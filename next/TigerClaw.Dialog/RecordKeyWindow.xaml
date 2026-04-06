@@ -1,0 +1,115 @@
+<Window x:Class="TigerClaw.Dialog.RecordKeyWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="录制按键"
+        Icon="bime.ico"
+        Width="460"
+        Height="360"
+        MinWidth="420"
+        MinHeight="340"
+        Background="#F6F2EA"
+        Foreground="#3A2A20"
+        WindowStartupLocation="CenterOwner"
+        PreviewKeyDown="OnPreviewKeyDown">
+    <Window.Resources>
+        <SolidColorBrush x:Key="PanelBrush" Color="#FFFDF8" />
+        <SolidColorBrush x:Key="BorderBrushStrong" Color="#D96A1B" />
+        <SolidColorBrush x:Key="BorderBrushSoft" Color="#D9C7B3" />
+        <SolidColorBrush x:Key="AccentBrushSoft" Color="#F2C79D" />
+        <SolidColorBrush x:Key="MutedBrush" Color="#7D6B5D" />
+        <Style x:Key="ActionButtonStyle" TargetType="Button">
+            <Setter Property="Height" Value="32" />
+            <Setter Property="MinWidth" Value="88" />
+            <Setter Property="Margin" Value="8,0,0,0" />
+            <Setter Property="Padding" Value="12,4" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrushSoft}" />
+            <Setter Property="Background" Value="#FFF8F0" />
+            <Setter Property="Foreground" Value="#4A3326" />
+            <Style.Triggers>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Background" Value="#F2E7D9" />
+                    <Setter Property="BorderBrush" Value="#D8C8B8" />
+                    <Setter Property="Foreground" Value="#8E7968" />
+                    <Setter Property="Opacity" Value="1" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="PrimaryActionButtonStyle"
+               TargetType="Button"
+               BasedOn="{StaticResource ActionButtonStyle}">
+            <Setter Property="Background" Value="{StaticResource BorderBrushStrong}" />
+            <Setter Property="Foreground" Value="#FFF8F0" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrushStrong}" />
+            <Style.Triggers>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Background" Value="#F2E7D9" />
+                    <Setter Property="BorderBrush" Value="#D8C8B8" />
+                    <Setter Property="Foreground" Value="#8E7968" />
+                    <Setter Property="Opacity" Value="1" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0"
+                CornerRadius="12"
+                Padding="16"
+                BorderThickness="1"
+                BorderBrush="{StaticResource BorderBrushSoft}"
+                Background="{StaticResource PanelBrush}">
+            <StackPanel>
+                <TextBlock Text="请按下一个按键"
+                           FontSize="22"
+                           FontWeight="Bold" />
+                <TextBlock Margin="0,8,0,0"
+                           FontSize="13"
+                           Foreground="{StaticResource MutedBrush}"
+                           TextWrapping="Wrap"
+                           Text="可以连续按多次，本窗口只保留最近一次录到的按键。录到后点击“添加”写入当前槽位。" />
+
+                <Border Margin="0,16,0,0"
+                        CornerRadius="10"
+                        Padding="16"
+                        BorderThickness="1"
+                        BorderBrush="{StaticResource BorderBrushStrong}"
+                        Background="{StaticResource AccentBrushSoft}">
+                    <StackPanel>
+                        <TextBlock Text="当前按键"
+                                    FontSize="12"
+                                    Foreground="#8A572D"
+                                    FontWeight="SemiBold" />
+                        <TextBlock x:Name="DisplayNameText"
+                                   Margin="0,8,0,0"
+                                   FontSize="22"
+                                   FontWeight="Bold"
+                                   Foreground="#3A2A20"
+                                   Text="尚未录制" />
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </Border>
+
+        <StackPanel Grid.Row="1"
+                    Margin="0,14,0,0"
+                    Orientation="Horizontal"
+                    HorizontalAlignment="Right">
+            <Button x:Name="AddButton"
+                    Content="添加"
+                    Style="{StaticResource PrimaryActionButtonStyle}"
+                    IsEnabled="False"
+                    Click="OnAddClick" />
+            <Button Content="取消"
+                    Style="{StaticResource ActionButtonStyle}"
+                    Click="OnCancelClick" />
+        </StackPanel>
+    </Grid>
+</Window>

@@ -1,0 +1,69 @@
+<Window x:Class="TigerClaw.Overlay.StatusWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="TigerStatusOverlay"
+        WindowStyle="None"
+        ResizeMode="NoResize"
+        Width="26"
+        Height="50"
+        AllowsTransparency="True"
+        BorderThickness="0"
+        Topmost="True"
+        Background="Transparent"
+        ShowInTaskbar="False"
+        Focusable="False"
+        MouseRightButtonDown="Window_MouseRightButtonDown"
+        Loaded="Window_Loaded">
+    <Window.ContextMenu>
+        <ContextMenu Opened="ContextMenu_Opened" Closed="ContextMenu_Closed">
+            <MenuItem Header="Github&#x9875;&#x9762;" Click="MenuOfficial_Click" />
+            <Separator />
+            <MenuItem Header="&#x65B9;&#x6848;&#x6587;&#x4EF6;&#x5939;" Click="MenuFolder_Click" />
+            <MenuItem Header="&#x5BFC;&#x51FA;&#x7801;&#x8868;" Click="MenuExport_Click" />
+            <MenuItem Header="&#x91CD;&#x8F7D;&#x7801;&#x8868;" Click="MenuReload_Click" />
+            <MenuItem Header="&#x52A0;&#x8BCD;" Click="MenuAddCi_Click" />
+            <MenuItem Header="&#x65B9;&#x6848;" Name="MenuSchema" />
+            <MenuItem Header="&#x4E3B;&#x9898;" Name="MenuTheme" />
+            <MenuItem Header="&#x8BBE;&#x7F6E;" Click="MenuConfig_Click" />
+            <Separator />
+            <MenuItem Header="&#x9000;&#x51FA;" Click="MenuExit_Click" />
+        </ContextMenu>
+    </Window.ContextMenu>
+
+    <Border x:Name="Bd"
+            BorderBrush="#D96A1B"
+            BorderThickness="1"
+            CornerRadius="10"
+            Background="#FFF8F0"
+            Padding="0"
+            MouseLeftButtonDown="DragSurface_MouseLeftButtonDown">
+        <Grid HorizontalAlignment="Stretch"
+              VerticalAlignment="Stretch">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="12" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+            <Border x:Name="AccentMark"
+                    Grid.Row="0"
+                    Width="8"
+                    Height="3"
+                    Margin="0,8,0,0"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Top"
+                    CornerRadius="2"
+                    Background="#D96A1B" />
+            <TextBlock x:Name="Disp"
+                       Grid.Row="1"
+                       Margin="0,0,0,4"
+                       MouseMove="Disp_MouseMove"
+                       Text="&#x4E2D;"
+                       FontFamily="&#x7B49;&#x7EBF;"
+                       HorizontalAlignment="Center"
+                       TextWrapping="NoWrap"
+                       FontSize="15"
+                       FontWeight="SemiBold"
+                       TextAlignment="Center"
+                       VerticalAlignment="Center" />
+        </Grid>
+    </Border>
+</Window>

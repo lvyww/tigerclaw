@@ -1,0 +1,40 @@
+# BimeTSF2 Bridge-Only Notes
+
+## Scope
+
+BimeTSF2 now runs in bridge-only mode:
+
+- Capture TSF key/focus/caret events.
+- Forward to BimeCore through `\\.\pipe\BimeIPC`.
+- Apply BimeCore response (`handled`, `text_to_output`, `keyboard_open`) back to TSF/UI.
+
+TSF side is **not** the source of IME state, composition state, or candidate logic.
+
+## Source Of Truth
+
+- Chinese/English mode source: **BimeCore**.
+- TSF language bar icon: display-only mirror of BimeCore `keyboard_open`.
+- Any external/system compartment drift is corrected back to the cached BimeCore state.
+
+## Build Set (active in `BimeTSF2.vcxproj`)
+
+- `BaseWindow.cpp`
+- `Compartment.cpp`
+- `DllMain.cpp`
+- `EditSession.cpp`
+- `FunctionProviderSink.cpp`
+- `Globals.cpp`
+- `KeyEventSink.cpp`
+- `LanguageBar.cpp`
+- `PipeClient.cpp`
+- `Register.cpp`
+- `RegKey.cpp`
+- `Server.cpp`
+- `SampleIMEBaseStructure.cpp`
+- `SampleIME.cpp`
+- `TfInputProcessorProfile.cpp`
+- `ThreadMgrEventSink.cpp`
+
+## Legacy Code
+
+SampleIME legacy composition/candidate/display-attribute paths remain in tree for reference, but are excluded from current bridge-only compile path.
