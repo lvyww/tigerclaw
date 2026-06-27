@@ -1,0 +1,112 @@
+<Window x:Class="TigerClaw.Dialog.SelectionKeyWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="自定义选重键"
+        Icon="bime.ico"
+        Width="760"
+        Height="700"
+        MinWidth="700"
+        MinHeight="560"
+        Background="#F6F2EA"
+        Foreground="#3A2A20"
+        WindowStartupLocation="CenterOwner"
+        Closing="OnWindowClosing">
+    <Window.Resources>
+        <SolidColorBrush x:Key="PanelBrush" Color="#FFFDF8" />
+        <SolidColorBrush x:Key="RowBrush" Color="#FFFFFF" />
+        <SolidColorBrush x:Key="BorderBrushStrong" Color="#D96A1B" />
+        <SolidColorBrush x:Key="BorderBrushSoft" Color="#D9C7B3" />
+        <SolidColorBrush x:Key="MutedBrush" Color="#7D6B5D" />
+        <Style x:Key="ActionButtonStyle" TargetType="Button">
+            <Setter Property="Height" Value="32" />
+            <Setter Property="MinWidth" Value="88" />
+            <Setter Property="Margin" Value="8,0,0,0" />
+            <Setter Property="Padding" Value="12,4" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrushSoft}" />
+            <Setter Property="Background" Value="#FFF8F0" />
+            <Setter Property="Foreground" Value="#4A3326" />
+            <Style.Triggers>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Background" Value="#F2E7D9" />
+                    <Setter Property="BorderBrush" Value="#D8C8B8" />
+                    <Setter Property="Foreground" Value="#8E7968" />
+                    <Setter Property="Opacity" Value="1" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="PrimaryActionButtonStyle"
+               TargetType="Button"
+               BasedOn="{StaticResource ActionButtonStyle}">
+            <Setter Property="Background" Value="{StaticResource BorderBrushStrong}" />
+            <Setter Property="Foreground" Value="#FFF8F0" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrushStrong}" />
+            <Style.Triggers>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Background" Value="#F2E7D9" />
+                    <Setter Property="BorderBrush" Value="#D8C8B8" />
+                    <Setter Property="Foreground" Value="#8E7968" />
+                    <Setter Property="Opacity" Value="1" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="18">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <ScrollViewer Grid.Row="0"
+                      VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled">
+            <StackPanel x:Name="SlotsPanel" />
+        </ScrollViewer>
+
+        <Border Grid.Row="1"
+                Margin="0,14,0,0"
+                Padding="14,12"
+                CornerRadius="12"
+                BorderThickness="1"
+                BorderBrush="{StaticResource BorderBrushSoft}"
+                Background="{StaticResource PanelBrush}">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel>
+                    <TextBlock x:Name="DirtyHintText"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Text="所有更改已保存" />
+                    <TextBlock x:Name="StatusText"
+                               Margin="0,4,0,0"
+                               FontSize="12"
+                               Foreground="{StaticResource MutedBrush}"
+                               Text="状态：已读取选重键配置。" />
+                </StackPanel>
+                <StackPanel Grid.Column="1"
+                            Orientation="Horizontal"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Center">
+                    <Button x:Name="ReloadButton" Content="重载"
+                            Style="{StaticResource ActionButtonStyle}"
+                            Click="OnReloadClick" />
+                    <Button x:Name="ResetAllButton" Content="恢复默认"
+                            Style="{StaticResource ActionButtonStyle}"
+                            Click="OnResetAllClick" />
+                    <Button x:Name="SaveButton" Content="保存"
+                            Style="{StaticResource PrimaryActionButtonStyle}"
+                            Click="OnSaveClick" />
+                    <Button x:Name="CloseButton" Content="关闭"
+                            Style="{StaticResource ActionButtonStyle}"
+                            Click="OnCloseClick" />
+                </StackPanel>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

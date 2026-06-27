@@ -1,0 +1,93 @@
+#pragma once
+
+#include "Private.h"
+#include <string>
+
+#define BIME_PIPE_NAME L"\\\\.\\pipe\\BimeIPC"
+#define BIME_PIPE_BUFFER_SIZE 4096
+#define BIME_DEFAULT_TIMEOUT_MS 200
+#define BIME_PROTOCOL_VERSION 2
+
+struct BimeResponse
+{
+    LONG seq;
+    BOOL success;
+    BOOL handled;
+    std::wstring textToOutput;
+    std::wstring inputBuffer;
+    BOOL hasProtocolVersion;
+    LONG protocolVersion;
+    std::wstring coreBuild;
+    std::wstring coreCommit;
+    std::wstring coreBranch;
+    std::wstring corePath;
+    BOOL hasKeyboardOpen;
+    BOOL keyboardOpen;
+    BOOL cancelComposition;
+
+    BimeResponse()
+        : seq(-1),
+          success(FALSE),
+          handled(FALSE),
+          hasProtocolVersion(FALSE),
+          protocolVersion(0),
+          hasKeyboardOpen(FALSE),
+          keyboardOpen(FALSE),
+          cancelComposition(FALSE)
+    {
+    }
+};
+
+class CPipeClient
+{
+public:
+    CPipeClient();
+    ~CPipeClient();
+
+    BOOL Connect();
+    void Disconnect();
+    BOOL IsConnected() const;
+    BOOL GetConnectedServerProcessPath(_Out_writes_(pathCount) WCHAR *path, size_t pathCount) const;
+
+    BOOL SendMessage(const char *jsonMessage);
+    HRESULT SendMessageAndWait(const char *jsonMessage, _Out_ BimeResponse *pResponse, DWORD timeoutMs = BIME_DEFAULT_TIMEOUT_MS);
+
+    HRESULT SendKeyAndWait(UINT vkCode,
+                           UINT scanCode,
+                           BOOL isKeyDown,
+                           _In_opt_z_ const char *tsfStage,
+                           BOOL shift,
+                           BOOL ctrl,
+                           BOOL alt,
+                           BOOL win,
+                           BOOL capsLock,
+                           BOOL numLock,
+                           UINT repeat,
+                           BOOL extended,
+                           BOOL caretValid,
+                           LONG caretX,
+                           LONG caretY,
+                           _Out_ BimeResponse *pResponse,
+                           DWORD timeoutMs = BIME_DEFAULT_TIMEOUT_MS);
+
+    HRESULT SendCtrlSpaceAndWait(_Out_ BimeResponse *pResponse, DWORD timeoutMs = BIME_DEFAULT_TIMEOUT_MS);
+    HRESULT SendShowMenuAndWait(_Out_ BimeResponse *pResponse, DWORD timeoutMs = BIME_DEFAULT_TIMEOUT_MS);
+    HRESULT SendQueryStateAndWait(_Out_ BimeResponse *pResponse, DWORD timeoutMs = BIME_DEFAULT_TIMEOUT_MS);
+    HRESULT SendHelloAndWait(_Out_ BimeResponse *pResponse, DWORD timeoutMs = BIME_DEFAULT_TIMEOUT_MS);
+    HRESULT EnsureHelloHandshake(DWORD timeoutMs = BIME_DEFAULT_TIMEOUT_MS);
+
+    BOOL SendFocusMessage(LONGLONG hwnd, DWORD processId);
+    BOOL SendCaretMessage(LONG x, LONG y, LONG width = 2, LONG height = 20);
+    BOOL SendCompositionCanceledMessage();
+    BOOL SendImeActiveMessage(BOOL active);
+
+private:
+    HANDLE _hPipe;
+    BOOL _isConnected;
+    LONG _seq;
+    BOOL _helloDone;
+
+    BOOL TryConnect();
+    BOOL ReadResponse(_Out_writes_bytes_(bufferSize) char *buffer, DWORD bufferSize, DWORD timeoutMs);
+    BOOL ParseResponse(const char *json, _Out_ BimeResponse *pResponse);
+};

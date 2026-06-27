@@ -1,0 +1,70 @@
+# IDE and user-local files
+.vs/
+**/.vs/
+*.suo
+*.user
+*.userprefs
+*.rsuser
+*.VC.db
+*.VC.opendb
+*.opendb
+
+# Build outputs
+**/bin/
+**/obj/
+**/x64/
+**/Win32/
+**/Debug/
+**/Release/
+*.pdb
+*.ilk
+*.iobj
+*.ipdb
+*.tlog
+*.idb
+*.exp
+*.lib
+
+# Runtime and temp directories
+next/_run/
+next/**/bin/
+next/**/obj/
+.dotnet_home/
+_dotnet_home_tmp/
+_tmp*/
+_run*/
+_run)
+*.tmp
+*.temp
+*.bak
+
+# Release/package noise
+release/**
+release/*.exe
+release/*.dll
+release/*.manifest
+release/*.config
+release/*.7z
+release/install.log
+release/uninstall.log
+release/_tmp*
+release/TigerClaw/
+release/Win32/
+release/x64/
+BimeTSF2/SampleIME/BimeTSF2/Release/
+BimeTSF2/SampleIME/BimeTSF2/x64/
+reference/SampleIME/x64/
+reference/SampleIME/SampleIME/x64/
+reference/weasel/output/
+
+# Logs and dumps
+CrashDumps/
+*.log
+uninstall.log
+
+# Archives
+*.7z
+
+# Windows explorer
+Thumbs.db
+Desktop.ini

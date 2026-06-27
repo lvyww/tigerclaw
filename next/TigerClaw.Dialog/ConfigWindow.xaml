@@ -1,0 +1,613 @@
+<Window x:Class="TigerClaw.Dialog.ConfigWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="虎爪输入法设置"
+        Icon="bime.ico"
+        Width="780"
+        Height="680"
+        MinWidth="720"
+        MinHeight="580"
+        MaxHeight="920"
+        Background="#F6F2EA"
+        Foreground="#3A2A20"
+        SizeToContent="Manual"
+        Closing="OnWindowClosing"
+        WindowStartupLocation="CenterScreen">
+    <Window.Resources>
+        <SolidColorBrush x:Key="PanelBrush" Color="#FFFDF8" />
+        <SolidColorBrush x:Key="PanelBrushAlt" Color="#FBF4EA" />
+        <SolidColorBrush x:Key="RowBrush" Color="#FFF8F0" />
+        <SolidColorBrush x:Key="BorderBrushStrong" Color="#D96A1B" />
+        <SolidColorBrush x:Key="BorderBrushSoft" Color="#D9C7B3" />
+        <SolidColorBrush x:Key="AccentBrush" Color="#D96A1B" />
+        <SolidColorBrush x:Key="AccentBrushSoft" Color="#F2C79D" />
+        <SolidColorBrush x:Key="MutedBrush" Color="#7D6B5D" />
+
+        <Style x:Key="SectionBorderStyle" TargetType="Border">
+            <Setter Property="Background" Value="{StaticResource PanelBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrushSoft}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="12" />
+            <Setter Property="Padding" Value="12" />
+            <Setter Property="Margin" Value="0,0,0,10" />
+        </Style>
+
+        <Style x:Key="SettingRowStyle" TargetType="Border">
+            <Setter Property="Background" Value="#FFFFFF" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrushSoft}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="CornerRadius" Value="10" />
+            <Setter Property="Padding" Value="12,10" />
+            <Setter Property="Margin" Value="0,0,0,12" />
+        </Style>
+
+        <Style x:Key="SectionTitleStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="16" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="#2F2118" />
+        </Style>
+
+        <Style x:Key="SectionSubtitleStyle" TargetType="TextBlock">
+            <Setter Property="Margin" Value="0,4,0,10" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Foreground" Value="{StaticResource MutedBrush}" />
+        </Style>
+
+        <Style x:Key="RowTitleStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="#34251B" />
+        </Style>
+
+        <Style x:Key="RowDescriptionStyle" TargetType="TextBlock">
+            <Setter Property="Margin" Value="0,2,0,0" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Foreground" Value="{StaticResource MutedBrush}" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+
+        <Style x:Key="InlineInfoStyle" TargetType="TextBlock">
+            <Setter Property="Margin" Value="0,4,0,0" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Foreground" Value="#C8671D" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+
+        <Style x:Key="FieldComboStyle" TargetType="ComboBox">
+            <Setter Property="MinWidth" Value="240" />
+            <Setter Property="Height" Value="28" />
+            <Setter Property="Padding" Value="6,3" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="Background" Value="#FFFFFF" />
+            <Setter Property="Foreground" Value="#38281E" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrushSoft}" />
+        </Style>
+
+        <Style x:Key="FieldTextStyle" TargetType="TextBox">
+            <Setter Property="MinWidth" Value="280" />
+            <Setter Property="MaxWidth" Value="460" />
+            <Setter Property="Height" Value="28" />
+            <Setter Property="Padding" Value="6,3" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="TextAlignment" Value="Left" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Background" Value="#FFFFFF" />
+            <Setter Property="Foreground" Value="#38281E" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrushSoft}" />
+        </Style>
+
+        <Style x:Key="ActionButtonStyle" TargetType="Button">
+            <Setter Property="Width" Value="104" />
+            <Setter Property="Height" Value="30" />
+            <Setter Property="Margin" Value="8,0,0,0" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrushSoft}" />
+            <Setter Property="Background" Value="#FFF8F0" />
+            <Setter Property="Foreground" Value="#4A3326" />
+            <Style.Triggers>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Background" Value="#F2E7D9" />
+                    <Setter Property="BorderBrush" Value="#D8C8B8" />
+                    <Setter Property="Foreground" Value="#8E7968" />
+                    <Setter Property="Opacity" Value="1" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="NavButtonStyle" TargetType="Button">
+            <Setter Property="Margin" Value="0,0,0,8" />
+            <Setter Property="Padding" Value="12,10" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrushSoft}" />
+            <Setter Property="Background" Value="#FFFDF8" />
+            <Setter Property="Foreground" Value="#5A4130" />
+            <Setter Property="FontSize" Value="13" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+
+        <Style x:Key="PrimaryActionButtonStyle"
+               TargetType="Button"
+               BasedOn="{StaticResource ActionButtonStyle}">
+            <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+            <Setter Property="Foreground" Value="#FFF8F0" />
+            <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+            <Style.Triggers>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Background" Value="#F2E7D9" />
+                    <Setter Property="BorderBrush" Value="#D8C8B8" />
+                    <Setter Property="Foreground" Value="#8E7968" />
+                    <Setter Property="Opacity" Value="1" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="14">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0"
+                Style="{StaticResource SectionBorderStyle}"
+                Padding="10,8"
+                Margin="0,0,0,10"
+                Background="{StaticResource PanelBrush}">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Margin="0,0,10,0"
+                            VerticalAlignment="Center">
+                    <TextBlock Text="快速筛选"
+                                FontSize="11"
+                                FontWeight="SemiBold" />
+                    <TextBlock Margin="0,3,0,0"
+                                FontSize="11"
+                                Foreground="{StaticResource MutedBrush}"
+                                Text="按名称或说明搜索" />
+                </StackPanel>
+                <TextBox x:Name="SearchBox"
+                         Grid.Column="1"
+                         Style="{StaticResource FieldTextStyle}"
+                         MinWidth="320"
+                         MaxWidth="640"
+                         TextChanged="OnSearchTextChanged" />
+            </Grid>
+        </Border>
+
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="168" />
+                <ColumnDefinition Width="12" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0"
+                    Style="{StaticResource SectionBorderStyle}"
+                    Background="{StaticResource PanelBrush}">
+                <StackPanel>
+                    <TextBlock Text="设置分组"
+                               Style="{StaticResource SectionTitleStyle}" />
+                    <TextBlock Text="从左侧导航切换当前分组。"
+                               Style="{StaticResource SectionSubtitleStyle}" />
+
+                    <Button x:Name="SystemNavButton"
+                            Content="系统"
+                            Style="{StaticResource NavButtonStyle}"
+                            Click="OnSectionNavClick" />
+                    <Button x:Name="CodeInputNavButton"
+                            Content="码表及输入行为"
+                            Style="{StaticResource NavButtonStyle}"
+                            Click="OnSectionNavClick" />
+                    <Button x:Name="KeysNavButton"
+                            Content="按键"
+                            Style="{StaticResource NavButtonStyle}"
+                            Click="OnSectionNavClick" />
+                    <Button x:Name="CandidateNavButton"
+                            Content="候选窗"
+                            Style="{StaticResource NavButtonStyle}"
+                            Click="OnSectionNavClick" />
+                    <Button x:Name="NativeNavButton"
+                            Content="外挂版"
+                            Style="{StaticResource NavButtonStyle}"
+                            Click="OnSectionNavClick" />
+                    <Button x:Name="AboutNavButton"
+                            Content="关于"
+                            Style="{StaticResource NavButtonStyle}"
+                            Click="OnSectionNavClick" />
+                </StackPanel>
+            </Border>
+
+            <ScrollViewer x:Name="ContentScrollViewer"
+                          Grid.Column="2"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled">
+                <StackPanel>
+
+                    <Border x:Name="SystemSection"
+                            Style="{StaticResource SectionBorderStyle}"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            Padding="0"
+                            Margin="0,0,0,14">
+                        <StackPanel>
+                            <TextBlock Text="系统"
+                                       Style="{StaticResource SectionTitleStyle}" />
+                            <TextBlock Text="系统集成、启动方式和全局输入习惯。"
+                                       Style="{StaticResource SectionSubtitleStyle}"
+                                       Margin="0,4,0,14" />
+
+<Border x:Name="ThemeRow"
+                                Style="{StaticResource SettingRowStyle}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="170" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0"
+                                            Margin="0,0,10,0">
+                                    <TextBlock Text="主题"
+                                               Style="{StaticResource RowTitleStyle}" />
+                                    <TextBlock Text="切换候选窗与状态栏配色。"
+                                               Style="{StaticResource RowDescriptionStyle}" />
+                                </StackPanel>
+                                <ComboBox x:Name="CbTheme"
+                                          Grid.Column="1"
+                                          Style="{StaticResource FieldComboStyle}"
+                                          HorizontalAlignment="Left"
+                                          VerticalAlignment="Center"
+                                          SelectionChanged="OnAnyEditorChanged" />
+                            </Grid>
+                        </Border>
+
+                            <StackPanel x:Name="SystemDynamicPanel" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border x:Name="CodeInputSection"
+                            Style="{StaticResource SectionBorderStyle}"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            Padding="0"
+                            Margin="0,0,0,14">
+                        <StackPanel>
+                            <TextBlock Text="码表及输入行为"
+                                       Style="{StaticResource SectionTitleStyle}" />
+                            <TextBlock Text="与码表方案强相关的输入规则和自动上屏行为。"
+                                       Style="{StaticResource SectionSubtitleStyle}"
+                                       Margin="0,4,0,14" />
+
+<Border x:Name="SchemaRow"
+                                Style="{StaticResource SettingRowStyle}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="170" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0"
+                                            Margin="0,0,10,0">
+                                    <TextBlock Text="当前码表"
+                                               Style="{StaticResource RowTitleStyle}" />
+                                    <TextBlock Text="切换当前正在使用的码表方案。"
+                                               Style="{StaticResource RowDescriptionStyle}" />
+                                </StackPanel>
+                                <ComboBox x:Name="CbSchema"
+                                          Grid.Column="1"
+                                          Style="{StaticResource FieldComboStyle}"
+                                          HorizontalAlignment="Left"
+                                          VerticalAlignment="Center"
+                                          SelectionChanged="OnAnyEditorChanged" />
+                            </Grid>
+                        </Border>
+
+                            <StackPanel x:Name="CodeInputDynamicPanel" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border x:Name="KeysSection"
+                            Style="{StaticResource SectionBorderStyle}"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            Padding="0"
+                            Margin="0,0,0,14">
+                        <StackPanel>
+                            <TextBlock Text="按键"
+                                       Style="{StaticResource SectionTitleStyle}" />
+                            <TextBlock Text="切换、翻页、选重和快捷按键行为。"
+                                       Style="{StaticResource SectionSubtitleStyle}"
+                                       Margin="0,4,0,14" />
+
+<Border x:Name="PageKeyRow"
+                                Style="{StaticResource SettingRowStyle}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="170" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0"
+                                            Margin="0,0,10,0">
+                                    <TextBlock Text="翻页键"
+                                               Style="{StaticResource RowTitleStyle}" />
+                                    <TextBlock Text="配置候选上下翻页使用的按键组合。"
+                                               Style="{StaticResource RowDescriptionStyle}" />
+                                </StackPanel>
+                                <UniformGrid Grid.Column="1"
+                                             Columns="1"
+                                             Margin="0,2,0,0">
+                                    <RadioButton Content="[ ]"
+                                                 Foreground="#4A3326"
+                                                 Margin="0,0,16,8"
+                                                 Checked="OnAnyEditorChanged"
+                                                 IsEnabled="False" />
+                                    <RadioButton Content="- ="
+                                                 Foreground="#4A3326"
+                                                 Margin="0,0,16,8"
+                                                 Checked="OnAnyEditorChanged"
+                                                 IsEnabled="False" />
+                                    <RadioButton Content="Shift Tab/Tab"
+                                                 Foreground="#4A3326"
+                                                 Margin="0,0,16,0"
+                                                 Checked="OnAnyEditorChanged"
+                                                 IsEnabled="False" />
+                                    <RadioButton Content="PageUp/PageDown"
+                                                 Foreground="#4A3326"
+                                                 Margin="0,0,16,0"
+                                                 Checked="OnAnyEditorChanged"
+                                                 IsEnabled="False" />
+                                </UniformGrid>
+                            </Grid>
+                        </Border>
+
+<Border x:Name="SelectionKeysRow"
+                                Style="{StaticResource SettingRowStyle}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="170" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0"
+                                            Margin="0,0,10,0">
+                                    <TextBlock Text="自定义选重键"
+                                               Style="{StaticResource RowTitleStyle}" />
+                                    <TextBlock Text="编辑 1 到 10 选的自定义按键绑定。"
+                                               Style="{StaticResource RowDescriptionStyle}" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1"
+                                            Orientation="Horizontal"
+                                            VerticalAlignment="Center">
+                                    <Button x:Name="OpenSelectionKeysButton"
+                                            Content="打开"
+                                            Style="{StaticResource ActionButtonStyle}"
+                                            Click="OnSelectionKeysClick" />
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+
+                            <StackPanel x:Name="KeysDynamicPanel" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border x:Name="CandidateSection"
+                            Style="{StaticResource SectionBorderStyle}"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            Padding="0"
+                            Margin="0,0,0,14">
+                        <StackPanel>
+                            <TextBlock Text="候选窗"
+                                       Style="{StaticResource SectionTitleStyle}" />
+                            <TextBlock Text="候选窗外观，以及候选、注释和拆分的显示方式。"
+                                       Style="{StaticResource SectionSubtitleStyle}"
+                                       Margin="0,4,0,14" />
+
+<Border x:Name="FontRow"
+                                Style="{StaticResource SettingRowStyle}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="170" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0"
+                                            Margin="0,0,10,0">
+                                    <TextBlock Text="字体"
+                                               Style="{StaticResource RowTitleStyle}" />
+                                    <TextBlock Text="设置候选窗和状态栏的主要字体。"
+                                               Style="{StaticResource RowDescriptionStyle}" />
+                                </StackPanel>
+                                <ComboBox x:Name="CbFonts"
+                                          Grid.Column="1"
+                                          Style="{StaticResource FieldComboStyle}"
+                                          HorizontalAlignment="Left"
+                                          VerticalAlignment="Center"
+                                          SelectionChanged="OnAnyEditorChanged" />
+                            </Grid>
+                        </Border>
+
+                            <StackPanel x:Name="CandidateDynamicPanel" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border x:Name="NativeSection"
+                            Style="{StaticResource SectionBorderStyle}"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            Padding="0"
+                            Margin="0,0,0,14">
+                        <StackPanel>
+                            <TextBlock Text="外挂版"
+                                       Style="{StaticResource SectionTitleStyle}" />
+                            <TextBlock Text="直接运行 TigerClaw.exe 来启动外挂版，可免安装直接输入文字。"
+                                       Style="{StaticResource SectionSubtitleStyle}"
+                                       Margin="0,4,0,14" />
+                            <StackPanel x:Name="NativeDynamicPanel" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border x:Name="AboutSection"
+                            Style="{StaticResource SectionBorderStyle}"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            Padding="0"
+                            Margin="0,0,0,14">
+                        <StackPanel>
+                            <TextBlock Text="关于"
+                                       Style="{StaticResource SectionTitleStyle}" />
+                            <TextBlock Text="版本、构建信息和支持入口。"
+                                       Style="{StaticResource SectionSubtitleStyle}"
+                                       Margin="0,4,0,14" />
+
+                            <Border x:Name="AboutCard"
+                                    Style="{StaticResource SettingRowStyle}"
+                                    Padding="14,12">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="140" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="Auto" />
+                                    </Grid.RowDefinitions>
+
+                                    <TextBlock Grid.Row="0"
+                                               Text="产品"
+                                               Style="{StaticResource RowTitleStyle}" />
+                                    <TextBlock x:Name="AboutProductText"
+                                               Grid.Row="0"
+                                               Grid.Column="1"
+                                               FontSize="13"
+                                               Foreground="#34251B" />
+
+                                    <TextBlock Grid.Row="1"
+                                               Grid.Column="0"
+                                               Margin="0,10,0,0"
+                                               Text="版本"
+                                               Style="{StaticResource RowTitleStyle}" />
+                                    <TextBlock x:Name="AboutVersionText"
+                                               Grid.Row="1"
+                                               Grid.Column="1"
+                                               Margin="0,10,0,0"
+                                               FontSize="13"
+                                               Foreground="#34251B" />
+
+                                    <TextBlock Grid.Row="2"
+                                               Grid.Column="0"
+                                               Margin="0,10,0,0"
+                                               Text="提交"
+                                               Style="{StaticResource RowTitleStyle}" />
+                                    <TextBlock x:Name="AboutCommitText"
+                                               Grid.Row="2"
+                                               Grid.Column="1"
+                                               Margin="0,10,0,0"
+                                               FontSize="13"
+                                               Foreground="#34251B" />
+
+                                    <TextBlock Grid.Row="3"
+                                               Grid.Column="0"
+                                               Margin="0,10,0,0"
+                                               Text="构建时间"
+                                               Style="{StaticResource RowTitleStyle}" />
+                                    <TextBlock x:Name="AboutBuildTimeText"
+                                               Grid.Row="3"
+                                               Grid.Column="1"
+                                               Margin="0,10,0,0"
+                                               FontSize="13"
+                                               Foreground="#34251B" />
+
+                                    <TextBlock x:Name="AboutTrialLabel"
+                                               Grid.Row="4"
+                                               Grid.Column="0"
+                                               Margin="0,10,0,0"
+                                               Text="试用到期"
+                                               Style="{StaticResource RowTitleStyle}" />
+                                    <TextBlock x:Name="AboutTrialText"
+                                               Grid.Row="4"
+                                               Grid.Column="1"
+                                               Margin="0,10,0,0"
+                                               FontSize="13"
+                                               Foreground="#34251B" />
+
+                                </Grid>
+                            </Border>
+
+                            <StackPanel Orientation="Horizontal">
+                                <Button x:Name="AboutCopyButton"
+                                        Content="复制版本信息"
+                                        Width="116"
+                                        Margin="0"
+                                        Style="{StaticResource ActionButtonStyle}"
+                                        Click="OnAboutCopyClick" />
+                                <Button x:Name="AboutOfficialButton"
+                                        Content="打开 Github"
+                                        Width="112"
+                                        Style="{StaticResource ActionButtonStyle}"
+                                        Click="OnAboutOfficialClick" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <TextBlock x:Name="EmptySearchText"
+                               Visibility="Collapsed"
+                               Margin="0,6,0,0"
+                               HorizontalAlignment="Center"
+                               FontSize="12"
+                               Foreground="{StaticResource MutedBrush}"
+                               Text="没有匹配的设置项，请修改搜索关键词。" />
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+
+        <Border Grid.Row="2"
+                Margin="0,10,0,0"
+                Padding="14"
+                CornerRadius="12"
+                Background="{StaticResource PanelBrush}"
+                BorderThickness="1"
+                BorderBrush="{StaticResource BorderBrushSoft}">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel VerticalAlignment="Center">
+                    <TextBlock x:Name="StatusText"
+                               FontSize="12"
+                               Text="状态：空闲" />
+                    <TextBlock x:Name="DirtyHintText"
+                               Margin="0,4,0,0"
+                               FontSize="12"
+                               Foreground="{StaticResource MutedBrush}"
+                               Text="所有更改已保存" />
+                </StackPanel>
+
+                <StackPanel Grid.Column="1"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center">
+                    <Button x:Name="Reload"
+                            Content="重新载入"
+                            Style="{StaticResource ActionButtonStyle}"
+                            Click="OnReloadClick" />
+                    <Button x:Name="Save"
+                            Content="保存"
+                            Style="{StaticResource PrimaryActionButtonStyle}"
+                            Click="OnSaveClick" />
+                    <Button x:Name="Cancel"
+                            Content="关闭"
+                            Style="{StaticResource ActionButtonStyle}"
+                            Click="OnCloseClick" />
+                </StackPanel>
+            </Grid>
+        </Border>
+    </Grid>
+</Window>

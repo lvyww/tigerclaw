@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net48</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ApplicationManifest>..\app.manifest</ApplicationManifest>
+    <LangVersion>7.3</LangVersion>
+    <Nullable>disable</Nullable>
+    <AssemblyName>TigerClaw.Overlay</AssemblyName>
+    <RootNamespace>TigerClaw.Overlay</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="Accessibility" />
+    <ProjectReference Include="..\TigerClaw.Shared\TigerClaw.Shared.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="sounds\*.wav">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+</Project>
