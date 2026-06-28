@@ -569,7 +569,7 @@
                                     <Image Source="/donate_qr.png"
                                            Width="200"
                                            Height="195"
-                                           HorizontalAlignment="Left"
+                                           HorizontalAlignment="Center"
                                            Stretch="Uniform"
                                            RenderOptions.BitmapScalingMode="HighQuality" />
                                 </StackPanel>

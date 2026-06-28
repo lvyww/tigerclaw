@@ -37,7 +37,8 @@ namespace TigerClaw.Core
 
         private const string KeyDefaultChinese = "\u9ed8\u8ba4\u4e2d\u6587"; // unicode: 榛樿涓枃
 
-        private const string KeyCtrlEqualAddCi = "Ctrl+\u7b49\u53f7\u624b\u52a8\u52a0\u8bcd"; // unicode: Ctrl+绛夊彿鎵嬪姩鍔犺瘝
+        private const string KeyCtrlEqualAddCi = "Ctrl+\u7b49\u53f7\u624b\u52a8\u52a0\u8bcd";
+        private const string KeyCtrlMSwitchSchema = "Ctrl+m\u5207\u6362\u6700\u8fd1\u7801\u8868"; // Ctrl+m switch recent code table
 
         private const string KeyMaxCodeLen = "\u6700\u5927\u7801\u957f"; // unicode: 鏈€澶х爜闀?
         private const string KeyCnUseEnPunc = "\u4e2d\u6587\u72b6\u6001\u4e0b\u4f7f\u7528\u82f1\u6587\u6807\u70b9"; // unicode: 涓枃鐘舵€佷笅浣跨敤鑻辨枃鏍囩偣
@@ -135,6 +136,8 @@ namespace TigerClaw.Core
 
             new KeyValuePair<string, string>(KeyCtrlEqualAddCi, Yes),
 
+            new KeyValuePair<string, string>(KeyCtrlMSwitchSchema, No),
+
             new KeyValuePair<string, string>(KeyEnterClear, No),
 
             new KeyValuePair<string, string>(KeyTabClear, Yes),
@@ -196,6 +199,9 @@ namespace TigerClaw.Core
 
 
         private readonly object _lock = new object();
+
+        // Recent code tables (MRU, most-recent first, max 2): drives Ctrl+m switch-recent-schema.
+        private readonly List<string> _recentSchemas = new List<string>();
 
         private readonly Dictionary<string, string> _config = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
@@ -378,6 +384,11 @@ namespace TigerClaw.Core
                 string root = ResolveCodeRoot();
 
                 string mbDir = ResolveCurrentMbDir(root);
+
+                if (!string.IsNullOrEmpty(mbDir))
+                {
+                    lock (_lock) { RecordRecentSchemaNoLock(Path.GetFileName(mbDir)); }
+                }
 
                 var map = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
 
@@ -710,6 +721,8 @@ namespace TigerClaw.Core
 
 
         public bool GetCtrlEqualAddCiEnabled() => GetBool(KeyCtrlEqualAddCi, true);
+
+        public bool GetCtrlMSwitchSchemaEnabled() => GetBool(KeyCtrlMSwitchSchema, false);
 
 
 
@@ -1713,6 +1726,75 @@ namespace TigerClaw.Core
 
             }
 
+        }
+
+        // Move a code-table name to the front of the recent-MRU list (case-insensitive), capped at 2.
+        // Caller must hold _lock.
+        private void RecordRecentSchemaNoLock(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                return;
+            }
+
+            name = name.Trim();
+            _recentSchemas.RemoveAll(s => string.Equals(s, name, StringComparison.OrdinalIgnoreCase));
+            _recentSchemas.Insert(0, name);
+            while (_recentSchemas.Count > 2)
+            {
+                _recentSchemas.RemoveAt(_recentSchemas.Count - 1);
+            }
+        }
+
+        // Ctrl+m: switch to the most recently used "other" code table and reload the lexicon.
+        // Returns false (no-op) when fewer than two code tables exist.
+        public bool TrySwitchRecentSchema(out string newSchema)
+        {
+            newSchema = null;
+
+            string[] schemas = GetSchemaList();
+            if (schemas == null || schemas.Length < 2)
+            {
+                return false;
+            }
+
+            string current = GetCurrentSchema();
+
+            string target = null;
+            lock (_lock)
+            {
+                foreach (string s in _recentSchemas)
+                {
+                    if (!string.Equals(s, current, StringComparison.OrdinalIgnoreCase) &&
+                        schemas.Any(x => string.Equals(x, s, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        target = s;
+                        break;
+                    }
+                }
+            }
+
+            // No recorded second table yet (e.g. just started): seed the pair with the next table in the list.
+            if (string.IsNullOrEmpty(target))
+            {
+                int idx = Array.FindIndex(schemas, x => string.Equals(x, current, StringComparison.OrdinalIgnoreCase));
+                int nextIdx = (idx < 0) ? 0 : (idx + 1) % schemas.Length;
+                target = schemas[nextIdx];
+            }
+
+            // Normalize to the canonical directory casing.
+            string canonical = schemas.FirstOrDefault(x => string.Equals(x, target, StringComparison.OrdinalIgnoreCase));
+            if (string.IsNullOrEmpty(canonical) || string.Equals(canonical, current, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            // Reuse the exact same path as the right-click "方案" menu / settings switch:
+            // set the "当前码表" config then reload the lexicon (mirrors ProtocolHandler's set_config case).
+            TrySetConfigValue(KeyCurrentMb, canonical, out _, out _);
+            ReloadLexicon(); // also records `canonical` as the new most-recent schema
+            newSchema = canonical;
+            return true;
         }
 
 

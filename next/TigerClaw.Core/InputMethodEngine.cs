@@ -57,6 +57,7 @@ namespace TigerClaw.Core
         private const int VK_NUMPAD0 = 0x60;
         private const int VK_NUMPAD9 = 0x69;
         private const int VK_A = 0x41;
+        private const int VK_M = 0x4D;
         private const int VK_Z = 0x5A;
 
         private readonly object _lock = new object();
@@ -150,6 +151,11 @@ namespace TigerClaw.Core
         private bool _spaceChordDown;
         private bool _ctrlSpaceArmed;
         private bool _ctrlSpaceSwitched;
+        // VK of a one-shot Ctrl/Alt shortcut (switch-schema / add-word / reorder) that has already
+        // fired for the current physical press; 0 = none. Reset on that key's key-up. Auto-repeat
+        // key-downs and the TSF test+commit double dispatch all carry repeat==1, so this gate (not
+        // the repeat count) is what stops a single press from re-firing the action rapidly.
+        private int _oneShotActionKey;
         private DateTime _lastCtrlUpUtc = DateTime.MinValue;
         private static readonly TimeSpan CtrlSpaceGrace = TimeSpan.FromMilliseconds(250);
         private bool _leftSingleQuote = true;
@@ -487,6 +493,13 @@ namespace TigerClaw.Core
                     _shiftChordUsed = true;
                 }
 
+                if (isUp && _oneShotActionKey != 0 && resolvedVk == _oneShotActionKey)
+                {
+                    // Physical release re-arms the one-shot shortcut for the next press, so a held
+                    // key (auto-repeat) fires exactly once and only a real new press fires again.
+                    _oneShotActionKey = 0;
+                }
+
                 if (!isDown)
                 {
                     return KeyEngineResult.Pass(_compositionState != CompositionState.En);
@@ -511,13 +524,21 @@ namespace TigerClaw.Core
                         _compositionState == CompositionState.CnComposing &&
                         resolvedVk >= VK_1 && resolvedVk <= VK_9)
                     {
+                        if (_oneShotActionKey == resolvedVk)
+                        {
+                            // Auto-repeat / duplicate dispatch of the held number key: consume it,
+                            // keep the composition, don't adjust the word order again.
+                            return KeyEngineResult.CreateHandled(_compositionState != CompositionState.En, null, _inputBuffer.ToString(), true);
+                        }
+
                         string currentCode = _inputBuffer.ToString();
                         List<string> allCandidates = ResolveCandidates(currentCode);
                         List<string> candidates = GetCandidatePage(currentCode, CompositionState.CnComposing, allCandidates, out _);
                         int index = resolvedVk - VK_1;
-                        if (repeat <= 1 && candidates != null && index >= 0 && index < candidates.Count)
+                        if (candidates != null && index >= 0 && index < candidates.Count)
                         {
                             _state.TryUserAdvance(currentCode, candidates[index], out _);
+                            _oneShotActionKey = resolvedVk;
                             return KeyEngineResult.CreateHandled(_compositionState != CompositionState.En, null, currentCode, true);
                         }
                     }
@@ -532,20 +553,61 @@ namespace TigerClaw.Core
 
                 if (ctrl)
                 {
-                    if (repeat <= 1 && resolvedVk == VK_OEM_PLUS && _state.GetCtrlEqualAddCiEnabled())
+                    if (resolvedVk == VK_OEM_PLUS && _state.GetCtrlEqualAddCiEnabled())
                     {
+                        if (_oneShotActionKey == resolvedVk)
+                        {
+                            // Auto-repeat / duplicate dispatch of a held Ctrl+=: consume it without
+                            // reopening the add-word window (matches the post-open empty composition).
+                            return KeyEngineResult.CreateHandled(_compositionState != CompositionState.En, null, null, false);
+                        }
+                        _oneShotActionKey = resolvedVk;
                         return KeyEngineResult.CreateHandled(_compositionState != CompositionState.En, null, null, false, openAddCiWindow: true);
+                    }
+
+                    if (resolvedVk == VK_M && !alt && !win && !shift && _state.GetCtrlMSwitchSchemaEnabled())
+                    {
+                        bool composing = _inputBuffer.Length > 0 &&
+                                         (_compositionState == CompositionState.CnComposing ||
+                                          _compositionState == CompositionState.CnPinyin ||
+                                          _compositionState == CompositionState.CnUpperCase);
+
+                        // One switch per physical press (see _oneShotActionKey). A single Ctrl+m reaches
+                        // Core through the TSF test phase plus key-down, and a held key auto-repeats many
+                        // key-downs (each repeat==1); without the gate every message would flip the schema
+                        // again, producing the back-and-forth oscillation.
+                        if (_oneShotActionKey == resolvedVk)
+                        {
+                            return KeyEngineResult.CreateHandled(_compositionState != CompositionState.En, null, _inputBuffer.ToString(), composing);
+                        }
+
+                        if (_state.TrySwitchRecentSchema(out _))
+                        {
+                            _oneShotActionKey = resolvedVk;
+                            // Keep the in-flight code; the new code table re-resolves candidates on the
+                            // next UI snapshot. Reset paging because the candidate list changed.
+                            ResetCandidatePageTracker();
+                            return KeyEngineResult.CreateHandled(_compositionState != CompositionState.En, null, _inputBuffer.ToString(), composing);
+                        }
+                        // Could not switch (fewer than two code tables): fall through to normal Ctrl handling.
                     }
 
                     if (!alt && !win &&
                         _compositionState == CompositionState.CnComposing &&
                         resolvedVk >= VK_1 && resolvedVk <= VK_9)
                     {
+                        if (_oneShotActionKey == resolvedVk)
+                        {
+                            // Auto-repeat / duplicate dispatch of the held number key: consume it,
+                            // keep the composition, don't re-top / re-delete.
+                            return KeyEngineResult.CreateHandled(_compositionState != CompositionState.En, null, _inputBuffer.ToString(), true);
+                        }
+
                         string currentCode = _inputBuffer.ToString();
                         List<string> allCandidates = ResolveCandidates(currentCode);
                         List<string> candidates = GetCandidatePage(currentCode, CompositionState.CnComposing, allCandidates, out _);
                         int index = resolvedVk - VK_1;
-                        if (repeat <= 1 && candidates != null && index >= 0 && index < candidates.Count)
+                        if (candidates != null && index >= 0 && index < candidates.Count)
                         {
                             string chosen = candidates[index];
                             bool changed = shift
@@ -553,6 +615,7 @@ namespace TigerClaw.Core
                                 : _state.TryUserTop(currentCode, chosen, out _);
                             if (changed)
                             {
+                                _oneShotActionKey = resolvedVk;
                                 return KeyEngineResult.CreateHandled(_compositionState != CompositionState.En, null, currentCode, true);
                             }
                         }
@@ -2734,6 +2797,14 @@ namespace TigerClaw.Core
 
             if (!isCtrl && !isSpace)
             {
+                // Any other key pressed while Ctrl is held means Ctrl is acting as a modifier for a
+                // chord (Ctrl+M, Ctrl+=, Ctrl+1..9, ...), not as half of a Ctrl+Space toggle. Disarm
+                // so a Space pressed right after (within CtrlSpaceGrace of Ctrl-up, e.g. to commit)
+                // won't get mistaken for Ctrl+Space and flip CN/EN.
+                if (isDown && _ctrlChordDown)
+                {
+                    _ctrlSpaceArmed = false;
+                }
                 CleanupCtrlSpaceState(nowUtc);
                 return false;
             }

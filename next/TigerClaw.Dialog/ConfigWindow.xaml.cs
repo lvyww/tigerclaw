@@ -1140,6 +1140,8 @@ namespace TigerClaw.Dialog
                     return "允许使用 Ctrl+空格 切换中英文状态。";
                 case "Ctrl+等号手动加词":
                     return "快捷触发手动加词流程。";
+                case "Ctrl+m切换最近码表":
+                    return "记录最近使用的两个码表，按 Ctrl+m 在这两个码表之间切换。";
                 case "回车清屏":
                     return "回车键是否立即清掉编码串。";
                 case "TAB清屏":
@@ -1234,6 +1236,7 @@ namespace TigerClaw.Dialog
                 case "shift切换中英文":
                 case "Ctrl+空格切换中英文":
                 case "Ctrl+等号手动加词":
+                case "Ctrl+m切换最近码表":
                 case "分号次选":
                 case "引号三选":
                 case "回车清屏":
