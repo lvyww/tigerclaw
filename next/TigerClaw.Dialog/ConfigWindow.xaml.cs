@@ -125,7 +125,8 @@ namespace TigerClaw.Dialog
 
             foreach (KeyValuePair<string, string> kv in config)
             {
-                if (string.Equals(kv.Key, "任务栏显示", StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(kv.Key, "任务栏显示", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(kv.Key, "最近码表对", StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
@@ -302,7 +303,8 @@ namespace TigerClaw.Dialog
                     string.Equals(kv.Key, KeyPageKey, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(kv.Key, KeyTheme, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(kv.Key, KeyCurrentSchema, StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(kv.Key, "任务栏显示", StringComparison.OrdinalIgnoreCase))
+                    string.Equals(kv.Key, "任务栏显示", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(kv.Key, "最近码表对", StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }

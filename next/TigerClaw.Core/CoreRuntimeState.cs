@@ -39,6 +39,9 @@ namespace TigerClaw.Core
 
         private const string KeyCtrlEqualAddCi = "Ctrl+\u7b49\u53f7\u624b\u52a8\u52a0\u8bcd";
         private const string KeyCtrlMSwitchSchema = "Ctrl+m\u5207\u6362\u6700\u8fd1\u7801\u8868"; // Ctrl+m switch recent code table
+        // Internal/persisted record of the two most-recently-used code tables (for Ctrl+m), stored
+        // as "name|name". Persisted so the pair survives a restart; hidden from the settings dialog.
+        private const string KeyRecentSchemas = "\u6700\u8fd1\u7801\u8868\u5bf9"; // unicode: \u6700\u8fd1\u7801\u8868\u5bf9
 
         private const string KeyMaxCodeLen = "\u6700\u5927\u7801\u957f"; // unicode: 鏈€澶х爜闀?
         private const string KeyCnUseEnPunc = "\u4e2d\u6587\u72b6\u6001\u4e0b\u4f7f\u7528\u82f1\u6587\u6807\u70b9"; // unicode: 涓枃鐘舵€佷笅浣跨敤鑻辨枃鏍囩偣
@@ -137,6 +140,8 @@ namespace TigerClaw.Core
             new KeyValuePair<string, string>(KeyCtrlEqualAddCi, Yes),
 
             new KeyValuePair<string, string>(KeyCtrlMSwitchSchema, No),
+
+            new KeyValuePair<string, string>(KeyRecentSchemas, string.Empty),
 
             new KeyValuePair<string, string>(KeyEnterClear, No),
 
@@ -356,6 +361,8 @@ namespace TigerClaw.Core
 
                     foreach (var kv in merged) { _config[kv.Key] = kv.Value; }
 
+                    SeedRecentSchemasFromConfigNoLock();
+
                     ConfigVersion++;
 
                 }
@@ -388,6 +395,8 @@ namespace TigerClaw.Core
                 if (!string.IsNullOrEmpty(mbDir))
                 {
                     lock (_lock) { RecordRecentSchemaNoLock(Path.GetFileName(mbDir)); }
+                    // Persist the updated recent-table pair so Ctrl+m remembers it across restarts.
+                    WriteConfigNoThrow();
                 }
 
                 var map = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
@@ -1743,6 +1752,37 @@ namespace TigerClaw.Core
             while (_recentSchemas.Count > 2)
             {
                 _recentSchemas.RemoveAt(_recentSchemas.Count - 1);
+            }
+
+            // Mirror the pair into the config dict so it can be persisted (ReloadLexicon writes the
+            // file). Stored as "name|name"; survives a restart and is seeded back on config load.
+            _config[KeyRecentSchemas] = string.Join("|", _recentSchemas);
+        }
+
+        // Restore the recent-MRU list from the persisted "name|name" config value. Caller must hold
+        // _lock. Runs on config load, before the first ReloadLexicon, so a restart remembers the pair.
+        private void SeedRecentSchemasFromConfigNoLock()
+        {
+            _recentSchemas.Clear();
+            if (!_config.TryGetValue(KeyRecentSchemas, out string raw) || string.IsNullOrWhiteSpace(raw))
+            {
+                return;
+            }
+
+            foreach (string part in raw.Split('|'))
+            {
+                string name = part.Trim();
+                if (name.Length == 0 ||
+                    _recentSchemas.Any(s => string.Equals(s, name, StringComparison.OrdinalIgnoreCase)))
+                {
+                    continue;
+                }
+
+                _recentSchemas.Add(name);
+                if (_recentSchemas.Count >= 2)
+                {
+                    break;
+                }
             }
         }
 
