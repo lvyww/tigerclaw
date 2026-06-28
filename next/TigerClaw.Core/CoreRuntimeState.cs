@@ -238,6 +238,31 @@ namespace TigerClaw.Core
 
         private HashSet<string> _autoShortSymbol = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+        // Ctrl+m snapshot cache: lazily holds the most-recently-left code table's loaded lexicon so
+        // switching back is instant (no disk reload). Capacity 1; only the Ctrl+m path fills/uses it,
+        // and any plain ReloadLexicon clears it. Key = code-table directory name.
+        private readonly Dictionary<string, LexiconSnapshot> _lexiconCache =
+            new Dictionary<string, LexiconSnapshot>(StringComparer.OrdinalIgnoreCase);
+
+        // A fully-loaded code table: the bundle ReloadLexicon assigns to the live fields all at once.
+        private sealed class LexiconSnapshot
+        {
+            public Dictionary<string, List<string>> Lexicon;
+            public Dictionary<string, List<string>> PinyinLexicon;
+            public Dictionary<string, string> CommentMap;
+            public Dictionary<string, string> SplitMap;
+            public Dictionary<string, string> FullCodeMap;
+            public Dictionary<string, string> ConstructCodeMap;
+            public HashSet<string> Unique;
+            public HashSet<string> NonTerminal;
+            public HashSet<char> Leading;
+            public bool ShortSymbolSemicolon;
+            public bool ShortSymbolSlash;
+            public bool ShortSymbolLBracket;
+            public bool ShortSymbolZ;
+            public HashSet<string> AutoShortSymbol;
+        }
+
 
 
         private readonly string _exeDir;
@@ -399,6 +424,24 @@ namespace TigerClaw.Core
                     WriteConfigNoThrow();
                 }
 
+                // A full disk reload of the current table invalidates the Ctrl+m snapshot cache.
+                lock (_lock) { _lexiconCache.Clear(); }
+
+                ApplyLexiconSnapshot(BuildLexiconSnapshot(mbDir));
+
+                return true;
+
+            }
+
+            catch { return false; }
+
+        }
+
+        // Build a fully-loaded lexicon snapshot from disk for the given code-table directory.
+        // Pure heavy work: reads only `mbDir`; touches no live fields and takes no lock.
+        private LexiconSnapshot BuildLexiconSnapshot(string mbDir)
+        {
+
                 var map = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
 
                 var codedRows = new List<(string code, string text, int freq)>(4096);
@@ -551,48 +594,74 @@ namespace TigerClaw.Core
 
                                        out HashSet<string> autoShort);
 
-                lock (_lock)
-
+                return new LexiconSnapshot
                 {
+                    Lexicon = map,
+                    PinyinLexicon = pyMap,
+                    CommentMap = commentMap,
+                    SplitMap = splitMap,
+                    FullCodeMap = fullCodeMap,
+                    ConstructCodeMap = constructCodeMapFinal,
+                    Unique = unique,
+                    NonTerminal = nonTerm,
+                    Leading = leading,
+                    ShortSymbolSemicolon = shortSemi,
+                    ShortSymbolSlash = shortSlash,
+                    ShortSymbolLBracket = shortLBracket,
+                    ShortSymbolZ = shortZ,
+                    AutoShortSymbol = autoShort,
+                };
 
-                    _lexicon = map;
+        }
 
-                    _pinyinLexicon = pyMap;
-
-                    _commentMap = commentMap;
-
-                    _splitMap = splitMap;
-
-                    _fullCodeMap = fullCodeMap;
-
-                    _constructCodeMap = constructCodeMapFinal;
-
-                    _unique = unique;
-
-                    _nonTerminal = nonTerm;
-
-                    _leading = leading;
-
-                    _shortSymbolSemicolon = shortSemi;
-
-                    _shortSymbolSlash = shortSlash;
-
-                    _shortSymbolLBracket = shortLBracket;
-
-                    _shortSymbolZ = shortZ;
-
-                    _autoShortSymbol = autoShort;
-
-                    LexiconVersion++;
-
-                }
-
-                return true;
-
+        // Swap a loaded snapshot into the live fields under lock and bump LexiconVersion so the
+        // existing UI pipeline (PublishUiState -> GetUiSnapshot) re-resolves candidates.
+        private void ApplyLexiconSnapshot(LexiconSnapshot s)
+        {
+            lock (_lock)
+            {
+                _lexicon = s.Lexicon;
+                _pinyinLexicon = s.PinyinLexicon;
+                _commentMap = s.CommentMap;
+                _splitMap = s.SplitMap;
+                _fullCodeMap = s.FullCodeMap;
+                _constructCodeMap = s.ConstructCodeMap;
+                _unique = s.Unique;
+                _nonTerminal = s.NonTerminal;
+                _leading = s.Leading;
+                _shortSymbolSemicolon = s.ShortSymbolSemicolon;
+                _shortSymbolSlash = s.ShortSymbolSlash;
+                _shortSymbolLBracket = s.ShortSymbolLBracket;
+                _shortSymbolZ = s.ShortSymbolZ;
+                _autoShortSymbol = s.AutoShortSymbol;
+                LexiconVersion++;
             }
+        }
 
-            catch { return false; }
-
+        // Reference-copy the current live fields into a snapshot so the table being switched away
+        // from can be cached for an instant Ctrl+m switch back.
+        private LexiconSnapshot CaptureLiveSnapshot()
+        {
+            lock (_lock)
+            {
+                return new LexiconSnapshot
+                {
+                    Lexicon = _lexicon,
+                    PinyinLexicon = _pinyinLexicon,
+                    CommentMap = _commentMap,
+                    SplitMap = _splitMap,
+                    FullCodeMap = _fullCodeMap,
+                    ConstructCodeMap = _constructCodeMap,
+                    Unique = _unique,
+                    NonTerminal = _nonTerminal,
+                    Leading = _leading,
+                    ShortSymbolSemicolon = _shortSymbolSemicolon,
+                    ShortSymbolSlash = _shortSymbolSlash,
+                    ShortSymbolLBracket = _shortSymbolLBracket,
+                    ShortSymbolZ = _shortSymbolZ,
+                    AutoShortSymbol = _autoShortSymbol,
+                };
+            }
         }
 
 
@@ -1829,10 +1898,33 @@ namespace TigerClaw.Core
                 return false;
             }
 
-            // Reuse the exact same path as the right-click "方案" menu / settings switch:
-            // set the "当前码表" config then reload the lexicon (mirrors ProtocolHandler's set_config case).
+            // Cache-aware Ctrl+m switch (faster than the menu/set_config path's disk ReloadLexicon):
+            // snapshot the table we are leaving, then restore the target from cache if present.
+            string leaving = current;
+            LexiconSnapshot leavingSnapshot = CaptureLiveSnapshot();
+
+            // Persist the new current table + recent pair (same as the menu/set_config path, but we
+            // replace the disk ReloadLexicon with the snapshot swap below).
             TrySetConfigValue(KeyCurrentMb, canonical, out _, out _);
-            ReloadLexicon(); // also records `canonical` as the new most-recent schema
+            lock (_lock) { RecordRecentSchemaNoLock(canonical); }
+            WriteConfigNoThrow();
+
+            string targetMbDir = ResolveCurrentMbDir(ResolveCodeRoot());
+
+            LexiconSnapshot hit;
+            lock (_lock)
+            {
+                _lexiconCache.TryGetValue(canonical, out hit); // read before clearing
+                _lexiconCache.Clear();                          // enforce capacity 1
+                if (!string.IsNullOrEmpty(leaving))
+                {
+                    _lexiconCache[leaving] = leavingSnapshot;   // keep only the table we just left
+                }
+            }
+
+            // Cache hit -> instant swap; miss -> load the target from disk (outside the lock).
+            ApplyLexiconSnapshot(hit ?? BuildLexiconSnapshot(targetMbDir));
+
             newSchema = canonical;
             return true;
         }
