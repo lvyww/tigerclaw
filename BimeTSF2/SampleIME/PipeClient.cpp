@@ -172,6 +172,60 @@ BOOL CPipeClient::TryConnect()
     return TRUE;
 }
 
+// The pipe handle is opened with FILE_FLAG_OVERLAPPED, so writes MUST pass an OVERLAPPED;
+// otherwise the write may not complete synchronously and bytesWritten can be 0 while the I/O is
+// still pending, causing false failures. Mirrors ReadResponse but uses WaitForSingleObject (no msg pump).
+BOOL CPipeClient::WriteMessageOverlapped(const char *data, size_t len, DWORD timeoutMs)
+{
+    if (data == nullptr || _hPipe == INVALID_HANDLE_VALUE)
+    {
+        return FALSE;
+    }
+
+    OVERLAPPED ov = {};
+    ov.hEvent = CreateEvent(nullptr, TRUE, FALSE, nullptr);
+    if (ov.hEvent == nullptr)
+    {
+        LogPipeFailure("WriteMessageOverlapped.CreateEvent", GetLastError(), -1);
+        return FALSE;
+    }
+
+    DWORD bytesWritten = 0;
+    BOOL ok = WriteFile(_hPipe, data, static_cast<DWORD>(len), &bytesWritten, &ov);
+    if (!ok)
+    {
+        DWORD err = GetLastError();
+        if (err == ERROR_IO_PENDING)
+        {
+            DWORD waitResult = WaitForSingleObject(ov.hEvent, timeoutMs);
+            if (waitResult != WAIT_OBJECT_0)
+            {
+                CancelIo(_hPipe);
+                SetLastError(waitResult == WAIT_TIMEOUT ? ERROR_TIMEOUT : ERROR_GEN_FAILURE);
+                CloseHandle(ov.hEvent);
+                return FALSE;
+            }
+
+            if (!GetOverlappedResult(_hPipe, &ov, &bytesWritten, FALSE))
+            {
+                DWORD ge = GetLastError();
+                CloseHandle(ov.hEvent);
+                SetLastError(ge);
+                return FALSE;
+            }
+        }
+        else
+        {
+            CloseHandle(ov.hEvent);
+            SetLastError(err);
+            return FALSE;
+        }
+    }
+
+    CloseHandle(ov.hEvent);
+    return (bytesWritten == static_cast<DWORD>(len));
+}
+
 BOOL CPipeClient::SendMessage(const char *jsonMessage)
 {
     if (jsonMessage == nullptr)
@@ -186,9 +240,7 @@ BOOL CPipeClient::SendMessage(const char *jsonMessage)
     }
 
     size_t len = strlen(jsonMessage);
-    DWORD bytesWritten = 0;
-    BOOL ok = WriteFile(_hPipe, jsonMessage, static_cast<DWORD>(len), &bytesWritten, nullptr);
-    if (!ok || bytesWritten != static_cast<DWORD>(len))
+    if (!WriteMessageOverlapped(jsonMessage, len, BIME_PIPE_WRITE_TIMEOUT_MS))
     {
         LogPipeFailure("SendMessage.WriteFile", GetLastError(), ExtractSeqFromJson(jsonMessage));
         Disconnect();
@@ -228,9 +280,8 @@ HRESULT CPipeClient::SendMessageAndWait(const char *jsonMessage, _Out_ BimeRespo
     }
 
     size_t len = strlen(jsonMessage);
-    DWORD bytesWritten = 0;
-    BOOL writeOk = WriteFile(_hPipe, jsonMessage, static_cast<DWORD>(len), &bytesWritten, nullptr);
-    if (!writeOk || bytesWritten != static_cast<DWORD>(len))
+    BOOL writeOk = WriteMessageOverlapped(jsonMessage, len, BIME_PIPE_WRITE_TIMEOUT_MS);
+    if (!writeOk)
     {
         DWORD writeError = GetLastError();
         BOOL canReconnect = (writeError == ERROR_BROKEN_PIPE ||
@@ -244,8 +295,7 @@ HRESULT CPipeClient::SendMessageAndWait(const char *jsonMessage, _Out_ BimeRespo
             Disconnect();
             if (Connect())
             {
-                bytesWritten = 0;
-                writeOk = WriteFile(_hPipe, jsonMessage, static_cast<DWORD>(len), &bytesWritten, nullptr);
+                writeOk = WriteMessageOverlapped(jsonMessage, len, BIME_PIPE_WRITE_TIMEOUT_MS);
                 if (!writeOk)
                 {
                     writeError = GetLastError();
@@ -253,7 +303,7 @@ HRESULT CPipeClient::SendMessageAndWait(const char *jsonMessage, _Out_ BimeRespo
             }
         }
 
-        if (!writeOk || bytesWritten != static_cast<DWORD>(len))
+        if (!writeOk)
         {
             LogPipeFailure("SendMessageAndWait.WriteFile", writeError, seq);
             Disconnect();

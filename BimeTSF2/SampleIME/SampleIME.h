@@ -66,7 +66,7 @@ class CSampleIME : public ITfTextInputProcessorEx,//文本输入处理器
     public ITfFnShowHelp,//Windows shell help function
     public ITfFnSearchCandidateProvider,//Windows search candidate provider
     public ITfFnGetPreferredTouchKeyboardLayout,//获取首选触摸键盘布局
-    public ITfActiveLanguageProfileNotifySink//输入法激活通知接收器（状态窗随激活显隐）
+    public ITfActiveLanguageProfileNotifySink//active language profile notify sink (status window activation)
 {
 public:
     CSampleIME();
@@ -139,6 +139,8 @@ public:
     BOOL _ResolveBimeCoreRelativePath(_Out_writes_(pathCount) WCHAR *path, size_t pathCount);
     void _SendFocusMessage();
     void _PublishImeActive();
+    void _ScheduleImeActivePublishRetry();
+    void _CancelImeActivePublishRetry();
     void _ScheduleFocusStateQuery();
     void _HandleDeferredFocusStateQuery();
     void _SendCaretMessage(LONG x, LONG y, LONG width = 2, LONG height = 20, int source = CARET_SOURCE_UNKNOWN);
@@ -262,7 +264,7 @@ private:
     // The cookie of ThreadMgrEventSink
     DWORD _threadMgrEventSinkCookie;
 
-    // The cookie of ActiveLanguageProfileNotifySink（输入法激活通知）
+    // The cookie of ActiveLanguageProfileNotifySink (active language profile notify)
     DWORD _activeLanguageProfileNotifySinkCookie = TF_INVALID_COOKIE;
 
     // Language bar item object.
@@ -300,11 +302,11 @@ private:
     DWORD _pendingFocusProcessId;
     BOOL _focusQueryPending;
 
-    // 状态窗随 TSF 激活同步显隐：本 profile 是否被选中、焦点是否在可编辑文档、上次上报值
+    // Status window shows/hides with TSF activation: profile selected? last reported value / sent flag
     BOOL _profileActive;
-    BOOL _focusEditable;
     BOOL _lastImeActiveSent;
     BOOL _hasSentImeActive;
+    int _imeActivePublishRetryCount;
 
     BOOL _hasSentCaret;
     ULONGLONG _lastCaretSentTick;

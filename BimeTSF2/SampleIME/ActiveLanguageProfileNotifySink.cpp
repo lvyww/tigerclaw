@@ -102,8 +102,8 @@ static void LogActiveProfileStateActiveLang(_In_opt_ const char *stage)
     pProfileMgr->Release();
 }
 
-// 查询当前激活的键盘 profile 是否为本 IME（用于在 advise 之后 seed _profileActive，
-// 因为我们已是当前激活输入法时不会再收到自身的 OnActivated 回调）。
+// Query whether the active keyboard profile is ours (used to seed _profileActive after advise,
+// because when we are already the active IME we won't get our own OnActivated callback).
 static BOOL IsOurProfileActiveNow()
 {
     ITfInputProcessorProfileMgr *pProfileMgr = nullptr;
@@ -130,9 +130,9 @@ static BOOL IsOurProfileActiveNow()
 }
 
 //+---------------------------------------------------------------------------
-//�������ü�����Ϣ������::����
+// (CSampleIME active language profile notify)
 // ITfActiveLanguageProfileNotifySink::OnActivated
-//�����ļ������������ļ�ʱ����ܵ��ý�������
+// Notified by the framework when the active language profile changes.
 // Sink called by the framework when changes activate language profile.
 //----------------------------------------------------------------------------
 
@@ -150,7 +150,7 @@ STDAPI CSampleIME::OnActivated(_In_ REFCLSID clsid, _In_ REFGUID guidProfile, _I
     LogForegroundWindowInfoActiveLang("OnActivated");
     LogActiveProfileStateActiveLang("OnActivated");
 
-    // 状态窗随激活显隐：仅维护“本 IME 的 profile 是否被选中”，不恢复任何 legacy composition 逻辑。
+    // Status window activation: only track whether our profile is selected; no legacy composition logic.
     const BOOL isOurs = (IsEqualCLSID(clsid, Global::SampleIMECLSID) && IsEqualGUID(guidProfile, Global::SampleIMEGuidProfile)) ? TRUE : FALSE;
     if (isOurs)
     {
@@ -158,7 +158,7 @@ STDAPI CSampleIME::OnActivated(_In_ REFCLSID clsid, _In_ REFGUID guidProfile, _I
     }
     else if (isActivated)
     {
-        // 另一个输入法 profile 被激活 → 本 IME 不再是当前选中输入法
+        // Another input profile became active -> our IME is no longer the selected one
         _profileActive = FALSE;
     }
     _PublishImeActive();
@@ -194,7 +194,7 @@ BOOL CSampleIME::_InitActiveLanguageProfileNotifySink()
     }
 
     ret = TRUE;
-    // seed：若本 IME 已是当前激活输入法，则不会收到自身 OnActivated，需主动查询初始化。
+    // seed: if our IME is already the active one we won't get our own OnActivated, so query directly.
     _profileActive = IsOurProfileActiveNow();
     Global::LogToFileVerbose("ActiveLanguageProfile: sink advised cookie=0x%08X seeded_profileActive=%d",
                              _activeLanguageProfileNotifySinkCookie, _profileActive);

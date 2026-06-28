@@ -13,6 +13,7 @@
 
   <ItemGroup>
     <Resource Include="bime.ico" />
+    <Resource Include="donate_qr.png" />
   </ItemGroup>
 
   <ItemGroup>

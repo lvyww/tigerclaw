@@ -553,6 +553,27 @@
                                         Style="{StaticResource ActionButtonStyle}"
                                         Click="OnAboutOfficialClick" />
                             </StackPanel>
+
+                            <Border x:Name="DonateCard"
+                                    Style="{StaticResource SettingRowStyle}"
+                                    Padding="14,12"
+                                    Margin="0,14,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="赞赏支持"
+                                               Style="{StaticResource RowTitleStyle}" />
+                                    <TextBlock Text="本输入法为免费软件。如果它帮到了你，欢迎用微信扫码赞赏，支持持续开发。"
+                                               FontSize="13"
+                                               Foreground="#34251B"
+                                               TextWrapping="Wrap"
+                                               Margin="0,6,0,10" />
+                                    <Image Source="/donate_qr.png"
+                                           Width="200"
+                                           Height="195"
+                                           HorizontalAlignment="Left"
+                                           Stretch="Uniform"
+                                           RenderOptions.BitmapScalingMode="HighQuality" />
+                                </StackPanel>
+                            </Border>
                         </StackPanel>
                     </Border>
 

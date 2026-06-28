@@ -665,18 +665,8 @@ STDAPI CSampleIME::OnSetFocus(_In_ ITfDocumentMgr *pDocMgrFocus, _In_ ITfDocumen
     _StopCaretTracking();
     _SendFocusMessage();
 
-    // 状态窗随激活显隐：焦点落在可编辑文档（docMgr 非空且有 top context）才算可输入。
-    BOOL focusEditable = FALSE;
-    if (pDocMgrFocus != nullptr)
-    {
-        ITfContext *pTopContext = nullptr;
-        if (SUCCEEDED(pDocMgrFocus->GetTop(&pTopContext)) && pTopContext != nullptr)
-        {
-            focusEditable = TRUE;
-            pTopContext->Release();
-        }
-    }
-    _focusEditable = focusEditable;
+    // Status window activation: focus changed, so republish. _PublishImeActive queries focus
+    // editability live from the current thread focus, so no need to compute it here.
     _PublishImeActive();
 
     return S_OK;

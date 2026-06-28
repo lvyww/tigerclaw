@@ -745,6 +745,11 @@ static void ClearRangeDisplayAttribute(_In_opt_ ITfContext *pContext, TfEditCook
 static const WCHAR kCaretCoalesceWindowClass[] = L"TigerClaw.CaretCoalesceWindow";
 static const UINT_PTR kCaretCoalesceTimerId = 1;
 static const UINT_PTR kFocusQueryStateTimerId = 2;
+// ime_active publish retry: on first launch Core is still starting, so the pipe is down when we
+// first want to report active=TRUE. Retry on a timer until Core connects (bounded).
+static const UINT_PTR kImeActivePublishRetryTimerId = 3;
+static const UINT kImeActivePublishRetryDelayMs = 400;
+static const int kImeActivePublishRetryMax = 15;
 static const UINT kCaretCoalesceWindowMs = 12;
 static const UINT kCaretAnchorOverrideWindowMs = 3;
 static const UINT kFocusQueryStateDelayMs = 30;
@@ -801,6 +806,15 @@ LRESULT CALLBACK CSampleIME_WindowProc(HWND wndHandle, UINT uMsg, WPARAM wParam,
                 pTextService->_HandleDeferredFocusStateQuery();
                 return 0;
             }
+            if (wParam == kImeActivePublishRetryTimerId)
+            {
+                if (pTextService->_msgWndHandle != nullptr)
+                {
+                    KillTimer(pTextService->_msgWndHandle, kImeActivePublishRetryTimerId);
+                }
+                pTextService->_PublishImeActive();
+                return 0;
+            }
         }
         break;
 
@@ -826,6 +840,7 @@ LRESULT CALLBACK CSampleIME_WindowProc(HWND wndHandle, UINT uMsg, WPARAM wParam,
         {
             KillTimer(wndHandle, kCaretCoalesceTimerId);
             KillTimer(wndHandle, kFocusQueryStateTimerId);
+            KillTimer(wndHandle, kImeActivePublishRetryTimerId);
             pTextService->_ClearDeferredCaretAnchorReopen();
             pTextService->_caretTrackingPrimePending = FALSE;
             pTextService->_msgWndHandle = nullptr;
@@ -897,6 +912,7 @@ CSampleIME::CSampleIME()
     _pSIPIMEOnOffCompartment = nullptr;
     _dwSIPIMEOnOffCompartmentSinkCookie = 0;
     _msgWndHandle = nullptr;
+    _imeActivePublishRetryCount = 0;
 
     _pPipeClient = new (std::nothrow) CPipeClient();
 
@@ -1113,9 +1129,9 @@ STDAPI CSampleIME::ActivateEx(ITfThreadMgr *pThreadMgr, TfClientId tfClientId, D
     _pendingFocusProcessId = 0;
     _focusQueryPending = FALSE;
     _profileActive = FALSE;
-    _focusEditable = FALSE;
     _lastImeActiveSent = FALSE;
     _hasSentImeActive = FALSE;
+    _imeActivePublishRetryCount = 0;
 
     char trialExpireUtc[64] = {};
     BOOL trialExpired = FALSE;
@@ -1171,7 +1187,7 @@ STDAPI CSampleIME::ActivateEx(ITfThreadMgr *pThreadMgr, TfClientId tfClientId, D
     }
 
     _InitCtrlSpacePreservedKey();
-    // 状态窗随激活显隐：启用 active-language-profile 通知（仅用于上报激活态，不恢复 legacy composition）。
+    // Status window activation: enable the active-language-profile sink (report activation only; no legacy composition).
     _InitActiveLanguageProfileNotifySink();
 
     if (!_InitFunctionProviderSink())
@@ -1183,6 +1199,10 @@ STDAPI CSampleIME::ActivateEx(ITfThreadMgr *pThreadMgr, TfClientId tfClientId, D
     {
         goto ExitError;
     }
+
+    // Publish activation now: switching back to this IME always runs ActivateEx, but the self
+    // OnActivated that triggered it is usually missed (sink advised too late), so push state here.
+    _PublishImeActive();
 
     return S_OK;
 
@@ -1202,7 +1222,7 @@ STDAPI CSampleIME::Deactivate()
     _ClearDeferredCaretAnchorReopen();
 
     _UninitFunctionProviderSink();
-    // 状态窗随激活显隐：注销 active-language-profile 通知（须在 _pThreadMgr 释放前）。
+    // Status window activation: unadvise the active-language-profile sink (must run before _pThreadMgr is released).
     _UninitActiveLanguageProfileNotifySink();
 
     _UninitKeyEventSink();
@@ -1229,7 +1249,7 @@ STDAPI CSampleIME::Deactivate()
     CompartmentDoubleSingleByte._ClearCompartment();
 
     CCompartment CompartmentPunctuation(_pThreadMgr, _tfClientId, Global::SampleIMEGuidCompartmentPunctuation);
-    CompartmentDoubleSingleByte._ClearCompartment();
+    CompartmentPunctuation._ClearCompartment();
 
     if (_pThreadMgr != nullptr)
     {
@@ -1244,9 +1264,9 @@ STDAPI CSampleIME::Deactivate()
         _pDocMgrLastFocused = nullptr;
     }
 
-    // 失活/卸载时通知 Core 隐藏状态窗（须在 Disconnect 之前发送）。
+    // On deactivate/teardown, tell Core to hide the status window (must send before Disconnect).
+    _CancelImeActivePublishRetry();
     _profileActive = FALSE;
-    _focusEditable = FALSE;
     if (_pPipeClient && _pPipeClient->IsConnected())
     {
         _pPipeClient->SendImeActiveMessage(FALSE);
@@ -2956,6 +2976,7 @@ void CSampleIME::_UninitCaretCoalesceWindow()
     {
         KillTimer(_msgWndHandle, kCaretCoalesceTimerId);
         KillTimer(_msgWndHandle, kFocusQueryStateTimerId);
+        KillTimer(_msgWndHandle, kImeActivePublishRetryTimerId);
         DestroyWindow(_msgWndHandle);
         _msgWndHandle = nullptr;
     }
@@ -3319,12 +3340,31 @@ void CSampleIME::_SendFocusMessage()
 
 void CSampleIME::_PublishImeActive()
 {
-    // 激活态 = 本 IME 被选中(profile) 且 焦点在可编辑文档(focus)。两者任一不满足即未激活。
-    BOOL active = (_profileActive && _focusEditable) ? TRUE : FALSE;
+    // Query focus editability live (not cached): switching IME / Win+Space fires OnActivated but
+    // not OnSetFocus, so a cached value goes stale. Re-derive from the current thread focus each time.
+    BOOL focusEditable = FALSE;
+    if (_pThreadMgr != nullptr)
+    {
+        ITfDocumentMgr *pDocMgrFocus = nullptr;
+        if (SUCCEEDED(_pThreadMgr->GetFocus(&pDocMgrFocus)) && pDocMgrFocus != nullptr)
+        {
+            ITfContext *pTopContext = nullptr;
+            if (SUCCEEDED(pDocMgrFocus->GetTop(&pTopContext)) && pTopContext != nullptr)
+            {
+                focusEditable = TRUE;
+                pTopContext->Release();
+            }
+            pDocMgrFocus->Release();
+        }
+    }
 
-    // 去抖：仅在与上次上报值不同时才发送，避免 OnSetFocus/OnActivated 频繁触发刷屏。
+    // Active = our IME selected (profile) AND focus on an editable doc. Either false => inactive.
+    BOOL active = (_profileActive && focusEditable) ? TRUE : FALSE;
+
+    // Debounce: only send when the value changed, to avoid spamming on frequent OnSetFocus/OnActivated.
     if (_hasSentImeActive && _lastImeActiveSent == active)
     {
+        _CancelImeActivePublishRetry();
         return;
     }
 
@@ -3336,15 +3376,50 @@ void CSampleIME::_PublishImeActive()
     if (!_EnsurePipeConnected())
     {
         Global::LogToFileVerbose("ImeActiveSync: pipe unavailable active=%d", active);
+        // First launch: Core not connected yet. If we want to show (active=TRUE), retry until Core is up.
+        if (active)
+        {
+            _ScheduleImeActivePublishRetry();
+        }
         return;
     }
 
     BOOL sent = _pPipeClient->SendImeActiveMessage(active);
-    Global::LogToFileVerbose("ImeActiveSync: sent=%d active=%d profile=%d focus=%d", sent, active, _profileActive, _focusEditable);
+    Global::LogToFileVerbose("ImeActiveSync: sent=%d active=%d profile=%d focus=%d", sent, active, _profileActive, focusEditable);
     if (sent)
     {
         _lastImeActiveSent = active;
         _hasSentImeActive = TRUE;
+        _CancelImeActivePublishRetry();
+    }
+    else if (active)
+    {
+        _ScheduleImeActivePublishRetry();
+    }
+}
+
+void CSampleIME::_ScheduleImeActivePublishRetry()
+{
+    if (_msgWndHandle == nullptr)
+    {
+        return;
+    }
+    if (_imeActivePublishRetryCount >= kImeActivePublishRetryMax)
+    {
+        Global::LogToFileVerbose("ImeActiveSync: retry exhausted count=%d", _imeActivePublishRetryCount);
+        return;
+    }
+    _imeActivePublishRetryCount++;
+    KillTimer(_msgWndHandle, kImeActivePublishRetryTimerId);
+    SetTimer(_msgWndHandle, kImeActivePublishRetryTimerId, kImeActivePublishRetryDelayMs, nullptr);
+}
+
+void CSampleIME::_CancelImeActivePublishRetry()
+{
+    _imeActivePublishRetryCount = 0;
+    if (_msgWndHandle != nullptr)
+    {
+        KillTimer(_msgWndHandle, kImeActivePublishRetryTimerId);
     }
 }
 

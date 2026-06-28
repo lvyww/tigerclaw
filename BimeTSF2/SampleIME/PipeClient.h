@@ -6,6 +6,7 @@
 #define BIME_PIPE_NAME L"\\\\.\\pipe\\BimeIPC"
 #define BIME_PIPE_BUFFER_SIZE 4096
 #define BIME_DEFAULT_TIMEOUT_MS 200
+#define BIME_PIPE_WRITE_TIMEOUT_MS 200
 #define BIME_PROTOCOL_VERSION 2
 
 struct BimeResponse
@@ -88,6 +89,7 @@ private:
     BOOL _helloDone;
 
     BOOL TryConnect();
+    BOOL WriteMessageOverlapped(const char *data, size_t len, DWORD timeoutMs);
     BOOL ReadResponse(_Out_writes_bytes_(bufferSize) char *buffer, DWORD bufferSize, DWORD timeoutMs);
     BOOL ParseResponse(const char *json, _Out_ BimeResponse *pResponse);
 };
