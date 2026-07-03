@@ -5,16 +5,16 @@
 BimeTSF2 now runs in bridge-only mode:
 
 - Capture TSF key/focus/caret events.
-- Forward to BimeCore through `\\.\pipe\BimeIPC`.
-- Apply BimeCore response (`handled`, `text_to_output`, `keyboard_open`) back to TSF/UI.
+- Forward to TigerClaw Core through `\\.\pipe\BimeIPC`.
+- Apply Core response (`handled`, `commit_text`, `keyboard_open`) back to TSF/UI.
 
 TSF side is **not** the source of IME state, composition state, or candidate logic.
 
 ## Source Of Truth
 
-- Chinese/English mode source: **BimeCore**.
-- TSF language bar icon: display-only mirror of BimeCore `keyboard_open`.
-- Any external/system compartment drift is corrected back to the cached BimeCore state.
+- Chinese/English mode source: **TigerClaw Core**.
+- TSF language bar icon: display-only mirror of Core `keyboard_open`.
+- Any external/system compartment drift is corrected back to the cached Core state.
 
 ## Build Set (active in `BimeTSF2.vcxproj`)
 

@@ -1,3 +1,7 @@
+> 当前项目交接入口是根目录 `AGENTS.md`。
+>
+> 本目录仍是活跃 TSF DLL 构建来源，但下方大量说明来自 SampleIME/旧 TSF 文档。当前实现为 bridge-only：TSF 侧主要捕获 key/focus/caret/ime_active 并通过 `\\.\pipe\BimeIPC` 转发给 TigerClaw Core；候选、组词和输入法状态以 Core 为准。当前桥接说明见 `SampleIME/BRIDGE_ONLY_NOTES.md`。
+
 ## 文件说明
 
 本章输入法源自[Windows-classic-samples](https://github.com/microsoft/Windows-classic-samples/tree/main/Samples/IME)。

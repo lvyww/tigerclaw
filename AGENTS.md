@@ -1,101 +1,126 @@
-# AGENTS.md
+# TigerClaw Agent Handoff
 
-## Project Overview
+This file is the single project handoff entry for future agents. Treat it as the current source of truth before reading older documents. External documents are referenced only where they are still useful.
 
-Current active runtime is **next split-process**:
+Last reorganized: 2026-07-03.
 
-- **Active runtime**: `next/` (split process)
-  - `TigerClaw.Core`
-  - `TigerClaw.Overlay`
-  - `TigerClaw.Dialog`
-  - `TigerClaw.Shared`
-- **Experimental native frontend**: `next/TigerClaw.Hook.Native/`
-  - C++ hook frontend skeleton
-  - currently wired into solution, `build_next.bat`, and `publish.bat`
-  - does not replace TSF default flow unless explicitly launched
-- **Active TSF packaging/build project**: `BimeTSF2/SampleIME/`
-- **Active publish entry**: `publish.bat`
-- **IPC docs**: `Protocol/messages.md`, `Protocol/entrypoints.md`, `Protocol/ui_messages.md`
+## Current Architecture
 
-Current notable behavior:
+TigerClaw is a Windows input method built around a split-process runtime.
 
-- Overlay typing sound is implemented in `next/TigerClaw.Overlay/TypingSoundPlayer.cs`
-  - normal keys use a `MediaPlayer` pool
-  - space and function/backspace keys use dedicated slots
-  - failed slots are auto-recreated
-- Code masking (`编码伪装`) is currently applied in `next/TigerClaw.Core/ProtocolHandler.cs` on outward display data
-  - internal Core input buffer remains raw
-  - TSF/Overlay receive masked display code
-- Candidate window currently does **not** show input code; code display is mainly via composition
-- `TigerClaw.Hook.Native` is currently experimental and should not change the default TSF workflow
-  - `next\build_next.bat` builds it into `next\_run\Debug\native\TigerClaw.Hook.Native.exe`
-  - `publish.bat` includes it in `release\TigerClaw.exe`
-- Settings window implementation is in `next/TigerClaw.Dialog/ConfigWindow.xaml` and `ConfigWindow.xaml.cs`
-  - grouped form layout
-  - search/filter
-  - `按键音量0~100` uses a slider
-  - empty-value config items must remain visible in parsing/UI
+```text
+Windows TSF
+  -> BimeTSF2/SampleIME/TigerClaw.dll
+  -> named pipe \\.\pipe\BimeIPC
+  -> next/TigerClaw.Core.exe
+  -> memory mapped UI state + heartbeat/events
+  -> next/TigerClaw.Overlay.exe
+  -> next/TigerClaw.Dialog.exe
+```
 
-Deprecated implementations were removed from root:
+Active components:
 
-- `bime/` removed
-- `BimeTSF/` removed
+- `BimeTSF2/SampleIME/`: active TSF DLL build/package source. It is bridge-only: capture TSF key/focus/caret/IME activation events, send them to Core, and apply Core responses back to TSF.
+- `next/TigerClaw.Core/`: input method state center. Owns config, lexicon loading, candidate logic, key handling, code masking, caret/focus state, IPC responses, and process launch commands.
+- `next/TigerClaw.Overlay/`: WPF status/candidate UI. Reads `OverlayUiState` from shared memory, renders candidate/status windows, and plays typing sounds.
+- `next/TigerClaw.Dialog/`: WPF settings/add-word/custom-selection-key UI. Talks to Core through the same named pipe.
+- `next/TigerClaw.Shared/`: shared runtime constants, build info, process guards, heartbeat/MMF helpers, and `OverlayUiState`.
+- `next/TigerClaw.Hook.Native/`: experimental native hook frontend. It is built and published, but it must not replace the default TSF workflow unless explicitly launched.
 
-Reference-only upstream source trees are kept under:
+Deprecated root implementations `bime/` and `BimeTSF/` have been removed. Upstream/reference-only trees live under `reference/` and must not be wired into active build or publish scripts.
 
-- `reference/bime-master/`
-- `reference/SampleIME/`
-- `reference/weasel/`
+## Runtime Contracts
 
----
+Main IPC:
 
-## Build Commands
+- Pipe: `\\.\pipe\BimeIPC`
+- Encoding: UTF-8 JSON, one message per line
+- Contract reference: `Protocol/messages.md`
+- Main handler: `next/TigerClaw.Core/ProtocolHandler.cs`
 
-### Mainline Build
+Common pipe message types in active code:
+
+- TSF/Native/Dialog -> Core requests: `hello`, `query_state`, `key`, `ctrl_space`, `show_menu`, `show_config`, `show_addci`, `reload_config`, `reload_mb`, `get_config`, `set_config`, `add_ci`, `construct_ci`
+- TSF/Native -> Core notifications: `focus`, `caret`, `ime_active`, `composition_canceled`, `hook_native_disabled`
+- Core -> caller response: `response` with fields such as `success`, `handled`, `commit_text`, `input_buffer`, `keyboard_open`, `cancel_composition`
+
+UI state:
+
+- Core publishes `OverlayUiState` to `Local\TigerClaw.UiState.v1`.
+- Overlay polls that memory map via `UiStateReader`.
+- Core heartbeat is `Local\TigerClaw.Heartbeat.v1`; Overlay heartbeat is `Local\TigerClaw.OverlayHeartbeat.v1`.
+- Status-window menu trigger uses `Local\TigerClaw.ShowMenu.v1`.
+
+Important behavior:
+
+- Core internal input buffer remains raw.
+- Code masking (`编码伪装`) is display-only and is applied in `ProtocolHandler` before TSF/Overlay see outward display code.
+- Candidate display is owned by Overlay. TSF legacy candidate UI is not the active path.
+- Candidate window does not normally show input code unless the relevant config says so.
+- Overlay typing sound is implemented in `next/TigerClaw.Overlay/TypingSoundPlayer.cs`.
+
+## Key Code Paths
+
+Startup:
+
+- Core entry: `next/TigerClaw.Core/Program.cs`
+- Core process launching: `next/TigerClaw.Core/ProcessLauncher.cs`
+- TSF registration guard/shared constants: `next/TigerClaw.Shared/`
+
+Key handling:
+
+- TSF side: `BimeTSF2/SampleIME/KeyEventSink.cpp`
+- TSF pipe client: `BimeTSF2/SampleIME/PipeClient.cpp`
+- Core protocol dispatch: `next/TigerClaw.Core/ProtocolHandler.cs`
+- Core engine: `next/TigerClaw.Core/InputMethodEngine.cs`
+- Runtime config/lexicon/candidates: `next/TigerClaw.Core/CoreRuntimeState.cs`
+
+UI:
+
+- Overlay main window: `next/TigerClaw.Overlay/MainWindow.xaml.cs`
+- Overlay candidate rendering: `next/TigerClaw.Overlay/MainWindow.Candidate.cs`
+- Overlay state reader: `next/TigerClaw.Overlay/OverlayStateSource.cs`
+- Settings window: `next/TigerClaw.Dialog/ConfigWindow.xaml` and `ConfigWindow.xaml.cs`
+- Add-word window: `next/TigerClaw.Dialog/AddCiWindow.xaml` and `AddCiWindow.xaml.cs`
+- Dialog pipe client: `next/TigerClaw.Dialog/CorePipeClient.cs`
+
+Native hook:
+
+- Entry: `next/TigerClaw.Hook.Native/App/main.cpp`
+- Runtime: `next/TigerClaw.Hook.Native/App/HookRuntime.cpp`
+- Low-level keyboard hook: `next/TigerClaw.Hook.Native/Hook/KeyboardHook.cpp`
+- Native pipe client: `next/TigerClaw.Hook.Native/IPC/PipeClient.cpp`
+
+## Build And Smoke Test
+
+Mainline debug build:
 
 ```batch
 next\build_next.bat
 ```
 
-Builds debug artifacts to:
+Debug output:
 
 ```text
 next\_run\Debug\net48\
+next\_run\Debug\native\
 ```
 
-### Publish (Release)
+Release publish:
 
 ```batch
 publish.bat
 ```
 
-Builds release artifacts and copies to:
+Release output:
 
 ```text
 release\
+release\x64\TigerClaw.dll
+release\Win32\TigerClaw.dll
 ```
 
-Current release payload:
-
-- `TigerClaw.Core.exe`
-- `TigerClaw.Overlay.exe`
-- `TigerClaw.Dialog.exe`
-- `TigerClaw.exe`
-- `TigerClaw.Shared.dll`
-- `x64/TigerClaw.dll`
-- `Win32/TigerClaw.dll`
-
-### Batch Script Line Endings
-
-- All `.bat` files must use CRLF line endings (`\r\n`).
-- For text-file rewrites that are sensitive to encoding, Chinese filenames, or CRLF preservation, prefer a short Python script over PowerShell string replacement.
-- This preference is especially important for `.bat` files and other non-UTF-8 text files.
-
----
-
-## Manual Test Flow
-
-No automated tests yet. Use manual smoke test:
+Manual smoke test:
 
 ```batch
 next\build_next.bat
@@ -109,119 +134,73 @@ Then test in target apps and unregister if needed:
 next\unregister_dev_corepath.bat
 ```
 
----
+There are no automated tests yet.
 
-## C# Code Style
+## Common Workflows
 
-### Imports
+Add or change IPC:
 
-System namespaces -> third-party -> project namespaces. Keep alphabetical order.
+1. Update `Protocol/messages.md`.
+2. Update `next/TigerClaw.Core/ProtocolHandler.cs`.
+3. Update the caller side: TSF `PipeClient.cpp`, Dialog `CorePipeClient.cs`, Overlay shared-state reader, or Native Hook `PipeClient.cpp`.
 
-### Naming
+Modify key behavior:
 
-| Element | Convention | Example |
-|---------|------------|---------|
-| Namespace | Pascal/lowercase by existing project style | `TigerClaw.Core` |
-| Class/Method/Property | PascalCase | `ProtocolHandler`, `Handle` |
-| Private field | `_underscorePrefix` | `_state`, `_uiStatePublisher` |
-| Local variable | camelCase | `message`, `response` |
-| Constant | PascalCase or UPPER | `PipeName`, `VK_RETURN` |
+1. Start with `next/TigerClaw.Core/InputMethodEngine.cs`.
+2. Check response shaping and UI publication in `next/TigerClaw.Core/ProtocolHandler.cs`.
+3. Verify TSF handling in `BimeTSF2/SampleIME/KeyEventSink.cpp` only when physical key capture or TSF commit behavior changes.
 
-### Formatting
+Modify display-only code rendering:
 
-- Indent: 4 spaces
-- Braces: Allman style where existing files use it
-- Keep edits consistent with surrounding file style
+1. Prefer `next/TigerClaw.Core/ProtocolHandler.cs`.
+2. Keep raw Core input state separate from masked outward display state.
+3. Do not change protocol shape unless callers truly need a new field.
 
-### Native Hook / C++ Notes
+Modify settings:
 
-- When debugging window-title or IME compatibility issues, prefer logging unambiguous values such as hex code points in addition to human-readable text. Do not rely on terminal rendering of CJK strings alone.
-- For high-frequency diagnostics such as caret polling, keep logs disabled by default during targeted debugging. Remove or silence noisy logs once they stop serving the current investigation.
-- Do not rely on raw C++ source-file Chinese string literals for runtime matching in native code when cross-machine stability matters. Prefer code-point construction for non-ASCII match tokens.
-- When constructing non-ASCII strings from code points for matching, add an end-of-line comment showing the intended readable text, for example `// Pain打器` or `// 跟打`.
+1. UI: `next/TigerClaw.Dialog/ConfigWindow.xaml` and `ConfigWindow.xaml.cs`.
+2. Persistence/defaults: `next/TigerClaw.Core/CoreRuntimeState.cs`.
+3. Preserve grouped layout, search/filter, dirty-state feedback, and empty-string config values.
 
----
+Modify release packaging:
 
-## IPC Notes
+1. Edit `publish.bat`.
+2. Keep `.bat` files CRLF.
+3. Confirm `release\TigerClaw.Core.exe`, `TigerClaw.Overlay.exe`, `TigerClaw.Dialog.exe`, `TigerClaw.exe`, `TigerClaw.Shared.dll`, `x64\TigerClaw.dll`, and `Win32\TigerClaw.dll`.
 
-Transport:
+## Documentation Policy
 
-- Named pipe: `\\.\pipe\BimeIPC`
-- UTF-8 JSON per line (`\n`)
+This `AGENTS.md` is the single handoff entry. Keep it current and concise.
 
-Common message types in active code:
+Still-useful external documents:
 
-- `key`
-- `caret`
-- `focus`
-- `hello`
-- `query_state`
-- `ctrl_space`
-- `show_menu`
-- `response`
+- `Protocol/messages.md`: detailed pipe message fields.
+- `用户使用说明书.md`: user-facing install/use/config guide.
+- `更新日志.txt`: release notes.
+- `BimeTSF2/SampleIME/BRIDGE_ONLY_NOTES.md`: TSF bridge-only note.
+- `reference/README.md`: explains reference-only source trees.
 
-Use `Protocol/messages.md` as the contract source.
+Archived or historical documents live under `docs/archive/`. Do not treat them as current implementation guidance.
 
----
+Generated files, release payload files, `reference/`, and `BimeTSF2/doc/` are not the active project handoff surface unless a task specifically asks for them.
 
-## Project Structure
+## Style And Safety Notes
 
-```text
-bime_codex/
-|-- BimeTSF2/                      # Active TSF build/package source
-|-- next/                          # Active source
-|   |-- TigerClaw.Core/
-|   |-- TigerClaw.Overlay/
-|   |-- TigerClaw.Dialog/
-|   |-- TigerClaw.Hook.Native/
-|   `-- TigerClaw.Shared/
-|-- Protocol/                      # Active protocol docs
-|-- reference/                     # Reference-only upstream source
-|   |-- bime-master/
-|   |-- SampleIME/
-|   `-- weasel/
-|-- release/                       # Publish output
-|-- publish.bat                    # Only root bat entry
-`-- AGENTS.md
-```
+C#:
 
----
+- Use existing project style, 4 spaces, Allman braces where surrounding code does.
+- Import order: System namespaces, third-party namespaces, project namespaces.
+- Private fields use `_underscorePrefix`; locals use camelCase.
 
-## Common Tasks
+C++:
 
-### Add/Change IPC Message
+- When debugging window-title or IME compatibility issues, log unambiguous values such as hex code points in addition to human-readable text.
+- Keep high-frequency caret/key diagnostics disabled by default once targeted debugging ends.
+- Do not rely on raw C++ source-file Chinese string literals for cross-machine runtime matching. Prefer code-point construction and add an end-of-line readable comment, for example `// Pain打器` or `// 跟打`.
 
-1. Update `Protocol/messages.md`
-2. Update active handler path:
-   - `next/TigerClaw.Core/ProtocolHandler.cs`
-   - related UI/reader code in `next/TigerClaw.Overlay/` or `next/TigerClaw.Dialog/`
+Repository hygiene:
 
-### Modify Key Handling
-
-1. `next/TigerClaw.Core/InputMethodEngine.cs`
-2. `next/TigerClaw.Core/ProtocolHandler.cs`
-3. verify overlay display in `next/TigerClaw.Overlay/`
-
-### Modify Display-Only Code Rendering
-
-1. If the change affects what TSF/Overlay should display but not how Core computes input, prefer changing:
-   - `next/TigerClaw.Core/ProtocolHandler.cs`
-2. Do not change protocol shape unless there is a clear need.
-3. Keep raw Core input state and outward display state conceptually separate.
-
-### Modify Settings Window
-
-1. Main files:
-   - `next/TigerClaw.Dialog/ConfigWindow.xaml`
-   - `next/TigerClaw.Dialog/ConfigWindow.xaml.cs`
-2. Preserve:
-   - grouped form layout
-   - search/filter
-   - dirty-state feedback
-   - support for empty-string config values
-
-### Release Packaging
-
-1. Run `publish.bat`
-2. Check output files under `release\`
-3. Confirm TSF payload exists under `release\x64\` and `release\Win32\`
+- The worktree may be dirty. Do not revert unrelated user changes.
+- Prefer `rg`/`rg --files` for search.
+- Use `apply_patch` for manual file edits.
+- All `.bat` files must keep CRLF line endings. For encoding-sensitive rewrites with Chinese filenames or CRLF preservation, prefer a short Python script over PowerShell string replacement.

@@ -2,27 +2,27 @@
 
 ## 概览
 
-BimeTSF/BimeTSF2 与 BimeCore 通过命名管道通信。
+BimeTSF2、Dialog、Native Hook 与 TigerClaw Core 通过命名管道通信。
 
 - 管道名: `\\.\pipe\BimeIPC`
 - 编码: UTF-8
 - 分隔: 每条 JSON 以换行 `\n` 结尾
 - 方向:
-  - TSF -> Core: 请求/通知
-  - Core -> TSF: 响应
+  - 前端 -> Core: 请求/通知
+  - Core -> 前端: 响应
 
 ## 通用约定
 
 - `type` 为消息类型。
 - `seq` 仅在“需要响应”的请求中使用，用于请求-响应配对。
 - 布尔字段默认值由发送方显式给出，不要依赖隐式默认。
-- 中英文状态以 BimeCore 为准，通过 `response.keyboard_open` 向 TSF 同步。
+- 中英文状态以 TigerClaw Core 为准，通过 `response.keyboard_open` 向前端同步。
 
 ## 消息类型
 
 ### 1. `key`（TSF -> Core，需响应）
 
-用途: 发送按键事件到 BimeCore，由 Core 决定是否处理、是否上屏。
+用途: 发送按键事件到 Core，由 Core 决定是否处理、是否上屏。
 
 示例:
 
@@ -132,7 +132,7 @@ BimeTSF/BimeTSF2 与 BimeCore 通过命名管道通信。
 
 对应响应: `response`
 
-### 11. `ime_active`（TSF -> Core，通知）
+### 10. `ime_active`（TSF -> Core，通知）
 
 用途: 通知本输入法是否处于激活态，供 Core 控制状态窗显隐。激活态 = 本 IME 是当前选中输入法（profile）且焦点落在可编辑文档上；两者任一不满足即未激活。
 
@@ -151,7 +151,7 @@ BimeTSF/BimeTSF2 与 BimeCore 通过命名管道通信。
 - TSF 在 `ActiveLanguageProfileNotifySink::OnActivated`（输入法切换）和 `ThreadMgrEventSink::OnSetFocus`（焦点变化）时计算并上报；`Deactivate` 卸载前强制上报 `false`。
 - Core 收到后将其折入 `OverlayUiState.HideStatusBar`（未激活时强制隐藏）。
 
-### 10. `query_state`（TSF -> Core，需响应）
+### 11. `query_state`（TSF -> Core，需响应）
 
 用途: TSF 在焦点切换等场景主动查询 Core 当前中英文状态，避免语言栏显示漂移。
 
@@ -168,16 +168,15 @@ BimeTSF/BimeTSF2 与 BimeCore 通过命名管道通信。
 示例:
 
 ```json
-{"type":"response","seq":101,"success":true,"handled":true,"text_to_output":"你好","input_buffer":"nihao","is_composing":true,"keyboard_open":true}
+{"type":"response","seq":101,"success":true,"handled":true,"commit_text":"你好","input_buffer":"nihao","keyboard_open":true}
 ```
 
 字段:
 
 - `success`: 请求处理是否成功
 - `handled`: 当前按键/命令是否由 Core 接管
-- `text_to_output`: 需要 TSF 代为上屏的字符串（可为空或省略）
+- `commit_text`: 需要前端代为上屏/回放的字符串（可为空或省略）
 - `input_buffer`: 当前输入串（可选）
-- `is_composing`: 是否处于组词态（可选）
 - `keyboard_open`: Core 当前中英状态（可选，`true`=中文，`false`=英文）
 - `protocol_version`: 协议版本（`hello` 响应可选）
 - `core_build`: Core 构建标识（`hello` 响应可选）
