@@ -60,6 +60,7 @@ namespace TigerClawHookNative
         keyEvent.VirtualKey = keyboardInfo->vkCode;
         keyEvent.ScanCode = keyboardInfo->scanCode;
         keyEvent.IsInjected = (keyboardInfo->flags & LLKHF_INJECTED) != 0;
+        keyEvent.IsExtended = (keyboardInfo->flags & LLKHF_EXTENDED) != 0;
         keyEvent.IsKeyDown = (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN);
         keyEvent.IsKeyUp = (wParam == WM_KEYUP || wParam == WM_SYSKEYUP);
         keyEvent.Flags = keyboardInfo->flags;

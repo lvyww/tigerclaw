@@ -76,6 +76,9 @@ namespace TigerClaw.Shared
 
         [DataMember(Order = 24)]
         public int AnnotationExpandDelayMs { get; set; }
+
+        [DataMember(Order = 25)]
+        public bool IsNativeHook { get; set; }
     }
 }
 

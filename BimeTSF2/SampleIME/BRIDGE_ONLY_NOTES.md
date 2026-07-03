@@ -18,9 +18,14 @@ TSF side is **not** the source of IME state, composition state, or candidate log
 
 ## Build Set (active in `BimeTSF2.vcxproj`)
 
+- `ActiveLanguageProfileNotifySink.cpp`
 - `BaseWindow.cpp`
 - `Compartment.cpp`
 - `DllMain.cpp`
+- `DisplayAttributeInfo.cpp`
+- `DisplayAttributeProvider.cpp`
+- `EnumDisplayAttributeInfo.cpp`
+- `EnumTfCandidates.cpp`
 - `EditSession.cpp`
 - `FunctionProviderSink.cpp`
 - `Globals.cpp`
@@ -34,7 +39,9 @@ TSF side is **not** the source of IME state, composition state, or candidate log
 - `SampleIME.cpp`
 - `TfInputProcessorProfile.cpp`
 - `ThreadMgrEventSink.cpp`
+- `TipCandidateList.cpp`
+- `TipCandidateString.cpp`
 
-## Legacy Code
+`BaseWindow.cpp` is still active because `Globals.cpp` uses it for TSF window-class registration.
 
-SampleIME legacy composition/candidate/display-attribute paths remain in tree for reference, but are excluded from current bridge-only compile path.
+Legacy SampleIME documents and inactive composition/candidate/dictionary source files have been removed from this tree. Reference copies remain under `../../reference/SampleIME/`.

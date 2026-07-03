@@ -227,7 +227,7 @@ namespace TigerClaw.Overlay
                 return;
             }
 
-            _statusWindow.ApplyStatus(_state.IsOff, _state.IsChinese, _state.StatusText, _state.HideStatusBar);
+            _statusWindow.ApplyStatus(_state.IsOff, _state.IsNativeHook, _state.IsChinese, _state.StatusText, _state.HideStatusBar);
         }
 
         private void Window_Loaded(object sender, RoutedEventArgs e)

@@ -29,22 +29,14 @@
     <None Include="image\SampleIme.ico" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="BaseDictionaryEngine.h" />
     <ClInclude Include="BaseWindow.h" />
-    <ClInclude Include="ButtonWindow.h" />
     <ClInclude Include="Compartment.h" />
-    <ClInclude Include="CompositionProcessorEngine.h" />
     <ClInclude Include="define.h" />
     <ClInclude Include="SampleIMEBaseStructure.h" />
-    <ClInclude Include="DictionaryParser.h" />
-    <ClInclude Include="DictionarySearch.h" />
     <ClInclude Include="DisplayAttributeInfo.h" />
     <ClInclude Include="EditSession.h" />
     <ClInclude Include="EnumTfCandidates.h" />
     <ClInclude Include="EnumDisplayAttributeInfo.h" />
-    <ClInclude Include="File.h" />
-    <ClInclude Include="FileMapping.h" />
-    <ClInclude Include="GetTextExtentEditSession.h" />
     <ClInclude Include="Globals.h" />
     <ClInclude Include="LanguageBar.h" />
     <ClInclude Include="PipeClient.h" />
@@ -52,14 +44,10 @@
     <ClInclude Include="RegKey.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="SampleIME.h" />
-    <ClInclude Include="ScrollBarWindow.h" />
-    <ClInclude Include="ShadowWindow.h" />
     <ClInclude Include="stdafx.h" />
-    <ClInclude Include="TableDictionaryEngine.h" />
     <ClInclude Include="TipCandidateList.h" />
     <ClInclude Include="TipCandidateString.h" />
     <ClInclude Include="TfInputProcessorProfile.h" />
-    <ClInclude Include="TfTextLayoutSink.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="ActiveLanguageProfileNotifySink.cpp" />

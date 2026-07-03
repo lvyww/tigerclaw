@@ -103,36 +103,7 @@ BimeTSF2、Dialog、Native Hook 与 TigerClaw Core 通过命名管道通信。
 
 说明: 当前实现不要求响应。
 
-### 7. `connect`（TSF -> Core，需响应）
-
-用途: 握手/连通性确认。
-
-示例:
-
-```json
-{"type":"connect","seq":1}
-```
-
-对应响应: `response`
-
-### 8. `ping` / `pong`
-
-- 请求: `{"type":"ping"}`
-- 响应: `{"type":"pong"}`
-
-### 9. `keyboard_open_close`（兼容保留，需响应）
-
-用途: 直接设定 Core 中英开关状态。
-
-示例:
-
-```json
-{"type":"keyboard_open_close","seq":104,"open":true}
-```
-
-对应响应: `response`
-
-### 10. `ime_active`（TSF -> Core，通知）
+### 7. `ime_active`（TSF -> Core，通知）
 
 用途: 通知本输入法是否处于激活态，供 Core 控制状态窗显隐。激活态 = 本 IME 是当前选中输入法（profile）且焦点落在可编辑文档上；两者任一不满足即未激活。
 
@@ -151,7 +122,7 @@ BimeTSF2、Dialog、Native Hook 与 TigerClaw Core 通过命名管道通信。
 - TSF 在 `ActiveLanguageProfileNotifySink::OnActivated`（输入法切换）和 `ThreadMgrEventSink::OnSetFocus`（焦点变化）时计算并上报；`Deactivate` 卸载前强制上报 `false`。
 - Core 收到后将其折入 `OverlayUiState.HideStatusBar`（未激活时强制隐藏）。
 
-### 11. `query_state`（TSF -> Core，需响应）
+### 8. `query_state`（TSF -> Core，需响应）
 
 用途: TSF 在焦点切换等场景主动查询 Core 当前中英文状态，避免语言栏显示漂移。
 

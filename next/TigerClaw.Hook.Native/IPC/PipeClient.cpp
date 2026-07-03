@@ -268,13 +268,16 @@ namespace TigerClawHookNative
         const long seq = InterlockedIncrement(&_nextSeq);
         stream << "{\"type\":\"key\",\"seq\":" << seq
                << ",\"vk\":" << keyEvent.VirtualKey
-               << ",\"scan_code\":" << keyEvent.ScanCode
-               << ",\"action\":\"" << (keyEvent.IsKeyDown ? "key_down" : "key_up") << "\""
+               << ",\"scan\":" << keyEvent.ScanCode
+               << ",\"action\":\"" << (keyEvent.IsKeyDown ? "down" : "up") << "\""
                << ",\"shift\":" << (state.ShiftDown() ? "true" : "false")
                << ",\"ctrl\":" << (state.CtrlDown() ? "true" : "false")
                << ",\"alt\":" << (state.AltDown() ? "true" : "false")
                << ",\"win\":" << (state.WinDown() ? "true" : "false")
-               << ",\"caps_lock\":" << (state.CapsLockOn() ? "true" : "false")
+               << ",\"capsLock\":" << (state.CapsLockOn() ? "true" : "false")
+               << ",\"numLock\":" << (state.NumLockOn() ? "true" : "false")
+               << ",\"repeat\":1"
+               << ",\"extended\":" << (keyEvent.IsExtended ? "true" : "false")
                << ",\"caret_x\":" << caret.X
                << ",\"caret_y\":" << caret.Y
                << ",\"width\":" << caret.Width

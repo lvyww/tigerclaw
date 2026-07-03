@@ -44,25 +44,10 @@
     </None>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="BaseDictionaryEngine.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="BaseWindow.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="ButtonWindow.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="Compartment.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="CompositionProcessorEngine.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="DictionaryParser.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="DictionarySearch.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="DisplayAttributeInfo.h">
@@ -72,15 +57,6 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="EnumDisplayAttributeInfo.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="File.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="FileMapping.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="GetTextExtentEditSession.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="Globals.h">
@@ -101,19 +77,7 @@
     <ClInclude Include="resource.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="ScrollBarWindow.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="ShadowWindow.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="TableDictionaryEngine.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="TfInputProcessorProfile.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="TfTextLayoutSink.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="SampleIME.h">

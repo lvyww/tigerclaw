@@ -15,6 +15,7 @@ namespace TigerClaw.Overlay
         private const int VkLButton = 0x01;
         private const int VkRButton = 0x02;
         private bool _isOff;
+        private bool _isNativeHook;
         private bool _isChinese = true;
         private string _displayText = "\u4e2d";
         private bool _hideStatusBar;
@@ -44,9 +45,10 @@ namespace TigerClaw.Overlay
             _contextMenuDismissTimer.Tick += ContextMenuDismissTimer_Tick;
         }
 
-        public void ApplyStatus(bool isOff, bool isChinese, string displayText, bool hideStatusBar)
+        public void ApplyStatus(bool isOff, bool isNativeHook, bool isChinese, string displayText, bool hideStatusBar)
         {
             _isOff = isOff;
+            _isNativeHook = isNativeHook;
             _isChinese = isChinese;
             _displayText = string.IsNullOrWhiteSpace(displayText) ? (_isChinese ? "\u4e2d" : "EN") : displayText;
             _hideStatusBar = hideStatusBar;
@@ -55,7 +57,37 @@ namespace TigerClaw.Overlay
 
         private void RefreshVisual()
         {
-            if (_isOff)
+            if (_isNativeHook)
+            {
+                string text = _isOff ? "\u7981" : (string.IsNullOrWhiteSpace(_displayText) ? (_isChinese ? "\u4e2d" : "EN") : _displayText);
+                Disp.Text = text;
+                Disp.FontSize = _isChinese ? 15 : 14;
+                Disp.FontFamily = new FontFamily("\u7b49\u7ebf");
+                if (_isOff)
+                {
+                    Disp.Foreground = CreateFrozenBrush(0x50, 0x50, 0x50);
+                    Bd.Background = CreateFrozenBrush(0xF2, 0xF2, 0xF2);
+                    Bd.BorderBrush = CreateFrozenBrush(0xA8, 0xA8, 0xA8);
+                    AccentMark.Background = CreateFrozenBrush(0xA8, 0xA8, 0xA8);
+                }
+                else if (_isChinese)
+                {
+                    Disp.Foreground = CreateFrozenBrush(0x1F, 0x3A, 0x5A);
+                    Bd.Background = CreateFrozenBrush(0xEA, 0xF5, 0xFF);
+                    Bd.BorderBrush = CreateFrozenBrush(0x2D, 0x7D, 0xD2);
+                    AccentMark.Background = CreateFrozenBrush(0x2D, 0x7D, 0xD2);
+                }
+                else
+                {
+                    Disp.Foreground = CreateFrozenBrush(0x4D, 0x5B, 0x66);
+                    Bd.Background = CreateFrozenBrush(0xF4, 0xF7, 0xFA);
+                    Bd.BorderBrush = CreateFrozenBrush(0xA8, 0xB6, 0xC4);
+                    AccentMark.Background = CreateFrozenBrush(0xA8, 0xB6, 0xC4);
+                }
+                Width = 26;
+                Height = 50;
+            }
+            else if (_isOff)
             {
                 Disp.Text = "\u7981";
                 Disp.FontSize = 14;

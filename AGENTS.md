@@ -180,9 +180,9 @@ Still-useful external documents:
 - `BimeTSF2/SampleIME/BRIDGE_ONLY_NOTES.md`: TSF bridge-only note.
 - `reference/README.md`: explains reference-only source trees.
 
-Archived or historical documents live under `docs/archive/`. Do not treat them as current implementation guidance.
+Archived or historical documents live under `docs/archive/` when present. Do not treat them as current implementation guidance.
 
-Generated files, release payload files, `reference/`, and `BimeTSF2/doc/` are not the active project handoff surface unless a task specifically asks for them.
+Generated files, release payload files, and `reference/` are not the active project handoff surface unless a task specifically asks for them.
 
 ## Style And Safety Notes
 

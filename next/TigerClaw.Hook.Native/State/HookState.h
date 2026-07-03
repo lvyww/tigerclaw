@@ -28,6 +28,7 @@ namespace TigerClawHookNative
         bool AltDown() const;
         bool WinDown() const;
         bool CapsLockOn() const;
+        bool NumLockOn() const;
         const std::wstring& CurrentInputBuffer() const;
         bool NativeHookAltBackslashToggleEnabled() const;
         void SetNativeHookAltBackslashToggleEnabled(bool enabled);
@@ -188,6 +189,11 @@ namespace TigerClawHookNative
     inline bool HookState::CapsLockOn() const
     {
         return (GetKeyState(VK_CAPITAL) & 0x0001) != 0;
+    }
+
+    inline bool HookState::NumLockOn() const
+    {
+        return (GetKeyState(VK_NUMLOCK) & 0x0001) != 0;
     }
 
     inline const std::wstring& HookState::CurrentInputBuffer() const

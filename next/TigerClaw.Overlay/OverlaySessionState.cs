@@ -21,6 +21,7 @@ namespace TigerClaw.Overlay
             OverlayUiChangeFlags changes = OverlayUiChangeFlags.None;
 
             if (_current.IsOff != next.IsOff ||
+                _current.IsNativeHook != next.IsNativeHook ||
                 _current.IsChinese != next.IsChinese ||
                 !StringEquals(_current.StatusText, next.StatusText) ||
                 _current.HideStatusBar != next.HideStatusBar)
@@ -76,6 +77,7 @@ namespace TigerClaw.Overlay
             return new OverlayUiState
             {
                 IsOff = state.IsOff,
+                IsNativeHook = state.IsNativeHook,
                 IsChinese = state.IsChinese,
                 StatusText = state.StatusText ?? string.Empty,
                 CandidateVisible = state.CandidateVisible,

@@ -13,6 +13,7 @@ namespace TigerClawHookNative
         bool IsKeyDown = false;
         bool IsKeyUp = false;
         bool IsInjected = false;
+        bool IsExtended = false;
         DWORD Flags = 0;
         ULONG_PTR ExtraInfo = 0;
     };

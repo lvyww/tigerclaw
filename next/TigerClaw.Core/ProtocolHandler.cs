@@ -26,6 +26,7 @@ namespace TigerClaw.Core
         private bool _hookNativeDisabled;
         // TSF 是否处于激活态（本 IME 被选中且焦点在可编辑文档）。默认 false → 启动即隐藏状态窗，直到首个 ime_active:true。
         private bool _imeActive;
+        private bool _isNativeHookStatus;
         private long _soundSeq;
         private int _soundVk;
         private int _soundVolumePercent;
@@ -56,12 +57,14 @@ namespace TigerClaw.Core
             switch (type)
             {
                 case "hello":
+                    MarkFrontendMode(ConvertToString(msg.GetValue("frontend")));
                     PublishUiState();
                     return BuildHelloResponse(seq);
 
                 case "query_state":
                     {
                         string frontend = ConvertToString(msg.GetValue("frontend"));
+                        MarkFrontendMode(frontend);
                         string hookNativeExtra = BuildHookNativeConfigExtraJson(frontend);
                         return BuildResponseWithUiState(
                             seq,
@@ -81,7 +84,6 @@ namespace TigerClaw.Core
                             true,
                             textToOutput: string.IsNullOrEmpty(committedByToggle) ? null : committedByToggle,
                             inputBuffer: string.Empty,
-                            isComposing: false,
                             keyboardOpen: _engine.IsChinese);
                     }
 
@@ -90,20 +92,6 @@ namespace TigerClaw.Core
                         true,
                         false,
                         keyboardOpen: _engine.IsChinese);
-
-                case "keyboard_open_close":
-                    {
-                        bool open = ConvertToBool(msg.GetValue("open"), false);
-                        _engine.SetChineseWithoutCommit(open);
-                        return BuildResponseWithUiState(
-                            seq,
-                            true,
-                            true,
-                            textToOutput: null,
-                            inputBuffer: string.Empty,
-                            isComposing: false,
-                            keyboardOpen: _engine.IsChinese);
-                    }
 
                 case "show_menu":
                     _uiCommandCallback?.Invoke(CoreUiCommand.ShowMenu);
@@ -264,23 +252,6 @@ namespace TigerClaw.Core
                             extraJsonPairs: extra);
                     }
 
-                case "reset_selection_key_config":
-                    {
-                        bool ok = _engine.ResetCustomSelectionKeyConfig(out string error);
-                        string extra = ",\"config_text\":" + Quote(_engine.GetCustomSelectionKeyConfigText());
-                        if (!ok && !string.IsNullOrWhiteSpace(error))
-                        {
-                            extra += ",\"error\":" + Quote(error);
-                        }
-
-                        return BuildResponseWithUiState(
-                            seq,
-                            ok,
-                            ok,
-                            keyboardOpen: _engine.IsChinese,
-                            extraJsonPairs: extra);
-                    }
-
                 case "get_send_history_count":
                     {
                         int count = _engine.GetSendHistoryCount();
@@ -330,29 +301,27 @@ namespace TigerClaw.Core
                 case "key":
                     return HandleKeyMessage(msg, seq);
 
-                case "connect":
-                    return BuildResponseWithUiState(seq, true, false, keyboardOpen: _engine.IsChinese);
-
-                case "ping":
-                    return "{\"type\":\"pong\"}";
-
                 case "caret":
+                    MarkFrontendMode(ConvertToString(msg.GetValue("frontend")));
                     HandleCaretMessage(msg);
                     PublishUiState();
                     return null;
 
                 case "focus":
+                    MarkFrontendMode(ConvertToString(msg.GetValue("frontend")));
                     HandleFocusMessage(msg);
                     PublishUiState();
                     return null;
 
                 case "composition_canceled":
+                    MarkFrontendMode(ConvertToString(msg.GetValue("frontend")));
                     _engine.OnExternalCompositionCanceled();
                     ClearFreshCaretAwaitState();
                     PublishUiState();
                     return null;
 
                 case "hook_native_disabled":
+                    _isNativeHookStatus = true;
                     _hookNativeDisabled = ConvertToBool(msg.GetValue("disabled"), false);
                     if (_hookNativeDisabled)
                     {
@@ -363,6 +332,7 @@ namespace TigerClaw.Core
                     return null;
 
                 case "ime_active":
+                    _isNativeHookStatus = false;
                     _imeActive = ConvertToBool(msg.GetValue("active"), false);
                     PublishUiState();
                     return null;
@@ -375,16 +345,17 @@ namespace TigerClaw.Core
         private string HandleKeyMessage(SimpleJsonObject msg, int seq)
         {
             string frontend = ConvertToString(msg.GetValue("frontend"));
+            MarkFrontendMode(frontend);
             EngineUiSnapshot beforeState = _engine.GetUiSnapshot(_state.GetPageSize());
             int vk = ConvertToInt(msg.GetValue("vk"), 0);
-            int scan = ConvertToInt(msg.GetValue("scan"), 0);
+            int scan = ConvertToInt(GetFirstValue(msg, "scan", "scan_code"), 0);
             string action = ConvertToString(msg.GetValue("action"));
             bool shift = ConvertToBool(msg.GetValue("shift"), false);
             bool ctrl = ConvertToBool(msg.GetValue("ctrl"), false);
             bool alt = ConvertToBool(msg.GetValue("alt"), false);
             bool win = ConvertToBool(msg.GetValue("win"), false);
-            bool capsLock = ConvertToBool(msg.GetValue("capsLock"), false);
-            bool numLock = ConvertToBool(msg.GetValue("numLock"), false);
+            bool capsLock = ConvertToBool(GetFirstValue(msg, "capsLock", "caps_lock"), false);
+            bool numLock = ConvertToBool(GetFirstValue(msg, "numLock", "num_lock"), false);
             int repeat = ConvertToInt(msg.GetValue("repeat"), 1);
             bool extended = ConvertToBool(msg.GetValue("extended"), false);
             string tsfStage = ConvertToString(msg.GetValue("tsf_stage"));
@@ -408,7 +379,9 @@ namespace TigerClaw.Core
             {
                 int caretX = ConvertToInt(caretXRaw, 0);
                 int caretY = ConvertToInt(caretYRaw, 0);
-                _state.GetCaret(out _, out _, out int width, out int height);
+                _state.GetCaret(out _, out _, out int previousWidth, out int previousHeight);
+                int width = ConvertToInt(msg.GetValue("width"), previousWidth);
+                int height = ConvertToInt(msg.GetValue("height"), previousHeight);
                 _state.UpdateCaret(caretX, caretY, width, height);
            //     Console.WriteLine($"key: x:{caretX}, y:{caretY}");
             }
@@ -423,7 +396,7 @@ namespace TigerClaw.Core
             string inputCode = result.InputBuffer ?? _engine.GetCurrentInputCode();
             bool languageStateChanged = beforeState != null && beforeState.IsChinese != result.IsChinese;
             string extraJsonPairs = BuildHookNativeConfigExtraJson(frontend);
-            if (string.Equals(frontend, "hook_native", StringComparison.OrdinalIgnoreCase) &&
+            if (IsHookNativeFrontend(frontend) &&
                 languageStateChanged &&
                 _state.GetAutoSwitchSystemLanguageEnabled())
             {
@@ -435,7 +408,6 @@ namespace TigerClaw.Core
                 result.Handled,
                 textToOutput: result.TextToOutput,
                 inputBuffer: inputCode,
-                isComposing: result.IsComposing,
                 keyboardOpen: result.IsChinese,
                 cancelComposition: result.CancelComposition,
                 extraJsonPairs: extraJsonPairs);
@@ -501,7 +473,7 @@ namespace TigerClaw.Core
 
         private string BuildHookNativeConfigExtraJson(string frontend)
         {
-            if (!string.Equals(frontend, "hook_native", StringComparison.OrdinalIgnoreCase))
+            if (!IsHookNativeFrontend(frontend))
             {
                 return string.Empty;
             }
@@ -512,14 +484,27 @@ namespace TigerClaw.Core
                    ",\"clipboard_commit_whitelist\":" + Quote(_state.GetClipboardCommitWhitelist());
         }
 
-        private string BuildResponseWithUiState(int seq, bool success, bool handled, string textToOutput = null, string inputBuffer = null, bool isComposing = false, bool? keyboardOpen = null, bool cancelComposition = false, string extraJsonPairs = null)
+        private void MarkFrontendMode(string frontend)
         {
-            string response = BuildResponse(seq, success, handled, textToOutput, MaskInputBufferForDisplay(inputBuffer), isComposing, keyboardOpen, cancelComposition, extraJsonPairs);
+            if (IsHookNativeFrontend(frontend))
+            {
+                _isNativeHookStatus = true;
+            }
+        }
+
+        private static bool IsHookNativeFrontend(string frontend)
+        {
+            return string.Equals(frontend, "hook_native", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private string BuildResponseWithUiState(int seq, bool success, bool handled, string textToOutput = null, string inputBuffer = null, bool? keyboardOpen = null, bool cancelComposition = false, string extraJsonPairs = null)
+        {
+            string response = BuildResponse(seq, success, handled, textToOutput, MaskInputBufferForDisplay(inputBuffer), keyboardOpen, cancelComposition, extraJsonPairs);
             PublishUiState();
             return response;
         }
 
-        private static string BuildResponse(int seq, bool success, bool handled, string textToOutput = null, string inputBuffer = null, bool isComposing = false, bool? keyboardOpen = null, bool cancelComposition = false, string extraJsonPairs = null)
+        private static string BuildResponse(int seq, bool success, bool handled, string textToOutput = null, string inputBuffer = null, bool? keyboardOpen = null, bool cancelComposition = false, string extraJsonPairs = null)
         {
             string json = "{" +
                           "\"type\":\"response\"," +
@@ -564,6 +549,25 @@ namespace TigerClaw.Core
                    string.Equals(k, "\u5f53\u524d\u7801\u8868", StringComparison.OrdinalIgnoreCase);
         }
 
+        private static object GetFirstValue(SimpleJsonObject msg, params string[] keys)
+        {
+            if (msg == null || keys == null)
+            {
+                return null;
+            }
+
+            foreach (string key in keys)
+            {
+                object value = msg.GetValue(key);
+                if (value != null)
+                {
+                    return value;
+                }
+            }
+
+            return null;
+        }
+
         private void PublishUiState()
         {
             if (_uiStatePublisher == null)
@@ -576,10 +580,12 @@ namespace TigerClaw.Core
                 int pageSize = _state.GetPageSize();
                 EngineUiSnapshot engineState = _engine.GetUiSnapshot(pageSize);
                 _state.GetCaret(out int caretX, out int caretY, out _, out _);
+                bool hideStatusBar = _state.GetHideStatusBar() || (!_isNativeHookStatus && !_imeActive);
 
                 var state = new OverlayUiState
                 {
                     IsOff = _hookNativeDisabled,
+                    IsNativeHook = _isNativeHookStatus,
                     IsChinese = engineState.IsChinese,
                     StatusText = _hookNativeDisabled ? "\u7981" : (engineState.IsChinese ? "\u4e2d" : "EN"),
                     CandidateVisible = ShouldShowCandidate(engineState),
@@ -595,8 +601,8 @@ namespace TigerClaw.Core
                     ShowInputCodeInCandidateWindow = _state.GetShowInputCodeInCandidateWindow(),
                     CandidateExpandDelayMs = _state.GetCandidateExpandDelayMs(),
                     AnnotationExpandDelayMs = _state.GetAnnotationExpandDelayMs(),
-                    // 折入 TSF 激活态：未激活时强制隐藏状态窗
-                    HideStatusBar = _state.GetHideStatusBar() || !_imeActive,
+                    // Native Hook owns its status visibility; TSF mode still follows ime_active.
+                    HideStatusBar = hideStatusBar,
                     CodeMasking = _state.GetCodeMasking(),
                     ThemeName = _state.GetThemeName(),
                     FontName = _state.GetFontName(),

@@ -181,20 +181,6 @@ namespace TigerClaw.Dialog
             return true;
         }
 
-        public static bool TryResetSelectionKeyConfig(int timeoutMs, out string configText, out string error)
-        {
-            configText = string.Empty;
-            error = string.Empty;
-            string request = "{\"type\":\"reset_selection_key_config\",\"seq\":" + DefaultSeq + "}";
-            if (!TrySendRequest(request, timeoutMs, out string responseLine, out error))
-            {
-                return false;
-            }
-
-            configText = ExtractJsonField(responseLine, "config_text");
-            return true;
-        }
-
         private static bool TrySendRequest(string requestJson, int timeoutMs, out string responseLine, out string error)
         {
             responseLine = string.Empty;
