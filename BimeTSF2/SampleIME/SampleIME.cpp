@@ -1147,6 +1147,7 @@ STDAPI CSampleIME::ActivateEx(ITfThreadMgr *pThreadMgr, TfClientId tfClientId, D
     Global::LogToFileVerbose("Trial: expire_utc=%s expired=%d", trialExpireUtc, _trialExpired);
     if (!_InitCaretCoalesceWindow())
     {
+        Global::LogToFile("ActivateEx: _InitCaretCoalesceWindow failed");
         goto ExitError;
     }
 
@@ -1176,6 +1177,7 @@ STDAPI CSampleIME::ActivateEx(ITfThreadMgr *pThreadMgr, TfClientId tfClientId, D
 
     if (!_InitThreadMgrEventSink())
     {
+        Global::LogToFile("ActivateEx: _InitThreadMgrEventSink failed");
         goto ExitError;
     }
 
@@ -1183,6 +1185,7 @@ STDAPI CSampleIME::ActivateEx(ITfThreadMgr *pThreadMgr, TfClientId tfClientId, D
 
     if (!_InitKeyEventSink())
     {
+        Global::LogToFile("ActivateEx: _InitKeyEventSink failed");
         goto ExitError;
     }
 
@@ -1192,11 +1195,13 @@ STDAPI CSampleIME::ActivateEx(ITfThreadMgr *pThreadMgr, TfClientId tfClientId, D
 
     if (!_InitFunctionProviderSink())
     {
+        Global::LogToFile("ActivateEx: _InitFunctionProviderSink failed");
         goto ExitError;
     }
 
     if (!_InitBridgeLanguageBar())
     {
+        Global::LogToFile("ActivateEx: _InitBridgeLanguageBar failed");
         goto ExitError;
     }
 
@@ -1207,6 +1212,7 @@ STDAPI CSampleIME::ActivateEx(ITfThreadMgr *pThreadMgr, TfClientId tfClientId, D
     return S_OK;
 
 ExitError:
+    Global::LogToFile("ActivateEx: failed");
     Deactivate();
     return E_FAIL;
 }

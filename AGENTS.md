@@ -2,7 +2,7 @@
 
 This file is the single project handoff entry for future agents. Treat it as the current source of truth before reading older documents. External documents are referenced only where they are still useful.
 
-Last reorganized: 2026-07-03.
+Last reorganized: 2026-08-09.
 
 ## Current Architecture
 
@@ -119,6 +119,20 @@ release\
 release\x64\TigerClaw.dll
 release\Win32\TigerClaw.dll
 ```
+
+Windows on ARM development build:
+
+```batch
+publish_arm64.bat
+```
+
+ARM64 development output:
+
+```text
+release_arm64\
+```
+
+The Windows on ARM work is still under development and is not the main release path. Its default experiment uses an ARM64X in-process wrapper (`TigerClaw.dll`) with ARM64 and x64 sidecar TSF DLLs. ARM64 direct registration and the out-of-process `TigerClaw.TsfServer.exe`/`LocalServer32` route are diagnostic alternatives selected by their dedicated install scripts. `publish_arm64.bat --diagnostic` enables embedded TSF text logging; the normal ARM64 build follows `text_log_enabled` in `publish_config.txt`.
 
 Manual smoke test:
 

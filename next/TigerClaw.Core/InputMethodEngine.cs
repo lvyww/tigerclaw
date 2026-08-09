@@ -456,7 +456,7 @@ namespace TigerClaw.Core
                     }
                 }
 
-                if (TryHandleCtrlSpaceChord(resolvedVk, isDown, isUp, repeat, out KeyEngineResult ctrlSpaceResult))
+                if (TryHandleCtrlSpaceChord(resolvedVk, isDown, isUp, repeat, shift, alt, win, out KeyEngineResult ctrlSpaceResult))
                 {
                     return ctrlSpaceResult;
                 }
@@ -2788,11 +2788,12 @@ namespace TigerClaw.Core
                    vk == VK_CAPITAL;
         }
 
-        private bool TryHandleCtrlSpaceChord(int vk, bool isDown, bool isUp, int repeat, out KeyEngineResult result)
+        private bool TryHandleCtrlSpaceChord(int vk, bool isDown, bool isUp, int repeat, bool shift, bool alt, bool win, out KeyEngineResult result)
         {
             result = null;
             bool isCtrl = IsControlKey(vk);
             bool isSpace = vk == VK_SPACE;
+            bool hasBlockingModifier = shift || alt || win;
             DateTime nowUtc = DateTime.UtcNow;
 
             if (!isCtrl && !isSpace)
@@ -2803,7 +2804,8 @@ namespace TigerClaw.Core
                 // won't get mistaken for Ctrl+Space and flip CN/EN.
                 if (isDown && _ctrlChordDown)
                 {
-                    _ctrlSpaceArmed = false;
+                    ResetCtrlSpaceState();
+                    return false;
                 }
                 CleanupCtrlSpaceState(nowUtc);
                 return false;
@@ -2820,6 +2822,12 @@ namespace TigerClaw.Core
             {
                 if (isCtrl)
                 {
+                    if (hasBlockingModifier)
+                    {
+                        ResetCtrlSpaceState();
+                        return false;
+                    }
+
                     _ctrlChordDown = true;
                     _ctrlSpaceArmed = !_spaceChordDown;
                     _ctrlSpaceSwitched = false;
@@ -2827,6 +2835,12 @@ namespace TigerClaw.Core
                 }
                 else if (isSpace)
                 {
+                    if (hasBlockingModifier)
+                    {
+                        ResetCtrlSpaceState();
+                        return false;
+                    }
+
                     _spaceChordDown = true;
                     if (_ctrlChordDown && repeat <= 1)
                     {
@@ -2838,6 +2852,12 @@ namespace TigerClaw.Core
             {
                 if (isCtrl)
                 {
+                    if (hasBlockingModifier)
+                    {
+                        ResetCtrlSpaceState();
+                        return false;
+                    }
+
                     _ctrlChordDown = false;
                     _lastCtrlUpUtc = nowUtc;
                     if (_spaceChordDown)
@@ -2847,6 +2867,12 @@ namespace TigerClaw.Core
                 }
                 else if (isSpace)
                 {
+                    if (hasBlockingModifier)
+                    {
+                        ResetCtrlSpaceState();
+                        return false;
+                    }
+
                     _spaceChordDown = false;
                     bool withinGrace = _lastCtrlUpUtc != DateTime.MinValue &&
                                        (nowUtc - _lastCtrlUpUtc) <= CtrlSpaceGrace;

@@ -1,0 +1,3 @@
+  publish_arm64.bat --diagnostic
+  release_arm64\安装_LocalServer32诊断.bat
+  release_arm64\诊断_ARM64_UWP.bat

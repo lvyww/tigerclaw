@@ -40,6 +40,7 @@ _run)
 
 # Release/package noise
 release/**
+/release_arm64/
 release/*.exe
 release/*.dll
 release/*.manifest
@@ -56,10 +57,12 @@ BimeTSF2/SampleIME/BimeTSF2/x64/
 reference/SampleIME/x64/
 reference/SampleIME/SampleIME/x64/
 reference/weasel/output/
+/BimeTSF2/SampleIME/arm64x_wrapper/TigerClaw.dll
 
 # Logs and dumps
 CrashDumps/
 *.log
+/output.txt
 uninstall.log
 
 # Archives
