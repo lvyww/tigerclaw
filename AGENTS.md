@@ -53,7 +53,7 @@ UI state:
 
 Important behavior:
 
-- Core internal input buffer remains raw.
+- Core composition authority remains raw. Unlimited mixed Chinese/English input keeps the complete per-composition raw code, including letter casing, separately and full-decodes it on every edit; lexicon lookup is case-insensitive, while display and literal/raw commits preserve casing. The outward composition is derived as a resolved prefix plus an active code tail. Completed segments without candidates remain literal English in the resolved prefix.
 - Code masking (`编码伪装`) is display-only and is applied in `ProtocolHandler` before TSF/Overlay see outward display code.
 - Candidate display is owned by Overlay. TSF legacy candidate UI is not the active path.
 - Candidate window does not normally show input code unless the relevant config says so.
@@ -148,7 +148,7 @@ Then test in target apps and unregister if needed:
 next\unregister_dev_corepath.bat
 ```
 
-There are no automated tests yet.
+Core mixed-input decoder and commit behavior have zero-dependency automated coverage in `next/TigerClaw.Core.Tests/`.
 
 ## Common Workflows
 

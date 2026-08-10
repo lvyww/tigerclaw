@@ -1146,6 +1146,8 @@ namespace TigerClaw.Dialog
                     return "记录最近使用的两个码表，按 Ctrl+m 在这两个码表之间切换。";
                 case "回车清屏":
                     return "回车键是否立即清掉编码串。";
+                case "中英文不限长混合输入":
+                    return "允许超过最大码长，暂存顶字上屏的候选字词，最后一起上屏。";
                 case "TAB清屏":
                     return "Tab 键在对应场景下是否直接清屏。";
                 case "竖排候选":
@@ -1231,6 +1233,7 @@ namespace TigerClaw.Dialog
                 case KeyCurrentSchema:
                 case "最大码长":
                 case "最大码长无重自动上屏":
+                case "中英文不限长混合输入":
                 case "空码自动清屏":
                     return SectionCodeInput;
 

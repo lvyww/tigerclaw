@@ -1,5 +1,6 @@
 <Solution>
   <Project Path="TigerClaw.Core/TigerClaw.Core.csproj" />
+  <Project Path="TigerClaw.Core.Tests/TigerClaw.Core.Tests.csproj" />
   <Project Path="TigerClaw.Dialog/TigerClaw.Dialog.csproj" />
   <Project Path="TigerClaw.Hook.Native/TigerClaw.Hook.Native.vcxproj" Id="d5a85b25-99a2-4d4e-8b8b-b8b4d0bc09b6" />
   <Project Path="TigerClaw.Overlay/TigerClaw.Overlay.csproj" />

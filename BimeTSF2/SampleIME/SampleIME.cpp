@@ -2478,7 +2478,7 @@ BOOL CSampleIME::_SyncCaretAnchorForResponse(_In_opt_ ITfContext *pContext, _Ino
 
     _ClearDeferredCaretAnchorReopen();
 
-    if (!pResponse->handled && pResponse->cancelComposition)
+    if (pResponse->cancelComposition)
     {
         if (_pCaretAnchorComposition != nullptr && _pCaretAnchorContext == pEffectiveContext)
         {
@@ -2494,7 +2494,10 @@ BOOL CSampleIME::_SyncCaretAnchorForResponse(_In_opt_ ITfContext *pContext, _Ino
         }
 
         _lastAnchorInputBuffer.clear();
-        return compositionApplied;
+        if (!pResponse->handled)
+        {
+            return compositionApplied;
+        }
     }
 
     const BOOL shouldDeferReopen = (!pResponse->textToOutput.empty() && !pResponse->inputBuffer.empty()) ? TRUE : FALSE;

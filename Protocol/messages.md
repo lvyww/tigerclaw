@@ -147,18 +147,20 @@ BimeTSF2、Dialog、Native Hook 与 TigerClaw Core 通过命名管道通信。
 - `success`: 请求处理是否成功
 - `handled`: 当前按键/命令是否由 Core 接管
 - `commit_text`: 需要前端代为上屏/回放的字符串（可为空或省略）
-- `input_buffer`: 当前输入串（可选）
+- `input_buffer`: 前端应显示的当前 composition 字符串（可选）。开启“中英文不限长混合输入”时，它是“已解析前缀 + 活动尾码”的表面显示串；已解析前缀中的有码段显示候选字词，无码段显示原始英文编码，因此不等同于 Core 保存的本轮完整原始编码。
 - `keyboard_open`: Core 当前中英状态（可选，`true`=中文，`false`=英文）
 - `protocol_version`: 协议版本（`hello` 响应可选）
 - `core_build`: Core 构建标识（`hello` 响应可选）
 - `core_commit`: Core 提交短哈希（`hello` 响应可选）
 - `core_branch`: Core 分支名（`hello` 响应可选）
 - `core_path`: Core 进程路径（`hello` 响应可选）
+- `cancel_composition`: 要求前端先取消旧 composition（可选）。该字段可与 `handled:true` 和新的 `input_buffer` 同时出现，此时应先取消旧串，再应用本次响应。
 
 说明:
 
 - 对 `key` 消息，TSF 以 `handled` 决定是否吞键。
 - TSF 不应自行切换中英文本地状态；语言栏状态同步只使用 `keyboard_open`。
+- 编码伪装只作用于 `input_buffer` 中的活动尾码；大写尾码按对应小写字母的位置伪装。已解析前缀中的候选字词和无码英文段均不伪装，原始大小写保持不变。
 
 ## 错误响应 `error`（Core -> TSF）
 

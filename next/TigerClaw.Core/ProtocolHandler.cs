@@ -32,6 +32,7 @@ namespace TigerClaw.Core
         private int _soundVolumePercent;
         private bool _awaitingFreshCaretForComposition;
         private long _awaitingFreshCaretDeadlineTick;
+        private bool _pendingFrontendCompositionReset;
 
         public ProtocolHandler(Action<CoreUiCommand> uiCommandCallback, CoreRuntimeState state, UiStatePublisher uiStatePublisher)
         {
@@ -153,10 +154,12 @@ namespace TigerClaw.Core
 
                 case "reload_config":
                     {
+                        bool hadComposition = _engine.ResetCompositionForConfigChange();
                         bool cfgOk = _state.ReloadConfig();
                         bool lexOk = _state.ReloadLexicon();
                         _engine.ReloadCustomSelectionKeyConfig();
                         _engine.SetChinese(_state.GetDefaultChinese(), out _);
+                        _pendingFrontendCompositionReset |= hadComposition;
                         bool ok = cfgOk && lexOk;
                         return BuildResponseWithUiState(
                             seq,
@@ -275,6 +278,11 @@ namespace TigerClaw.Core
                         }
 
                         bool success = ok && lexOk;
+                        if (success && changed && IsUnlimitedMixedInputConfigKey(key))
+                        {
+                            _pendingFrontendCompositionReset |= _engine.ResetCompositionForConfigChange();
+                            ClearFreshCaretAwaitState();
+                        }
                         string extra = ",\"changed\":" + (changed ? "true" : "false") + ",\"config_version\":" + _state.ConfigVersion + ",\"lexicon_version\":" + _state.LexiconVersion;
                         if (!success && !string.IsNullOrWhiteSpace(reason))
                         {
@@ -393,7 +401,10 @@ namespace TigerClaw.Core
             {
                 _uiCommandCallback?.Invoke(CoreUiCommand.ShowAddCi);
             }
-            string inputCode = result.InputBuffer ?? _engine.GetCurrentInputCode();
+            _engine.GetCompositionDisplayParts(out string compositionPrefix, out string activeInputCode);
+            string inputCode = BuildDisplayComposition(compositionPrefix, activeInputCode);
+            bool cancelComposition = result.CancelComposition || _pendingFrontendCompositionReset;
+            _pendingFrontendCompositionReset = false;
             bool languageStateChanged = beforeState != null && beforeState.IsChinese != result.IsChinese;
             string extraJsonPairs = BuildHookNativeConfigExtraJson(frontend);
             if (IsHookNativeFrontend(frontend) &&
@@ -409,7 +420,7 @@ namespace TigerClaw.Core
                 textToOutput: result.TextToOutput,
                 inputBuffer: inputCode,
                 keyboardOpen: result.IsChinese,
-                cancelComposition: result.CancelComposition,
+                cancelComposition: cancelComposition,
                 extraJsonPairs: extraJsonPairs);
         }
 
@@ -499,7 +510,7 @@ namespace TigerClaw.Core
 
         private string BuildResponseWithUiState(int seq, bool success, bool handled, string textToOutput = null, string inputBuffer = null, bool? keyboardOpen = null, bool cancelComposition = false, string extraJsonPairs = null)
         {
-            string response = BuildResponse(seq, success, handled, textToOutput, MaskInputBufferForDisplay(inputBuffer), keyboardOpen, cancelComposition, extraJsonPairs);
+            string response = BuildResponse(seq, success, handled, textToOutput, inputBuffer, keyboardOpen, cancelComposition, extraJsonPairs);
             PublishUiState();
             return response;
         }
@@ -549,6 +560,14 @@ namespace TigerClaw.Core
                    string.Equals(k, "\u5f53\u524d\u7801\u8868", StringComparison.OrdinalIgnoreCase);
         }
 
+        private static bool IsUnlimitedMixedInputConfigKey(string key)
+        {
+            return string.Equals(
+                key?.Trim(),
+                "\u4e2d\u82f1\u6587\u4e0d\u9650\u957f\u6df7\u5408\u8f93\u5165",
+                StringComparison.OrdinalIgnoreCase); // unicode: 中英文不限长混合输入
+        }
+
         private static object GetFirstValue(SimpleJsonObject msg, params string[] keys)
         {
             if (msg == null || keys == null)
@@ -589,7 +608,7 @@ namespace TigerClaw.Core
                     IsChinese = engineState.IsChinese,
                     StatusText = _hookNativeDisabled ? "\u7981" : (engineState.IsChinese ? "\u4e2d" : "EN"),
                     CandidateVisible = ShouldShowCandidate(engineState),
-                    InputCode = MaskInputBufferForDisplay(engineState.InputCode ?? string.Empty),
+                    InputCode = BuildDisplayComposition(engineState),
                     Candidates = engineState.Candidates ?? Array.Empty<string>(),
                     CandidateAnnotations = engineState.CandidateAnnotations ?? Array.Empty<string>(),
                     CompositionState = engineState.CompositionState,
@@ -702,7 +721,7 @@ namespace TigerClaw.Core
 
             for (int i = 0; i < inputBuffer.Length; i++)
             {
-                int pos = charLut.IndexOf(inputBuffer[i]);
+                int pos = charLut.IndexOf(char.ToLowerInvariant(inputBuffer[i]));
                 if (pos < 0)
                 {
                     pos = 0;
@@ -713,6 +732,23 @@ namespace TigerClaw.Core
             }
 
             return sb.ToString();
+        }
+
+        private string BuildDisplayComposition(EngineUiSnapshot engineState)
+        {
+            if (engineState == null)
+            {
+                return string.Empty;
+            }
+
+            return BuildDisplayComposition(
+                engineState.CompositionPrefix,
+                engineState.ActiveInputCode ?? engineState.InputCode);
+        }
+
+        private string BuildDisplayComposition(string prefix, string activeCode)
+        {
+            return (prefix ?? string.Empty) + MaskInputBufferForDisplay(activeCode ?? string.Empty);
         }
 
         private static string Quote(string text)

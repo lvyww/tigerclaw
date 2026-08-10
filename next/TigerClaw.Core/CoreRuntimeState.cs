@@ -44,6 +44,7 @@ namespace TigerClaw.Core
         private const string KeyRecentSchemas = "\u6700\u8fd1\u7801\u8868\u5bf9"; // unicode: \u6700\u8fd1\u7801\u8868\u5bf9
 
         private const string KeyMaxCodeLen = "\u6700\u5927\u7801\u957f"; // unicode: 鏈€澶х爜闀?
+        private const string KeyUnlimitedMixedChineseEnglishInput = "\u4e2d\u82f1\u6587\u4e0d\u9650\u957f\u6df7\u5408\u8f93\u5165"; // unicode: 中英文不限长混合输入
         private const string KeyCnUseEnPunc = "\u4e2d\u6587\u72b6\u6001\u4e0b\u4f7f\u7528\u82f1\u6587\u6807\u70b9"; // unicode: 涓枃鐘舵€佷笅浣跨敤鑻辨枃鏍囩偣
 
         private const string KeyVerticalCandidates = "\u7ad6\u6392\u5019\u9009"; // unicode: 绔栨帓鍊欓€?
@@ -115,7 +116,7 @@ namespace TigerClaw.Core
 
         {
 
-            new KeyValuePair<string, string>(KeyAutoStart, No),
+            new KeyValuePair<string, string>(KeyAutoStart, Yes),
 
             new KeyValuePair<string, string>(KeyHideStatusBar, No),
 
@@ -180,6 +181,8 @@ namespace TigerClaw.Core
             new KeyValuePair<string, string>(KeyClearOnNoCode, Yes),
 
             new KeyValuePair<string, string>(KeyMaxCodeLen, "4"),
+
+            new KeyValuePair<string, string>(KeyUnlimitedMixedChineseEnglishInput, No),
 
             new KeyValuePair<string, string>(KeyMaxAuto, Yes),
 
@@ -1251,6 +1254,8 @@ namespace TigerClaw.Core
         public bool GetEnterClear() => GetBool(KeyEnterClear, false);
 
         public bool GetMaxCodeAutoCommit() => GetBool(KeyMaxAuto, true);
+
+        public bool GetUnlimitedMixedChineseEnglishInput() => GetBool(KeyUnlimitedMixedChineseEnglishInput, false);
 
         public bool GetShiftToggleEnabled() => GetBool(KeyShiftToggle, true);
 

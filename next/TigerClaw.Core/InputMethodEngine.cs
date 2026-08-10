@@ -62,7 +62,13 @@ namespace TigerClaw.Core
 
         private readonly object _lock = new object();
         private readonly StringBuilder _inputBuffer = new StringBuilder(64);
+        private readonly StringBuilder _mixedRawBuffer = new StringBuilder(128);
         private readonly CoreRuntimeState _state;
+        private readonly IMixedInputDecoder _mixedInputDecoder;
+        private readonly Dictionary<int, string> _mixedPreferredCandidateText = new Dictionary<int, string>();
+        private MixedInputDecodeResult _mixedDecodeResult = MixedInputDecodeResult.Empty;
+        private int _mixedDecodedLexiconVersion = -1;
+        private int _mixedDecodedMaxCodeLength = -1;
         private readonly Dictionary<int, int> _customSelectionKeyMap = new Dictionary<int, int>();
         private Dictionary<int, List<int>> _customSelectionBindings = BuildDefaultSelectionKeyBindings();
         private readonly HashSet<int> _handledModifierSelectionKeys = new HashSet<int>();
@@ -175,6 +181,7 @@ namespace TigerClaw.Core
         public InputMethodEngine(CoreRuntimeState state)
         {
             _state = state ?? throw new ArgumentNullException(nameof(state));
+            _mixedInputDecoder = new FixedLengthMixedInputDecoder(ResolveCandidates, GetCandidateOutputText);
             LoadCustomSelectionKeyConfig();
         }
 
@@ -214,14 +221,14 @@ namespace TigerClaw.Core
                 return;
             }
 
-            if (!isChinese && commitOnSwitchToEn && _inputBuffer.Length > 0)
+            if (!isChinese && commitOnSwitchToEn && HasCompositionInput())
             {
                 textToCommit = CommitCodeBuffer();
                 if (!string.IsNullOrEmpty(textToCommit))
                 {
                     AppendSendHistory(textToCommit);
                 }
-                _inputBuffer.Clear();
+                ClearCompositionInput();
             }
 
             _isChinese = isChinese;
@@ -253,12 +260,25 @@ namespace TigerClaw.Core
         {
             lock (_lock)
             {
-                _inputBuffer.Clear();
+                ClearCompositionInput();
                 _compositionState = _isChinese ? CompositionState.CnIdle : CompositionState.En;
                 ResetCandidatePageTracker();
                 ResetCtrlSpaceState();
                 ResetShiftToggleState();
                 _dotAfterDigitArmed = false;
+            }
+        }
+
+        public bool ResetCompositionForConfigChange()
+        {
+            lock (_lock)
+            {
+                bool hadComposition = HasCompositionInput();
+                ClearCompositionInput();
+                _compositionState = _isChinese ? CompositionState.CnIdle : CompositionState.En;
+                ResetCandidatePageTracker();
+                _dotAfterDigitArmed = false;
+                return hadComposition;
             }
         }
 
@@ -584,6 +604,11 @@ namespace TigerClaw.Core
                         if (_state.TrySwitchRecentSchema(out _))
                         {
                             _oneShotActionKey = resolvedVk;
+                            if (IsMixedInputSession())
+                            {
+                                _mixedInputDecoder.ClearCache();
+                                RebuildMixedInput();
+                            }
                             // Keep the in-flight code; the new code table re-resolves candidates on the
                             // next UI snapshot. Reset paging because the candidate list changed.
                             ResetCandidatePageTracker();
@@ -659,8 +684,8 @@ namespace TigerClaw.Core
                 {
                     if (_inputBuffer.Length > 0)
                     {
-                        string commit = ResolveCommitTextForCurrentState(_inputBuffer.ToString());
-                        _inputBuffer.Clear();
+                        string commit = CombineMixedCommit(ResolveCommitTextForCurrentState(_inputBuffer.ToString()));
+                        ClearCompositionInput();
                         _compositionState = CompositionState.CnIdle;
                         ResetCandidatePageTracker();
                         _isChinese = true;
@@ -804,6 +829,13 @@ namespace TigerClaw.Core
 
             if (TryMapIdleCodeChar(vk, shift, out char idleCodeChar))
             {
+                if (_state.GetUnlimitedMixedChineseEnglishInput())
+                {
+                    StartMixedInput(idleCodeChar);
+                    _compositionState = CompositionState.CnComposing;
+                    return KeyEngineResult.CreateHandled(_isChinese, null, _inputBuffer.ToString(), true);
+                }
+
                 _inputBuffer.Append(idleCodeChar);
                 int maxCodeLen = GetSafeMaxCodeLen();
                 string currentCode = _inputBuffer.ToString();
@@ -835,19 +867,19 @@ namespace TigerClaw.Core
             List<string> candidates = GetCandidatePage(currentCode, CompositionState.CnComposing, allCandidates, out _);
             bool hasAnyCandidate = allCandidates != null && allCandidates.Count > 0;
             bool hasPageCandidate = candidates != null && candidates.Count > 0;
+            bool isMixedInputSession = IsMixedInputSession();
+            bool hasMixedResolvedPrefix = !string.IsNullOrEmpty(GetMixedResolvedPrefixText());
 
             if (shift && ShiftCnSymbols.ContainsKey(vk))
             {
-                if (hasPageCandidate)
+                if (hasPageCandidate || hasMixedResolvedPrefix || isMixedInputSession)
                 {
-                    string output = GetCandidateOutputText(candidates[0]) + (_state.GetUseEnPuncInCn() && ShiftEnSymbols.TryGetValue(vk, out string shiftEn) ? shiftEn : ShiftCnSymbols[vk]);
-                    _inputBuffer.Clear();
-                    _compositionState = CompositionState.CnIdle;
-                    ResetCandidatePageTracker();
-                    return KeyEngineResult.CreateHandled(true, output, string.Empty, false);
+                    string activeOutput = hasPageCandidate ? GetCandidateOutputText(candidates[0]) : string.Empty;
+                    string symbol = _state.GetUseEnPuncInCn() && ShiftEnSymbols.TryGetValue(vk, out string shiftEn) ? shiftEn : ShiftCnSymbols[vk];
+                    return CompleteCnComposition(activeOutput, symbol);
                 }
 
-                _inputBuffer.Clear();
+                ClearCompositionInput();
                 _compositionState = CompositionState.CnIdle;
                 ResetCandidatePageTracker();
                 return KeyEngineResult.CreateHandled(true, null, string.Empty, false);
@@ -881,6 +913,19 @@ namespace TigerClaw.Core
 
             if (vk == VK_BACK)
             {
+                if (IsMixedInputSession())
+                {
+                    BackspaceMixedInput();
+                    if (_mixedRawBuffer.Length == 0)
+                    {
+                        _compositionState = CompositionState.CnIdle;
+                        ResetCandidatePageTracker();
+                        return KeyEngineResult.CreateHandled(true, null, string.Empty, false);
+                    }
+
+                    return KeyEngineResult.CreateHandled(_isChinese, null, _inputBuffer.ToString(), true);
+                }
+
                 if (_inputBuffer.Length > 0)
                 {
                     _inputBuffer.Length -= 1;
@@ -898,7 +943,7 @@ namespace TigerClaw.Core
 
             if (vk == VK_ESCAPE)
             {
-                _inputBuffer.Clear();
+                ClearCompositionInput();
                 _compositionState = CompositionState.CnIdle;
                 ResetCandidatePageTracker();
                 return KeyEngineResult.CreateHandled(_isChinese, null, string.Empty, false);
@@ -906,8 +951,8 @@ namespace TigerClaw.Core
 
             if (vk == VK_RETURN)
             {
-                string output = _state.GetEnterClear() ? string.Empty : currentCode;
-                _inputBuffer.Clear();
+                string output = _state.GetEnterClear() ? string.Empty : CommitCodeBuffer();
+                ClearCompositionInput();
                 _compositionState = CompositionState.CnIdle;
                 ResetCandidatePageTracker();
                 return KeyEngineResult.CreateHandled(_isChinese, output, string.Empty, false);
@@ -917,7 +962,7 @@ namespace TigerClaw.Core
             {
                 if (_state.GetTabClear())
                 {
-                    _inputBuffer.Clear();
+                    ClearCompositionInput();
                     _compositionState = CompositionState.CnIdle;
                     ResetCandidatePageTracker();
                     return KeyEngineResult.CreateHandled(_isChinese, null, string.Empty, false);
@@ -934,38 +979,26 @@ namespace TigerClaw.Core
             if (vk == VK_SPACE)
             {
                 string commitSpace = hasPageCandidate ? GetCandidateOutputText(candidates[0]) : null;
-                _inputBuffer.Clear();
-                _compositionState = CompositionState.CnIdle;
-                ResetCandidatePageTracker();
-                return KeyEngineResult.CreateHandled(_isChinese, commitSpace, string.Empty, false);
+                return CompleteCnComposition(commitSpace);
             }
 
             if (_state.GetSecondCandidateSemicolon() && vk == VK_OEM_1 && !shift && hasPageCandidate && candidates.Count >= 2)
             {
                 string commitSecond = GetCandidateOutputText(candidates[1]);
-                _inputBuffer.Clear();
-                _compositionState = CompositionState.CnIdle;
-                ResetCandidatePageTracker();
-                return KeyEngineResult.CreateHandled(_isChinese, commitSecond, string.Empty, false);
+                return CompleteCnComposition(commitSecond);
             }
 
             if (_state.GetThirdCandidateQuote() && vk == VK_OEM_7 && !shift && hasPageCandidate && candidates.Count >= 3)
             {
                 string commitThird = GetCandidateOutputText(candidates[2]);
-                _inputBuffer.Clear();
-                _compositionState = CompositionState.CnIdle;
-                ResetCandidatePageTracker();
-                return KeyEngineResult.CreateHandled(_isChinese, commitThird, string.Empty, false);
+                return CompleteCnComposition(commitThird);
             }
 
             if (!shift && vk >= VK_0 && vk <= VK_9)
             {
                 int num = vk - VK_1 + 1;
-                string output = (hasPageCandidate ? GetCandidateOutputText(candidates[0]) : string.Empty) + num.ToString(CultureInfo.InvariantCulture);
-                _inputBuffer.Clear();
-                _compositionState = CompositionState.CnIdle;
-                ResetCandidatePageTracker();
-                return KeyEngineResult.CreateHandled(_isChinese, output, string.Empty, false);
+                string activeOutput = hasPageCandidate ? GetCandidateOutputText(candidates[0]) : string.Empty;
+                return CompleteCnComposition(activeOutput, num.ToString(CultureInfo.InvariantCulture));
             }
 
             if (TryResolveCnSymbolOutput(vk, out _))
@@ -975,18 +1008,14 @@ namespace TigerClaw.Core
 
             if (vk == VK_OEM_7)
             {
-                if (hasPageCandidate)
+                if (hasPageCandidate || hasMixedResolvedPrefix || isMixedInputSession)
                 {
                     string quoteOut = EmitSmartQuote(shift);
-
-                    string output = GetCandidateOutputText(candidates[0]) + quoteOut;
-                    _inputBuffer.Clear();
-                    _compositionState = CompositionState.CnIdle;
-                    ResetCandidatePageTracker();
-                    return KeyEngineResult.CreateHandled(true, output, string.Empty, false);
+                    string activeOutput = hasPageCandidate ? GetCandidateOutputText(candidates[0]) : string.Empty;
+                    return CompleteCnComposition(activeOutput, quoteOut);
                 }
 
-                _inputBuffer.Clear();
+                ClearCompositionInput();
                 _compositionState = CompositionState.CnIdle;
                 ResetCandidatePageTracker();
                 return KeyEngineResult.CreateHandled(true, null, string.Empty, false);
@@ -994,6 +1023,13 @@ namespace TigerClaw.Core
 
             if (TryMapLetter(vk, out char nextLetter))
             {
+                if (IsMixedInputSession())
+                {
+                    char mixedLetter = shift ? char.ToUpperInvariant(nextLetter) : nextLetter;
+                    AppendMixedInput(mixedLetter, candidates);
+                    return KeyEngineResult.CreateHandled(_isChinese, null, _inputBuffer.ToString(), true);
+                }
+
                 int maxCodeLen = GetSafeMaxCodeLen();
                 string extendedCode = currentCode + nextLetter;
 
@@ -1742,6 +1778,11 @@ namespace TigerClaw.Core
 
         private string CommitCodeBuffer()
         {
+            if (_mixedRawBuffer.Length > 0)
+            {
+                return MixedInputCommitComposer.ComposeRaw(_mixedDecodeResult);
+            }
+
             if (_inputBuffer.Length == 0)
             {
                 return string.Empty;
@@ -1749,6 +1790,109 @@ namespace TigerClaw.Core
 
             // Switching CN/EN should commit the raw input code, not first candidate.
             return _inputBuffer.ToString();
+        }
+
+        private bool HasCompositionInput()
+        {
+            return _inputBuffer.Length > 0 || _mixedRawBuffer.Length > 0;
+        }
+
+        private bool IsMixedInputSession()
+        {
+            return _mixedRawBuffer.Length > 0;
+        }
+
+        private void StartMixedInput(char firstCodeChar)
+        {
+            ClearCompositionInput();
+            _mixedRawBuffer.Append(firstCodeChar);
+            RebuildMixedInput();
+        }
+
+        private void AppendMixedInput(char codeChar, List<string> currentPageCandidates)
+        {
+            int maxCodeLength = GetSafeMaxCodeLen();
+            if (_inputBuffer.Length == maxCodeLength &&
+                currentPageCandidates != null &&
+                currentPageCandidates.Count > 0)
+            {
+                int segmentStart = _mixedRawBuffer.Length - _inputBuffer.Length;
+                _mixedPreferredCandidateText[segmentStart] = GetCandidateOutputText(currentPageCandidates[0]);
+            }
+
+            _mixedRawBuffer.Append(codeChar);
+            RebuildMixedInput();
+        }
+
+        private void BackspaceMixedInput()
+        {
+            if (_mixedRawBuffer.Length > 0)
+            {
+                _mixedRawBuffer.Length -= 1;
+            }
+
+            RebuildMixedInput();
+        }
+
+        private void RebuildMixedInput()
+        {
+            int maxCodeLength = GetSafeMaxCodeLen();
+            int completedLength = _mixedRawBuffer.Length == 0
+                ? 0
+                : ((_mixedRawBuffer.Length - 1) / maxCodeLength) * maxCodeLength;
+            int[] preferredStarts = _mixedPreferredCandidateText.Keys.ToArray();
+            foreach (int start in preferredStarts)
+            {
+                if (start < 0 || start >= completedLength)
+                {
+                    _mixedPreferredCandidateText.Remove(start);
+                }
+            }
+
+            _mixedDecodeResult = _mixedInputDecoder.Decode(new MixedInputDecodeRequest
+            {
+                RawCode = _mixedRawBuffer.ToString(),
+                MaxCodeLength = maxCodeLength,
+                LexiconVersion = _state.LexiconVersion,
+                PreferredCandidateTextByStart = _mixedPreferredCandidateText
+            });
+            _mixedDecodedLexiconVersion = _state.LexiconVersion;
+            _mixedDecodedMaxCodeLength = maxCodeLength;
+
+            _inputBuffer.Clear();
+            _inputBuffer.Append(_mixedDecodeResult.ActiveCode);
+            ResetCandidatePageTracker();
+        }
+
+        private string GetMixedResolvedPrefixText()
+        {
+            return IsMixedInputSession() ? (_mixedDecodeResult.ResolvedPrefixText ?? string.Empty) : string.Empty;
+        }
+
+        private string CombineMixedCommit(string activeOutput, string suffix = null)
+        {
+            return IsMixedInputSession()
+                ? MixedInputCommitComposer.ComposeChinese(_mixedDecodeResult, activeOutput, suffix)
+                : (activeOutput ?? string.Empty) + (suffix ?? string.Empty);
+        }
+
+        private void ClearCompositionInput()
+        {
+            _inputBuffer.Clear();
+            _mixedRawBuffer.Clear();
+            _mixedPreferredCandidateText.Clear();
+            _mixedDecodeResult = MixedInputDecodeResult.Empty;
+            _mixedDecodedLexiconVersion = -1;
+            _mixedDecodedMaxCodeLength = -1;
+        }
+
+        private KeyEngineResult CompleteCnComposition(string activeOutput, string suffix = null)
+        {
+            string output = CombineMixedCommit(activeOutput, suffix);
+            ClearCompositionInput();
+            _compositionState = CompositionState.CnIdle;
+            ResetCandidatePageTracker();
+            return KeyEngineResult.CreateHandled(_isChinese, output.Length > 0 ? output : null, string.Empty, false);
         }
 
         private string ResolveCommitTextForCurrentState(string code)
@@ -2158,30 +2302,21 @@ namespace TigerClaw.Core
             if (string.Equals(currentCode, ";", StringComparison.Ordinal) &&
                 (vk == VK_OEM_1 || (vk == VK_SPACE && noCandidate)))
             {
-                _inputBuffer.Clear();
-                _compositionState = CompositionState.CnIdle;
-                ResetCandidatePageTracker();
-                result = KeyEngineResult.CreateHandled(_isChinese, "\uFF1B", string.Empty, false); // unicode: ；
+                result = CompleteCnComposition("\uFF1B"); // unicode: ；
                 return true;
             }
 
             if (string.Equals(currentCode, "/", StringComparison.Ordinal) &&
                 (vk == VK_OEM_2 || (vk == VK_SPACE && noCandidate)))
             {
-                _inputBuffer.Clear();
-                _compositionState = CompositionState.CnIdle;
-                ResetCandidatePageTracker();
-                result = KeyEngineResult.CreateHandled(_isChinese, _state.GetSlashOutputsDunhao() ? "\u3001" : "/", string.Empty, false); // unicode: 、
+                result = CompleteCnComposition(_state.GetSlashOutputsDunhao() ? "\u3001" : "/"); // unicode: 、
                 return true;
             }
 
             if (string.Equals(currentCode, "[", StringComparison.Ordinal) &&
                 (vk == VK_OEM_4 || (vk == VK_SPACE && noCandidate)))
             {
-                _inputBuffer.Clear();
-                _compositionState = CompositionState.CnIdle;
-                ResetCandidatePageTracker();
-                result = KeyEngineResult.CreateHandled(_isChinese, "\u3010", string.Empty, false); // unicode: 【
+                result = CompleteCnComposition("\u3010"); // unicode: 【
                 return true;
             }
 
@@ -2190,16 +2325,18 @@ namespace TigerClaw.Core
 
         private KeyEngineResult HandleCnSymbolAfterCandidateCommit(int vk, bool shift, string firstCandidate)
         {
-            _inputBuffer.Clear();
+            bool wasMixedInputSession = IsMixedInputSession();
+            string resolvedPrefixText = GetMixedResolvedPrefixText();
+            ClearCompositionInput();
             _compositionState = CompositionState.CnIdle;
             ResetCandidatePageTracker();
 
-            if (string.IsNullOrEmpty(firstCandidate))
+            if (!wasMixedInputSession && string.IsNullOrEmpty(firstCandidate) && string.IsNullOrEmpty(resolvedPrefixText))
             {
                 return KeyEngineResult.CreateHandled(_isChinese, null, string.Empty, false);
             }
 
-            string firstOutput = GetCandidateOutputText(firstCandidate);
+            string firstOutput = resolvedPrefixText + (string.IsNullOrEmpty(firstCandidate) ? string.Empty : GetCandidateOutputText(firstCandidate));
             KeyEngineResult idleResult = ProcessCnIdleKeyDown(vk, shift);
             if (idleResult != null && idleResult.Handled)
             {
@@ -2272,10 +2409,7 @@ namespace TigerClaw.Core
                 }
                 else if (!IsDigitSelectionKey(vk))
                 {
-                    _inputBuffer.Clear();
-                    _compositionState = CompositionState.CnIdle;
-                    ResetCandidatePageTracker();
-                    result = KeyEngineResult.CreateHandled(_isChinese, null, string.Empty, false);
+                    result = CompleteCnComposition(null);
                     return true;
                 }
                 else
@@ -2285,17 +2419,11 @@ namespace TigerClaw.Core
                     output += digit.ToString(CultureInfo.InvariantCulture);
                 }
 
-                _inputBuffer.Clear();
-                _compositionState = CompositionState.CnIdle;
-                ResetCandidatePageTracker();
-                result = KeyEngineResult.CreateHandled(_isChinese, output, string.Empty, false);
+                result = CompleteCnComposition(output);
                 return true;
             }
 
-            _inputBuffer.Clear();
-            _compositionState = CompositionState.CnIdle;
-            ResetCandidatePageTracker();
-            result = KeyEngineResult.CreateHandled(_isChinese, null, string.Empty, false);
+            result = CompleteCnComposition(null);
             return true;
         }
 
@@ -2939,7 +3067,7 @@ namespace TigerClaw.Core
 
         private void CancelCompositionStateForPassShortcut()
         {
-            _inputBuffer.Clear();
+            ClearCompositionInput();
             _compositionState = _isChinese ? CompositionState.CnIdle : CompositionState.En;
             ResetCandidatePageTracker();
         }
@@ -2978,7 +3106,18 @@ namespace TigerClaw.Core
         {
             lock (_lock)
             {
-                return _inputBuffer.ToString();
+                EnsureMixedDecodeCurrent();
+                return GetMixedResolvedPrefixText() + _inputBuffer;
+            }
+        }
+
+        public void GetCompositionDisplayParts(out string prefix, out string activeCode)
+        {
+            lock (_lock)
+            {
+                EnsureMixedDecodeCurrent();
+                prefix = GetMixedResolvedPrefixText();
+                activeCode = _inputBuffer.ToString();
             }
         }
 
@@ -3007,6 +3146,8 @@ namespace TigerClaw.Core
         {
             lock (_lock)
             {
+                EnsureMixedDecodeCurrent();
+
                 string inputCode = _inputBuffer.ToString();
                 bool isComposing = _compositionState == CompositionState.CnComposing ||
                                    _compositionState == CompositionState.CnPinyin ||
@@ -3064,11 +3205,23 @@ namespace TigerClaw.Core
                 {
                     IsChinese = _isChinese,
                     IsComposing = isComposing && inputCode.Length > 0,
-                    InputCode = inputCode,
+                    InputCode = GetMixedResolvedPrefixText() + inputCode,
+                    CompositionPrefix = GetMixedResolvedPrefixText(),
+                    ActiveInputCode = inputCode,
                     Candidates = displayPage,
                     CandidateAnnotations = annotations,
                     CompositionState = (int)_compositionState
                 };
+            }
+        }
+
+        private void EnsureMixedDecodeCurrent()
+        {
+            if (IsMixedInputSession() &&
+                (_mixedDecodedLexiconVersion != _state.LexiconVersion ||
+                 _mixedDecodedMaxCodeLength != GetSafeMaxCodeLen()))
+            {
+                RebuildMixedInput();
             }
         }
     }
@@ -3078,6 +3231,8 @@ namespace TigerClaw.Core
         public bool IsChinese { get; set; }
         public bool IsComposing { get; set; }
         public string InputCode { get; set; }
+        public string CompositionPrefix { get; set; }
+        public string ActiveInputCode { get; set; }
         public string[] Candidates { get; set; }
         public string[] CandidateAnnotations { get; set; }
         public int CompositionState { get; set; }
