@@ -150,6 +150,13 @@ next\unregister_dev_corepath.bat
 
 Core mixed-input decoder and commit behavior have zero-dependency automated coverage in `next/TigerClaw.Core.Tests/`.
 
+Offline sentence-input experiments live under `tools/`. `test_sentence_ngram.py` can
+stream the local brightmart corpus into a sampled character n-gram model and run
+two-code-constrained Beam Search, with optional large-word-frequency reranking;
+the `sentence_neural_*`/`prepare_sentence_neural_data.py` tools add an offline
+character-Transformer training and reranking path. See `tools/README_sentence_neural.md`.
+None of these experiments is connected to the active runtime.
+
 ## Common Workflows
 
 Add or change IPC:
