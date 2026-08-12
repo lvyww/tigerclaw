@@ -13,6 +13,8 @@ Windows TSF
   -> BimeTSF2/SampleIME/TigerClaw.dll
   -> named pipe \\.\pipe\BimeIPC
   -> next/TigerClaw.Core.exe
+  -> optional named pipe \\.\pipe\TigerClaw.Sentence.v1
+  -> next/TigerClaw.Sentence.exe
   -> memory mapped UI state + heartbeat/events
   -> next/TigerClaw.Overlay.exe
   -> next/TigerClaw.Dialog.exe
@@ -25,6 +27,7 @@ Active components:
 - `next/TigerClaw.Overlay/`: WPF status/candidate UI. Reads `OverlayUiState` from shared memory, renders candidate/status windows, and plays typing sounds.
 - `next/TigerClaw.Dialog/`: WPF settings/add-word/custom-selection-key UI. Talks to Core through the same named pipe.
 - `next/TigerClaw.Shared/`: shared runtime constants, build info, process guards, heartbeat/MMF helpers, and `OverlayUiState`.
+- `next/TigerClaw.Sentence/`: optional .NET neural reranking sidecar. Core starts it lazily; failures never replace the native n-gram candidate order.
 - `next/TigerClaw.Hook.Native/`: experimental native hook frontend. It is built and published, but it must not replace the default TSF workflow unless explicitly launched.
 
 Deprecated root implementations `bime/` and `BimeTSF/` have been removed. Upstream/reference-only trees live under `reference/` and must not be wired into active build or publish scripts.
@@ -37,6 +40,13 @@ Main IPC:
 - Encoding: UTF-8 JSON, one message per line
 - Contract reference: `Protocol/messages.md`
 - Main handler: `next/TigerClaw.Core/ProtocolHandler.cs`
+
+Sentence reranking IPC:
+
+- Pipe: `\\.\pipe\TigerClaw.Sentence.v1`
+- Contract reference: `Protocol/sentence_messages.md`
+- Core client: `next/TigerClaw.Core/SentenceRerankClient.cs`
+- Sidecar server: `next/TigerClaw.Sentence/Program.cs`
 
 Common pipe message types in active code:
 
@@ -54,6 +64,8 @@ UI state:
 Important behavior:
 
 - Core composition authority remains raw. Unlimited mixed Chinese/English input keeps the complete per-composition raw code, including letter casing, separately and full-decodes it on every edit; lexicon lookup is case-insensitive, while display and literal/raw commits preserve casing. The outward composition is derived as a resolved prefix plus an active code tail. Completed segments without candidates remain literal English in the resolved prefix.
+- Sentence input likewise keeps raw code authoritative. Its outward composition inserts spaces according to the currently selected first candidate's segmentation; those spaces are display-only and never enter raw-code commits.
+- Sentence input is disabled by default. When enabled, Core rebuilds a variable-length lattice from the entire raw code on every edit. A one-key segment is legal only when it is the whole input; other segments consume at least two keys including an optional selector (`;` selects rank 2, `'` selects rank 3, digits select an explicit rank). Semicolon and quote selectors enter the code only when their corresponding selection settings are enabled. Multi-character lexicon entries are legal edges. Core's compact n-gram model is authoritative fallback; neural reranking is asynchronous and generation-checked.
 - Code masking (`编码伪装`) is display-only and is applied in `ProtocolHandler` before TSF/Overlay see outward display code.
 - Candidate display is owned by Overlay. TSF legacy candidate UI is not the active path.
 - Candidate window does not normally show input code unless the relevant config says so.
@@ -104,6 +116,7 @@ Debug output:
 ```text
 next\_run\Debug\net48\
 next\_run\Debug\native\
+next\_run\Debug\sentence\
 ```
 
 Release publish:
@@ -155,7 +168,8 @@ stream the local brightmart corpus into a sampled character n-gram model and run
 two-code-constrained Beam Search, with optional large-word-frequency reranking;
 the `sentence_neural_*`/`prepare_sentence_neural_data.py` tools add an offline
 character-Transformer training and reranking path. See `tools/README_sentence_neural.md`.
-None of these experiments is connected to the active runtime.
+The active runtime uses the exported compact n-gram and ONNX artifacts, while training and evaluation remain offline.
+Generated runtime models remain outside Git under `C:\Archive\tigerclaw_sentence_ml\runtime`; debug and publish scripts copy them into `Models\` and `sentence\Models\`.
 
 ## Common Workflows
 

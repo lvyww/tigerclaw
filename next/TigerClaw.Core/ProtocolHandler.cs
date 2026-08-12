@@ -16,12 +16,14 @@ namespace TigerClaw.Core
         ShowMenu = 4
     }
 
-    internal sealed class ProtocolHandler
+    internal sealed class ProtocolHandler : IDisposable
     {
         private readonly Action<CoreUiCommand> _uiCommandCallback;
         private readonly CoreRuntimeState _state;
         private readonly InputMethodEngine _engine;
         private readonly UiStatePublisher _uiStatePublisher;
+        private readonly SentenceRerankClient _sentenceRerankClient;
+        private readonly object _publishLock = new object();
         private const int FreshCaretAwaitWindowMs = 30;
         private bool _hookNativeDisabled;
         // TSF 是否处于激活态（本 IME 被选中且焦点在可编辑文档）。默认 false → 启动即隐藏状态窗，直到首个 ime_active:true。
@@ -40,8 +42,26 @@ namespace TigerClaw.Core
             _state = state ?? throw new ArgumentNullException(nameof(state));
             _uiStatePublisher = uiStatePublisher;
             _engine = new InputMethodEngine(_state);
+            _sentenceRerankClient = new SentenceRerankClient(
+                _state,
+                new ProcessLauncher(),
+                OnSentenceRerankResult);
+            _engine.SetSentenceRerankService(_sentenceRerankClient);
             _engine.SetChinese(_state.GetDefaultChinese(), out _);
             PublishUiState();
+        }
+
+        public void Dispose()
+        {
+            _sentenceRerankClient?.Dispose();
+        }
+
+        private void OnSentenceRerankResult(long generation, string rawCode, double[] scores)
+        {
+            if (_engine.ApplySentenceNeuralScores(generation, rawCode, scores))
+            {
+                PublishUiState();
+            }
         }
 
         public string Handle(string json)
@@ -110,6 +130,10 @@ namespace TigerClaw.Core
                     {
                         bool ok = _state.ReloadLexicon();
                         _engine.ReloadCustomSelectionKeyConfig();
+                        if (ok)
+                        {
+                            _engine.ReloadSentenceResources();
+                        }
                         return BuildResponseWithUiState(
                             seq,
                             ok,
@@ -158,6 +182,10 @@ namespace TigerClaw.Core
                         bool cfgOk = _state.ReloadConfig();
                         bool lexOk = _state.ReloadLexicon();
                         _engine.ReloadCustomSelectionKeyConfig();
+                        if (lexOk)
+                        {
+                            _engine.ReloadSentenceResources();
+                        }
                         _engine.SetChinese(_state.GetDefaultChinese(), out _);
                         _pendingFrontendCompositionReset |= hadComposition;
                         bool ok = cfgOk && lexOk;
@@ -278,10 +306,16 @@ namespace TigerClaw.Core
                         }
 
                         bool success = ok && lexOk;
-                        if (success && changed && IsUnlimitedMixedInputConfigKey(key))
+                        if (success && changed &&
+                            (IsUnlimitedMixedInputConfigKey(key) || IsSentenceInputConfigKey(key)))
                         {
                             _pendingFrontendCompositionReset |= _engine.ResetCompositionForConfigChange();
                             ClearFreshCaretAwaitState();
+                        }
+                        if (success && changed &&
+                            (IsSentenceInputConfigKey(key) || IsLexiconConfigKey(key)))
+                        {
+                            _engine.ReloadSentenceResources();
                         }
                         string extra = ",\"changed\":" + (changed ? "true" : "false") + ",\"config_version\":" + _state.ConfigVersion + ",\"lexicon_version\":" + _state.LexiconVersion;
                         if (!success && !string.IsNullOrWhiteSpace(reason))
@@ -568,6 +602,14 @@ namespace TigerClaw.Core
                 StringComparison.OrdinalIgnoreCase); // unicode: 中英文不限长混合输入
         }
 
+        private static bool IsSentenceInputConfigKey(string key)
+        {
+            return string.Equals(
+                key?.Trim(),
+                "\u6574\u53e5\u8f93\u5165",
+                StringComparison.OrdinalIgnoreCase); // unicode: 整句输入
+        }
+
         private static object GetFirstValue(SimpleJsonObject msg, params string[] keys)
         {
             if (msg == null || keys == null)
@@ -596,42 +638,45 @@ namespace TigerClaw.Core
 
             try
             {
-                int pageSize = _state.GetPageSize();
-                EngineUiSnapshot engineState = _engine.GetUiSnapshot(pageSize);
-                _state.GetCaret(out int caretX, out int caretY, out _, out _);
-                bool hideStatusBar = _state.GetHideStatusBar() || (!_isNativeHookStatus && !_imeActive);
-
-                var state = new OverlayUiState
+                lock (_publishLock)
                 {
-                    IsOff = _hookNativeDisabled,
-                    IsNativeHook = _isNativeHookStatus,
-                    IsChinese = engineState.IsChinese,
-                    StatusText = _hookNativeDisabled ? "\u7981" : (engineState.IsChinese ? "\u4e2d" : "EN"),
-                    CandidateVisible = ShouldShowCandidate(engineState),
-                    InputCode = BuildDisplayComposition(engineState),
-                    Candidates = engineState.Candidates ?? Array.Empty<string>(),
-                    CandidateAnnotations = engineState.CandidateAnnotations ?? Array.Empty<string>(),
-                    CompositionState = engineState.CompositionState,
-                    CaretX = caretX,
-                    CaretY = caretY,
-                    VerticalCandidates = _state.GetVerticalCandidates(),
-                    ShowCandidateIndex = _state.GetShowCandidateIndex(),
-                    HideCandidateItems = _state.GetHideCandidateItems(),
-                    ShowInputCodeInCandidateWindow = _state.GetShowInputCodeInCandidateWindow(),
-                    CandidateExpandDelayMs = _state.GetCandidateExpandDelayMs(),
-                    AnnotationExpandDelayMs = _state.GetAnnotationExpandDelayMs(),
-                    // Native Hook owns its status visibility; TSF mode still follows ime_active.
-                    HideStatusBar = hideStatusBar,
-                    CodeMasking = _state.GetCodeMasking(),
-                    ThemeName = _state.GetThemeName(),
-                    FontName = _state.GetFontName(),
-                    FontSize = _state.GetFontSize(),
-                    SoundSeq = Interlocked.Read(ref _soundSeq),
-                    SoundVk = _soundVk,
-                    SoundVolumePercent = _soundVolumePercent
-                };
+                    int pageSize = _state.GetPageSize();
+                    EngineUiSnapshot engineState = _engine.GetUiSnapshot(pageSize);
+                    _state.GetCaret(out int caretX, out int caretY, out _, out _);
+                    bool hideStatusBar = _state.GetHideStatusBar() || (!_isNativeHookStatus && !_imeActive);
 
-                _uiStatePublisher.Publish(state);
+                    var state = new OverlayUiState
+                    {
+                        IsOff = _hookNativeDisabled,
+                        IsNativeHook = _isNativeHookStatus,
+                        IsChinese = engineState.IsChinese,
+                        StatusText = _hookNativeDisabled ? "\u7981" : (engineState.IsChinese ? "\u4e2d" : "EN"),
+                        CandidateVisible = ShouldShowCandidate(engineState),
+                        InputCode = BuildDisplayComposition(engineState),
+                        Candidates = engineState.Candidates ?? Array.Empty<string>(),
+                        CandidateAnnotations = engineState.CandidateAnnotations ?? Array.Empty<string>(),
+                        CompositionState = engineState.CompositionState,
+                        CaretX = caretX,
+                        CaretY = caretY,
+                        VerticalCandidates = _state.GetVerticalCandidates(),
+                        ShowCandidateIndex = _state.GetShowCandidateIndex(),
+                        HideCandidateItems = _state.GetHideCandidateItems(),
+                        ShowInputCodeInCandidateWindow = _state.GetShowInputCodeInCandidateWindow(),
+                        CandidateExpandDelayMs = _state.GetCandidateExpandDelayMs(),
+                        AnnotationExpandDelayMs = _state.GetAnnotationExpandDelayMs(),
+                        // Native Hook owns its status visibility; TSF mode still follows ime_active.
+                        HideStatusBar = hideStatusBar,
+                        CodeMasking = _state.GetCodeMasking(),
+                        ThemeName = _state.GetThemeName(),
+                        FontName = _state.GetFontName(),
+                        FontSize = _state.GetFontSize(),
+                        SoundSeq = Interlocked.Read(ref _soundSeq),
+                        SoundVk = _soundVk,
+                        SoundVolumePercent = _soundVolumePercent
+                    };
+
+                    _uiStatePublisher.Publish(state);
+                }
             }
             catch
             {
@@ -721,6 +766,12 @@ namespace TigerClaw.Core
 
             for (int i = 0; i < inputBuffer.Length; i++)
             {
+                if (char.IsWhiteSpace(inputBuffer[i]))
+                {
+                    sb.Append(inputBuffer[i]);
+                    continue;
+                }
+
                 int pos = charLut.IndexOf(char.ToLowerInvariant(inputBuffer[i]));
                 if (pos < 0)
                 {

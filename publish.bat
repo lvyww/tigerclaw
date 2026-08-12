@@ -58,6 +58,7 @@ if not defined MSBUILD (
 set "CORE_PROJECT=%ROOT%\next\TigerClaw.Core\TigerClaw.Core.csproj"
 set "OVERLAY_PROJECT=%ROOT%\next\TigerClaw.Overlay\TigerClaw.Overlay.csproj"
 set "DIALOG_PROJECT=%ROOT%\next\TigerClaw.Dialog\TigerClaw.Dialog.csproj"
+set "SENTENCE_PROJECT=%ROOT%\next\TigerClaw.Sentence\TigerClaw.Sentence.csproj"
 set "HOOK_NATIVE_PROJECT=%ROOT%\next\TigerClaw.Hook.Native\TigerClaw.Hook.Native.vcxproj"
 set "TSF_PROJECT=%ROOT%\BimeTSF2\SampleIME\BimeTSF2.vcxproj"
 
@@ -73,6 +74,10 @@ if not exist "%DIALOG_PROJECT%" (
     echo ERROR: Missing project: %DIALOG_PROJECT%
     exit /b 1
 )
+if not exist "%SENTENCE_PROJECT%" (
+    echo ERROR: Missing project: %SENTENCE_PROJECT%
+    exit /b 1
+)
 if not exist "%HOOK_NATIVE_PROJECT%" (
     echo ERROR: Missing project: %HOOK_NATIVE_PROJECT%
     exit /b 1
@@ -86,6 +91,10 @@ set "CORE_OUT=%ROOT%\next\_run\Release\net48"
 set "CORE_EXE_FOR_HASH=%CORE_OUT%\TigerClaw.Core.exe"
 set "OVERLAY_OUT=%ROOT%\next\_run\Release\net48"
 set "DIALOG_OUT=%ROOT%\next\_run\Release\net48"
+set "SENTENCE_OUT=%ROOT%\next\_run\Release\sentence"
+set "SENTENCE_MODEL_ROOT=C:\Archive\tigerclaw_sentence_ml\runtime"
+set "SENTENCE_DATA_ROOT=C:\Archive\tigerclaw_sentence_ml\pilot200m"
+set "ORT_NATIVE_ROOT=%LocalAppData%\TigerClawML\venv-directml\Lib\site-packages\onnxruntime\capi"
 set "HOOK_NATIVE_OUT=%ROOT%\next\_run\Release\native"
 set "TSF_X64_DLL=%ROOT%\BimeTSF2\SampleIME\x64\Release\TigerClaw.dll"
 set "TSF_X86_DLL=%ROOT%\BimeTSF2\SampleIME\Win32\Release\TigerClaw.dll"
@@ -94,6 +103,8 @@ if not exist "%TSF_X86_DLL%" set "TSF_X86_DLL=%ROOT%\BimeTSF2\SampleIME\Release\
 set "RELEASE_DIR=%ROOT%\release"
 set "RELEASE_TSF_X64=%RELEASE_DIR%\x64"
 set "RELEASE_TSF_X86=%RELEASE_DIR%\Win32"
+set "RELEASE_SENTENCE=%RELEASE_DIR%\sentence"
+set "RELEASE_MODELS=%RELEASE_DIR%\Models"
 set "DIST_INSTALL_TEMPLATE=%ROOT%\dist_install.bat"
 set "DIST_UNINSTALL_TEMPLATE=%ROOT%\dist_uninstall.bat"
 set "CHANGELOG_FILE="
@@ -182,6 +193,16 @@ if errorlevel 1 (
     exit /b 1
 )
 
+echo.
+echo [6/11] Build TigerClaw.Sentence Release
+"%DOTNET%" msbuild "%SENTENCE_PROJECT%" /restore /p:Configuration=Release /p:Platform=x64 /p:OutDir="%SENTENCE_OUT%\\" /v:minimal
+if errorlevel 1 (
+    echo ERROR: TigerClaw.Sentence Release build failed.
+    exit /b 1
+)
+if exist "%ORT_NATIVE_ROOT%\onnxruntime.dll" copy /Y "%ORT_NATIVE_ROOT%\onnxruntime.dll" "%SENTENCE_OUT%\onnxruntime.dll" >nul
+if exist "%ORT_NATIVE_ROOT%\onnxruntime_providers_shared.dll" copy /Y "%ORT_NATIVE_ROOT%\onnxruntime_providers_shared.dll" "%SENTENCE_OUT%\onnxruntime_providers_shared.dll" >nul
+
 
 echo.
 echo [7/11] Update EmbeddedBuildInfo.h
@@ -248,10 +269,18 @@ echo [10/11] Copy artifacts to release directory
 if not exist "%RELEASE_DIR%" mkdir "%RELEASE_DIR%"
 if not exist "%RELEASE_TSF_X64%" mkdir "%RELEASE_TSF_X64%"
 if not exist "%RELEASE_TSF_X86%" mkdir "%RELEASE_TSF_X86%"
+if not exist "%RELEASE_SENTENCE%" mkdir "%RELEASE_SENTENCE%"
+if not exist "%RELEASE_SENTENCE%\Models" mkdir "%RELEASE_SENTENCE%\Models"
+if not exist "%RELEASE_MODELS%" mkdir "%RELEASE_MODELS%"
 
 call :RequireFile "%CORE_OUT%\TigerClaw.Core.exe" "TigerClaw.Core.exe" || exit /b 1
 call :RequireFile "%OVERLAY_OUT%\TigerClaw.Overlay.exe" "TigerClaw.Overlay.exe" || exit /b 1
 call :RequireFile "%DIALOG_OUT%\TigerClaw.Dialog.exe" "TigerClaw.Dialog.exe" || exit /b 1
+call :RequireFile "%SENTENCE_OUT%\TigerClaw.Sentence.exe" "TigerClaw.Sentence.exe" || exit /b 1
+call :RequireFile "%SENTENCE_OUT%\onnxruntime.dll" "sentence onnxruntime.dll" || exit /b 1
+call :RequireFile "%SENTENCE_MODEL_ROOT%\sentence-ngram.bin" "sentence-ngram.bin" || exit /b 1
+call :RequireFile "%SENTENCE_MODEL_ROOT%\sentence-transformer.onnx" "sentence-transformer.onnx" || exit /b 1
+call :RequireFile "%SENTENCE_DATA_ROOT%\vocabulary.json" "sentence vocabulary.json" || exit /b 1
 call :RequireFile "%HOOK_NATIVE_OUT%\TigerClaw.Hook.Native.exe" "TigerClaw.Hook.Native.exe" || exit /b 1
 call :RequireFile "%TSF_X64_DLL%" "TigerClaw.dll x64" || exit /b 1
 call :RequireFile "%TSF_X86_DLL%" "TigerClaw.dll Win32" || exit /b 1
@@ -267,6 +296,14 @@ if exist "%OVERLAY_OUT%\TigerClaw.Overlay.pdb" del /q "%RELEASE_DIR%\TigerClaw.O
 call :CopyFileStrict "%DIALOG_OUT%\TigerClaw.Dialog.exe" "%RELEASE_DIR%\TigerClaw.Dialog.exe" || exit /b 1
 if exist "%DIALOG_OUT%\TigerClaw.Dialog.exe.config" call :CopyFileStrict "%DIALOG_OUT%\TigerClaw.Dialog.exe.config" "%RELEASE_DIR%\TigerClaw.Dialog.exe.config" || exit /b 1
 if exist "%DIALOG_OUT%\TigerClaw.Dialog.pdb" del /q "%RELEASE_DIR%\TigerClaw.Dialog.pdb" >nul 2>&1
+
+for %%F in (TigerClaw.Sentence.exe TigerClaw.Sentence.exe.config Microsoft.ML.OnnxRuntime.dll System.Buffers.dll System.Memory.dll System.Numerics.Tensors.dll System.Numerics.Vectors.dll System.Runtime.CompilerServices.Unsafe.dll onnxruntime.dll onnxruntime_providers_shared.dll) do (
+    if exist "%SENTENCE_OUT%\%%F" call :CopyFileStrict "%SENTENCE_OUT%\%%F" "%RELEASE_SENTENCE%\%%F" || exit /b 1
+)
+call :CopyFileStrict "%SENTENCE_MODEL_ROOT%\sentence-transformer.onnx" "%RELEASE_SENTENCE%\Models\sentence-transformer.onnx" || exit /b 1
+if exist "%SENTENCE_MODEL_ROOT%\sentence-transformer.json" call :CopyFileStrict "%SENTENCE_MODEL_ROOT%\sentence-transformer.json" "%RELEASE_SENTENCE%\Models\sentence-transformer.json" || exit /b 1
+call :CopyFileStrict "%SENTENCE_DATA_ROOT%\vocabulary.json" "%RELEASE_SENTENCE%\Models\sentence-vocabulary.json" || exit /b 1
+call :CopyFileStrict "%SENTENCE_MODEL_ROOT%\sentence-ngram.bin" "%RELEASE_MODELS%\sentence-ngram.bin" || exit /b 1
 
 call :CopyFileStrict "%HOOK_NATIVE_OUT%\TigerClaw.Hook.Native.exe" "%RELEASE_DIR%\TigerClaw.exe" || exit /b 1
 if exist "%HOOK_NATIVE_OUT%\TigerClaw.Hook.Native.pdb" del /q "%RELEASE_DIR%\TigerClaw.pdb" >nul 2>&1
@@ -288,6 +325,7 @@ echo Publish succeeded.
 echo   Core    : %RELEASE_DIR%\TigerClaw.Core.exe
 echo   Overlay : %RELEASE_DIR%\TigerClaw.Overlay.exe
 echo   Dialog  : %RELEASE_DIR%\TigerClaw.Dialog.exe
+echo   Sentence: %RELEASE_SENTENCE%\TigerClaw.Sentence.exe
 echo   Hook.N  : %RELEASE_DIR%\TigerClaw.exe
 echo   TSF x64 : %RELEASE_DIR%\x64\TigerClaw.dll
 echo   TSF x86 : %RELEASE_DIR%\Win32\TigerClaw.dll

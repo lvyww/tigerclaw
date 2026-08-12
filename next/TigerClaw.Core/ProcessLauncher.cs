@@ -33,6 +33,17 @@ namespace TigerClaw.Core
             return Start(exePath, args);
         }
 
+        public bool TryLaunchSentence(string arguments)
+        {
+            if (IsProcessRunning(RuntimeConstants.SentenceProcessName))
+            {
+                return true;
+            }
+
+            string exePath = ResolveSiblingExe(RuntimeConstants.SentenceProcessName + ".exe");
+            return Start(exePath, arguments, createNoWindow: true);
+        }
+
         public bool HasPublishedNativeHook()
         {
             string exePath = ResolveSiblingExe(RuntimeConstants.HookNativePublishedProcessName + ".exe");
@@ -71,6 +82,12 @@ namespace TigerClaw.Core
                 return sameDir;
             }
 
+            string sentenceSubdirectory = Path.Combine(_baseDir, "sentence", fileName);
+            if (File.Exists(sentenceSubdirectory))
+            {
+                return sentenceSubdirectory;
+            }
+
             // next/<Project>/bin/Debug/net48 => try siblings in ../.. style
             string dir = _baseDir;
             for (int up = 0; up < 6 && !string.IsNullOrEmpty(dir); up++)
@@ -79,6 +96,19 @@ namespace TigerClaw.Core
                 if (File.Exists(candidate))
                 {
                     return candidate;
+                }
+
+
+                string nestedCandidate = Path.Combine(dir, "sentence", fileName);
+                if (File.Exists(nestedCandidate))
+                {
+                    return nestedCandidate;
+                }
+
+                string debugSentenceCandidate = Path.Combine(dir, "_run", "Debug", "sentence", fileName);
+                if (File.Exists(debugSentenceCandidate))
+                {
+                    return debugSentenceCandidate;
                 }
 
                 string parent = Path.GetDirectoryName(dir);
@@ -106,7 +136,7 @@ namespace TigerClaw.Core
             return sameDir;
         }
 
-        private static bool Start(string exePath, string arguments)
+        private static bool Start(string exePath, string arguments, bool createNoWindow = false)
         {
             try
             {
@@ -120,7 +150,8 @@ namespace TigerClaw.Core
                     FileName = exePath,
                     Arguments = arguments ?? string.Empty,
                     WorkingDirectory = Path.GetDirectoryName(exePath),
-                    UseShellExecute = true
+                    UseShellExecute = !createNoWindow,
+                    CreateNoWindow = createNoWindow
                 };
                 Process.Start(psi);
                 return true;

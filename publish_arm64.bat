@@ -50,11 +50,16 @@ if not defined MSBUILD echo ERROR: MSBuild.exe not found. & exit /b 1
 set "CORE_PROJECT=%ROOT%\next\TigerClaw.Core\TigerClaw.Core.csproj"
 set "OVERLAY_PROJECT=%ROOT%\next\TigerClaw.Overlay\TigerClaw.Overlay.csproj"
 set "DIALOG_PROJECT=%ROOT%\next\TigerClaw.Dialog\TigerClaw.Dialog.csproj"
+set "SENTENCE_PROJECT=%ROOT%\next\TigerClaw.Sentence\TigerClaw.Sentence.csproj"
 set "HOOK_PROJECT=%ROOT%\next\TigerClaw.Hook.Native\TigerClaw.Hook.Native.vcxproj"
 set "TSF_PROJECT=%ROOT%\BimeTSF2\SampleIME\BimeTSF2.vcxproj"
 set "TSF_SERVER_PROJECT=%ROOT%\BimeTSF2\SampleIME\TigerClaw.TsfServer.vcxproj"
 set "WRAPPER_DIR=%ROOT%\BimeTSF2\SampleIME\arm64x_wrapper"
 set "CORE_OUT=%ROOT%\next\_run\ReleaseArm64\net481"
+set "SENTENCE_OUT=%ROOT%\next\_run\ReleaseArm64\sentence"
+set "SENTENCE_MODEL_ROOT=C:\Archive\tigerclaw_sentence_ml\runtime"
+set "SENTENCE_DATA_ROOT=C:\Archive\tigerclaw_sentence_ml\pilot200m"
+set "ORT_NATIVE_ROOT=%LocalAppData%\TigerClawML\venv-directml\Lib\site-packages\onnxruntime\capi"
 set "HOOK_OUT=%ROOT%\next\_run\ReleaseArm64\native\ARM64"
 set "RELEASE_DIR=%ROOT%\release_arm64"
 set "RELEASE_WIN32_DIR=%RELEASE_DIR%\Win32"
@@ -72,7 +77,7 @@ set "DIAGNOSE_TEMPLATE=%ROOT%\dist_arm64_diagnose.bat"
 set "UNINSTALL_TEMPLATE=%ROOT%\dist_arm64_uninstall.bat"
 set "UPDATE_EMBED_SCRIPT=%ROOT%\tools\update_embedded_build_info.ps1"
 
-for %%P in ("%CORE_PROJECT%" "%OVERLAY_PROJECT%" "%DIALOG_PROJECT%" "%HOOK_PROJECT%" "%TSF_PROJECT%" "%TSF_SERVER_PROJECT%" "%WRAPPER_DIR%\build.bat" "%INSTALL_TEMPLATE%" "%INSTALL_DIRECT_TEMPLATE%" "%INSTALL_ARM64X_TEMPLATE%" "%INSTALL_LOCALSERVER_TEMPLATE%" "%DIAGNOSE_TEMPLATE%" "%UNINSTALL_TEMPLATE%" "%UPDATE_EMBED_SCRIPT%") do if not exist %%~P echo ERROR: Missing %%~P & exit /b 1
+for %%P in ("%CORE_PROJECT%" "%OVERLAY_PROJECT%" "%DIALOG_PROJECT%" "%SENTENCE_PROJECT%" "%HOOK_PROJECT%" "%TSF_PROJECT%" "%TSF_SERVER_PROJECT%" "%WRAPPER_DIR%\build.bat" "%INSTALL_TEMPLATE%" "%INSTALL_DIRECT_TEMPLATE%" "%INSTALL_ARM64X_TEMPLATE%" "%INSTALL_LOCALSERVER_TEMPLATE%" "%DIAGNOSE_TEMPLATE%" "%UNINSTALL_TEMPLATE%" "%UPDATE_EMBED_SCRIPT%") do if not exist %%~P echo ERROR: Missing %%~P & exit /b 1
 
 echo Using MSBuild: %MSBUILD%
 echo Using dotnet : %DOTNET%
@@ -92,6 +97,15 @@ echo [2/10] Build .NET payload
 "%DOTNET%" msbuild "%CORE_PROJECT%" /restore /p:Configuration=Release /p:Platform=AnyCPU /p:TigerClawTargetFramework=net481 /p:PlatformTarget=ARM64 /p:Prefer32Bit=false /p:OutDir="%CORE_OUT%\\" /v:minimal || exit /b 1
 "%DOTNET%" msbuild "%OVERLAY_PROJECT%" /restore /p:Configuration=Release /p:Platform=AnyCPU /p:TigerClawTargetFramework=net481 /p:PlatformTarget=ARM64 /p:Prefer32Bit=false /p:OutDir="%CORE_OUT%\\" /v:minimal || exit /b 1
 "%DOTNET%" msbuild "%DIALOG_PROJECT%" /restore /p:Configuration=Release /p:Platform=AnyCPU /p:TigerClawTargetFramework=net481 /p:PlatformTarget=ARM64 /p:Prefer32Bit=false /p:OutDir="%CORE_OUT%\\" /v:minimal || exit /b 1
+"%DOTNET%" msbuild "%SENTENCE_PROJECT%" /restore /p:Configuration=Release /p:Platform=x64 /p:OutDir="%SENTENCE_OUT%\\" /v:minimal || exit /b 1
+if exist "%ORT_NATIVE_ROOT%\onnxruntime.dll" copy /Y "%ORT_NATIVE_ROOT%\onnxruntime.dll" "%SENTENCE_OUT%\onnxruntime.dll" >nul
+if exist "%ORT_NATIVE_ROOT%\onnxruntime_providers_shared.dll" copy /Y "%ORT_NATIVE_ROOT%\onnxruntime_providers_shared.dll" "%SENTENCE_OUT%\onnxruntime_providers_shared.dll" >nul
+if not exist "%CORE_OUT%\Models" mkdir "%CORE_OUT%\Models"
+if not exist "%SENTENCE_OUT%\Models" mkdir "%SENTENCE_OUT%\Models"
+copy /Y "%SENTENCE_MODEL_ROOT%\sentence-ngram.bin" "%CORE_OUT%\Models\sentence-ngram.bin" >nul || exit /b 1
+copy /Y "%SENTENCE_MODEL_ROOT%\sentence-transformer.onnx" "%SENTENCE_OUT%\Models\sentence-transformer.onnx" >nul || exit /b 1
+if exist "%SENTENCE_MODEL_ROOT%\sentence-transformer.json" copy /Y "%SENTENCE_MODEL_ROOT%\sentence-transformer.json" "%SENTENCE_OUT%\Models\sentence-transformer.json" >nul || exit /b 1
+copy /Y "%SENTENCE_DATA_ROOT%\vocabulary.json" "%SENTENCE_OUT%\Models\sentence-vocabulary.json" >nul || exit /b 1
 
 echo.
 echo [3/10] Update EmbeddedBuildInfo.h
@@ -121,12 +135,15 @@ if not "%WRAP_EC%"=="0" exit /b %WRAP_EC%
 
 echo.
 echo [8/10] Validate artifacts
-for %%P in ("%CORE_OUT%\TigerClaw.Core.exe" "%CORE_OUT%\TigerClaw.Overlay.exe" "%CORE_OUT%\TigerClaw.Dialog.exe" "%CORE_OUT%\TigerClaw.Shared.dll" "%HOOK_OUT%\TigerClaw.Hook.Native.exe" "%TSF_X86%" "%TSF_X64%" "%TSF_ARM64%" "%TSF_SERVER%" "%WRAPPER_DLL%") do if not exist %%~P echo ERROR: Missing %%~P & exit /b 1
+for %%P in ("%CORE_OUT%\TigerClaw.Core.exe" "%CORE_OUT%\TigerClaw.Overlay.exe" "%CORE_OUT%\TigerClaw.Dialog.exe" "%CORE_OUT%\TigerClaw.Shared.dll" "%CORE_OUT%\Models\sentence-ngram.bin" "%SENTENCE_OUT%\TigerClaw.Sentence.exe" "%SENTENCE_OUT%\onnxruntime.dll" "%SENTENCE_OUT%\Models\sentence-transformer.onnx" "%SENTENCE_OUT%\Models\sentence-vocabulary.json" "%HOOK_OUT%\TigerClaw.Hook.Native.exe" "%TSF_X86%" "%TSF_X64%" "%TSF_ARM64%" "%TSF_SERVER%" "%WRAPPER_DLL%") do if not exist %%~P echo ERROR: Missing %%~P & exit /b 1
 
 echo.
 echo [9/10] Copy artifacts
 if not exist "%RELEASE_DIR%" mkdir "%RELEASE_DIR%"
 if not exist "%RELEASE_WIN32_DIR%" mkdir "%RELEASE_WIN32_DIR%"
+if not exist "%RELEASE_DIR%\sentence" mkdir "%RELEASE_DIR%\sentence"
+if not exist "%RELEASE_DIR%\sentence\Models" mkdir "%RELEASE_DIR%\sentence\Models"
+if not exist "%RELEASE_DIR%\Models" mkdir "%RELEASE_DIR%\Models"
 copy /Y "%CORE_OUT%\TigerClaw.Core.exe" "%RELEASE_DIR%\TigerClaw.Core.exe" >nul || exit /b 1
 if exist "%CORE_OUT%\TigerClaw.Core.exe.config" copy /Y "%CORE_OUT%\TigerClaw.Core.exe.config" "%RELEASE_DIR%\TigerClaw.Core.exe.config" >nul || exit /b 1
 copy /Y "%CORE_OUT%\TigerClaw.Overlay.exe" "%RELEASE_DIR%\TigerClaw.Overlay.exe" >nul || exit /b 1
@@ -134,6 +151,13 @@ if exist "%CORE_OUT%\TigerClaw.Overlay.exe.config" copy /Y "%CORE_OUT%\TigerClaw
 copy /Y "%CORE_OUT%\TigerClaw.Dialog.exe" "%RELEASE_DIR%\TigerClaw.Dialog.exe" >nul || exit /b 1
 if exist "%CORE_OUT%\TigerClaw.Dialog.exe.config" copy /Y "%CORE_OUT%\TigerClaw.Dialog.exe.config" "%RELEASE_DIR%\TigerClaw.Dialog.exe.config" >nul || exit /b 1
 copy /Y "%CORE_OUT%\TigerClaw.Shared.dll" "%RELEASE_DIR%\TigerClaw.Shared.dll" >nul || exit /b 1
+for %%F in (TigerClaw.Sentence.exe TigerClaw.Sentence.exe.config Microsoft.ML.OnnxRuntime.dll System.Buffers.dll System.Memory.dll System.Numerics.Tensors.dll System.Numerics.Vectors.dll System.Runtime.CompilerServices.Unsafe.dll onnxruntime.dll onnxruntime_providers_shared.dll) do (
+  if exist "%SENTENCE_OUT%\%%F" copy /Y "%SENTENCE_OUT%\%%F" "%RELEASE_DIR%\sentence\%%F" >nul || exit /b 1
+)
+copy /Y "%SENTENCE_OUT%\Models\sentence-transformer.onnx" "%RELEASE_DIR%\sentence\Models\sentence-transformer.onnx" >nul || exit /b 1
+if exist "%SENTENCE_OUT%\Models\sentence-transformer.json" copy /Y "%SENTENCE_OUT%\Models\sentence-transformer.json" "%RELEASE_DIR%\sentence\Models\sentence-transformer.json" >nul || exit /b 1
+copy /Y "%SENTENCE_OUT%\Models\sentence-vocabulary.json" "%RELEASE_DIR%\sentence\Models\sentence-vocabulary.json" >nul || exit /b 1
+copy /Y "%CORE_OUT%\Models\sentence-ngram.bin" "%RELEASE_DIR%\Models\sentence-ngram.bin" >nul || exit /b 1
 copy /Y "%HOOK_OUT%\TigerClaw.Hook.Native.exe" "%RELEASE_DIR%\TigerClaw.exe" >nul || exit /b 1
 if exist "%ROOT%\next\TigerClaw.Dialog\bime.ico" copy /Y "%ROOT%\next\TigerClaw.Dialog\bime.ico" "%RELEASE_DIR%\bime.ico" >nul || exit /b 1
 copy /Y "%WRAPPER_DLL%" "%RELEASE_DIR%\TigerClaw.dll" >nul || exit /b 1

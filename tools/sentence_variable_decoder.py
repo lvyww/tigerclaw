@@ -44,7 +44,8 @@ def parse_shortest_code_index(path: Path) -> ShortestCodeIndex:
     只有整个输入本身只有一码时才允许一码切分；其他情况下，每个切分连同
     选重标记在内至少占用二码，所以“一码字母+选重键”是合法切分。
     非首选单字的自动编码附加选重标记：分号表示第二候选，数字表示其余
-    候选位。词语保留码表中的全部显式编码。
+    候选位。词语保留码表中的全部显式编码，但同样只有首选能由裸编码命中，
+    其他候选必须显式选重。
     """
 
     if not path.is_file():
@@ -93,6 +94,8 @@ def parse_shortest_code_index(path: Path) -> ShortestCodeIndex:
             return ""
         if rank == 2:
             return ";"
+        if rank == 3:
+            return "'"
         if rank == 10:
             return "0"
         return str(rank)
@@ -220,6 +223,9 @@ def decode_code_lattice(
             if final_position < code_length and raw_code[final_position] == ";":
                 selected_rank = 2
                 consumed_position += 1
+            elif final_position < code_length and raw_code[final_position] == "'":
+                selected_rank = 3
+                consumed_position += 1
             elif final_position < code_length and raw_code[final_position].isdigit():
                 digit_end = final_position
                 while digit_end < code_length and raw_code[digit_end].isdigit():
@@ -229,14 +235,14 @@ def decode_code_lattice(
                 consumed_position = digit_end
             if code_length > 1 and consumed_position - position < 2:
                 continue
-            if selected_rank:
-                candidates = tuple(
-                    candidate
-                    for candidate in candidates
-                    if candidate.rank == selected_rank
-                )
-                if not candidates:
-                    continue
+            # 每个裸编码段只能取该码位的首选。语言模型可以选择不同切分，
+            # 但不能在没有分号、单引号或数字时自行选用同码的第二候选及以后。
+            required_rank = selected_rank or 1
+            candidates = tuple(
+                candidate for candidate in candidates if candidate.rank == required_rank
+            )
+            if not candidates:
+                continue
             destination = states[consumed_position]
             for item in beam:
                 for candidate in candidates:

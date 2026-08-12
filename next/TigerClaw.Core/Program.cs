@@ -129,6 +129,7 @@ namespace TigerClaw.Core
                     }
                     LogLine("[Core] press Ctrl+C to exit.");
                     ShutdownEvent.WaitOne();
+                    protocolHandler.Dispose();
                 }
             }
 
@@ -136,6 +137,7 @@ namespace TigerClaw.Core
             Thread.Sleep(300);
             ProcessInstanceGuard.TryTerminateOtherInstances(RuntimeConstants.OverlayProcessName, currentPid);
             ProcessInstanceGuard.TryTerminateOtherInstances(RuntimeConstants.DialogProcessName, currentPid);
+            ProcessInstanceGuard.TryTerminateOtherInstances(RuntimeConstants.SentenceProcessName, currentPid);
             ProcessInstanceGuard.TryTerminateOtherInstances(RuntimeConstants.HookNativeProcessName, currentPid);
             ProcessInstanceGuard.TryTerminateOtherInstances(RuntimeConstants.HookNativePublishedProcessName, currentPid);
             LogLine("[Core] stopped.");

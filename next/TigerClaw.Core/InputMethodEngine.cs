@@ -18,7 +18,8 @@ namespace TigerClaw.Core
             CnIdle = 1,
             CnComposing = 2,
             CnUpperCase = 3,
-            CnPinyin = 4
+            CnPinyin = 4,
+            CnSentence = 5
         }
 
         private const int VK_SHIFT = 0x10;
@@ -40,6 +41,8 @@ namespace TigerClaw.Core
         private const int VK_ESCAPE = 0x1B;
         private const int VK_PRIOR = 0x21;
         private const int VK_NEXT = 0x22;
+        private const int VK_UP = 0x26;
+        private const int VK_DOWN = 0x28;
         private const int VK_OEM_1 = 0xBA; // ;:
         private const int VK_OEM_2 = 0xBF; // /?
         private const int VK_OEM_PLUS = 0xBB;
@@ -69,6 +72,16 @@ namespace TigerClaw.Core
         private MixedInputDecodeResult _mixedDecodeResult = MixedInputDecodeResult.Empty;
         private int _mixedDecodedLexiconVersion = -1;
         private int _mixedDecodedMaxCodeLength = -1;
+        private readonly StringBuilder _sentenceRawBuffer = new StringBuilder(128);
+        private SentenceInputDecoder _sentenceInputDecoder;
+        private ISentenceLanguageModel _sentenceLanguageModel;
+        private readonly bool _sentenceDecoderExternallyProvided;
+        private SentenceDecodeResult _sentenceDecodeResult = SentenceDecodeResult.Empty;
+        private int _sentenceDecodedLexiconVersion = -1;
+        private int _sentenceResultLexiconVersion = -1;
+        private int _sentenceSelectedIndex;
+        private long _sentenceGeneration;
+        private ISentenceRerankService _sentenceRerankService;
         private readonly Dictionary<int, int> _customSelectionKeyMap = new Dictionary<int, int>();
         private Dictionary<int, List<int>> _customSelectionBindings = BuildDefaultSelectionKeyBindings();
         private readonly HashSet<int> _handledModifierSelectionKeys = new HashSet<int>();
@@ -178,11 +191,81 @@ namespace TigerClaw.Core
         private readonly Stack<string> _sendHistory = new Stack<string>();
         private Timer _manualTimer;
 
-        public InputMethodEngine(CoreRuntimeState state)
+        public InputMethodEngine(CoreRuntimeState state, SentenceInputDecoder sentenceInputDecoder = null)
         {
             _state = state ?? throw new ArgumentNullException(nameof(state));
             _mixedInputDecoder = new FixedLengthMixedInputDecoder(ResolveCandidates, GetCandidateOutputText);
+            _sentenceInputDecoder = sentenceInputDecoder;
+            _sentenceDecoderExternallyProvided = sentenceInputDecoder != null;
+            if (_sentenceDecoderExternallyProvided)
+            {
+                _sentenceDecodedLexiconVersion = _state.LexiconVersion;
+            }
+            else if (_state.GetSentenceInputEnabled())
+            {
+                ReloadSentenceResources();
+            }
             LoadCustomSelectionKeyConfig();
+        }
+
+        public void ReloadSentenceResources()
+        {
+            lock (_lock)
+            {
+                if (_sentenceDecoderExternallyProvided)
+                {
+                    return;
+                }
+
+                if (!_state.GetSentenceInputEnabled())
+                {
+                    _sentenceInputDecoder = null;
+                    _sentenceLanguageModel = null;
+                    _sentenceDecodedLexiconVersion = -1;
+                    return;
+                }
+
+                if (_sentenceLanguageModel == null ||
+                    ReferenceEquals(_sentenceLanguageModel, NeutralSentenceLanguageModel.Instance))
+                {
+                    _sentenceLanguageModel = SentenceNgramModel.LoadOrNeutral(AppContext.BaseDirectory);
+                }
+
+                SentenceLexiconIndex lexicon = SentenceLexiconIndex.Build(_state.GetSentenceLexiconSnapshot());
+                _sentenceInputDecoder = new SentenceInputDecoder(lexicon, _sentenceLanguageModel);
+                _sentenceDecodedLexiconVersion = _state.LexiconVersion;
+            }
+        }
+
+        public void SetSentenceRerankService(ISentenceRerankService service)
+        {
+            lock (_lock)
+            {
+                _sentenceRerankService = service;
+            }
+        }
+
+        public bool ApplySentenceNeuralScores(long generation, string rawCode, double[] scores)
+        {
+            lock (_lock)
+            {
+                SentenceCandidate[] candidates = _sentenceDecodeResult.Candidates ?? Array.Empty<SentenceCandidate>();
+                if (_compositionState != CompositionState.CnSentence ||
+                    generation != _sentenceGeneration ||
+                    !string.Equals(rawCode, _sentenceRawBuffer.ToString(), StringComparison.Ordinal) ||
+                    scores == null || scores.Length != candidates.Length)
+                {
+                    return false;
+                }
+
+                for (int index = 0; index < candidates.Length; index++)
+                {
+                    candidates[index].FinalScore = candidates[index].BaseScore + 0.40 * scores[index];
+                }
+                Array.Sort(candidates, (left, right) => right.FinalScore.CompareTo(left.FinalScore));
+                _sentenceSelectedIndex = 0;
+                return true;
+            }
         }
 
         public bool IsChinese
@@ -538,7 +621,8 @@ namespace TigerClaw.Core
                         _inputBuffer.Length > 0 &&
                         (_compositionState == CompositionState.CnComposing ||
                          _compositionState == CompositionState.CnPinyin ||
-                         _compositionState == CompositionState.CnUpperCase);
+                         _compositionState == CompositionState.CnUpperCase ||
+                         _compositionState == CompositionState.CnSentence);
 
                     if (!ctrl && !win && !shift &&
                         _compositionState == CompositionState.CnComposing &&
@@ -573,6 +657,24 @@ namespace TigerClaw.Core
 
                 if (ctrl)
                 {
+                    if (!alt && !win && !shift &&
+                        _compositionState == CompositionState.CnSentence &&
+                        resolvedVk >= VK_0 && resolvedVk <= VK_9)
+                    {
+                        if (_oneShotActionKey == resolvedVk)
+                        {
+                            return KeyEngineResult.CreateHandled(true, null, _sentenceRawBuffer.ToString(), true);
+                        }
+
+                        _oneShotActionKey = resolvedVk;
+                        int displayIndex = resolvedVk == VK_0 ? 9 : resolvedVk - VK_1;
+                        if (displayIndex >= Math.Min(Math.Max(_state.GetPageSize(), 1), 10))
+                        {
+                            return KeyEngineResult.CreateHandled(true, null, _sentenceRawBuffer.ToString(), true);
+                        }
+                        return CompleteSentenceDisplayCandidate(displayIndex);
+                    }
+
                     if (resolvedVk == VK_OEM_PLUS && _state.GetCtrlEqualAddCiEnabled())
                     {
                         if (_oneShotActionKey == resolvedVk)
@@ -590,7 +692,8 @@ namespace TigerClaw.Core
                         bool composing = _inputBuffer.Length > 0 &&
                                          (_compositionState == CompositionState.CnComposing ||
                                           _compositionState == CompositionState.CnPinyin ||
-                                          _compositionState == CompositionState.CnUpperCase);
+                                          _compositionState == CompositionState.CnUpperCase ||
+                                          _compositionState == CompositionState.CnSentence);
 
                         // One switch per physical press (see _oneShotActionKey). A single Ctrl+m reaches
                         // Core through the TSF test phase plus key-down, and a held key auto-repeats many
@@ -652,7 +755,8 @@ namespace TigerClaw.Core
                         _inputBuffer.Length > 0 &&
                         (_compositionState == CompositionState.CnComposing ||
                          _compositionState == CompositionState.CnPinyin ||
-                         _compositionState == CompositionState.CnUpperCase);
+                         _compositionState == CompositionState.CnUpperCase ||
+                         _compositionState == CompositionState.CnSentence);
 
                     if (shouldCancelCompositionBeforePass)
                     {
@@ -670,7 +774,8 @@ namespace TigerClaw.Core
                         _inputBuffer.Length > 0 &&
                         (_compositionState == CompositionState.CnComposing ||
                          _compositionState == CompositionState.CnPinyin ||
-                         _compositionState == CompositionState.CnUpperCase);
+                         _compositionState == CompositionState.CnUpperCase ||
+                         _compositionState == CompositionState.CnSentence);
 
                     if (shouldCancelCompositionBeforePass)
                     {
@@ -684,7 +789,9 @@ namespace TigerClaw.Core
                 {
                     if (_inputBuffer.Length > 0)
                     {
-                        string commit = CombineMixedCommit(ResolveCommitTextForCurrentState(_inputBuffer.ToString()));
+                        string commit = _compositionState == CompositionState.CnSentence
+                            ? CommitCodeBuffer()
+                            : CombineMixedCommit(ResolveCommitTextForCurrentState(_inputBuffer.ToString()));
                         ClearCompositionInput();
                         _compositionState = CompositionState.CnIdle;
                         ResetCandidatePageTracker();
@@ -712,6 +819,8 @@ namespace TigerClaw.Core
                         return ProcessCnUpperCaseKeyDown(resolvedVk, shift);
                     case CompositionState.CnPinyin:
                         return ProcessCnPinyinKeyDown(resolvedVk, shift);
+                    case CompositionState.CnSentence:
+                        return ProcessCnSentenceKeyDown(resolvedVk, shift);
                     default:
                         return KeyEngineResult.Pass(_compositionState != CompositionState.En);
                 }
@@ -829,6 +938,13 @@ namespace TigerClaw.Core
 
             if (TryMapIdleCodeChar(vk, shift, out char idleCodeChar))
             {
+                if (_state.GetSentenceInputEnabled())
+                {
+                    _compositionState = CompositionState.CnSentence;
+                    StartSentenceInput(idleCodeChar);
+                    return KeyEngineResult.CreateHandled(_isChinese, null, _sentenceRawBuffer.ToString(), true);
+                }
+
                 if (_state.GetUnlimitedMixedChineseEnglishInput())
                 {
                     StartMixedInput(idleCodeChar);
@@ -1099,6 +1215,126 @@ namespace TigerClaw.Core
             }
 
             return KeyEngineResult.Pass(_isChinese);
+        }
+
+        private KeyEngineResult ProcessCnSentenceKeyDown(int vk, bool shift)
+        {
+            if (vk == VK_BACK)
+            {
+                if (_sentenceRawBuffer.Length > 0)
+                {
+                    _sentenceRawBuffer.Length -= 1;
+                }
+
+                if (_sentenceRawBuffer.Length == 0)
+                {
+                    ClearCompositionInput();
+                    _compositionState = CompositionState.CnIdle;
+                    return KeyEngineResult.CreateHandled(true, null, string.Empty, false);
+                }
+
+                RebuildSentenceInput();
+                return KeyEngineResult.CreateHandled(true, null, _sentenceRawBuffer.ToString(), true);
+            }
+
+            if (vk == VK_ESCAPE)
+            {
+                ClearCompositionInput();
+                _compositionState = CompositionState.CnIdle;
+                return KeyEngineResult.CreateHandled(true, null, string.Empty, false);
+            }
+
+            if (vk == VK_RETURN)
+            {
+                string output = _state.GetEnterClear() ? string.Empty : _sentenceRawBuffer.ToString();
+                ClearCompositionInput();
+                _compositionState = CompositionState.CnIdle;
+                return KeyEngineResult.CreateHandled(true, output.Length > 0 ? output : null, string.Empty, false);
+            }
+
+            if (vk == VK_TAB)
+            {
+                if (_state.GetTabClear())
+                {
+                    ClearCompositionInput();
+                    _compositionState = CompositionState.CnIdle;
+                    ResetCandidatePageTracker();
+                    return KeyEngineResult.CreateHandled(true, null, string.Empty, false);
+                }
+
+                return KeyEngineResult.Pass(true);
+            }
+
+            if (vk == VK_SPACE)
+            {
+                if (_sentenceDecodeResult.Candidates == null || _sentenceDecodeResult.Candidates.Length == 0)
+                {
+                    return KeyEngineResult.CreateHandled(true, null, _sentenceRawBuffer.ToString(), true);
+                }
+
+                return CompleteSentenceCandidate(_sentenceSelectedIndex);
+            }
+
+            if (vk == VK_UP || vk == VK_DOWN)
+            {
+                int count = _sentenceDecodeResult.Candidates?.Length ?? 0;
+                if (count > 0)
+                {
+                    int delta = vk == VK_UP ? -1 : 1;
+                    _sentenceSelectedIndex = (_sentenceSelectedIndex + delta + count) % count;
+                }
+                return KeyEngineResult.CreateHandled(true, null, _sentenceRawBuffer.ToString(), true);
+            }
+
+            if (!shift && vk == VK_OEM_1 && _state.GetSecondCandidateSemicolon())
+            {
+                AppendSentenceInput(';');
+                return KeyEngineResult.CreateHandled(true, null, _sentenceRawBuffer.ToString(), true);
+            }
+
+            if (!shift && vk == VK_OEM_7 && _state.GetThirdCandidateQuote())
+            {
+                AppendSentenceInput('\'');
+                return KeyEngineResult.CreateHandled(true, null, _sentenceRawBuffer.ToString(), true);
+            }
+
+            if (!shift && vk >= VK_0 && vk <= VK_9)
+            {
+                AppendSentenceInput((char)('0' + (vk - VK_0)));
+                return KeyEngineResult.CreateHandled(true, null, _sentenceRawBuffer.ToString(), true);
+            }
+
+            if (!shift && vk >= VK_NUMPAD0 && vk <= VK_NUMPAD9)
+            {
+                AppendSentenceInput((char)('0' + (vk - VK_NUMPAD0)));
+                return KeyEngineResult.CreateHandled(true, null, _sentenceRawBuffer.ToString(), true);
+            }
+
+            if (TryMapLetter(vk, out char letter))
+            {
+                AppendSentenceInput(letter);
+                return KeyEngineResult.CreateHandled(true, null, _sentenceRawBuffer.ToString(), true);
+            }
+
+            if (vk == VK_OEM_7)
+            {
+                return CompleteSentenceWithSuffix(EmitSmartQuote(shift));
+            }
+
+            if (shift && ShiftCnSymbols.TryGetValue(vk, out string shiftSymbol))
+            {
+                return CompleteSentenceWithSuffix(
+                    _state.GetUseEnPuncInCn() && ShiftEnSymbols.TryGetValue(vk, out string shiftEnglish)
+                        ? shiftEnglish
+                        : shiftSymbol);
+            }
+
+            if (TryResolveCnSymbolOutput(vk, out string symbol))
+            {
+                return CompleteSentenceWithSuffix(symbol);
+            }
+
+            return KeyEngineResult.Pass(true);
         }
 
         private KeyEngineResult ProcessCnPinyinKeyDown(int vk, bool shift)
@@ -1778,6 +2014,11 @@ namespace TigerClaw.Core
 
         private string CommitCodeBuffer()
         {
+            if (_sentenceRawBuffer.Length > 0)
+            {
+                return _sentenceRawBuffer.ToString();
+            }
+
             if (_mixedRawBuffer.Length > 0)
             {
                 return MixedInputCommitComposer.ComposeRaw(_mixedDecodeResult);
@@ -1794,7 +2035,107 @@ namespace TigerClaw.Core
 
         private bool HasCompositionInput()
         {
-            return _inputBuffer.Length > 0 || _mixedRawBuffer.Length > 0;
+            return _inputBuffer.Length > 0 || _mixedRawBuffer.Length > 0 || _sentenceRawBuffer.Length > 0;
+        }
+
+        private void StartSentenceInput(char firstCodeChar)
+        {
+            ClearCompositionInput();
+            _sentenceRawBuffer.Append(char.ToLowerInvariant(firstCodeChar));
+            RebuildSentenceInput();
+        }
+
+        private void AppendSentenceInput(char value)
+        {
+            if (_sentenceRawBuffer.Length >= 128)
+            {
+                return;
+            }
+
+            _sentenceRawBuffer.Append(char.ToLowerInvariant(value));
+            RebuildSentenceInput();
+        }
+
+        private void RebuildSentenceInput()
+        {
+            EnsureSentenceDecoderCurrent();
+            _sentenceDecodeResult = _sentenceInputDecoder?.Decode(_sentenceRawBuffer.ToString(), 20)
+                                    ?? SentenceDecodeResult.Empty;
+            _sentenceResultLexiconVersion = _state.LexiconVersion;
+            _sentenceSelectedIndex = 0;
+            _sentenceGeneration++;
+            _inputBuffer.Clear();
+            _inputBuffer.Append(_sentenceRawBuffer);
+            ResetCandidatePageTracker();
+
+            SentenceCandidate[] candidates = _sentenceDecodeResult.Candidates ?? Array.Empty<SentenceCandidate>();
+            if (candidates.Length > 0)
+            {
+                _sentenceRerankService?.Request(new SentenceRerankRequest
+                {
+                    Generation = _sentenceGeneration,
+                    RawCode = _sentenceRawBuffer.ToString(),
+                    Candidates = candidates.Select(candidate => candidate.Text).ToArray()
+                });
+            }
+        }
+
+        private void EnsureSentenceDecoderCurrent()
+        {
+            if (_sentenceDecoderExternallyProvided ||
+                (_sentenceInputDecoder != null && _sentenceDecodedLexiconVersion == _state.LexiconVersion))
+            {
+                return;
+            }
+
+            ReloadSentenceResources();
+        }
+
+        private KeyEngineResult CompleteSentenceDisplayCandidate(int displayIndex)
+        {
+            int actualIndex = displayIndex;
+            int count = _sentenceDecodeResult.Candidates?.Length ?? 0;
+            if (_sentenceSelectedIndex > 0 && _sentenceSelectedIndex < count)
+            {
+                if (displayIndex == 0)
+                {
+                    actualIndex = _sentenceSelectedIndex;
+                }
+                else if (displayIndex <= _sentenceSelectedIndex)
+                {
+                    actualIndex = displayIndex - 1;
+                }
+            }
+
+            return CompleteSentenceCandidate(actualIndex);
+        }
+
+        private KeyEngineResult CompleteSentenceCandidate(int index)
+        {
+            SentenceCandidate[] candidates = _sentenceDecodeResult.Candidates ?? Array.Empty<SentenceCandidate>();
+            if (index < 0 || index >= candidates.Length)
+            {
+                return KeyEngineResult.CreateHandled(true, null, _sentenceRawBuffer.ToString(), true);
+            }
+
+            string output = candidates[index].Text;
+            ClearCompositionInput();
+            _compositionState = CompositionState.CnIdle;
+            ResetCandidatePageTracker();
+            return KeyEngineResult.CreateHandled(true, output, string.Empty, false);
+        }
+
+        private KeyEngineResult CompleteSentenceWithSuffix(string suffix)
+        {
+            SentenceCandidate[] candidates = _sentenceDecodeResult.Candidates ?? Array.Empty<SentenceCandidate>();
+            string output = candidates.Length > 0 && _sentenceSelectedIndex < candidates.Length
+                ? candidates[_sentenceSelectedIndex].Text
+                : _sentenceRawBuffer.ToString();
+            output += suffix ?? string.Empty;
+            ClearCompositionInput();
+            _compositionState = CompositionState.CnIdle;
+            ResetCandidatePageTracker();
+            return KeyEngineResult.CreateHandled(true, output, string.Empty, false);
         }
 
         private bool IsMixedInputSession()
@@ -1884,6 +2225,11 @@ namespace TigerClaw.Core
             _mixedDecodeResult = MixedInputDecodeResult.Empty;
             _mixedDecodedLexiconVersion = -1;
             _mixedDecodedMaxCodeLength = -1;
+            _sentenceRawBuffer.Clear();
+            _sentenceDecodeResult = SentenceDecodeResult.Empty;
+            _sentenceResultLexiconVersion = -1;
+            _sentenceSelectedIndex = 0;
+            _sentenceGeneration++;
         }
 
         private KeyEngineResult CompleteCnComposition(string activeOutput, string suffix = null)
@@ -3117,7 +3463,9 @@ namespace TigerClaw.Core
             {
                 EnsureMixedDecodeCurrent();
                 prefix = GetMixedResolvedPrefixText();
-                activeCode = _inputBuffer.ToString();
+                activeCode = _compositionState == CompositionState.CnSentence
+                    ? GetSentenceDisplayCode()
+                    : _inputBuffer.ToString();
             }
         }
 
@@ -3148,10 +3496,13 @@ namespace TigerClaw.Core
             {
                 EnsureMixedDecodeCurrent();
 
-                string inputCode = _inputBuffer.ToString();
+                string inputCode = _compositionState == CompositionState.CnSentence
+                    ? GetSentenceDisplayCode()
+                    : _inputBuffer.ToString();
                 bool isComposing = _compositionState == CompositionState.CnComposing ||
                                    _compositionState == CompositionState.CnPinyin ||
-                                   _compositionState == CompositionState.CnUpperCase;
+                                   _compositionState == CompositionState.CnUpperCase ||
+                                   _compositionState == CompositionState.CnSentence;
 
                 List<string> allList = null;
                 List<string> list = null;
@@ -3165,6 +3516,23 @@ namespace TigerClaw.Core
                     string pinyinCode = inputCode.Length > 0 ? inputCode.Substring(1) : string.Empty;
                     allList = ResolvePinyinCandidates(pinyinCode);
                     list = GetCandidatePage(inputCode, CompositionState.CnPinyin, allList, out _);
+                }
+                else if (_compositionState == CompositionState.CnSentence)
+                {
+                    if (_sentenceResultLexiconVersion != _state.LexiconVersion)
+                    {
+                        RebuildSentenceInput();
+                        inputCode = GetSentenceDisplayCode();
+                    }
+                    SentenceCandidate[] sentenceCandidates = _sentenceDecodeResult.Candidates ?? Array.Empty<SentenceCandidate>();
+                    allList = sentenceCandidates.Select(candidate => candidate.Text).ToList();
+                    if (_sentenceSelectedIndex > 0 && _sentenceSelectedIndex < allList.Count)
+                    {
+                        string selected = allList[_sentenceSelectedIndex];
+                        allList.RemoveAt(_sentenceSelectedIndex);
+                        allList.Insert(0, selected);
+                    }
+                    list = allList;
                 }
 
                 if (list == null)
@@ -3213,6 +3581,21 @@ namespace TigerClaw.Core
                     CompositionState = (int)_compositionState
                 };
             }
+        }
+
+        private string GetSentenceDisplayCode()
+        {
+            string rawCode = _sentenceRawBuffer.ToString();
+            SentenceCandidate[] candidates = _sentenceDecodeResult.Candidates ?? Array.Empty<SentenceCandidate>();
+            int index = _sentenceSelectedIndex >= 0 && _sentenceSelectedIndex < candidates.Length
+                ? _sentenceSelectedIndex
+                : 0;
+            if (index < candidates.Length && !string.IsNullOrWhiteSpace(candidates[index].SegmentedCode))
+            {
+                return candidates[index].SegmentedCode;
+            }
+
+            return rawCode;
         }
 
         private void EnsureMixedDecodeCurrent()

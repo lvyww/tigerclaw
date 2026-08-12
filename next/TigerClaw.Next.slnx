@@ -4,5 +4,6 @@
   <Project Path="TigerClaw.Dialog/TigerClaw.Dialog.csproj" />
   <Project Path="TigerClaw.Hook.Native/TigerClaw.Hook.Native.vcxproj" Id="d5a85b25-99a2-4d4e-8b8b-b8b4d0bc09b6" />
   <Project Path="TigerClaw.Overlay/TigerClaw.Overlay.csproj" />
+  <Project Path="TigerClaw.Sentence/TigerClaw.Sentence.csproj" />
   <Project Path="TigerClaw.Shared/TigerClaw.Shared.csproj" />
 </Solution>

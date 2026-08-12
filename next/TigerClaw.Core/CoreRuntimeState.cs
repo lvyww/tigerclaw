@@ -45,6 +45,8 @@ namespace TigerClaw.Core
 
         private const string KeyMaxCodeLen = "\u6700\u5927\u7801\u957f"; // unicode: 鏈€澶х爜闀?
         private const string KeyUnlimitedMixedChineseEnglishInput = "\u4e2d\u82f1\u6587\u4e0d\u9650\u957f\u6df7\u5408\u8f93\u5165"; // unicode: 中英文不限长混合输入
+        private const string KeySentenceInput = "\u6574\u53e5\u8f93\u5165"; // 整句输入
+        private const string KeySentenceNeuralRerank = "\u6574\u53e5\u795e\u7ecf\u91cd\u6392"; // 整句神经重排
         private const string KeyCnUseEnPunc = "\u4e2d\u6587\u72b6\u6001\u4e0b\u4f7f\u7528\u82f1\u6587\u6807\u70b9"; // unicode: 涓枃鐘舵€佷笅浣跨敤鑻辨枃鏍囩偣
 
         private const string KeyVerticalCandidates = "\u7ad6\u6392\u5019\u9009"; // unicode: 绔栨帓鍊欓€?
@@ -183,6 +185,10 @@ namespace TigerClaw.Core
             new KeyValuePair<string, string>(KeyMaxCodeLen, "4"),
 
             new KeyValuePair<string, string>(KeyUnlimitedMixedChineseEnglishInput, No),
+
+            new KeyValuePair<string, string>(KeySentenceInput, No),
+
+            new KeyValuePair<string, string>(KeySentenceNeuralRerank, Yes),
 
             new KeyValuePair<string, string>(KeyMaxAuto, Yes),
 
@@ -689,6 +695,38 @@ namespace TigerClaw.Core
 
             lock (_lock) { return _lexicon.TryGetValue(c, out List<string> v) ? new List<string>(v) : null; }
 
+        }
+
+        public Dictionary<string, List<string>> GetSentenceLexiconSnapshot()
+        {
+            lock (_lock)
+            {
+                var snapshot = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+                foreach (KeyValuePair<string, List<string>> pair in _lexicon)
+                {
+                    if (string.IsNullOrWhiteSpace(pair.Key) || pair.Value == null || pair.Value.Count == 0)
+                    {
+                        continue;
+                    }
+
+                    var values = new List<string>(pair.Value.Count);
+                    foreach (string entry in pair.Value)
+                    {
+                        string text = GetCandidateCommitText(entry);
+                        if (!string.IsNullOrEmpty(text) && !values.Contains(text))
+                        {
+                            values.Add(text);
+                        }
+                    }
+
+                    if (values.Count > 0)
+                    {
+                        snapshot[pair.Key] = values;
+                    }
+                }
+
+                return snapshot;
+            }
         }
 
         public string GetCandidateDisplayText(string entry)
@@ -1256,6 +1294,10 @@ namespace TigerClaw.Core
         public bool GetMaxCodeAutoCommit() => GetBool(KeyMaxAuto, true);
 
         public bool GetUnlimitedMixedChineseEnglishInput() => GetBool(KeyUnlimitedMixedChineseEnglishInput, false);
+
+        public bool GetSentenceInputEnabled() => GetBool(KeySentenceInput, false);
+
+        public bool GetSentenceNeuralRerankEnabled() => GetBool(KeySentenceNeuralRerank, true);
 
         public bool GetShiftToggleEnabled() => GetBool(KeyShiftToggle, true);
 

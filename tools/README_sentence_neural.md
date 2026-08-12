@@ -1,6 +1,8 @@
 # 整句神经模型离线实验
 
-这些工具只用于离线数据处理、训练和候选重排，尚未接入 TigerClaw.Core。
+这些工具用于离线数据处理、训练、评测和导出。TigerClaw.Core 使用导出的
+`sentence-ngram.bin`，可选的 `TigerClaw.Sentence.exe` 使用导出的 ONNX 模型；
+训练过程本身不进入输入法运行时。
 
 ## 工具
 
@@ -9,6 +11,8 @@
 - `benchmark_sentence_neural.py`：CPU/DirectML 训练吞吐测试。
 - `train_sentence_neural.py`：训练、验证和可恢复 checkpoint。
 - `export_sentence_neural.py`：去除优化器状态，导出紧凑推理模型。
+- `export_sentence_neural_onnx.py`：把推理 checkpoint 导出为独立进程使用的 ONNX 模型。
+- `export_sentence_ngram_binary.py`：把实验 JSON n-gram 转为 Core 使用的紧凑二进制模型。
 - `sentence_neural_reranker.py`：批量计算完整候选句的神经语言分。
 - `evaluate_sentence_decoder.py`：比较字符、词频和神经重排排名。
 - `evaluate_sentence_neural_pools.py`：在 Windows/DirectML 上重排由 WSL 导出的候选池。
@@ -51,6 +55,27 @@ python3 tools/prepare_sentence_neural_data.py \
 长时间 DirectML 训练使用 `run_sentence_training_segments.ps1` 分段重启，避免
 checkpoint 暂存缓冲长期占用共享内存。
 
+## 运行时模型导出
+
+```bash
+python3 tools/export_sentence_ngram_binary.py \
+  --input /mnt/c/Archive/tigerclaw_sentence_ml/baseline/ngram-20000.json.gz \
+  --output /mnt/c/Archive/tigerclaw_sentence_ml/runtime/sentence-ngram.bin
+
+/mnt/c/Users/yc/AppData/Local/TigerClawML/venv-directml/Scripts/python.exe \
+  tools/export_sentence_neural_onnx.py \
+  --checkpoint C:/Archive/tigerclaw_sentence_ml/model10m/best.pt \
+  --output C:/Archive/tigerclaw_sentence_ml/runtime/sentence-transformer.onnx
+```
+
+`next/build_next.bat` 从上述 runtime 目录复制模型，并从隔离 Python 环境的
+`onnxruntime/capi` 复制 Windows x64 原生库。首次准备环境时安装与托管程序集
+同版本的 CPU wheel：
+
+```batch
+C:\Users\yc\AppData\Local\TigerClawML\venv-directml\Scripts\python.exe -m pip install onnxruntime==1.24.4
+```
+
 ## 实时试用程序
 
 在 Windows 资源管理器中双击：
@@ -62,10 +87,12 @@ tools\run_sentence_input_demo.bat
 程序加载完成后直接键入连续编码。每个字优先采用最短的首选编码，即该编码下
 无需选重即可得到这个字；不存在首选编码时才采用最短编码，并用选重符号确定
 非首选字。编码下还有其他候选不影响首选码判定。只有整个输入本身只有一码时
-才允许一码切分；其他情况下，每个切分连同选重标记至少占用二码。因此 `j2`
-属于合法的二码切分，而长串中的裸 `j` 不合法。不再使用“一码+空格”。码表中的
+才允许一码切分。所有未带选重符的编码段都只返回该码位的第一候选；第二候选
+及以后必须显式选重。其他情况下，每个切分连同选重标记至少占用二码。因此 `j2` 属于合法的
+二码切分，而长串中的裸 `j` 不合法。不再使用“一码+空格”。码表中的
 词语可以作为一条候选路径输出。编码后加 ASCII 分号表示明确选择第二候选，
-加数字表示指定候选位（`0` 表示第10位，也支持 `10` 及更大的十进制位次）。
+加 ASCII 单引号表示第三候选，加数字表示指定候选位（`0` 表示第10位，也支持
+`10` 及更大的十进制位次）。
 退格、粘贴和清空都会触发候选刷新。“载入示例”会填入“今天早上我吃了两个
 面包三根油条”的逐字最优编码。
 默认使用字符模型产生 Beam，只对前20个候选使用神经权重0.40重排；旧词频权重

@@ -1148,6 +1148,10 @@ namespace TigerClaw.Dialog
                     return "回车键是否立即清掉编码串。";
                 case "中英文不限长混合输入":
                     return "允许超过最大码长，暂存顶字上屏的候选字词，最后一起上屏。";
+                case "整句输入":
+                    return "连续输入整句编码，由本地语言模型自动切分并生成整句候选。";
+                case "整句神经重排":
+                    return "使用独立推理进程重排整句候选；不可用时自动保留三元模型结果。";
                 case "TAB清屏":
                     return "Tab 键在对应场景下是否直接清屏。";
                 case "竖排候选":
@@ -1165,9 +1169,9 @@ namespace TigerClaw.Dialog
                 case KeySelectionKeys:
                     return "编辑 1 到 10 选的自定义按键绑定。";
                 case "分号次选":
-                    return "允许用分号快速上屏第二候选。";
+                    return "允许用分号选择第二候选；整句模式下分号仅在开启时写入编码。";
                 case "引号三选":
-                    return "允许用引号快速上屏第三候选。";
+                    return "允许用单引号选择第三候选；整句模式下单引号仅在开启时写入编码。";
                 case "/输出顿号":
                     return "配置 / 键是否直接输出顿号。";
                 case "隐藏候选":
@@ -1234,6 +1238,8 @@ namespace TigerClaw.Dialog
                 case "最大码长":
                 case "最大码长无重自动上屏":
                 case "中英文不限长混合输入":
+                case "整句输入":
+                case "整句神经重排":
                 case "空码自动清屏":
                     return SectionCodeInput;
 

@@ -17,6 +17,7 @@ BimeTSF2、Dialog、Native Hook 与 TigerClaw Core 通过命名管道通信。
 - `seq` 仅在“需要响应”的请求中使用，用于请求-响应配对。
 - 布尔字段默认值由发送方显式给出，不要依赖隐式默认。
 - 中英文状态以 TigerClaw Core 为准，通过 `response.keyboard_open` 向前端同步。
+- 可选整句神经重排使用独立管道，见 `Protocol/sentence_messages.md`；它不改变 BimeIPC 的前端协议。
 
 ## 消息类型
 
@@ -147,7 +148,7 @@ BimeTSF2、Dialog、Native Hook 与 TigerClaw Core 通过命名管道通信。
 - `success`: 请求处理是否成功
 - `handled`: 当前按键/命令是否由 Core 接管
 - `commit_text`: 需要前端代为上屏/回放的字符串（可为空或省略）
-- `input_buffer`: 前端应显示的当前 composition 字符串（可选）。开启“中英文不限长混合输入”时，它是“已解析前缀 + 活动尾码”的表面显示串；已解析前缀中的有码段显示候选字词，无码段显示原始英文编码，因此不等同于 Core 保存的本轮完整原始编码。
+- `input_buffer`: 前端应显示的当前 composition 字符串（可选）。开启“中英文不限长混合输入”时，它是“已解析前缀 + 活动尾码”的表面显示串；已解析前缀中的有码段显示候选字词，无码段显示原始英文编码，因此不等同于 Core 保存的本轮完整原始编码。整句模式下，它会按照当前首选候选的切分路径插入显示空格；Core 保存的原始整句编码仍不含这些空格。
 - `keyboard_open`: Core 当前中英状态（可选，`true`=中文，`false`=英文）
 - `protocol_version`: 协议版本（`hello` 响应可选）
 - `core_build`: Core 构建标识（`hello` 响应可选）

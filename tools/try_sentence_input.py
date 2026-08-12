@@ -235,7 +235,7 @@ class SentenceInputWindow:
 
         title = ttk.Label(
             outer,
-            text="单字取最优码并允许词语；分号选第二候选，数字指定候选位。",
+            text="单字取最优码并允许词语；分号选第二、单引号选第三，数字指定候选位。",
         )
         title.pack(anchor=tk.W, pady=(0, 8))
 
