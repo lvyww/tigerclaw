@@ -665,6 +665,47 @@ void CSampleIME::_StorePendingResponseCache(BOOL isKeyDown, WPARAM wParam, UINT 
                              static_cast<unsigned>(_pendingResponseInputBuffer.length()));
 }
 
+void CSampleIME::_ClearPendingKeyEvent()
+{
+    _pendingKeyEventValid = FALSE;
+    _pendingKeyEventIsKeyDown = FALSE;
+    _pendingKeyEventWParam = 0;
+    _pendingKeyEventScanCode = 0;
+    _pendingKeyEventExtended = FALSE;
+    _pendingKeyEventId = 0;
+}
+
+void CSampleIME::_StorePendingKeyEvent(BOOL isKeyDown, WPARAM wParam, UINT scanCode, BOOL extended, ULONGLONG eventId)
+{
+    _pendingKeyEventValid = eventId != 0;
+    _pendingKeyEventIsKeyDown = isKeyDown;
+    _pendingKeyEventWParam = wParam;
+    _pendingKeyEventScanCode = scanCode;
+    _pendingKeyEventExtended = extended;
+    _pendingKeyEventId = eventId;
+}
+
+BOOL CSampleIME::_TryConsumePendingKeyEvent(BOOL isKeyDown, WPARAM wParam, LPARAM lParam, _Out_ ULONGLONG *pEventId)
+{
+    if (pEventId == nullptr || !_pendingKeyEventValid || _pendingKeyEventIsKeyDown != isKeyDown)
+    {
+        return FALSE;
+    }
+
+    if (!IsPendingKeyEventMatch(_pendingKeyEventWParam,
+                                _pendingKeyEventScanCode,
+                                _pendingKeyEventExtended,
+                                wParam,
+                                lParam))
+    {
+        return FALSE;
+    }
+
+    *pEventId = _pendingKeyEventId;
+    _ClearPendingKeyEvent();
+    return TRUE;
+}
+
 BOOL CSampleIME::_TryConsumePendingResponseCache(BOOL isKeyDown, WPARAM wParam, LPARAM lParam, _Out_ BimeResponse *pResponse)
 {
     if (pResponse == nullptr)
@@ -717,6 +758,7 @@ BOOL CSampleIME::_TryConsumePendingResponseCache(BOOL isKeyDown, WPARAM wParam, 
                              static_cast<unsigned>(pResponse->inputBuffer.length()));
 
     _ClearPendingResponseCache();
+    _ClearPendingKeyEvent();
     return TRUE;
 }
 
@@ -757,13 +799,15 @@ void CSampleIME::_EnqueueFailedKeyMessage(UINT vkCode,
                                           BOOL caretValid,
                                           LONG caretX,
                                           LONG caretY,
-                                          _In_z_ const char *reason)
+                                          _In_z_ const char *reason,
+                                          ULONGLONG eventId)
 {
     ULONGLONG nowTick = GetTickCount64();
     _PruneFailedKeyQueue(nowTick);
 
     FailedKeyMessage message = {};
     message.tick = nowTick;
+    message.eventId = eventId != 0 ? eventId : _pPipeClient->NextKeyEventId();
     message.vkCode = vkCode;
     message.scanCode = scanCode;
     message.isKeyDown = isKeyDown;
@@ -832,7 +876,8 @@ BOOL CSampleIME::_FlushFailedKeyQueue(_In_opt_ ITfContext *pContext, _In_z_ cons
                                                   message.caretX,
                                                   message.caretY,
                                                   &response,
-                                                  kPipeKeyResponseTimeoutMs);
+                                                  kPipeKeyResponseTimeoutMs,
+                                                  message.eventId);
         if (FAILED(hr))
         {
             Global::LogToFile("KeyFailQueue: flush failed hr=0x%08X vk=%u action=%s size=%u",
@@ -940,6 +985,7 @@ STDAPI CSampleIME::OnTestKeyDown(ITfContext *pContext, WPARAM wParam, LPARAM lPa
     }
 
     _ClearPendingResponseCache();
+    _ClearPendingKeyEvent();
 
     if (_trialExpired)
     {
@@ -992,25 +1038,12 @@ STDAPI CSampleIME::OnTestKeyDown(ITfContext *pContext, WPARAM wParam, LPARAM lPa
         return S_OK;
     }
     LogCapsDebugKey("OnTestKeyDown.built", wParam, lParam, TRUE, vkCode, scanCode, repeat, extended, shift, ctrl, alt, win, capsLock, numLock);
+    ULONGLONG eventId = _pPipeClient->NextKeyEventId();
+    _StorePendingKeyEvent(TRUE, wParam, scanCode, extended, eventId);
     if (!_FlushFailedKeyQueue(pContext, "OnTestKeyDown.prepend"))
     {
-        _EnqueueFailedKeyMessage(vkCode,
-                                 scanCode,
-                                 TRUE,
-                                 shift,
-                                 ctrl,
-                                 alt,
-                                 win,
-                                 capsLock,
-                                 numLock,
-                                 repeat,
-                                 extended,
-                                 caretValid,
-                                 caretX,
-                                 caretY,
-                                 "flush_failed_before_testdown");
         *pIsEaten = TRUE;
-        Global::LogToFile("KeySink OnTestKeyDown vk=%u queue_current=1 reason=flush_failed", vkCode);
+        Global::LogToFile("KeySink OnTestKeyDown vk=%u defer_current=1 reason=flush_failed", vkCode);
         return S_OK;
     }
 
@@ -1031,26 +1064,12 @@ STDAPI CSampleIME::OnTestKeyDown(ITfContext *pContext, WPARAM wParam, LPARAM lPa
                                               caretX,
                                               caretY,
                                               &response,
-                                              kPipeKeyResponseTimeoutMs);
+                                              kPipeKeyResponseTimeoutMs,
+                                              eventId);
     if (FAILED(hr))
     {
-        _EnqueueFailedKeyMessage(vkCode,
-                                 scanCode,
-                                 TRUE,
-                                 shift,
-                                 ctrl,
-                                 alt,
-                                 win,
-                                 capsLock,
-                                 numLock,
-                                 repeat,
-                                 extended,
-                                 caretValid,
-                                 caretX,
-                                 caretY,
-                                 "send_failed_testdown");
         *pIsEaten = TRUE;
-        Global::LogToFile("KeySink OnTestKeyDown vk=%u pipe_error hr=0x%08X queued=1", vkCode, static_cast<unsigned>(hr));
+        Global::LogToFile("KeySink OnTestKeyDown vk=%u pipe_error hr=0x%08X retry_in_keydown=1", vkCode, static_cast<unsigned>(hr));
         return S_OK;
     }
 
@@ -1155,6 +1174,11 @@ STDAPI CSampleIME::OnKeyDown(ITfContext *pContext, WPARAM wParam, LPARAM lParam,
 
         if (TryBuildPipeKeyEvent(wParam, lParam, TRUE, &queueVkCode, &queueScanCode, &queueShift, &queueCtrl, &queueAlt, &queueWin, &queueCapsLock, &queueNumLock, &queueRepeat, &queueExtended, &queueCaretValid, &queueCaretX, &queueCaretY))
         {
+            ULONGLONG eventId = 0;
+            if (!_TryConsumePendingKeyEvent(TRUE, wParam, lParam, &eventId))
+            {
+                eventId = _pPipeClient->NextKeyEventId();
+            }
             _EnqueueFailedKeyMessage(queueVkCode,
                                      queueScanCode,
                                      TRUE,
@@ -1169,7 +1193,8 @@ STDAPI CSampleIME::OnKeyDown(ITfContext *pContext, WPARAM wParam, LPARAM lParam,
                                      queueCaretValid,
                                      queueCaretX,
                                      queueCaretY,
-                                     "pipe_disconnected_keydown");
+                                     "pipe_disconnected_keydown",
+                                     eventId);
         }
 
         *pIsEaten = TRUE;
@@ -1231,6 +1256,11 @@ STDAPI CSampleIME::OnKeyDown(ITfContext *pContext, WPARAM wParam, LPARAM lParam,
             return S_OK;
         }
         LogCapsDebugKey("OnKeyDown.built", wParam, lParam, TRUE, vkCode, scanCode, repeat, extended, shift, ctrl, alt, win, capsLock, numLock);
+        ULONGLONG eventId = 0;
+        if (!_TryConsumePendingKeyEvent(TRUE, wParam, lParam, &eventId))
+        {
+            eventId = _pPipeClient->NextKeyEventId();
+        }
         if (!_FlushFailedKeyQueue(pContext, "OnKeyDown.prepend"))
         {
             _EnqueueFailedKeyMessage(vkCode,
@@ -1247,7 +1277,8 @@ STDAPI CSampleIME::OnKeyDown(ITfContext *pContext, WPARAM wParam, LPARAM lParam,
                                      caretValid,
                                      caretX,
                                      caretY,
-                                     "flush_failed_before_keydown");
+                                     "flush_failed_before_keydown",
+                                     eventId);
             *pIsEaten = TRUE;
             Global::LogToFile("KeySink OnKeyDown vk=%u queue_current=1 reason=flush_failed", vkCode);
             return S_OK;
@@ -1269,7 +1300,8 @@ STDAPI CSampleIME::OnKeyDown(ITfContext *pContext, WPARAM wParam, LPARAM lParam,
                                                   caretX,
                                                   caretY,
                                                   &response,
-                                                  kPipeKeyResponseTimeoutMs);
+                                                  kPipeKeyResponseTimeoutMs,
+                                                  eventId);
         if (FAILED(hr))
         {
             _EnqueueFailedKeyMessage(vkCode,
@@ -1286,7 +1318,8 @@ STDAPI CSampleIME::OnKeyDown(ITfContext *pContext, WPARAM wParam, LPARAM lParam,
                                      caretValid,
                                      caretX,
                                      caretY,
-                                     "send_failed_keydown");
+                                     "send_failed_keydown",
+                                     eventId);
             *pIsEaten = TRUE;
             Global::LogToFile("KeySink OnKeyDown vk=%u pipe_error hr=0x%08X queued=1", vkCode, static_cast<unsigned>(hr));
             return S_OK;
@@ -1391,6 +1424,7 @@ STDAPI CSampleIME::OnTestKeyUp(ITfContext *pContext, WPARAM wParam, LPARAM lPara
     }
 
     _ClearPendingResponseCache();
+    _ClearPendingKeyEvent();
 
     if (_trialExpired)
     {
@@ -1459,25 +1493,12 @@ STDAPI CSampleIME::OnTestKeyUp(ITfContext *pContext, WPARAM wParam, LPARAM lPara
         return S_OK;
     }
     LogCapsDebugKey("OnTestKeyUp.built", wParam, lParam, FALSE, vkCode, scanCode, repeat, extended, shift, ctrl, alt, win, capsLock, numLock);
+    ULONGLONG eventId = _pPipeClient->NextKeyEventId();
+    _StorePendingKeyEvent(FALSE, wParam, scanCode, extended, eventId);
     if (!_FlushFailedKeyQueue(pContext, "OnTestKeyUp.prepend"))
     {
-        _EnqueueFailedKeyMessage(vkCode,
-                                 scanCode,
-                                 FALSE,
-                                 shift,
-                                 ctrl,
-                                 alt,
-                                 win,
-                                 capsLock,
-                                 numLock,
-                                 repeat,
-                                 extended,
-                                 caretValid,
-                                 caretX,
-                                 caretY,
-                                 "flush_failed_before_testup");
         *pIsEaten = TRUE;
-        Global::LogToFile("KeySink OnTestKeyUp vk=%u queue_current=1 reason=flush_failed", vkCode);
+        Global::LogToFile("KeySink OnTestKeyUp vk=%u defer_current=1 reason=flush_failed", vkCode);
         return S_OK;
     }
 
@@ -1498,26 +1519,12 @@ STDAPI CSampleIME::OnTestKeyUp(ITfContext *pContext, WPARAM wParam, LPARAM lPara
                                               0,
                                               0,
                                               &response,
-                                              kPipeKeyResponseTimeoutMs);
+                                              kPipeKeyResponseTimeoutMs,
+                                              eventId);
     if (FAILED(hr))
     {
-        _EnqueueFailedKeyMessage(vkCode,
-                                 scanCode,
-                                 FALSE,
-                                 shift,
-                                 ctrl,
-                                 alt,
-                                 win,
-                                 capsLock,
-                                 numLock,
-                                 repeat,
-                                 extended,
-                                 caretValid,
-                                 caretX,
-                                 caretY,
-                                 "send_failed_testup");
         *pIsEaten = TRUE;
-        Global::LogToFile("KeySink OnTestKeyUp vk=%u pipe_error hr=0x%08X queued=1", vkCode, static_cast<unsigned>(hr));
+        Global::LogToFile("KeySink OnTestKeyUp vk=%u pipe_error hr=0x%08X retry_in_keyup=1", vkCode, static_cast<unsigned>(hr));
         return S_OK;
     }
 
@@ -1606,6 +1613,11 @@ STDAPI CSampleIME::OnKeyUp(ITfContext *pContext, WPARAM wParam, LPARAM lParam, B
 
         if (TryBuildPipeKeyEvent(wParam, lParam, FALSE, &queueVkCode, &queueScanCode, &queueShift, &queueCtrl, &queueAlt, &queueWin, &queueCapsLock, &queueNumLock, &queueRepeat, &queueExtended, &queueCaretValid, &queueCaretX, &queueCaretY))
         {
+            ULONGLONG eventId = 0;
+            if (!_TryConsumePendingKeyEvent(FALSE, wParam, lParam, &eventId))
+            {
+                eventId = _pPipeClient->NextKeyEventId();
+            }
             _EnqueueFailedKeyMessage(queueVkCode,
                                      queueScanCode,
                                      FALSE,
@@ -1620,7 +1632,8 @@ STDAPI CSampleIME::OnKeyUp(ITfContext *pContext, WPARAM wParam, LPARAM lParam, B
                                      queueCaretValid,
                                      queueCaretX,
                                      queueCaretY,
-                                     "pipe_disconnected_keyup");
+                                     "pipe_disconnected_keyup",
+                                     eventId);
         }
 
         *pIsEaten = TRUE;
@@ -1682,6 +1695,11 @@ STDAPI CSampleIME::OnKeyUp(ITfContext *pContext, WPARAM wParam, LPARAM lParam, B
             return S_OK;
         }
         LogCapsDebugKey("OnKeyUp.built", wParam, lParam, FALSE, vkCode, scanCode, repeat, extended, shift, ctrl, alt, win, capsLock, numLock);
+        ULONGLONG eventId = 0;
+        if (!_TryConsumePendingKeyEvent(FALSE, wParam, lParam, &eventId))
+        {
+            eventId = _pPipeClient->NextKeyEventId();
+        }
         if (!_FlushFailedKeyQueue(pContext, "OnKeyUp.prepend"))
         {
             _EnqueueFailedKeyMessage(vkCode,
@@ -1698,7 +1716,8 @@ STDAPI CSampleIME::OnKeyUp(ITfContext *pContext, WPARAM wParam, LPARAM lParam, B
                                      caretValid,
                                      caretX,
                                      caretY,
-                                     "flush_failed_before_keyup");
+                                     "flush_failed_before_keyup",
+                                     eventId);
             *pIsEaten = TRUE;
             Global::LogToFile("KeySink OnKeyUp vk=%u queue_current=1 reason=flush_failed", vkCode);
             return S_OK;
@@ -1720,7 +1739,8 @@ STDAPI CSampleIME::OnKeyUp(ITfContext *pContext, WPARAM wParam, LPARAM lParam, B
                                                   0,
                                                   0,
                                                   &response,
-                                                  kPipeKeyResponseTimeoutMs);
+                                                  kPipeKeyResponseTimeoutMs,
+                                                  eventId);
         if (FAILED(hr))
         {
             _EnqueueFailedKeyMessage(vkCode,
@@ -1737,7 +1757,8 @@ STDAPI CSampleIME::OnKeyUp(ITfContext *pContext, WPARAM wParam, LPARAM lParam, B
                                      caretValid,
                                      caretX,
                                      caretY,
-                                     "send_failed_keyup");
+                                     "send_failed_keyup",
+                                     eventId);
             *pIsEaten = TRUE;
             Global::LogToFile("KeySink OnKeyUp vk=%u pipe_error hr=0x%08X queued=1", vkCode, static_cast<unsigned>(hr));
             return S_OK;

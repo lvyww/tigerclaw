@@ -15,6 +15,7 @@ BimeTSF2、Dialog、Native Hook 与 TigerClaw Core 通过命名管道通信。
 
 - `type` 为消息类型。
 - `seq` 仅在“需要响应”的请求中使用，用于请求-响应配对。
+- TSF `key` 请求使用 `client_session` + `event_id` 标识一次物理按键；超时重发必须复用该标识，Core 会返回首次处理结果而不重复执行。
 - 布尔字段默认值由发送方显式给出，不要依赖隐式默认。
 - 中英文状态以 TigerClaw Core 为准，通过 `response.keyboard_open` 向前端同步。
 - 可选整句神经重排使用独立管道，见 `Protocol/sentence_messages.md`；它不改变 BimeIPC 的前端协议。
@@ -28,12 +29,13 @@ BimeTSF2、Dialog、Native Hook 与 TigerClaw Core 通过命名管道通信。
 示例:
 
 ```json
-{"type":"key","seq":101,"action":"down","vk":65,"scan":30,"shift":false,"ctrl":false,"alt":false,"win":false,"capsLock":false,"numLock":false,"repeat":1,"extended":false,"caret_x":800,"caret_y":500}
+{"type":"key","seq":101,"client_session":"1234-5678-1","event_id":"42","action":"down","vk":65,"scan":30,"shift":false,"ctrl":false,"alt":false,"win":false,"capsLock":false,"numLock":false,"repeat":1,"extended":false,"caret_x":800,"caret_y":500}
 ```
 
 字段:
 
 - `action`: `"down" | "up"`
+- `client_session`/`event_id`: TSF 提供的可选幂等标识；同一按键重发时保持不变
 - `vk`: 虚拟键码
 - `scan`: 扫描码
 - `shift`/`ctrl`/`alt`/`win`: 修饰键状态

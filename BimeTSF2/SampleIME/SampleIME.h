@@ -27,6 +27,7 @@ struct BimeResponse;
 struct FailedKeyMessage
 {
     ULONGLONG tick;
+    ULONGLONG eventId;
     UINT vkCode;
     UINT scanCode;
     BOOL isKeyDown;
@@ -191,6 +192,9 @@ private:
     void _ClearPendingResponseCache();
     void _StorePendingResponseCache(BOOL isKeyDown, WPARAM wParam, UINT scanCode, BOOL extended, _In_ const BimeResponse &response);
     BOOL _TryConsumePendingResponseCache(BOOL isKeyDown, WPARAM wParam, LPARAM lParam, _Out_ BimeResponse *pResponse);
+    void _ClearPendingKeyEvent();
+    void _StorePendingKeyEvent(BOOL isKeyDown, WPARAM wParam, UINT scanCode, BOOL extended, ULONGLONG eventId);
+    BOOL _TryConsumePendingKeyEvent(BOOL isKeyDown, WPARAM wParam, LPARAM lParam, _Out_ ULONGLONG *pEventId);
     void _PruneFailedKeyQueue(ULONGLONG nowTick);
     void _EnqueueFailedKeyMessage(UINT vkCode,
                                   UINT scanCode,
@@ -206,7 +210,8 @@ private:
                                   BOOL caretValid,
                                   LONG caretX,
                                   LONG caretY,
-                                  _In_z_ const char *reason);
+                                  _In_z_ const char *reason,
+                                  ULONGLONG eventId = 0);
     BOOL _FlushFailedKeyQueue(_In_opt_ ITfContext *pContext, _In_z_ const char *stageTag);
     BOOL _ApplyResponseAndSyncState(_In_opt_ ITfContext *pContext, _Inout_ BimeResponse *pResponse, _In_z_ const char *stageTag, _Out_opt_ BOOL *pCommittedViaAnchor = nullptr);
     void _AdjustKeySinkModeForForegroundWindow(_In_opt_ HWND hwndForeground);
@@ -346,6 +351,12 @@ private:
     ITfContext *_pDeferredReopenContext = nullptr;
     std::wstring _deferredReopenInputBuffer;
     std::deque<FailedKeyMessage> _failedKeyQueue;
+    BOOL _pendingKeyEventValid = FALSE;
+    BOOL _pendingKeyEventIsKeyDown = FALSE;
+    WPARAM _pendingKeyEventWParam = 0;
+    UINT _pendingKeyEventScanCode = 0;
+    BOOL _pendingKeyEventExtended = FALSE;
+    ULONGLONG _pendingKeyEventId = 0;
 
     LONG _refCount;
 

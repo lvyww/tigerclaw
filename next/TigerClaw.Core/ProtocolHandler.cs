@@ -23,6 +23,8 @@ namespace TigerClaw.Core
         private readonly InputMethodEngine _engine;
         private readonly UiStatePublisher _uiStatePublisher;
         private readonly SentenceRerankClient _sentenceRerankClient;
+        private readonly KeyRequestReplayCache _keyRequestReplayCache = new KeyRequestReplayCache();
+        private readonly object _keyRequestLock = new object();
         private readonly object _publishLock = new object();
         private const int FreshCaretAwaitWindowMs = 30;
         private bool _hookNativeDisabled;
@@ -47,6 +49,7 @@ namespace TigerClaw.Core
                 new ProcessLauncher(),
                 OnSentenceRerankResult);
             _engine.SetSentenceRerankService(_sentenceRerankClient);
+            _engine.SetSentenceDecodeCompletedCallback(PublishUiState);
             _engine.SetChinese(_state.GetDefaultChinese(), out _);
             PublishUiState();
         }
@@ -385,6 +388,25 @@ namespace TigerClaw.Core
         }
 
         private string HandleKeyMessage(SimpleJsonObject msg, int seq)
+        {
+            string replayKey = KeyRequestReplayCache.BuildKey(
+                ConvertToString(msg.GetValue("client_session")),
+                ConvertToString(msg.GetValue("event_id")));
+
+            lock (_keyRequestLock)
+            {
+                if (_keyRequestReplayCache.TryGet(replayKey, seq, out string cachedResponse))
+                {
+                    return cachedResponse;
+                }
+
+                string response = HandleKeyMessageCore(msg, seq);
+                _keyRequestReplayCache.Store(replayKey, response);
+                return response;
+            }
+        }
+
+        private string HandleKeyMessageCore(SimpleJsonObject msg, int seq)
         {
             string frontend = ConvertToString(msg.GetValue("frontend"));
             MarkFrontendMode(frontend);

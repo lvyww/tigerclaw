@@ -57,8 +57,14 @@ static void PumpCurrentThreadNonInputMessages()
     }
 }
 
-CPipeClient::CPipeClient() : _hPipe(INVALID_HANDLE_VALUE), _isConnected(FALSE), _seq(0), _helloDone(FALSE)
+CPipeClient::CPipeClient() : _hPipe(INVALID_HANDLE_VALUE), _isConnected(FALSE), _seq(0), _keyEventSeq(0), _helloDone(FALSE)
 {
+    sprintf_s(_clientSession,
+              sizeof(_clientSession),
+              "%lu-%lu-%llu",
+              GetCurrentProcessId(),
+              GetCurrentThreadId(),
+              GetTickCount64());
     Global::LogToFileVerbose("CPipeClient: ctor");
 }
 
@@ -386,7 +392,8 @@ HRESULT CPipeClient::SendKeyAndWait(UINT vkCode,
                                     LONG caretX,
                                     LONG caretY,
                                     _Out_ BimeResponse *pResponse,
-                                    DWORD timeoutMs)
+                                    DWORD timeoutMs,
+                                    ULONGLONG eventId)
 {
     if (pResponse == nullptr)
     {
@@ -394,6 +401,10 @@ HRESULT CPipeClient::SendKeyAndWait(UINT vkCode,
     }
 
     LONG currentSeq = InterlockedIncrement(&_seq);
+    if (eventId == 0)
+    {
+        eventId = NextKeyEventId();
+    }
 
     char message[768];
     int length = 0;
@@ -401,10 +412,12 @@ HRESULT CPipeClient::SendKeyAndWait(UINT vkCode,
     {
         length = sprintf_s(message,
                            sizeof(message),
-                           "{\"type\":\"key\",\"seq\":%ld,\"action\":\"%s\",\"vk\":%u,\"scan\":%u,"
+                           "{\"type\":\"key\",\"seq\":%ld,\"client_session\":\"%s\",\"event_id\":\"%llu\",\"action\":\"%s\",\"vk\":%u,\"scan\":%u,"
                            "\"shift\":%s,\"ctrl\":%s,\"alt\":%s,\"win\":%s,\"capsLock\":%s,\"numLock\":%s,"
                            "\"repeat\":%u,\"extended\":%s,\"tsf_stage\":\"%s\",\"caret_x\":%ld,\"caret_y\":%ld}\n",
                            currentSeq,
+                           _clientSession,
+                           eventId,
                            isKeyDown ? "down" : "up",
                            vkCode,
                            scanCode,
@@ -424,10 +437,12 @@ HRESULT CPipeClient::SendKeyAndWait(UINT vkCode,
     {
         length = sprintf_s(message,
                            sizeof(message),
-                           "{\"type\":\"key\",\"seq\":%ld,\"action\":\"%s\",\"vk\":%u,\"scan\":%u,"
+                           "{\"type\":\"key\",\"seq\":%ld,\"client_session\":\"%s\",\"event_id\":\"%llu\",\"action\":\"%s\",\"vk\":%u,\"scan\":%u,"
                            "\"shift\":%s,\"ctrl\":%s,\"alt\":%s,\"win\":%s,\"capsLock\":%s,\"numLock\":%s,"
                            "\"repeat\":%u,\"extended\":%s,\"tsf_stage\":\"%s\"}\n",
                            currentSeq,
+                           _clientSession,
+                           eventId,
                            isKeyDown ? "down" : "up",
                            vkCode,
                            scanCode,
@@ -458,6 +473,11 @@ HRESULT CPipeClient::SendKeyAndWait(UINT vkCode,
                       caretValid);
 
     return SendMessageAndWait(message, pResponse, timeoutMs);
+}
+
+ULONGLONG CPipeClient::NextKeyEventId()
+{
+    return static_cast<ULONGLONG>(InterlockedIncrement64(&_keyEventSeq));
 }
 
 HRESULT CPipeClient::SendCtrlSpaceAndWait(_Out_ BimeResponse *pResponse, DWORD timeoutMs)

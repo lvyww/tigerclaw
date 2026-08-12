@@ -69,7 +69,10 @@ public:
                            LONG caretX,
                            LONG caretY,
                            _Out_ BimeResponse *pResponse,
-                           DWORD timeoutMs = BIME_DEFAULT_TIMEOUT_MS);
+                           DWORD timeoutMs = BIME_DEFAULT_TIMEOUT_MS,
+                           ULONGLONG eventId = 0);
+
+    ULONGLONG NextKeyEventId();
 
     HRESULT SendCtrlSpaceAndWait(_Out_ BimeResponse *pResponse, DWORD timeoutMs = BIME_DEFAULT_TIMEOUT_MS);
     HRESULT SendShowMenuAndWait(_Out_ BimeResponse *pResponse, DWORD timeoutMs = BIME_DEFAULT_TIMEOUT_MS);
@@ -86,6 +89,8 @@ private:
     HANDLE _hPipe;
     BOOL _isConnected;
     LONG _seq;
+    LONGLONG _keyEventSeq;
+    char _clientSession[64];
     BOOL _helloDone;
 
     BOOL TryConnect();

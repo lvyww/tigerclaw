@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
+using System.Threading.Tasks;
 using Forms = System.Windows.Forms;
 
 namespace TigerClaw.Core
@@ -76,12 +77,15 @@ namespace TigerClaw.Core
         private SentenceInputDecoder _sentenceInputDecoder;
         private ISentenceLanguageModel _sentenceLanguageModel;
         private readonly bool _sentenceDecoderExternallyProvided;
+        private readonly bool _sentenceDecodeSynchronously;
         private SentenceDecodeResult _sentenceDecodeResult = SentenceDecodeResult.Empty;
         private int _sentenceDecodedLexiconVersion = -1;
         private int _sentenceResultLexiconVersion = -1;
         private int _sentenceSelectedIndex;
         private long _sentenceGeneration;
         private ISentenceRerankService _sentenceRerankService;
+        private Action _sentenceDecodeCompletedCallback;
+        private bool _sentenceDecodeWorkerRunning;
         private readonly Dictionary<int, int> _customSelectionKeyMap = new Dictionary<int, int>();
         private Dictionary<int, List<int>> _customSelectionBindings = BuildDefaultSelectionKeyBindings();
         private readonly HashSet<int> _handledModifierSelectionKeys = new HashSet<int>();
@@ -191,12 +195,16 @@ namespace TigerClaw.Core
         private readonly Stack<string> _sendHistory = new Stack<string>();
         private Timer _manualTimer;
 
-        public InputMethodEngine(CoreRuntimeState state, SentenceInputDecoder sentenceInputDecoder = null)
+        public InputMethodEngine(
+            CoreRuntimeState state,
+            SentenceInputDecoder sentenceInputDecoder = null,
+            bool? sentenceDecodeSynchronously = null)
         {
             _state = state ?? throw new ArgumentNullException(nameof(state));
             _mixedInputDecoder = new FixedLengthMixedInputDecoder(ResolveCandidates, GetCandidateOutputText);
             _sentenceInputDecoder = sentenceInputDecoder;
             _sentenceDecoderExternallyProvided = sentenceInputDecoder != null;
+            _sentenceDecodeSynchronously = sentenceDecodeSynchronously ?? _sentenceDecoderExternallyProvided;
             if (_sentenceDecoderExternallyProvided)
             {
                 _sentenceDecodedLexiconVersion = _state.LexiconVersion;
@@ -242,6 +250,14 @@ namespace TigerClaw.Core
             lock (_lock)
             {
                 _sentenceRerankService = service;
+            }
+        }
+
+        public void SetSentenceDecodeCompletedCallback(Action callback)
+        {
+            lock (_lock)
+            {
+                _sentenceDecodeCompletedCallback = callback;
             }
         }
 
@@ -1267,6 +1283,7 @@ namespace TigerClaw.Core
 
             if (vk == VK_SPACE)
             {
+                EnsureSentenceDecodeCurrent();
                 if (_sentenceDecodeResult.Candidates == null || _sentenceDecodeResult.Candidates.Length == 0)
                 {
                     return KeyEngineResult.CreateHandled(true, null, _sentenceRawBuffer.ToString(), true);
@@ -1277,6 +1294,7 @@ namespace TigerClaw.Core
 
             if (vk == VK_UP || vk == VK_DOWN)
             {
+                EnsureSentenceDecodeCurrent();
                 int count = _sentenceDecodeResult.Candidates?.Length ?? 0;
                 if (count > 0)
                 {
@@ -2059,25 +2077,135 @@ namespace TigerClaw.Core
         private void RebuildSentenceInput()
         {
             EnsureSentenceDecoderCurrent();
-            _sentenceDecodeResult = _sentenceInputDecoder?.Decode(_sentenceRawBuffer.ToString(), 20)
-                                    ?? SentenceDecodeResult.Empty;
-            _sentenceResultLexiconVersion = _state.LexiconVersion;
             _sentenceSelectedIndex = 0;
             _sentenceGeneration++;
             _inputBuffer.Clear();
             _inputBuffer.Append(_sentenceRawBuffer);
             ResetCandidatePageTracker();
 
+            if (_sentenceDecodeSynchronously)
+            {
+                ApplySentenceDecodeResult(
+                    _sentenceGeneration,
+                    _sentenceRawBuffer.ToString(),
+                    _state.LexiconVersion,
+                    _sentenceInputDecoder?.Decode(_sentenceRawBuffer.ToString(), 20) ?? SentenceDecodeResult.Empty);
+                return;
+            }
+
+            StartSentenceDecodeWorker();
+        }
+
+        private void StartSentenceDecodeWorker()
+        {
+            if (_sentenceDecodeWorkerRunning)
+            {
+                return;
+            }
+
+            _sentenceDecodeWorkerRunning = true;
+            Task.Run((Action)RunSentenceDecodeWorker);
+        }
+
+        private void RunSentenceDecodeWorker()
+        {
+            while (true)
+            {
+                long generation;
+                string rawCode;
+                int lexiconVersion;
+                SentenceInputDecoder decoder;
+
+                lock (_lock)
+                {
+                    if (_compositionState != CompositionState.CnSentence || _sentenceRawBuffer.Length == 0)
+                    {
+                        _sentenceDecodeWorkerRunning = false;
+                        return;
+                    }
+
+                    generation = _sentenceGeneration;
+                    rawCode = _sentenceRawBuffer.ToString();
+                    lexiconVersion = _state.LexiconVersion;
+                    decoder = _sentenceInputDecoder;
+                }
+
+                SentenceDecodeResult result;
+                try
+                {
+                    result = decoder?.Decode(rawCode, 20) ?? SentenceDecodeResult.Empty;
+                }
+                catch
+                {
+                    result = SentenceDecodeResult.Empty;
+                }
+                Action completedCallback = null;
+                bool finished;
+                lock (_lock)
+                {
+                    if (_compositionState == CompositionState.CnSentence &&
+                        generation == _sentenceGeneration &&
+                        string.Equals(rawCode, _sentenceRawBuffer.ToString(), StringComparison.Ordinal) &&
+                        lexiconVersion == _state.LexiconVersion)
+                    {
+                        ApplySentenceDecodeResult(generation, rawCode, lexiconVersion, result);
+                        completedCallback = _sentenceDecodeCompletedCallback;
+                    }
+
+                    finished = generation == _sentenceGeneration;
+                    if (finished)
+                    {
+                        _sentenceDecodeWorkerRunning = false;
+                    }
+                }
+
+                try
+                {
+                    completedCallback?.Invoke();
+                }
+                catch
+                {
+                }
+                if (finished)
+                {
+                    return;
+                }
+            }
+        }
+
+        private void ApplySentenceDecodeResult(long generation, string rawCode, int lexiconVersion, SentenceDecodeResult result)
+        {
+            _sentenceDecodeResult = result ?? SentenceDecodeResult.Empty;
+            _sentenceResultLexiconVersion = lexiconVersion;
+            _sentenceSelectedIndex = 0;
+
             SentenceCandidate[] candidates = _sentenceDecodeResult.Candidates ?? Array.Empty<SentenceCandidate>();
             if (candidates.Length > 0)
             {
                 _sentenceRerankService?.Request(new SentenceRerankRequest
                 {
-                    Generation = _sentenceGeneration,
-                    RawCode = _sentenceRawBuffer.ToString(),
+                    Generation = generation,
+                    RawCode = rawCode,
                     Candidates = candidates.Select(candidate => candidate.Text).ToArray()
                 });
             }
+        }
+
+        private void EnsureSentenceDecodeCurrent()
+        {
+            string rawCode = _sentenceRawBuffer.ToString();
+            if (_sentenceResultLexiconVersion == _state.LexiconVersion &&
+                string.Equals(_sentenceDecodeResult.RawCode, rawCode, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            EnsureSentenceDecoderCurrent();
+            ApplySentenceDecodeResult(
+                _sentenceGeneration,
+                rawCode,
+                _state.LexiconVersion,
+                _sentenceInputDecoder?.Decode(rawCode, 20) ?? SentenceDecodeResult.Empty);
         }
 
         private void EnsureSentenceDecoderCurrent()
@@ -2093,6 +2221,7 @@ namespace TigerClaw.Core
 
         private KeyEngineResult CompleteSentenceDisplayCandidate(int displayIndex)
         {
+            EnsureSentenceDecodeCurrent();
             int actualIndex = displayIndex;
             int count = _sentenceDecodeResult.Candidates?.Length ?? 0;
             if (_sentenceSelectedIndex > 0 && _sentenceSelectedIndex < count)
@@ -2112,6 +2241,7 @@ namespace TigerClaw.Core
 
         private KeyEngineResult CompleteSentenceCandidate(int index)
         {
+            EnsureSentenceDecodeCurrent();
             SentenceCandidate[] candidates = _sentenceDecodeResult.Candidates ?? Array.Empty<SentenceCandidate>();
             if (index < 0 || index >= candidates.Length)
             {
@@ -2127,6 +2257,7 @@ namespace TigerClaw.Core
 
         private KeyEngineResult CompleteSentenceWithSuffix(string suffix)
         {
+            EnsureSentenceDecodeCurrent();
             SentenceCandidate[] candidates = _sentenceDecodeResult.Candidates ?? Array.Empty<SentenceCandidate>();
             string output = candidates.Length > 0 && _sentenceSelectedIndex < candidates.Length
                 ? candidates[_sentenceSelectedIndex].Text
@@ -3519,12 +3650,17 @@ namespace TigerClaw.Core
                 }
                 else if (_compositionState == CompositionState.CnSentence)
                 {
-                    if (_sentenceResultLexiconVersion != _state.LexiconVersion)
+                    if (_sentenceResultLexiconVersion != _state.LexiconVersion && !_sentenceDecodeWorkerRunning)
                     {
                         RebuildSentenceInput();
                         inputCode = GetSentenceDisplayCode();
                     }
-                    SentenceCandidate[] sentenceCandidates = _sentenceDecodeResult.Candidates ?? Array.Empty<SentenceCandidate>();
+                    string sentenceRawCode = _sentenceRawBuffer.ToString();
+                    SentenceCandidate[] sentenceCandidates =
+                        _sentenceResultLexiconVersion == _state.LexiconVersion &&
+                        string.Equals(_sentenceDecodeResult.RawCode, sentenceRawCode, StringComparison.Ordinal)
+                            ? _sentenceDecodeResult.Candidates ?? Array.Empty<SentenceCandidate>()
+                            : Array.Empty<SentenceCandidate>();
                     allList = sentenceCandidates.Select(candidate => candidate.Text).ToList();
                     if (_sentenceSelectedIndex > 0 && _sentenceSelectedIndex < allList.Count)
                     {
@@ -3592,7 +3728,17 @@ namespace TigerClaw.Core
                 : 0;
             if (index < candidates.Length && !string.IsNullOrWhiteSpace(candidates[index].SegmentedCode))
             {
-                return candidates[index].SegmentedCode;
+                string decodedRawCode = _sentenceDecodeResult.RawCode ?? string.Empty;
+                if (string.Equals(decodedRawCode, rawCode, StringComparison.Ordinal))
+                {
+                    return candidates[index].SegmentedCode;
+                }
+
+                if (decodedRawCode.Length > 0 && rawCode.StartsWith(decodedRawCode, StringComparison.Ordinal))
+                {
+                    string tail = rawCode.Substring(decodedRawCode.Length);
+                    return tail.Length > 0 ? candidates[index].SegmentedCode + " " + tail : candidates[index].SegmentedCode;
+                }
             }
 
             return rawCode;

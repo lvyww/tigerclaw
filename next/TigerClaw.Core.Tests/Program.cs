@@ -46,6 +46,8 @@ namespace TigerClaw.Core.Tests
                 SentenceEngineMapsArrowSelectionToDisplayedCandidate();
                 SentenceEngineCommitsSmartQuoteAfterCandidate();
                 SentenceEngineRejectsStaleNeuralResult();
+                KeyReplayCacheReturnsOriginalResultWithCurrentSequence();
+                SentenceEngineDecodesLongWorkOffTheKeyPath();
                 Console.WriteLine("TigerClaw.Core.Tests: all tests passed.");
                 return 0;
             }
@@ -657,6 +659,57 @@ namespace TigerClaw.Core.Tests
                 SentenceLexiconIndex.Build(lexicon),
                 NeutralSentenceLanguageModel.Instance,
                 beamWidth: 100);
+        }
+
+        private static void KeyReplayCacheReturnsOriginalResultWithCurrentSequence()
+        {
+            var cache = new KeyRequestReplayCache(16);
+            string key = KeyRequestReplayCache.BuildKey("frontend-a", "17");
+            cache.Store(key, "{\"type\":\"response\",\"seq\":101,\"success\":true,\"handled\":true,\"commit_text\":\"一\"}");
+
+            True(cache.TryGet(key, 202, out string replayed), nameof(KeyReplayCacheReturnsOriginalResultWithCurrentSequence));
+            True(replayed.Contains("\"seq\":202,"), nameof(KeyReplayCacheReturnsOriginalResultWithCurrentSequence) + ".seq");
+            True(replayed.Contains("\"commit_text\":\"一\""), nameof(KeyReplayCacheReturnsOriginalResultWithCurrentSequence) + ".commit");
+            True(!cache.TryGet(KeyRequestReplayCache.BuildKey("frontend-a", "18"), 203, out _), nameof(KeyReplayCacheReturnsOriginalResultWithCurrentSequence) + ".different_event");
+            True(!cache.TryGet(KeyRequestReplayCache.BuildKey("frontend-b", "17"), 204, out _), nameof(KeyReplayCacheReturnsOriginalResultWithCurrentSequence) + ".different_frontend");
+        }
+
+        private static void SentenceEngineDecodesLongWorkOffTheKeyPath()
+        {
+            var state = new CoreRuntimeState();
+            True(state.TrySetConfigValue("整句输入", "是", out _, out string reason),
+                nameof(SentenceEngineDecodesLongWorkOffTheKeyPath) + ": " + reason);
+            var decoder = new SentenceInputDecoder(
+                SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
+                {
+                    ["ab"] = new List<string> { "你" }
+                }),
+                new SlowSentenceLanguageModel(),
+                beamWidth: 10);
+            var engine = new InputMethodEngine(state, decoder, sentenceDecodeSynchronously: false);
+            using (var completed = new ManualResetEvent(false))
+            {
+                engine.SetSentenceDecodeCompletedCallback(() => completed.Set());
+                var stopwatch = Stopwatch.StartNew();
+                Press(engine, 0x41);
+                Press(engine, 0x42);
+                stopwatch.Stop();
+                True(stopwatch.ElapsedMilliseconds < 60, nameof(SentenceEngineDecodesLongWorkOffTheKeyPath) + ".key_latency");
+                True(completed.WaitOne(3000), nameof(SentenceEngineDecodesLongWorkOffTheKeyPath) + ".decode_completed");
+
+                EngineUiSnapshot snapshot = engine.GetUiSnapshot(5);
+                True(snapshot.Candidates.Length > 0 && snapshot.Candidates[0] == "你",
+                    nameof(SentenceEngineDecodesLongWorkOffTheKeyPath) + ".candidate");
+            }
+        }
+
+        private sealed class SlowSentenceLanguageModel : ISentenceLanguageModel
+        {
+            public double LogProbability(string previous2, string previous1, string target)
+            {
+                Thread.Sleep(75);
+                return 0.0;
+            }
         }
 
         private static MixedInputDecodeResult Decode(
