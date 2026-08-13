@@ -195,6 +195,9 @@ private:
     void _ClearPendingKeyEvent();
     void _StorePendingKeyEvent(BOOL isKeyDown, WPARAM wParam, UINT scanCode, BOOL extended, ULONGLONG eventId);
     BOOL _TryConsumePendingKeyEvent(BOOL isKeyDown, WPARAM wParam, LPARAM lParam, _Out_ ULONGLONG *pEventId);
+    void _ScheduleCompositionRefresh(BOOL decodePending);
+    void _CancelCompositionRefresh();
+    void _HandleCompositionRefresh();
     void _PruneFailedKeyQueue(ULONGLONG nowTick);
     void _EnqueueFailedKeyMessage(UINT vkCode,
                                   UINT scanCode,
@@ -345,6 +348,8 @@ private:
     BOOL _pendingResponseHasKeyboardOpen;
     BOOL _pendingResponseKeyboardOpen;
     BOOL _pendingResponseCancelComposition;
+    BOOL _pendingResponseCompositionTracking;
+    BOOL _pendingResponseCompositionPending;
     std::wstring _pendingResponseTextToOutput;
     std::wstring _pendingResponseInputBuffer;
     std::wstring _lastAnchorInputBuffer;
@@ -357,6 +362,7 @@ private:
     UINT _pendingKeyEventScanCode = 0;
     BOOL _pendingKeyEventExtended = FALSE;
     ULONGLONG _pendingKeyEventId = 0;
+    BOOL _compositionRefreshScheduled = FALSE;
 
     LONG _refCount;
 

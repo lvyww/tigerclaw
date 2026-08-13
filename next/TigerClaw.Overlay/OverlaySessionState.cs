@@ -37,6 +37,7 @@ namespace TigerClaw.Overlay
                 _current.AnnotationExpandDelayMs != next.AnnotationExpandDelayMs ||
                 _current.ShowCandidateIndex != next.ShowCandidateIndex ||
                 _current.VerticalCandidates != next.VerticalCandidates ||
+                _current.SelectedCandidateIndex != next.SelectedCandidateIndex ||
                 !StringArrayEquals(_current.Candidates, next.Candidates) ||
                 !StringArrayEquals(_current.CandidateAnnotations, next.CandidateAnnotations))
             {
@@ -83,6 +84,7 @@ namespace TigerClaw.Overlay
                 CandidateVisible = state.CandidateVisible,
                 InputCode = state.InputCode ?? string.Empty,
                 Candidates = CloneArray(state.Candidates),
+                SelectedCandidateIndex = state.SelectedCandidateIndex,
                 CompositionState = state.CompositionState,
                 CaretX = state.CaretX,
                 CaretY = state.CaretY,

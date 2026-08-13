@@ -79,6 +79,9 @@ namespace TigerClaw.Shared
 
         [DataMember(Order = 25)]
         public bool IsNativeHook { get; set; }
+
+        [DataMember(Order = 26)]
+        public int SelectedCandidateIndex { get; set; } = -1;
     }
 }
 

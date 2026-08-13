@@ -151,6 +151,8 @@ BimeTSF2、Dialog、Native Hook 与 TigerClaw Core 通过命名管道通信。
 - `handled`: 当前按键/命令是否由 Core 接管
 - `commit_text`: 需要前端代为上屏/回放的字符串（可为空或省略）
 - `input_buffer`: 前端应显示的当前 composition 字符串（可选）。开启“中英文不限长混合输入”时，它是“已解析前缀 + 活动尾码”的表面显示串；已解析前缀中的有码段显示候选字词，无码段显示原始英文编码，因此不等同于 Core 保存的本轮完整原始编码。整句模式下，它会按照当前首选候选的切分路径插入显示空格；Core 保存的原始整句编码仍不含这些空格。
+- `composition_tracking`: 当前是否为需要异步刷新显示切分的整句 composition。
+- `composition_pending`: 当前原始编码的本地整句解码是否仍在后台运行；TSF 等待其结束后用 `query_state` 取得最新 `input_buffer`。
 - `keyboard_open`: Core 当前中英状态（可选，`true`=中文，`false`=英文）
 - `protocol_version`: 协议版本（`hello` 响应可选）
 - `core_build`: Core 构建标识（`hello` 响应可选）

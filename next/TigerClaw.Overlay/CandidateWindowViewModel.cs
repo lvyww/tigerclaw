@@ -8,7 +8,8 @@ namespace TigerClaw.Overlay
             new CandidateWindowViewModel
             {
                 Mode = CandidateDisplayMode.Hidden,
-                DisplayText = string.Empty
+                DisplayText = string.Empty,
+                SelectionStart = -1
             };
 
         public CandidateDisplayMode Mode { get; set; }
@@ -16,5 +17,9 @@ namespace TigerClaw.Overlay
         public bool IsVertical { get; set; }
 
         public string DisplayText { get; set; }
+
+        public int SelectionStart { get; set; }
+
+        public int SelectionLength { get; set; }
     }
 }

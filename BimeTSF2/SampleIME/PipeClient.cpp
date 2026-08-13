@@ -275,6 +275,8 @@ HRESULT CPipeClient::SendMessageAndWait(const char *jsonMessage, _Out_ BimeRespo
     pResponse->corePath.clear();
     pResponse->hasKeyboardOpen = FALSE;
     pResponse->keyboardOpen = FALSE;
+    pResponse->compositionTracking = FALSE;
+    pResponse->compositionPending = FALSE;
     pResponse->cancelComposition = FALSE;
 
     LONG seq = ExtractSeqFromJson(jsonMessage);
@@ -976,6 +978,8 @@ BOOL CPipeClient::ParseResponse(const char *json, _Out_ BimeResponse *pResponse)
         pResponse->keyboardOpen = keyboardOpen;
     }
     pResponse->cancelComposition = parseBool(json, "cancel_composition");
+    pResponse->compositionTracking = parseBool(json, "composition_tracking");
+    pResponse->compositionPending = parseBool(json, "composition_pending");
     parseString(json, "commit_text", pResponse->textToOutput);
     parseString(json, "input_buffer", pResponse->inputBuffer);
     parseString(json, "core_build", pResponse->coreBuild);

@@ -89,11 +89,14 @@ namespace TigerClaw.Core
                     {
                         string frontend = ConvertToString(msg.GetValue("frontend"));
                         MarkFrontendMode(frontend);
-                        string hookNativeExtra = BuildHookNativeConfigExtraJson(frontend);
+                        _engine.GetCompositionDisplayParts(out string compositionPrefix, out string activeInputCode);
+                        string inputCode = BuildDisplayComposition(compositionPrefix, activeInputCode);
+                        string hookNativeExtra = BuildHookNativeConfigExtraJson(frontend) + BuildCompositionStatusExtraJson();
                         return BuildResponseWithUiState(
                             seq,
                             true,
                             false,
+                            inputBuffer: inputCode,
                             keyboardOpen: _engine.IsChinese,
                             extraJsonPairs: ",\"config_version\":" + _state.ConfigVersion + ",\"lexicon_version\":" + _state.LexiconVersion + hookNativeExtra);
                     }
@@ -462,7 +465,7 @@ namespace TigerClaw.Core
             bool cancelComposition = result.CancelComposition || _pendingFrontendCompositionReset;
             _pendingFrontendCompositionReset = false;
             bool languageStateChanged = beforeState != null && beforeState.IsChinese != result.IsChinese;
-            string extraJsonPairs = BuildHookNativeConfigExtraJson(frontend);
+            string extraJsonPairs = BuildHookNativeConfigExtraJson(frontend) + BuildCompositionStatusExtraJson();
             if (IsHookNativeFrontend(frontend) &&
                 languageStateChanged &&
                 _state.GetAutoSwitchSystemLanguageEnabled())
@@ -549,6 +552,12 @@ namespace TigerClaw.Core
                    ",\"auto_switch_system_layout_enabled\":" + (_state.GetAutoSwitchSystemLanguageEnabled() ? "true" : "false") +
                    ",\"use_clipboard_commit\":" + (_state.GetUseClipboardCommit() ? "true" : "false") +
                    ",\"clipboard_commit_whitelist\":" + Quote(_state.GetClipboardCommitWhitelist());
+        }
+
+        private string BuildCompositionStatusExtraJson()
+        {
+            return ",\"composition_tracking\":" + (_engine.IsSentenceCompositionActive ? "true" : "false") +
+                   ",\"composition_pending\":" + (_engine.IsSentenceDecodePending ? "true" : "false");
         }
 
         private void MarkFrontendMode(string frontend)
@@ -677,6 +686,7 @@ namespace TigerClaw.Core
                         InputCode = BuildDisplayComposition(engineState),
                         Candidates = engineState.Candidates ?? Array.Empty<string>(),
                         CandidateAnnotations = engineState.CandidateAnnotations ?? Array.Empty<string>(),
+                        SelectedCandidateIndex = engineState.SelectedCandidateIndex,
                         CompositionState = engineState.CompositionState,
                         CaretX = caretX,
                         CaretY = caretY,

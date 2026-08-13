@@ -673,24 +673,6 @@ namespace TigerClaw.Core
 
                 if (ctrl)
                 {
-                    if (!alt && !win && !shift &&
-                        _compositionState == CompositionState.CnSentence &&
-                        resolvedVk >= VK_0 && resolvedVk <= VK_9)
-                    {
-                        if (_oneShotActionKey == resolvedVk)
-                        {
-                            return KeyEngineResult.CreateHandled(true, null, _sentenceRawBuffer.ToString(), true);
-                        }
-
-                        _oneShotActionKey = resolvedVk;
-                        int displayIndex = resolvedVk == VK_0 ? 9 : resolvedVk - VK_1;
-                        if (displayIndex >= Math.Min(Math.Max(_state.GetPageSize(), 1), 10))
-                        {
-                            return KeyEngineResult.CreateHandled(true, null, _sentenceRawBuffer.ToString(), true);
-                        }
-                        return CompleteSentenceDisplayCandidate(displayIndex);
-                    }
-
                     if (resolvedVk == VK_OEM_PLUS && _state.GetCtrlEqualAddCiEnabled())
                     {
                         if (_oneShotActionKey == resolvedVk)
@@ -1233,6 +1215,38 @@ namespace TigerClaw.Core
             return KeyEngineResult.Pass(_isChinese);
         }
 
+        public bool IsSentenceCompositionActive
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return _compositionState == CompositionState.CnSentence && _sentenceRawBuffer.Length > 0;
+                }
+            }
+        }
+
+        public bool IsSentenceDecodePending
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    if (_compositionState != CompositionState.CnSentence || _sentenceRawBuffer.Length == 0)
+                    {
+                        return false;
+                    }
+
+                    return _sentenceDecodeWorkerRunning ||
+                           _sentenceResultLexiconVersion != _state.LexiconVersion ||
+                           !string.Equals(
+                               _sentenceDecodeResult.RawCode,
+                               _sentenceRawBuffer.ToString(),
+                               StringComparison.Ordinal);
+                }
+            }
+        }
+
         private KeyEngineResult ProcessCnSentenceKeyDown(int vk, bool shift)
         {
             if (vk == VK_BACK)
@@ -1278,7 +1292,9 @@ namespace TigerClaw.Core
                     return KeyEngineResult.CreateHandled(true, null, string.Empty, false);
                 }
 
-                return KeyEngineResult.Pass(true);
+                EnsureSentenceDecodeCurrent();
+                MoveSentenceSelection(shift ? -1 : 1);
+                return KeyEngineResult.CreateHandled(true, null, _sentenceRawBuffer.ToString(), true);
             }
 
             if (vk == VK_SPACE)
@@ -1295,12 +1311,7 @@ namespace TigerClaw.Core
             if (vk == VK_UP || vk == VK_DOWN)
             {
                 EnsureSentenceDecodeCurrent();
-                int count = _sentenceDecodeResult.Candidates?.Length ?? 0;
-                if (count > 0)
-                {
-                    int delta = vk == VK_UP ? -1 : 1;
-                    _sentenceSelectedIndex = (_sentenceSelectedIndex + delta + count) % count;
-                }
+                MoveSentenceSelection(vk == VK_UP ? -1 : 1);
                 return KeyEngineResult.CreateHandled(true, null, _sentenceRawBuffer.ToString(), true);
             }
 
@@ -2219,24 +2230,14 @@ namespace TigerClaw.Core
             ReloadSentenceResources();
         }
 
-        private KeyEngineResult CompleteSentenceDisplayCandidate(int displayIndex)
+        private void MoveSentenceSelection(int delta)
         {
-            EnsureSentenceDecodeCurrent();
-            int actualIndex = displayIndex;
             int count = _sentenceDecodeResult.Candidates?.Length ?? 0;
-            if (_sentenceSelectedIndex > 0 && _sentenceSelectedIndex < count)
+            int visibleCount = Math.Min(count, Math.Min(Math.Max(_state.GetPageSize(), 1), 10));
+            if (visibleCount > 0)
             {
-                if (displayIndex == 0)
-                {
-                    actualIndex = _sentenceSelectedIndex;
-                }
-                else if (displayIndex <= _sentenceSelectedIndex)
-                {
-                    actualIndex = displayIndex - 1;
-                }
+                _sentenceSelectedIndex = (_sentenceSelectedIndex + delta + visibleCount) % visibleCount;
             }
-
-            return CompleteSentenceCandidate(actualIndex);
         }
 
         private KeyEngineResult CompleteSentenceCandidate(int index)
@@ -3662,12 +3663,6 @@ namespace TigerClaw.Core
                             ? _sentenceDecodeResult.Candidates ?? Array.Empty<SentenceCandidate>()
                             : Array.Empty<SentenceCandidate>();
                     allList = sentenceCandidates.Select(candidate => candidate.Text).ToList();
-                    if (_sentenceSelectedIndex > 0 && _sentenceSelectedIndex < allList.Count)
-                    {
-                        string selected = allList[_sentenceSelectedIndex];
-                        allList.RemoveAt(_sentenceSelectedIndex);
-                        allList.Insert(0, selected);
-                    }
                     list = allList;
                 }
 
@@ -3714,6 +3709,11 @@ namespace TigerClaw.Core
                     ActiveInputCode = inputCode,
                     Candidates = displayPage,
                     CandidateAnnotations = annotations,
+                    SelectedCandidateIndex = _compositionState == CompositionState.CnSentence &&
+                                             _sentenceSelectedIndex >= 0 &&
+                                             _sentenceSelectedIndex < displayPage.Length
+                        ? _sentenceSelectedIndex
+                        : -1,
                     CompositionState = (int)_compositionState
                 };
             }
@@ -3734,11 +3734,6 @@ namespace TigerClaw.Core
                     return candidates[index].SegmentedCode;
                 }
 
-                if (decodedRawCode.Length > 0 && rawCode.StartsWith(decodedRawCode, StringComparison.Ordinal))
-                {
-                    string tail = rawCode.Substring(decodedRawCode.Length);
-                    return tail.Length > 0 ? candidates[index].SegmentedCode + " " + tail : candidates[index].SegmentedCode;
-                }
             }
 
             return rawCode;
@@ -3764,6 +3759,7 @@ namespace TigerClaw.Core
         public string ActiveInputCode { get; set; }
         public string[] Candidates { get; set; }
         public string[] CandidateAnnotations { get; set; }
+        public int SelectedCandidateIndex { get; set; }
         public int CompositionState { get; set; }
     }
 

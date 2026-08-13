@@ -25,6 +25,8 @@ struct BimeResponse
     BOOL hasKeyboardOpen;
     BOOL keyboardOpen;
     BOOL cancelComposition;
+    BOOL compositionTracking;
+    BOOL compositionPending;
 
     BimeResponse()
         : seq(-1),
@@ -34,7 +36,9 @@ struct BimeResponse
           protocolVersion(0),
           hasKeyboardOpen(FALSE),
           keyboardOpen(FALSE),
-          cancelComposition(FALSE)
+          cancelComposition(FALSE),
+          compositionTracking(FALSE),
+          compositionPending(FALSE)
     {
     }
 };

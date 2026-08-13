@@ -748,6 +748,7 @@ static const UINT_PTR kFocusQueryStateTimerId = 2;
 // ime_active publish retry: on first launch Core is still starting, so the pipe is down when we
 // first want to report active=TRUE. Retry on a timer until Core connects (bounded).
 static const UINT_PTR kImeActivePublishRetryTimerId = 3;
+static const UINT_PTR kCompositionRefreshTimerId = 4;
 static const UINT kImeActivePublishRetryDelayMs = 400;
 static const int kImeActivePublishRetryMax = 15;
 static const UINT kCaretCoalesceWindowMs = 12;
@@ -756,6 +757,9 @@ static const UINT kFocusQueryStateDelayMs = 30;
 static const UINT kFocusSyncDebounceMs = 80;
 static const DWORD kPipeHelloTimeoutMs = 80;
 static const DWORD kPipeFocusQueryTimeoutMs = 60;
+static const UINT kCompositionPendingRefreshMs = 20;
+static const UINT kCompositionTrackingRefreshMs = 120;
+static const DWORD kCompositionRefreshTimeoutMs = 60;
 static const LONG kCaretCoalesceImmediateJumpThreshold = 10;
 static const UINT kCaretEndEditSuppressWindowMs = 24;
 static const UINT kCaretSendCooldownMs = 20;
@@ -815,6 +819,11 @@ LRESULT CALLBACK CSampleIME_WindowProc(HWND wndHandle, UINT uMsg, WPARAM wParam,
                 pTextService->_PublishImeActive();
                 return 0;
             }
+            if (wParam == kCompositionRefreshTimerId)
+            {
+                pTextService->_HandleCompositionRefresh();
+                return 0;
+            }
         }
         break;
 
@@ -841,6 +850,7 @@ LRESULT CALLBACK CSampleIME_WindowProc(HWND wndHandle, UINT uMsg, WPARAM wParam,
             KillTimer(wndHandle, kCaretCoalesceTimerId);
             KillTimer(wndHandle, kFocusQueryStateTimerId);
             KillTimer(wndHandle, kImeActivePublishRetryTimerId);
+            KillTimer(wndHandle, kCompositionRefreshTimerId);
             pTextService->_ClearDeferredCaretAnchorReopen();
             pTextService->_caretTrackingPrimePending = FALSE;
             pTextService->_msgWndHandle = nullptr;
@@ -961,6 +971,9 @@ CSampleIME::CSampleIME()
     _pendingResponseHandled = FALSE;
     _pendingResponseHasKeyboardOpen = FALSE;
     _pendingResponseKeyboardOpen = FALSE;
+    _pendingResponseCancelComposition = FALSE;
+    _pendingResponseCompositionTracking = FALSE;
+    _pendingResponseCompositionPending = FALSE;
     _pendingResponseTextToOutput.clear();
     _pendingResponseInputBuffer.clear();
     _deferredReopenInputBuffer.clear();
@@ -1310,8 +1323,12 @@ STDAPI CSampleIME::Deactivate()
     _pendingResponseHandled = FALSE;
     _pendingResponseHasKeyboardOpen = FALSE;
     _pendingResponseKeyboardOpen = FALSE;
+    _pendingResponseCancelComposition = FALSE;
+    _pendingResponseCompositionTracking = FALSE;
+    _pendingResponseCompositionPending = FALSE;
     _pendingResponseTextToOutput.clear();
     _pendingResponseInputBuffer.clear();
+    _CancelCompositionRefresh();
 
     return S_OK;
 }
@@ -2986,11 +3003,78 @@ void CSampleIME::_UninitCaretCoalesceWindow()
         KillTimer(_msgWndHandle, kCaretCoalesceTimerId);
         KillTimer(_msgWndHandle, kFocusQueryStateTimerId);
         KillTimer(_msgWndHandle, kImeActivePublishRetryTimerId);
+        KillTimer(_msgWndHandle, kCompositionRefreshTimerId);
         DestroyWindow(_msgWndHandle);
         _msgWndHandle = nullptr;
     }
 
     _ResetCaretCoalesceState();
+}
+
+void CSampleIME::_ScheduleCompositionRefresh(BOOL decodePending)
+{
+    if (_msgWndHandle == nullptr)
+    {
+        return;
+    }
+
+    UINT delayMs = decodePending ? kCompositionPendingRefreshMs : kCompositionTrackingRefreshMs;
+    KillTimer(_msgWndHandle, kCompositionRefreshTimerId);
+    _compositionRefreshScheduled =
+        SetTimer(_msgWndHandle, kCompositionRefreshTimerId, delayMs, nullptr) != 0;
+}
+
+void CSampleIME::_CancelCompositionRefresh()
+{
+    if (_msgWndHandle != nullptr)
+    {
+        KillTimer(_msgWndHandle, kCompositionRefreshTimerId);
+    }
+    _compositionRefreshScheduled = FALSE;
+}
+
+void CSampleIME::_HandleCompositionRefresh()
+{
+    _CancelCompositionRefresh();
+    if (_pPipeClient == nullptr || !_EnsurePipeConnected())
+    {
+        return;
+    }
+
+    BimeResponse response;
+    HRESULT hr = _pPipeClient->SendQueryStateAndWait(&response, kCompositionRefreshTimeoutMs);
+    if (FAILED(hr))
+    {
+        Global::LogToFileVerbose("CompositionRefresh: query failed hr=0x%08X", static_cast<unsigned>(hr));
+        return;
+    }
+
+    if (response.compositionTracking && response.compositionPending)
+    {
+        _ScheduleCompositionRefresh(TRUE);
+        return;
+    }
+
+    ITfDocumentMgr *pDocMgrFocus = nullptr;
+    ITfContext *pContext = nullptr;
+    if (_pThreadMgr != nullptr &&
+        SUCCEEDED(_pThreadMgr->GetFocus(&pDocMgrFocus)) &&
+        pDocMgrFocus != nullptr)
+    {
+        pDocMgrFocus->GetTop(&pContext);
+    }
+
+    response.handled = TRUE;
+    _ApplyResponseAndSyncState(pContext, &response, "CompositionRefresh");
+
+    if (pContext != nullptr)
+    {
+        pContext->Release();
+    }
+    if (pDocMgrFocus != nullptr)
+    {
+        pDocMgrFocus->Release();
+    }
 }
 
 void CSampleIME::_ResetCaretCoalesceState()

@@ -2,6 +2,7 @@ using System;
 using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -10,6 +11,8 @@ namespace TigerClaw.Overlay
 {
     public partial class MainWindow
     {
+        private Brush _candidateSelectionBackground = Brushes.Transparent;
+
         private void ApplyTheme()
         {
             OverlayThemePalette palette = _themeResolver.Resolve(_state.ThemeName);
@@ -18,6 +21,7 @@ namespace TigerClaw.Overlay
             BorderCandi.BorderThickness = new Thickness(palette.BorderWidth);
             BorderCandi.CornerRadius = palette.Corner;
             ApplyCandidateForeground(palette.Foreground);
+            _candidateSelectionBackground = CreateSelectionBackground(palette.Foreground);
         }
 
         private void ApplyFont()
@@ -193,6 +197,7 @@ namespace TigerClaw.Overlay
 
         private void ClearCandidateContent()
         {
+            CandidateText.Inlines.Clear();
             CandidateText.Text = string.Empty;
             _predictedWindowWidthDip = 0;
             _predictedWindowHeightDip = 0;
@@ -204,7 +209,38 @@ namespace TigerClaw.Overlay
             BorderCandi.MinWidth = 0.0;
             BorderCandi.MinHeight = 0.0;
             ApplyCandidateTextStyle(viewModel.Mode, viewModel.IsVertical, CandidateText.FontSize);
-            CandidateText.Text = viewModel.DisplayText ?? string.Empty;
+            ApplyCandidateDisplayText(viewModel);
+        }
+
+        private void ApplyCandidateDisplayText(CandidateWindowViewModel viewModel)
+        {
+            string displayText = viewModel.DisplayText ?? string.Empty;
+            int selectionStart = viewModel.SelectionStart;
+            int selectionLength = viewModel.SelectionLength;
+            if (selectionStart < 0 || selectionLength <= 0 || selectionStart + selectionLength > displayText.Length)
+            {
+                CandidateText.Inlines.Clear();
+                CandidateText.Text = displayText;
+                return;
+            }
+
+            CandidateText.Inlines.Clear();
+            if (selectionStart > 0)
+            {
+                CandidateText.Inlines.Add(new Run(displayText.Substring(0, selectionStart)));
+            }
+
+            CandidateText.Inlines.Add(new Run(displayText.Substring(selectionStart, selectionLength))
+            {
+                Background = _candidateSelectionBackground,
+                FontWeight = FontWeights.SemiBold
+            });
+
+            int remainingStart = selectionStart + selectionLength;
+            if (remainingStart < displayText.Length)
+            {
+                CandidateText.Inlines.Add(new Run(displayText.Substring(remainingStart)));
+            }
         }
 
         private string BuildCandidateRenderSignature(CandidateWindowViewModel viewModel)
@@ -217,9 +253,19 @@ namespace TigerClaw.Overlay
             return ((int)viewModel.Mode).ToString(CultureInfo.InvariantCulture) + "|" +
                    (viewModel.IsVertical ? "V" : "H") + "|" +
                    (viewModel.DisplayText ?? string.Empty) + "|" +
+                   viewModel.SelectionStart.ToString(CultureInfo.InvariantCulture) + "|" +
+                   viewModel.SelectionLength.ToString(CultureInfo.InvariantCulture) + "|" +
                    CandidateText.FontSize.ToString("0.##", CultureInfo.InvariantCulture) + "|" +
                    (_currentFontFamily == null ? string.Empty : _currentFontFamily.Source) + "|" +
                    (_state == null ? string.Empty : _state.ThemeName ?? string.Empty);
+        }
+
+        private static Brush CreateSelectionBackground(SolidColorBrush foreground)
+        {
+            Color color = foreground?.Color ?? Colors.Black;
+            var brush = new SolidColorBrush(Color.FromArgb(72, color.R, color.G, color.B));
+            brush.Freeze();
+            return brush;
         }
 
         private static bool HasCandidateItems(TigerClaw.Shared.OverlayUiState state)

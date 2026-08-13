@@ -65,13 +65,21 @@ namespace TigerClaw.Overlay
             }
 
             string escapedInputCode = EscapeCandidateForDisplay(state.InputCode ?? string.Empty);
-            string displayText = BuildDisplayText(state, mode, escapedInputCode, includeAnnotations);
+            string displayText = BuildDisplayText(
+                state,
+                mode,
+                escapedInputCode,
+                includeAnnotations,
+                out int selectionStart,
+                out int selectionLength);
 
             return new CandidateWindowViewModel
             {
                 Mode = mode,
                 IsVertical = state.VerticalCandidates,
-                DisplayText = displayText
+                DisplayText = displayText,
+                SelectionStart = selectionStart,
+                SelectionLength = selectionLength
             };
         }
 
@@ -95,8 +103,16 @@ namespace TigerClaw.Overlay
             return !string.IsNullOrEmpty(state.InputCode);
         }
 
-        private static string BuildDisplayText(OverlayUiState state, CandidateDisplayMode mode, string escapedInputCode, bool includeAnnotations)
+        private static string BuildDisplayText(
+            OverlayUiState state,
+            CandidateDisplayMode mode,
+            string escapedInputCode,
+            bool includeAnnotations,
+            out int selectionStart,
+            out int selectionLength)
         {
+            selectionStart = -1;
+            selectionLength = 0;
             if (mode == CandidateDisplayMode.CodeOnly || mode == CandidateDisplayMode.InputOnly)
             {
                 return escapedInputCode;
@@ -110,17 +126,44 @@ namespace TigerClaw.Overlay
 
             if (state.VerticalCandidates)
             {
-                BuildVerticalDisplayText(sb, escapedInputCode, candidates, annotations, showIndex, showCode);
+                BuildVerticalDisplayText(
+                    sb,
+                    escapedInputCode,
+                    candidates,
+                    annotations,
+                    showIndex,
+                    showCode,
+                    state.SelectedCandidateIndex,
+                    ref selectionStart,
+                    ref selectionLength);
             }
             else
             {
-                BuildHorizontalDisplayText(sb, escapedInputCode, candidates, annotations, showIndex, showCode);
+                BuildHorizontalDisplayText(
+                    sb,
+                    escapedInputCode,
+                    candidates,
+                    annotations,
+                    showIndex,
+                    showCode,
+                    state.SelectedCandidateIndex,
+                    ref selectionStart,
+                    ref selectionLength);
             }
 
             return sb.ToString();
         }
 
-        private static void BuildVerticalDisplayText(StringBuilder sb, string escapedInputCode, string[] candidates, string[] annotations, bool showIndex, bool showCode)
+        private static void BuildVerticalDisplayText(
+            StringBuilder sb,
+            string escapedInputCode,
+            string[] candidates,
+            string[] annotations,
+            bool showIndex,
+            bool showCode,
+            int selectedIndex,
+            ref int selectionStart,
+            ref int selectionLength)
         {
             if (showCode)
             {
@@ -138,11 +181,20 @@ namespace TigerClaw.Overlay
                     sb.Append('\n');
                 }
 
-                AppendCandidate(sb, candidates, annotations, i, showIndex);
+                AppendCandidate(sb, candidates, annotations, i, showIndex, selectedIndex, ref selectionStart, ref selectionLength);
             }
         }
 
-        private static void BuildHorizontalDisplayText(StringBuilder sb, string escapedInputCode, string[] candidates, string[] annotations, bool showIndex, bool showCode)
+        private static void BuildHorizontalDisplayText(
+            StringBuilder sb,
+            string escapedInputCode,
+            string[] candidates,
+            string[] annotations,
+            bool showIndex,
+            bool showCode,
+            int selectedIndex,
+            ref int selectionStart,
+            ref int selectionLength)
         {
             if (showCode)
             {
@@ -164,12 +216,21 @@ namespace TigerClaw.Overlay
                     sb.Append("  ");
                 }
 
-                AppendCandidate(sb, candidates, annotations, i, showIndex);
+                AppendCandidate(sb, candidates, annotations, i, showIndex, selectedIndex, ref selectionStart, ref selectionLength);
             }
         }
 
-        private static void AppendCandidate(StringBuilder sb, string[] candidates, string[] annotations, int index, bool showIndex)
+        private static void AppendCandidate(
+            StringBuilder sb,
+            string[] candidates,
+            string[] annotations,
+            int index,
+            bool showIndex,
+            int selectedIndex,
+            ref int selectionStart,
+            ref int selectionLength)
         {
+            int candidateStart = sb.Length;
             if (showIndex)
             {
                 sb.Append(index + 1);
@@ -183,6 +244,12 @@ namespace TigerClaw.Overlay
                 sb.Append('\u3014');
                 sb.Append(EscapeCandidateForDisplay(annotation));
                 sb.Append('\u3015');
+            }
+
+            if (index == selectedIndex)
+            {
+                selectionStart = candidateStart;
+                selectionLength = sb.Length - candidateStart;
             }
         }
 

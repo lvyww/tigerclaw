@@ -43,7 +43,9 @@ namespace TigerClaw.Core.Tests
                 SentenceEngineCommitsDecodedCandidate();
                 SentenceEngineDisplaysPrimarySegmentation();
                 SentenceEngineHonorsSelectionSymbolSettings();
-                SentenceEngineMapsArrowSelectionToDisplayedCandidate();
+                SentenceEngineKeepsArrowSelectionInPlace();
+                SentenceEngineUsesTabToTraverseCandidates();
+                SentenceEnginePassesCtrlNumberShortcut();
                 SentenceEngineCommitsSmartQuoteAfterCandidate();
                 SentenceEngineRejectsStaleNeuralResult();
                 KeyReplayCacheReturnsOriginalResultWithCurrentSequence();
@@ -450,7 +452,7 @@ namespace TigerClaw.Core.Tests
             Equal("是什么", Press(engine, 0x20).TextToOutput, nameof(SentenceEngineCommitsDecodedCandidate));
         }
 
-        private static void SentenceEngineMapsArrowSelectionToDisplayedCandidate()
+        private static void SentenceEngineKeepsArrowSelectionInPlace()
         {
             InputMethodEngine engine = CreateSentenceEngine(new Dictionary<string, List<string>>
             {
@@ -460,14 +462,55 @@ namespace TigerClaw.Core.Tests
             });
             TypeLetters(engine, "abcd");
             EngineUiSnapshot before = engine.GetUiSnapshot(5);
-            True(before.Candidates.Length >= 2, nameof(SentenceEngineMapsArrowSelectionToDisplayedCandidate));
+            True(before.Candidates.Length >= 2, nameof(SentenceEngineKeepsArrowSelectionInPlace));
+            string first = before.Candidates[0];
             string second = before.Candidates[1];
             string secondSegmentedCode = string.Equals(second, "丙", StringComparison.Ordinal) ? "abcd" : "ab cd";
             Press(engine, 0x28);
             EngineUiSnapshot selected = engine.GetUiSnapshot(5);
-            Equal(second, selected.Candidates[0], nameof(SentenceEngineMapsArrowSelectionToDisplayedCandidate));
-            Equal(secondSegmentedCode, selected.ActiveInputCode, nameof(SentenceEngineMapsArrowSelectionToDisplayedCandidate));
-            Equal(second, PressWithCtrl(engine, 0x31).TextToOutput, nameof(SentenceEngineMapsArrowSelectionToDisplayedCandidate));
+            Equal(first, selected.Candidates[0], nameof(SentenceEngineKeepsArrowSelectionInPlace) + ".stable_order");
+            True(selected.SelectedCandidateIndex == 1,
+                nameof(SentenceEngineKeepsArrowSelectionInPlace) + ".selected_index");
+            Equal(secondSegmentedCode, selected.ActiveInputCode, nameof(SentenceEngineKeepsArrowSelectionInPlace) + ".segmentation");
+            Equal(second, Press(engine, 0x20).TextToOutput, nameof(SentenceEngineKeepsArrowSelectionInPlace) + ".commit");
+        }
+
+        private static void SentenceEngineUsesTabToTraverseCandidates()
+        {
+            var state = new CoreRuntimeState();
+            True(state.TrySetConfigValue("整句输入", "是", out _, out string sentenceReason),
+                nameof(SentenceEngineUsesTabToTraverseCandidates) + ": " + sentenceReason);
+            True(state.TrySetConfigValue("TAB清屏", "否", out _, out string tabReason),
+                nameof(SentenceEngineUsesTabToTraverseCandidates) + ": " + tabReason);
+            var engine = new InputMethodEngine(state, CreateSentenceDecoder(new Dictionary<string, List<string>>
+            {
+                ["ab"] = new List<string> { "甲" },
+                ["cd"] = new List<string> { "乙" },
+                ["abcd"] = new List<string> { "丙" }
+            }));
+
+            TypeLetters(engine, "abcd");
+            EngineUiSnapshot before = engine.GetUiSnapshot(5);
+            True(before.Candidates.Length >= 2, nameof(SentenceEngineUsesTabToTraverseCandidates));
+            Press(engine, 0x09);
+            True(engine.GetUiSnapshot(5).SelectedCandidateIndex == 1,
+                nameof(SentenceEngineUsesTabToTraverseCandidates) + ".forward");
+            Press(engine, 0x09, shift: true);
+            True(engine.GetUiSnapshot(5).SelectedCandidateIndex == 0,
+                nameof(SentenceEngineUsesTabToTraverseCandidates) + ".backward");
+        }
+
+        private static void SentenceEnginePassesCtrlNumberShortcut()
+        {
+            InputMethodEngine engine = CreateSentenceEngine(new Dictionary<string, List<string>>
+            {
+                ["ab"] = new List<string> { "甲" }
+            });
+            TypeLetters(engine, "ab");
+
+            KeyEngineResult result = PressWithCtrl(engine, 0x31);
+            True(!result.Handled, nameof(SentenceEnginePassesCtrlNumberShortcut) + ".passed");
+            True(result.CancelComposition, nameof(SentenceEnginePassesCtrlNumberShortcut) + ".canceled_composition");
         }
 
         private static void SentenceEngineHonorsSelectionSymbolSettings()
@@ -695,9 +738,15 @@ namespace TigerClaw.Core.Tests
                 Press(engine, 0x42);
                 stopwatch.Stop();
                 True(stopwatch.ElapsedMilliseconds < 60, nameof(SentenceEngineDecodesLongWorkOffTheKeyPath) + ".key_latency");
+                True(engine.IsSentenceCompositionActive, nameof(SentenceEngineDecodesLongWorkOffTheKeyPath) + ".tracking");
+                True(engine.IsSentenceDecodePending, nameof(SentenceEngineDecodesLongWorkOffTheKeyPath) + ".pending");
+                engine.GetCompositionDisplayParts(out _, out string pendingDisplay);
+                Equal("ab", pendingDisplay, nameof(SentenceEngineDecodesLongWorkOffTheKeyPath) + ".pending_raw_display");
                 True(completed.WaitOne(3000), nameof(SentenceEngineDecodesLongWorkOffTheKeyPath) + ".decode_completed");
+                True(!engine.IsSentenceDecodePending, nameof(SentenceEngineDecodesLongWorkOffTheKeyPath) + ".completed");
 
                 EngineUiSnapshot snapshot = engine.GetUiSnapshot(5);
+                Equal("ab", snapshot.ActiveInputCode, nameof(SentenceEngineDecodesLongWorkOffTheKeyPath) + ".segmented_display");
                 True(snapshot.Candidates.Length > 0 && snapshot.Candidates[0] == "你",
                     nameof(SentenceEngineDecodesLongWorkOffTheKeyPath) + ".candidate");
             }

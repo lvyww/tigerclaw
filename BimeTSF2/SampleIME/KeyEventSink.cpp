@@ -638,6 +638,8 @@ void CSampleIME::_ClearPendingResponseCache()
     _pendingResponseHasKeyboardOpen = FALSE;
     _pendingResponseKeyboardOpen = FALSE;
     _pendingResponseCancelComposition = FALSE;
+    _pendingResponseCompositionTracking = FALSE;
+    _pendingResponseCompositionPending = FALSE;
     _pendingResponseTextToOutput.clear();
     _pendingResponseInputBuffer.clear();
 }
@@ -653,6 +655,8 @@ void CSampleIME::_StorePendingResponseCache(BOOL isKeyDown, WPARAM wParam, UINT 
     _pendingResponseHasKeyboardOpen = response.hasKeyboardOpen;
     _pendingResponseKeyboardOpen = response.keyboardOpen;
     _pendingResponseCancelComposition = response.cancelComposition;
+    _pendingResponseCompositionTracking = response.compositionTracking;
+    _pendingResponseCompositionPending = response.compositionPending;
     _pendingResponseTextToOutput = response.textToOutput;
     _pendingResponseInputBuffer = response.inputBuffer;
     Global::LogToFileVerbose("KeySink pending_store msg=%s wParam=%llu scan=%u ext=%d handled=%d text_len=%u input_len=%u",
@@ -748,6 +752,8 @@ BOOL CSampleIME::_TryConsumePendingResponseCache(BOOL isKeyDown, WPARAM wParam, 
     pResponse->hasKeyboardOpen = _pendingResponseHasKeyboardOpen;
     pResponse->keyboardOpen = _pendingResponseKeyboardOpen;
     pResponse->cancelComposition = _pendingResponseCancelComposition;
+    pResponse->compositionTracking = _pendingResponseCompositionTracking;
+    pResponse->compositionPending = _pendingResponseCompositionPending;
     pResponse->textToOutput = _pendingResponseTextToOutput;
     pResponse->inputBuffer = _pendingResponseInputBuffer;
 
@@ -915,6 +921,15 @@ BOOL CSampleIME::_ApplyResponseAndSyncState(_In_opt_ ITfContext *pContext, _Inou
 
     BOOL committedViaAnchor = _SyncCaretAnchorForResponse(pContext, pResponse);
 
+    if (pResponse->compositionTracking)
+    {
+        _ScheduleCompositionRefresh(pResponse->compositionPending);
+    }
+    else
+    {
+        _CancelCompositionRefresh();
+    }
+
     if (pResponse->hasKeyboardOpen)
     {
         _SyncKeyboardOpenCompartment(pResponse->keyboardOpen);
@@ -968,6 +983,8 @@ STDAPI CSampleIME::OnTestKeyDown(ITfContext *pContext, WPARAM wParam, LPARAM lPa
         cachedResponse.hasKeyboardOpen = _pendingResponseHasKeyboardOpen;
         cachedResponse.keyboardOpen = _pendingResponseKeyboardOpen;
         cachedResponse.cancelComposition = _pendingResponseCancelComposition;
+        cachedResponse.compositionTracking = _pendingResponseCompositionTracking;
+        cachedResponse.compositionPending = _pendingResponseCompositionPending;
         cachedResponse.textToOutput = _pendingResponseTextToOutput;
         cachedResponse.inputBuffer = _pendingResponseInputBuffer;
 
@@ -1395,6 +1412,8 @@ STDAPI CSampleIME::OnTestKeyUp(ITfContext *pContext, WPARAM wParam, LPARAM lPara
         cachedResponse.hasKeyboardOpen = _pendingResponseHasKeyboardOpen;
         cachedResponse.keyboardOpen = _pendingResponseKeyboardOpen;
         cachedResponse.cancelComposition = _pendingResponseCancelComposition;
+        cachedResponse.compositionTracking = _pendingResponseCompositionTracking;
+        cachedResponse.compositionPending = _pendingResponseCompositionPending;
         cachedResponse.textToOutput = _pendingResponseTextToOutput;
         cachedResponse.inputBuffer = _pendingResponseInputBuffer;
 
