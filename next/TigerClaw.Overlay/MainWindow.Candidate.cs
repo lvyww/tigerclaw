@@ -21,7 +21,7 @@ namespace TigerClaw.Overlay
             BorderCandi.BorderThickness = new Thickness(palette.BorderWidth);
             BorderCandi.CornerRadius = palette.Corner;
             ApplyCandidateForeground(palette.Foreground);
-            _candidateSelectionBackground = CreateSelectionBackground(palette.Foreground);
+            _candidateSelectionBackground = palette.CandidateSelectionBackground;
         }
 
         private void ApplyFont()
@@ -258,14 +258,6 @@ namespace TigerClaw.Overlay
                    CandidateText.FontSize.ToString("0.##", CultureInfo.InvariantCulture) + "|" +
                    (_currentFontFamily == null ? string.Empty : _currentFontFamily.Source) + "|" +
                    (_state == null ? string.Empty : _state.ThemeName ?? string.Empty);
-        }
-
-        private static Brush CreateSelectionBackground(SolidColorBrush foreground)
-        {
-            Color color = foreground?.Color ?? Colors.Black;
-            var brush = new SolidColorBrush(Color.FromArgb(72, color.R, color.G, color.B));
-            brush.Freeze();
-            return brush;
         }
 
         private static bool HasCandidateItems(TigerClaw.Shared.OverlayUiState state)

@@ -11,6 +11,7 @@ if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
 set "CONFIG_FILE=%ROOT%\publish_config.txt"
 set "EMBED_INFO=%ROOT%\BimeTSF2\SampleIME\EmbeddedBuildInfo.h"
 set "SHARED_BUILD_INFO=%ROOT%\next\TigerClaw.Shared\BuildInfo.cs"
+set "PACK_SCRIPT=%ROOT%\pack_release.bat"
 set "TEXT_LOG_ENABLED=0"
 set "CORE_HASH_VERIFY_ENABLED=1"
 set "TRIAL_EXPIRE_UTC="
@@ -86,6 +87,10 @@ if not exist "%TSF_PROJECT%" (
     echo ERROR: Missing project: %TSF_PROJECT%
     exit /b 1
 )
+if not exist "%PACK_SCRIPT%" (
+    echo ERROR: Missing package script: %PACK_SCRIPT%
+    exit /b 1
+)
 
 set "CORE_OUT=%ROOT%\next\_run\Release\net48"
 set "CORE_EXE_FOR_HASH=%CORE_OUT%\TigerClaw.Core.exe"
@@ -122,7 +127,7 @@ echo Using dotnet:
 echo   %DOTNET%
 
 echo.
-echo [1/11] Validate publish config
+echo [1/12] Validate publish config
 if not exist "%EMBED_INFO%" (
     echo ERROR: Missing embedded build info header: %EMBED_INFO%
     exit /b 1
@@ -136,7 +141,7 @@ echo   core_hash_verify_enabled=%CORE_HASH_VERIFY_ENABLED%
 echo   trial_expire_utc=%TRIAL_EXPIRE_UTC%
 
 echo.
-echo [2/11] Update Shared BuildInfo.cs
+echo [2/12] Update Shared BuildInfo.cs
 for /f "usebackq delims=" %%I in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "(Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')"`) do set "BUILD_UTC=%%I"
 for /f "usebackq delims=" %%I in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "(Get-Date).ToUniversalTime().ToString('yyyy.MM.dd-HHmm')"`) do set "BUILD_VERSION_LABEL=%%I"
 for /f "usebackq delims=" %%I in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='SilentlyContinue'; Set-Location -LiteralPath '%ROOT%'; git rev-parse --short=8 HEAD"`) do if not defined BUILD_COMMIT set "BUILD_COMMIT=%%I"
@@ -170,7 +175,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [3/11] Build TigerClaw.Core Release
+echo [3/12] Build TigerClaw.Core Release
 "%DOTNET%" msbuild "%CORE_PROJECT%" /restore /p:Configuration=Release /p:Platform=AnyCPU /p:OutDir="%CORE_OUT%\\" /v:minimal
 if errorlevel 1 (
     echo ERROR: TigerClaw.Core Release build failed.
@@ -178,7 +183,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [4/11] Build TigerClaw.Overlay Release
+echo [4/12] Build TigerClaw.Overlay Release
 "%DOTNET%" msbuild "%OVERLAY_PROJECT%" /restore /p:Configuration=Release /p:Platform=AnyCPU /p:OutDir="%OVERLAY_OUT%\\" /v:minimal
 if errorlevel 1 (
     echo ERROR: TigerClaw.Overlay Release build failed.
@@ -186,7 +191,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [5/11] Build TigerClaw.Dialog Release
+echo [5/12] Build TigerClaw.Dialog Release
 "%DOTNET%" msbuild "%DIALOG_PROJECT%" /restore /p:Configuration=Release /p:Platform=AnyCPU /p:OutDir="%DIALOG_OUT%\\" /v:minimal
 if errorlevel 1 (
     echo ERROR: TigerClaw.Dialog Release build failed.
@@ -194,7 +199,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [6/11] Build TigerClaw.Sentence Release
+echo [6/12] Build TigerClaw.Sentence Release
 "%DOTNET%" msbuild "%SENTENCE_PROJECT%" /restore /p:Configuration=Release /p:Platform=x64 /p:OutDir="%SENTENCE_OUT%\\" /v:minimal
 if errorlevel 1 (
     echo ERROR: TigerClaw.Sentence Release build failed.
@@ -205,7 +210,7 @@ if exist "%ORT_NATIVE_ROOT%\onnxruntime_providers_shared.dll" copy /Y "%ORT_NATI
 
 
 echo.
-echo [7/11] Update EmbeddedBuildInfo.h
+echo [7/12] Update EmbeddedBuildInfo.h
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$path = '%EMBED_INFO%';" ^
   "$coreExe = '%CORE_EXE_FOR_HASH%';" ^
@@ -244,7 +249,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [8/11] Build TigerClaw.Hook.Native Release
+echo [8/12] Build TigerClaw.Hook.Native Release
 "%MSBUILD%" "%HOOK_NATIVE_PROJECT%" /p:Configuration=Release /p:Platform=x64 /p:OutDir="%HOOK_NATIVE_OUT%\\" /v:minimal
 if errorlevel 1 (
     echo ERROR: TigerClaw.Hook.Native Release build failed.
@@ -252,7 +257,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [9/11] Build TigerClaw TSF x64/Win32 Release
+echo [9/12] Build TigerClaw TSF x64/Win32 Release
 call :BuildTsfRelease x64
 if errorlevel 1 (
     echo ERROR: TigerClaw TSF x64 Release build failed.
@@ -265,7 +270,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [10/11] Copy artifacts to release directory
+echo [10/12] Copy artifacts to release directory
 if not exist "%RELEASE_DIR%" mkdir "%RELEASE_DIR%"
 if not exist "%RELEASE_TSF_X64%" mkdir "%RELEASE_TSF_X64%"
 if not exist "%RELEASE_TSF_X86%" mkdir "%RELEASE_TSF_X86%"
@@ -320,7 +325,15 @@ if exist "%RELEASE_DIR%\install.bat" del /q "%RELEASE_DIR%\install.bat" >nul 2>&
 if exist "%RELEASE_DIR%\uninstall.bat" del /q "%RELEASE_DIR%\uninstall.bat" >nul 2>&1
 
 echo.
-echo [11/11] Done
+echo [11/12] Package release archive
+call "%PACK_SCRIPT%"
+if errorlevel 1 (
+    echo ERROR: Release packaging failed.
+    exit /b 1
+)
+
+echo.
+echo [12/12] Done
 echo Publish succeeded.
 echo   Core    : %RELEASE_DIR%\TigerClaw.Core.exe
 echo   Overlay : %RELEASE_DIR%\TigerClaw.Overlay.exe
