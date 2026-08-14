@@ -134,8 +134,10 @@ count-of-counts估计三档折扣，并使用续接概率作为二元和一元�
 dotnet run --project tools\SentenceNgramTrainer\TigerClaw.SentenceNgramTrainer.csproj ^
   -c Release -- build-model ^
   --counts C:\Archive\tigerclaw_sentence_ml\trainer_v2\full-counts-w16 ^
-  --output C:\Archive\tigerclaw_sentence_ml\trainer_v2\full-kn-m30-v2 ^
-  --min-bigram-export-count 30 --min-trigram-export-count 30
+  --output C:\Archive\tigerclaw_sentence_ml\trainer_v2\full-kn-m30-r20-p050-w025 ^
+  --min-bigram-export-count 30 --min-trigram-export-count 30 ^
+  --rescue-min-bigram-count 20 --rescue-min-trigram-count 20 ^
+  --rescue-min-conditional-probability 0.5 --rescue-probability-weight 0.25
 ```
 
 使用四类来源各2500条的非重叠验证集，并额外加入“不带一丝矫揉造作”回归句，
@@ -149,23 +151,25 @@ Top-1变化次数。
 | 10 | 390 MB | 99.27% | 0.99579 | 436 | 26 |
 | 20 | 273 MB | 98.93% | 0.99389 | 423 | 47 |
 | 30 | 226 MB | 98.82% | 0.99320 | 420 | 55 |
+| 30 + 条件软救回 | 228 MB | 98.84% | 0.99328 | 421 | 54 |
 
-当前离线推荐档是计数阈值30：它处于此前150--300 MB目标内，文件比阈值20
-减少约17%，Top-1只降低0.11个百分点，同时仍比原模型高3.65个百分点并修复
-手工回归句。阈值20保留为偏准确率的备选，阈值3则是准确率上限参考，不适合
-作为当前安装包默认模型。Core现已只读取该V2格式：开发版直接映射原始文件，
-发布版验证并解密到匿名页文件映射，不再兼容旧版紧凑三元模型。ARM64开发发布
-先使用未加密模型验证真实输入效果，x86/x64正式发布仍使用受保护容器。
+当前推荐档以计数阈值30为主体，并对计数20--29、上下文条件概率至少50%的项
+进行25%概率权重的软救回。它只比硬裁剪增加约2 MiB；10000条验证中相对硬裁剪
+新增2次首选修正且没有首选退化，并修复“虎码官方整句版”被硬阈值误删局部统计
+的问题。阈值20保留为偏准确率的备选，阈值3则是准确率上限参考。Core只读取
+V2格式：开发版直接映射原始文件，发布版验证并解密到匿名页文件映射，不再兼容
+旧版紧凑三元模型。ARM64开发发布先使用未加密模型验证真实输入效果，x86/x64
+正式发布仍使用受保护容器。
 
 完整对比命令：
 
 ```bash
 python3 tools/benchmark_sentence_gram.py \
   --experiment kneser-ney \
-  --kneser-ney /mnt/c/Archive/tigerclaw_sentence_ml/trainer_v2/full-kn-m30-v2/sentence-ngram-v2.bin \
+  --kneser-ney /mnt/c/Archive/tigerclaw_sentence_ml/trainer_v2/full-kn-m30-r20-p050-w025/sentence-ngram-v2.bin \
   --cases /mnt/c/Archive/tigerclaw_sentence_ml/baseline/tiger-sentence-validation-10000-cases.json \
   --workers 16 --max-cases 0 \
-  --output /mnt/c/Archive/tigerclaw_sentence_ml/baseline/kneser-ney-m30-vs-trigram-validation-10000.json
+  --output /mnt/c/Archive/tigerclaw_sentence_ml/baseline/kneser-ney-m30-r20-p050-w025-vs-trigram-validation-10000.json
 ```
 
 ## 主要命令
@@ -195,7 +199,7 @@ checkpoint 暂存缓冲长期占用共享内存。
 ## 运行时模型导出
 
 ```bash
-cp /mnt/c/Archive/tigerclaw_sentence_ml/trainer_v2/full-kn-m30-v2/sentence-ngram-v2.bin \
+cp /mnt/c/Archive/tigerclaw_sentence_ml/trainer_v2/full-kn-m30-r20-p050-w025/sentence-ngram-v2.bin \
   /mnt/c/Archive/tigerclaw_sentence_ml/runtime/sentence-ngram-v2.bin
 
 /mnt/c/Users/yc/AppData/Local/TigerClawML/venv-directml/Scripts/python.exe \

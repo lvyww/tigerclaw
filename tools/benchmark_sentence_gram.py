@@ -22,7 +22,10 @@ DEFAULT_CASES = ARCHIVE_ROOT / "baseline" / "tiger-sentence-test-1000-pools.json
 DEFAULT_BGC = Path("/mnt/c/Users/yc/Downloads/zh-hans-t-essay-bgc.gram")
 DEFAULT_BGW = Path("/mnt/c/Users/yc/Downloads/zh-hans-t-essay-bgw.gram")
 DEFAULT_KNESER_NEY = (
-    ARCHIVE_ROOT / "trainer_v2" / "full-kn-m30-v2" / "sentence-ngram-v2.bin"
+    ARCHIVE_ROOT
+    / "trainer_v2"
+    / "full-kn-m30-r20-p050-w025"
+    / "sentence-ngram-v2.bin"
 )
 DEFAULT_LEXICON = (
     Path(__file__).resolve().parents[1]

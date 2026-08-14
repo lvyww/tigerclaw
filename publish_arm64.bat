@@ -141,6 +141,11 @@ for %%P in ("%CORE_OUT%\TigerClaw.Core.exe" "%CORE_OUT%\TigerClaw.Overlay.exe" "
 
 echo.
 echo [9/10] Copy artifacts
+taskkill /F /IM TigerClaw.Sentence.exe /T >nul 2>&1
+taskkill /F /IM TigerClaw.Overlay.exe /T >nul 2>&1
+taskkill /F /IM TigerClaw.Dialog.exe /T >nul 2>&1
+taskkill /F /IM TigerClaw.Core.exe /T >nul 2>&1
+ping 127.0.0.1 -n 3 >nul
 if not exist "%RELEASE_DIR%" mkdir "%RELEASE_DIR%"
 if not exist "%RELEASE_WIN32_DIR%" mkdir "%RELEASE_WIN32_DIR%"
 if not exist "%RELEASE_DIR%\sentence" mkdir "%RELEASE_DIR%\sentence"

@@ -178,6 +178,8 @@ character-Transformer training and reranking path. See `tools/README_sentence_ne
 it uses bounded parallel local counters and sorted-run merging so the full corpus can
 be counted without loading every n-gram into memory. Its `build-model` subcommand
 exports the Modified Kneser-Ney V2 format consumed directly by Core.
+The selected 228 MiB model keeps count-30 terms and softly restores high-confidence
+count-20--29 terms at 25% observed weight to avoid hard-threshold regressions.
 The active runtime uses the exported compact n-gram and ONNX artifacts, while training and evaluation remain offline.
 Generated runtime models remain outside Git under `C:\Archive\tigerclaw_sentence_ml\runtime`; debug and publish scripts copy them into `Models\` and `sentence\Models\`.
 

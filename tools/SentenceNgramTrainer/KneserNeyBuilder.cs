@@ -11,6 +11,10 @@ internal sealed class KneserNeyOptions
     public required string Output { get; init; }
     public int MinimumBigramExportCount { get; init; } = 2;
     public int MinimumTrigramExportCount { get; init; } = 2;
+    public int RescueMinimumBigramCount { get; init; }
+    public int RescueMinimumTrigramCount { get; init; }
+    public double RescueMinimumConditionalProbability { get; init; } = 1.0;
+    public double RescueProbabilityWeight { get; init; } = 1.0;
 
     public static KneserNeyOptions Parse(string[] args)
     {
@@ -31,6 +35,13 @@ internal sealed class KneserNeyOptions
             Output = Path.GetFullPath(output),
             MinimumBigramExportCount = Integer(values, "--min-bigram-export-count", 2),
             MinimumTrigramExportCount = Integer(values, "--min-trigram-export-count", 2),
+            RescueMinimumBigramCount = Integer(values, "--rescue-min-bigram-count", 0),
+            RescueMinimumTrigramCount = Integer(values, "--rescue-min-trigram-count", 0),
+            RescueMinimumConditionalProbability = Double(
+                values,
+                "--rescue-min-conditional-probability",
+                1.0),
+            RescueProbabilityWeight = Double(values, "--rescue-probability-weight", 1.0),
         };
         if (!Directory.Exists(options.CountsDirectory))
         {
@@ -39,6 +50,21 @@ internal sealed class KneserNeyOptions
         if (options.MinimumBigramExportCount <= 0 || options.MinimumTrigramExportCount <= 0)
         {
             throw new ArgumentException("导出计数阈值必须为正数。");
+        }
+        if (options.RescueMinimumBigramCount < 0 || options.RescueMinimumTrigramCount < 0 ||
+            options.RescueMinimumBigramCount > options.MinimumBigramExportCount ||
+            options.RescueMinimumTrigramCount > options.MinimumTrigramExportCount)
+        {
+            throw new ArgumentException("条件救回计数必须为0或不大于对应导出阈值。");
+        }
+        if (options.RescueMinimumConditionalProbability <= 0.0 ||
+            options.RescueMinimumConditionalProbability > 1.0)
+        {
+            throw new ArgumentException("条件救回概率必须在(0, 1]范围内。");
+        }
+        if (options.RescueProbabilityWeight <= 0.0 || options.RescueProbabilityWeight > 1.0)
+        {
+            throw new ArgumentException("条件救回概率权重必须在(0, 1]范围内。");
         }
         if (Directory.Exists(options.Output) && Directory.EnumerateFileSystemEntries(options.Output).Any())
         {
@@ -63,6 +89,17 @@ internal sealed class KneserNeyOptions
         return int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out int value)
             ? value
             : throw new ArgumentException("整数参数无效: " + name);
+    }
+
+    private static double Double(Dictionary<string, string> values, string name, double fallback)
+    {
+        if (!values.TryGetValue(name, out string? raw))
+        {
+            return fallback;
+        }
+        return double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out double value)
+            ? value
+            : throw new ArgumentException("浮点参数无效: " + name);
     }
 }
 
@@ -114,15 +151,7 @@ internal struct ContextAccumulator
     public ulong Key;
     public long Total;
     public double ExportedNumerator;
-
-    public void Add(int count, int minimumExportCount, Discounts discounts)
-    {
-        Total += count;
-        if (count >= minimumExportCount)
-        {
-            ExportedNumerator += count - discounts.ForCount(count);
-        }
-    }
+    public long ExportedEntries;
 
     public double Lambda => Math.Clamp(1 - ExportedNumerator / Total, 0, 1);
 }
@@ -145,15 +174,17 @@ internal static class KneserNeyBuilder
 
         Stopwatch stopwatch = Stopwatch.StartNew();
         string rawContextsPath = Path.Combine(options.Output, "trigram-contexts.raw");
-        (long trigramEntries, long trigramExportEntries, CountOfCounts trigramCounts) =
-            ReadCountStatistics(trigramsPath, options.MinimumTrigramExportCount);
+        (long trigramEntries, CountOfCounts trigramCounts) = ReadCountStatistics(trigramsPath);
         Discounts trigramDiscounts = Discounts.Estimate(trigramCounts);
         var continuationBigrams = new Dictionary<ulong, int>(8_000_000);
-        long scannedTrigramEntries = ScanTrigrams(
+        (long scannedTrigramEntries, long trigramExportEntries) = ScanTrigrams(
             trigramsPath,
             rawContextsPath,
             continuationBigrams,
             options.MinimumTrigramExportCount,
+            options.RescueMinimumTrigramCount,
+            options.RescueMinimumConditionalProbability,
+            options.RescueProbabilityWeight,
             trigramDiscounts);
         if (scannedTrigramEntries != trigramEntries)
         {
@@ -169,19 +200,19 @@ internal static class KneserNeyBuilder
         continuationBigrams.TrimExcess();
         Array.Sort(bigrams, static (left, right) => left.Key.CompareTo(right.Key));
         CountOfCounts bigramCounts = default;
-        long bigramExportEntries = 0;
         var unigramContinuations = new Dictionary<int, long>();
         foreach ((ulong key, int count) in bigrams)
         {
             bigramCounts = bigramCounts.Add(count);
-            if (count >= options.MinimumBigramExportCount)
-            {
-                bigramExportEntries++;
-            }
             int target = (int)(key & Mask);
             unigramContinuations[target] = unigramContinuations.GetValueOrDefault(target) + 1;
         }
         Discounts bigramDiscounts = Discounts.Estimate(bigramCounts);
+        long bigramExportEntries = CountBigramExports(
+            bigrams,
+            options.MinimumBigramExportCount,
+            options.RescueMinimumBigramCount,
+            options.RescueMinimumConditionalProbability);
         Console.WriteLine(
             $"续接二元 entries={bigrams.Length:N0} export={bigramExportEntries:N0} " +
             $"D=({bigramDiscounts.One:F4},{bigramDiscounts.Two:F4},{bigramDiscounts.ThreePlus:F4})");
@@ -198,6 +229,9 @@ internal static class KneserNeyBuilder
                 bigrams,
                 bigramExportEntries,
                 options.MinimumBigramExportCount,
+                options.RescueMinimumBigramCount,
+                options.RescueMinimumConditionalProbability,
+                options.RescueProbabilityWeight,
                 bigramDiscounts);
             WriteTrigramProbabilities(
                 writer,
@@ -205,6 +239,9 @@ internal static class KneserNeyBuilder
                 rawContextsPath,
                 trigramExportEntries,
                 options.MinimumTrigramExportCount,
+                options.RescueMinimumTrigramCount,
+                options.RescueMinimumConditionalProbability,
+                options.RescueProbabilityWeight,
                 trigramDiscounts);
         }
         File.Delete(rawContextsPath);
@@ -219,6 +256,10 @@ internal static class KneserNeyBuilder
             peak_working_set_bytes = process.PeakWorkingSet64,
             minimum_bigram_export_count = options.MinimumBigramExportCount,
             minimum_trigram_export_count = options.MinimumTrigramExportCount,
+            rescue_minimum_bigram_count = options.RescueMinimumBigramCount,
+            rescue_minimum_trigram_count = options.RescueMinimumTrigramCount,
+            rescue_minimum_conditional_probability = options.RescueMinimumConditionalProbability,
+            rescue_probability_weight = options.RescueProbabilityWeight,
             trigram_entries = trigramEntries,
             trigram_export_entries = trigramExportEntries,
             continuation_bigram_entries = bigrams.LongLength,
@@ -239,11 +280,14 @@ internal static class KneserNeyBuilder
         return 0;
     }
 
-    private static long ScanTrigrams(
+    private static (long Entries, long ExportEntries) ScanTrigrams(
         string path,
         string contextsPath,
         Dictionary<ulong, int> continuationBigrams,
         int minimumExportCount,
+        int rescueMinimumCount,
+        double rescueMinimumConditionalProbability,
+        double rescueProbabilityWeight,
         Discounts discounts)
     {
         using var reader = new BinaryReader(
@@ -257,7 +301,9 @@ internal static class KneserNeyBuilder
         long entries = reader.ReadInt64();
         contextWriter.Write((long)0);
         long contextEntries = 0;
+        long exportEntries = 0;
         ContextAccumulator context = default;
+        var rescueCounts = new List<int>();
         bool hasContext = false;
         for (long index = 0; index < entries; index++)
         {
@@ -268,13 +314,30 @@ internal static class KneserNeyBuilder
             {
                 if (hasContext)
                 {
+                    CompleteContext(
+                        ref context,
+                        rescueCounts,
+                        rescueMinimumConditionalProbability,
+                        rescueProbabilityWeight,
+                        discounts);
                     WriteContext(contextWriter, context);
+                    exportEntries += context.ExportedEntries;
                     contextEntries++;
                 }
                 context = new ContextAccumulator { Key = contextKey };
+                rescueCounts.Clear();
                 hasContext = true;
             }
-            context.Add(count, minimumExportCount, discounts);
+            context.Total += count;
+            if (count >= minimumExportCount)
+            {
+                context.ExportedNumerator += count - discounts.ForCount(count);
+                context.ExportedEntries++;
+            }
+            else if (rescueMinimumCount > 0 && count >= rescueMinimumCount)
+            {
+                rescueCounts.Add(count);
+            }
             int second = (int)((key >> 21) & Mask);
             int third = (int)(key & Mask);
             ulong continuationKey = Program.PackPair(second, third);
@@ -283,12 +346,38 @@ internal static class KneserNeyBuilder
         }
         if (hasContext)
         {
+            CompleteContext(
+                ref context,
+                rescueCounts,
+                rescueMinimumConditionalProbability,
+                rescueProbabilityWeight,
+                discounts);
             WriteContext(contextWriter, context);
+            exportEntries += context.ExportedEntries;
             contextEntries++;
         }
         contextWriter.BaseStream.Position = 0;
         contextWriter.Write(contextEntries);
-        return entries;
+        return (entries, exportEntries);
+    }
+
+    private static void CompleteContext(
+        ref ContextAccumulator context,
+        List<int> rescueCounts,
+        double minimumConditionalProbability,
+        double rescueProbabilityWeight,
+        Discounts discounts)
+    {
+        foreach (int count in rescueCounts)
+        {
+            if (count / (double)context.Total < minimumConditionalProbability)
+            {
+                continue;
+            }
+            context.ExportedNumerator +=
+                rescueProbabilityWeight * (count - discounts.ForCount(count));
+            context.ExportedEntries++;
+        }
     }
 
     private static void WriteContext(BinaryWriter writer, ContextAccumulator context)
@@ -332,6 +421,9 @@ internal static class KneserNeyBuilder
         KeyValuePair<ulong, int>[] entries,
         long exportEntries,
         int minimumExportCount,
+        int rescueMinimumCount,
+        double rescueMinimumConditionalProbability,
+        double rescueProbabilityWeight,
         Discounts discounts)
     {
         writer.Write(exportEntries);
@@ -342,25 +434,52 @@ internal static class KneserNeyBuilder
             int context = (int)(entries[position].Key >> 21);
             int end = position;
             long total = 0;
-            double exportedNumerator = 0;
             while (end < entries.Length && (int)(entries[end].Key >> 21) == context)
             {
-                int count = entries[end].Value;
-                total += count;
-                if (count >= minimumExportCount)
-                {
-                    exportedNumerator += count - discounts.ForCount(count);
-                }
+                total += entries[end].Value;
                 end++;
+            }
+            double exportedNumerator = 0;
+            for (int index = position; index < end; index++)
+            {
+                int count = entries[index].Value;
+                if (ShouldExport(
+                    count,
+                    total,
+                    minimumExportCount,
+                    rescueMinimumCount,
+                    rescueMinimumConditionalProbability))
+                {
+                    exportedNumerator += ExportedNumerator(
+                        count,
+                        total,
+                        minimumExportCount,
+                        rescueMinimumCount,
+                        rescueMinimumConditionalProbability,
+                        rescueProbabilityWeight,
+                        discounts);
+                }
             }
             double lambda = Math.Clamp(1 - exportedNumerator / total, 0, 1);
             contexts.Add((context, (float)lambda));
             for (int index = position; index < end; index++)
             {
                 (ulong key, int count) = entries[index];
-                if (count < minimumExportCount) continue;
+                if (!ShouldExport(
+                    count,
+                    total,
+                    minimumExportCount,
+                    rescueMinimumCount,
+                    rescueMinimumConditionalProbability)) continue;
                 writer.Write(key);
-                writer.Write((float)((count - discounts.ForCount(count)) / total));
+                writer.Write((float)(ExportedNumerator(
+                    count,
+                    total,
+                    minimumExportCount,
+                    rescueMinimumCount,
+                    rescueMinimumConditionalProbability,
+                    rescueProbabilityWeight,
+                    discounts) / total));
             }
             position = end;
         }
@@ -378,6 +497,9 @@ internal static class KneserNeyBuilder
         string contextsPath,
         long exportEntries,
         int minimumExportCount,
+        int rescueMinimumCount,
+        double rescueMinimumConditionalProbability,
+        double rescueProbabilityWeight,
         Discounts discounts)
     {
         writer.Write(exportEntries);
@@ -401,9 +523,21 @@ internal static class KneserNeyBuilder
                 {
                     throw new InvalidDataException("三元上下文统计不匹配。");
                 }
-                if (count < minimumExportCount) continue;
+                if (!ShouldExport(
+                    count,
+                    context.Total,
+                    minimumExportCount,
+                    rescueMinimumCount,
+                    rescueMinimumConditionalProbability)) continue;
                 writer.Write(key);
-                writer.Write((float)((count - discounts.ForCount(count)) / context.Total));
+                writer.Write((float)(ExportedNumerator(
+                    count,
+                    context.Total,
+                    minimumExportCount,
+                    rescueMinimumCount,
+                    rescueMinimumConditionalProbability,
+                    rescueProbabilityWeight,
+                    discounts) / context.Total));
             }
         }
         using var contextReader = new BinaryReader(File.OpenRead(contextsPath), Encoding.UTF8, false);
@@ -427,26 +561,92 @@ internal static class KneserNeyBuilder
         };
     }
 
-    private static (long Entries, long ExportEntries, CountOfCounts Counts)
-        ReadCountStatistics(string path, int minimumExportCount)
+    private static long CountBigramExports(
+        KeyValuePair<ulong, int>[] entries,
+        int minimumExportCount,
+        int rescueMinimumCount,
+        double rescueMinimumConditionalProbability)
+    {
+        long exports = 0;
+        int position = 0;
+        while (position < entries.Length)
+        {
+            int context = (int)(entries[position].Key >> 21);
+            int end = position;
+            long total = 0;
+            while (end < entries.Length && (int)(entries[end].Key >> 21) == context)
+            {
+                total += entries[end].Value;
+                end++;
+            }
+            for (int index = position; index < end; index++)
+            {
+                if (ShouldExport(
+                    entries[index].Value,
+                    total,
+                    minimumExportCount,
+                    rescueMinimumCount,
+                    rescueMinimumConditionalProbability))
+                {
+                    exports++;
+                }
+            }
+            position = end;
+        }
+        return exports;
+    }
+
+    private static bool ShouldExport(
+        int count,
+        long contextTotal,
+        int minimumExportCount,
+        int rescueMinimumCount,
+        double rescueMinimumConditionalProbability)
+    {
+        return count >= minimumExportCount ||
+               (rescueMinimumCount > 0 &&
+                count >= rescueMinimumCount &&
+                count / (double)contextTotal >= rescueMinimumConditionalProbability);
+    }
+
+    private static double ExportedNumerator(
+        int count,
+        long contextTotal,
+        int minimumExportCount,
+        int rescueMinimumCount,
+        double rescueMinimumConditionalProbability,
+        double rescueProbabilityWeight,
+        Discounts discounts)
+    {
+        double numerator = count - discounts.ForCount(count);
+        if (count >= minimumExportCount)
+        {
+            return numerator;
+        }
+        return ShouldExport(
+            count,
+            contextTotal,
+            minimumExportCount,
+            rescueMinimumCount,
+            rescueMinimumConditionalProbability)
+            ? rescueProbabilityWeight * numerator
+            : 0.0;
+    }
+
+    private static (long Entries, CountOfCounts Counts) ReadCountStatistics(string path)
     {
         using var reader = new BinaryReader(
             new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20),
             Encoding.UTF8,
             false);
         long entries = reader.ReadInt64();
-        long exportEntries = 0;
         CountOfCounts counts = default;
         for (long index = 0; index < entries; index++)
         {
             reader.ReadUInt64();
             int count = reader.ReadInt32();
             counts = counts.Add(count);
-            if (count >= minimumExportCount)
-            {
-                exportEntries++;
-            }
         }
-        return (entries, exportEntries, counts);
+        return (entries, counts);
     }
 }
