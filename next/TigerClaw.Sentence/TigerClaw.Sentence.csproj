@@ -17,5 +17,6 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.ML.OnnxRuntime.Managed" Version="1.24.4" />
     <Reference Include="System.Web.Extensions" />
+    <ProjectReference Include="..\TigerClaw.Shared\TigerClaw.Shared.csproj" />
   </ItemGroup>
 </Project>

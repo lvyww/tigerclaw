@@ -7,11 +7,13 @@ using System.IO.Pipes;
 using System.Linq;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Web.Script.Serialization;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
+using TigerClaw.Shared;
 
 namespace TigerClaw.Sentence
 {
@@ -33,7 +35,7 @@ namespace TigerClaw.Sentence
             }
 
             bool createdNew;
-            using (var mutex = new Mutex(true, @"Local\TigerClaw.Sentence.SingleInstance", out createdNew))
+            using (var mutex = new Mutex(true, BuildMutexName(options.PipeName), out createdNew))
             {
                 if (!createdNew)
                 {
@@ -77,6 +79,21 @@ namespace TigerClaw.Sentence
             }
 
             return 0;
+        }
+
+        private static string BuildMutexName(string pipeName)
+        {
+            if (string.Equals(pipeName, RuntimeConstants.SentencePipeShortName, StringComparison.Ordinal))
+            {
+                return @"Local\TigerClaw.Sentence.SingleInstance";
+            }
+
+            byte[] source = Encoding.UTF8.GetBytes(pipeName ?? string.Empty);
+            using (var sha256 = SHA256.Create())
+            {
+                byte[] hash = sha256.ComputeHash(source);
+                return @"Local\TigerClaw.Sentence.Test." + BitConverter.ToString(hash, 0, 8).Replace("-", string.Empty);
+            }
         }
 
         private static void ServeClient(Stream stream, NeuralSentenceScorer scorer)
@@ -221,14 +238,32 @@ namespace TigerClaw.Sentence
                 throw new FileNotFoundException("Sentence vocabulary was not found.", vocabularyPath);
             }
 
-            _vocabulary = new JavaScriptSerializer().Deserialize<Dictionary<string, int>>(File.ReadAllText(vocabularyPath))
+            string vocabularyJson = ReadVocabulary(vocabularyPath);
+            _vocabulary = new JavaScriptSerializer().Deserialize<Dictionary<string, int>>(vocabularyJson)
                 ?? throw new InvalidDataException("Invalid sentence vocabulary.");
             _bos = ResolveRequired("<bos>");
             _eos = ResolveRequired("<eos>");
             _pad = ResolveRequired("<pad>");
             _unknown = ResolveRequired("<unk>");
             _contextLength = LoadContextLength(modelPath);
-            _session = new InferenceSession(modelPath);
+            if (string.Equals(Path.GetExtension(modelPath), ".tcmodel", StringComparison.OrdinalIgnoreCase))
+            {
+                byte[] modelBytes = EncryptedModelReader.ReadAllBytes(
+                    modelPath,
+                    EncryptedModelKind.SentenceTransformer);
+                try
+                {
+                    _session = new InferenceSession(modelBytes);
+                }
+                finally
+                {
+                    Array.Clear(modelBytes, 0, modelBytes.Length);
+                }
+            }
+            else
+            {
+                _session = new InferenceSession(modelPath);
+            }
         }
 
         public string Provider => "cpu";
@@ -323,6 +358,26 @@ namespace TigerClaw.Sentence
                 return id;
             }
             throw new InvalidDataException("Vocabulary is missing " + token + ".");
+        }
+
+        private static string ReadVocabulary(string vocabularyPath)
+        {
+            if (!string.Equals(Path.GetExtension(vocabularyPath), ".tcmodel", StringComparison.OrdinalIgnoreCase))
+            {
+                return File.ReadAllText(vocabularyPath);
+            }
+
+            byte[] vocabularyBytes = EncryptedModelReader.ReadAllBytes(
+                vocabularyPath,
+                EncryptedModelKind.SentenceVocabulary);
+            try
+            {
+                return Encoding.UTF8.GetString(vocabularyBytes);
+            }
+            finally
+            {
+                Array.Clear(vocabularyBytes, 0, vocabularyBytes.Length);
+            }
         }
 
         private static int LoadContextLength(string modelPath)

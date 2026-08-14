@@ -180,8 +180,8 @@ namespace TigerClaw.Core
         private static void ResolveModelPaths(out string modelPath, out string vocabularyPath)
         {
             string baseDirectory = AppContext.BaseDirectory;
-            modelPath = Path.Combine(baseDirectory, "Models", "sentence-transformer.onnx");
-            vocabularyPath = Path.Combine(baseDirectory, "Models", "sentence-vocabulary.json");
+            modelPath = Path.Combine(baseDirectory, "Models", "sentence-transformer.tcmodel");
+            vocabularyPath = Path.Combine(baseDirectory, "Models", "sentence-vocabulary.tcmodel");
             string directory = baseDirectory;
             for (int level = 0; level < 6 && !string.IsNullOrEmpty(directory); level++)
             {
@@ -194,13 +194,21 @@ namespace TigerClaw.Core
                 };
                 foreach (string root in roots)
                 {
-                    string modelCandidate = Path.Combine(root, "sentence-transformer.onnx");
-                    string vocabularyCandidate = Path.Combine(root, "sentence-vocabulary.json");
-                    if (File.Exists(modelCandidate) && File.Exists(vocabularyCandidate))
+                    string[,] filePairs =
                     {
-                        modelPath = modelCandidate;
-                        vocabularyPath = vocabularyCandidate;
-                        return;
+                        { "sentence-transformer.tcmodel", "sentence-vocabulary.tcmodel" },
+                        { "sentence-transformer.onnx", "sentence-vocabulary.json" }
+                    };
+                    for (int pairIndex = 0; pairIndex < filePairs.GetLength(0); pairIndex++)
+                    {
+                        string modelCandidate = Path.Combine(root, filePairs[pairIndex, 0]);
+                        string vocabularyCandidate = Path.Combine(root, filePairs[pairIndex, 1]);
+                        if (File.Exists(modelCandidate) && File.Exists(vocabularyCandidate))
+                        {
+                            modelPath = modelCandidate;
+                            vocabularyPath = vocabularyCandidate;
+                            return;
+                        }
                     }
                 }
 

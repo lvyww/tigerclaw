@@ -132,12 +132,12 @@ Release output:
 release\
 release\x64\TigerClaw.dll
 release\Win32\TigerClaw.dll
-release\Models\sentence-ngram.bin
+release\Models\sentence-ngram.tcmodel
 release\sentence\TigerClaw.Sentence.exe
 release\虎爪输入法-限期YYYYMMDD.7z
 ```
 
-`publish.bat` invokes the tracked `pack_release.bat` after a successful build. The package contains both TSF architectures, the optional sentence sidecar, the n-gram/ONNX models, and the `虎整句` schema. The clean distribution defaults are maintained in `dist_config.txt`; do not package a developer's live `config.txt`.
+`publish.bat` protects the n-gram, ONNX, and vocabulary assets as authenticated `.tcmodel` containers, then invokes the tracked `pack_release.bat`. The release key stays outside Git at `C:\Archive\tigerclaw_sentence_ml\runtime\model-protection.key` and is embedded only in release binaries. The package contains both TSF architectures, the optional sentence sidecar, protected models, and the `虎整句` schema. The clean distribution defaults are maintained in `dist_config.txt`; do not package a developer's live `config.txt`.
 
 Windows on ARM development build:
 

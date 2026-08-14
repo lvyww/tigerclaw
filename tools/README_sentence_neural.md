@@ -28,6 +28,8 @@ data:   C:\Archive\tigerclaw_sentence_ml\pilot200m
 model:  C:\Archive\tigerclaw_sentence_ml\model10m
 ```
 
+正式发布时，`publish.bat` 使用 `tools/protect_sentence_model.ps1` 将上述离线明文产物压缩并加密为经过 HMAC 校验的 `.tcmodel` 文件。发布密钥位于仓库外的 `C:\Archive\tigerclaw_sentence_ml\runtime\model-protection.key`，不要提交该密钥或把离线明文模型复制进发布包。Debug 构建仍可直接读取 `.bin`、`.onnx` 和 JSON，方便训练与实验。
+
 Python 是隔离的 Windows x64 3.12 环境，通过 `torch-directml` 使用 Adreno GPU；
 没有加入 PATH，也不替换系统 Python。
 

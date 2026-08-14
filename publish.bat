@@ -12,6 +12,7 @@ set "CONFIG_FILE=%ROOT%\publish_config.txt"
 set "EMBED_INFO=%ROOT%\BimeTSF2\SampleIME\EmbeddedBuildInfo.h"
 set "SHARED_BUILD_INFO=%ROOT%\next\TigerClaw.Shared\BuildInfo.cs"
 set "PACK_SCRIPT=%ROOT%\pack_release.bat"
+set "MODEL_PROTECTION_SCRIPT=%ROOT%\tools\protect_sentence_model.ps1"
 set "TEXT_LOG_ENABLED=0"
 set "CORE_HASH_VERIFY_ENABLED=1"
 set "TRIAL_EXPIRE_UTC="
@@ -99,6 +100,11 @@ set "DIALOG_OUT=%ROOT%\next\_run\Release\net48"
 set "SENTENCE_OUT=%ROOT%\next\_run\Release\sentence"
 set "SENTENCE_MODEL_ROOT=C:\Archive\tigerclaw_sentence_ml\runtime"
 set "SENTENCE_DATA_ROOT=C:\Archive\tigerclaw_sentence_ml\pilot200m"
+set "MODEL_PROTECTION_KEY=%SENTENCE_MODEL_ROOT%\model-protection.key"
+set "PROTECTED_MODEL_OUT=%ROOT%\next\_run\Release\protected-models"
+set "PROTECTED_NGRAM=%PROTECTED_MODEL_OUT%\sentence-ngram.tcmodel"
+set "PROTECTED_TRANSFORMER=%PROTECTED_MODEL_OUT%\sentence-transformer.tcmodel"
+set "PROTECTED_VOCABULARY=%PROTECTED_MODEL_OUT%\sentence-vocabulary.tcmodel"
 set "ORT_NATIVE_ROOT=%LocalAppData%\TigerClawML\venv-directml\Lib\site-packages\onnxruntime\capi"
 set "HOOK_NATIVE_OUT=%ROOT%\next\_run\Release\native"
 set "TSF_X64_DLL=%ROOT%\BimeTSF2\SampleIME\x64\Release\TigerClaw.dll"
@@ -127,7 +133,7 @@ echo Using dotnet:
 echo   %DOTNET%
 
 echo.
-echo [1/12] Validate publish config
+echo [1/13] Validate publish config
 if not exist "%EMBED_INFO%" (
     echo ERROR: Missing embedded build info header: %EMBED_INFO%
     exit /b 1
@@ -136,12 +142,24 @@ if not exist "%SHARED_BUILD_INFO%" (
     echo ERROR: Missing shared build info source: %SHARED_BUILD_INFO%
     exit /b 1
 )
+if not exist "%MODEL_PROTECTION_SCRIPT%" (
+    echo ERROR: Missing model protection script: %MODEL_PROTECTION_SCRIPT%
+    exit /b 1
+)
+if not exist "%MODEL_PROTECTION_KEY%" (
+    echo ERROR: Missing model protection key: %MODEL_PROTECTION_KEY%
+    exit /b 1
+)
+for %%I in ("%MODEL_PROTECTION_KEY%") do if not "%%~zI"=="32" (
+    echo ERROR: Model protection key must contain exactly 32 bytes.
+    exit /b 1
+)
 echo   text_log_enabled=%TEXT_LOG_ENABLED%
 echo   core_hash_verify_enabled=%CORE_HASH_VERIFY_ENABLED%
 echo   trial_expire_utc=%TRIAL_EXPIRE_UTC%
 
 echo.
-echo [2/12] Update Shared BuildInfo.cs
+echo [2/13] Update Shared BuildInfo.cs
 for /f "usebackq delims=" %%I in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "(Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')"`) do set "BUILD_UTC=%%I"
 for /f "usebackq delims=" %%I in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "(Get-Date).ToUniversalTime().ToString('yyyy.MM.dd-HHmm')"`) do set "BUILD_VERSION_LABEL=%%I"
 for /f "usebackq delims=" %%I in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='SilentlyContinue'; Set-Location -LiteralPath '%ROOT%'; git rev-parse --short=8 HEAD"`) do if not defined BUILD_COMMIT set "BUILD_COMMIT=%%I"
@@ -152,6 +170,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$commit = '%BUILD_COMMIT%';" ^
   "$buildUtc = '%BUILD_UTC%';" ^
   "$trialUtc = '%TRIAL_EXPIRE_UTC%';" ^
+  "$modelKeyPath = '%MODEL_PROTECTION_KEY%';" ^
+  "$modelKey = [System.IO.File]::ReadAllBytes($modelKeyPath);" ^
+  "if ($modelKey.Length -ne 32) { throw 'Model protection key must contain exactly 32 bytes.' };" ^
+  "$modelKeyLiteral = (($modelKey | ForEach-Object { '0x{0:X2}' -f $_ }) -join ', ');" ^
   "$lines = @(" ^
   "  'namespace TigerClaw.Shared'," ^
   "  '{'," ^
@@ -161,6 +183,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "  ('        public const string Commit = \"' + $commit + '\";')," ^
   "  ('        public const string BuildUtc = \"' + $buildUtc + '\";')," ^
   "  ('        public const string TrialExpireUtc = \"' + $trialUtc + '\";')," ^
+  "  ''," ^
+  "  '        internal static byte[] GetModelProtectionKey()'," ^
+  "  '        {'," ^
+  "  ('            return new byte[] { ' + $modelKeyLiteral + ' };')," ^
+  "  '        }'," ^
   "  '    }'," ^
   "  '}'" ^
   ");" ^
@@ -168,14 +195,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "Set-Content -LiteralPath $path -Value $raw -Encoding UTF8 -NoNewline;" ^
   "Write-Host ('  version=' + $version);" ^
   "Write-Host ('  commit=' + $commit);" ^
-  "Write-Host ('  build_utc=' + $buildUtc);"
+  "Write-Host ('  build_utc=' + $buildUtc);" ^
+  "Write-Host '  model_protection=enabled';"
 if errorlevel 1 (
     echo ERROR: Failed to update BuildInfo.cs
     exit /b 1
 )
 
 echo.
-echo [3/12] Build TigerClaw.Core Release
+echo [3/13] Build TigerClaw.Core Release
 "%DOTNET%" msbuild "%CORE_PROJECT%" /restore /p:Configuration=Release /p:Platform=AnyCPU /p:OutDir="%CORE_OUT%\\" /v:minimal
 if errorlevel 1 (
     echo ERROR: TigerClaw.Core Release build failed.
@@ -183,7 +211,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [4/12] Build TigerClaw.Overlay Release
+echo [4/13] Build TigerClaw.Overlay Release
 "%DOTNET%" msbuild "%OVERLAY_PROJECT%" /restore /p:Configuration=Release /p:Platform=AnyCPU /p:OutDir="%OVERLAY_OUT%\\" /v:minimal
 if errorlevel 1 (
     echo ERROR: TigerClaw.Overlay Release build failed.
@@ -191,7 +219,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [5/12] Build TigerClaw.Dialog Release
+echo [5/13] Build TigerClaw.Dialog Release
 "%DOTNET%" msbuild "%DIALOG_PROJECT%" /restore /p:Configuration=Release /p:Platform=AnyCPU /p:OutDir="%DIALOG_OUT%\\" /v:minimal
 if errorlevel 1 (
     echo ERROR: TigerClaw.Dialog Release build failed.
@@ -199,7 +227,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [6/12] Build TigerClaw.Sentence Release
+echo [6/13] Build TigerClaw.Sentence Release
 "%DOTNET%" msbuild "%SENTENCE_PROJECT%" /restore /p:Configuration=Release /p:Platform=x64 /p:OutDir="%SENTENCE_OUT%\\" /v:minimal
 if errorlevel 1 (
     echo ERROR: TigerClaw.Sentence Release build failed.
@@ -208,9 +236,18 @@ if errorlevel 1 (
 if exist "%ORT_NATIVE_ROOT%\onnxruntime.dll" copy /Y "%ORT_NATIVE_ROOT%\onnxruntime.dll" "%SENTENCE_OUT%\onnxruntime.dll" >nul
 if exist "%ORT_NATIVE_ROOT%\onnxruntime_providers_shared.dll" copy /Y "%ORT_NATIVE_ROOT%\onnxruntime_providers_shared.dll" "%SENTENCE_OUT%\onnxruntime_providers_shared.dll" >nul
 
+echo.
+echo [7/13] Protect sentence models
+if not exist "%PROTECTED_MODEL_OUT%" mkdir "%PROTECTED_MODEL_OUT%"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%MODEL_PROTECTION_SCRIPT%" -Source "%SENTENCE_MODEL_ROOT%\sentence-ngram.bin" -Destination "%PROTECTED_NGRAM%" -Kind SentenceNgram -KeyFile "%MODEL_PROTECTION_KEY%"
+if errorlevel 1 exit /b 1
+powershell -NoProfile -ExecutionPolicy Bypass -File "%MODEL_PROTECTION_SCRIPT%" -Source "%SENTENCE_MODEL_ROOT%\sentence-transformer.onnx" -Destination "%PROTECTED_TRANSFORMER%" -Kind SentenceTransformer -KeyFile "%MODEL_PROTECTION_KEY%"
+if errorlevel 1 exit /b 1
+powershell -NoProfile -ExecutionPolicy Bypass -File "%MODEL_PROTECTION_SCRIPT%" -Source "%SENTENCE_DATA_ROOT%\vocabulary.json" -Destination "%PROTECTED_VOCABULARY%" -Kind SentenceVocabulary -KeyFile "%MODEL_PROTECTION_KEY%"
+if errorlevel 1 exit /b 1
 
 echo.
-echo [7/12] Update EmbeddedBuildInfo.h
+echo [8/13] Update EmbeddedBuildInfo.h
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$path = '%EMBED_INFO%';" ^
   "$coreExe = '%CORE_EXE_FOR_HASH%';" ^
@@ -249,7 +286,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [8/12] Build TigerClaw.Hook.Native Release
+echo [9/13] Build TigerClaw.Hook.Native Release
 "%MSBUILD%" "%HOOK_NATIVE_PROJECT%" /p:Configuration=Release /p:Platform=x64 /p:OutDir="%HOOK_NATIVE_OUT%\\" /v:minimal
 if errorlevel 1 (
     echo ERROR: TigerClaw.Hook.Native Release build failed.
@@ -257,7 +294,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [9/12] Build TigerClaw TSF x64/Win32 Release
+echo [10/13] Build TigerClaw TSF x64/Win32 Release
 call :BuildTsfRelease x64
 if errorlevel 1 (
     echo ERROR: TigerClaw TSF x64 Release build failed.
@@ -270,7 +307,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [10/12] Copy artifacts to release directory
+echo [11/13] Copy artifacts to release directory
 if not exist "%RELEASE_DIR%" mkdir "%RELEASE_DIR%"
 if not exist "%RELEASE_TSF_X64%" mkdir "%RELEASE_TSF_X64%"
 if not exist "%RELEASE_TSF_X86%" mkdir "%RELEASE_TSF_X86%"
@@ -283,9 +320,9 @@ call :RequireFile "%OVERLAY_OUT%\TigerClaw.Overlay.exe" "TigerClaw.Overlay.exe" 
 call :RequireFile "%DIALOG_OUT%\TigerClaw.Dialog.exe" "TigerClaw.Dialog.exe" || exit /b 1
 call :RequireFile "%SENTENCE_OUT%\TigerClaw.Sentence.exe" "TigerClaw.Sentence.exe" || exit /b 1
 call :RequireFile "%SENTENCE_OUT%\onnxruntime.dll" "sentence onnxruntime.dll" || exit /b 1
-call :RequireFile "%SENTENCE_MODEL_ROOT%\sentence-ngram.bin" "sentence-ngram.bin" || exit /b 1
-call :RequireFile "%SENTENCE_MODEL_ROOT%\sentence-transformer.onnx" "sentence-transformer.onnx" || exit /b 1
-call :RequireFile "%SENTENCE_DATA_ROOT%\vocabulary.json" "sentence vocabulary.json" || exit /b 1
+call :RequireFile "%PROTECTED_NGRAM%" "protected sentence n-gram model" || exit /b 1
+call :RequireFile "%PROTECTED_TRANSFORMER%" "protected sentence transformer model" || exit /b 1
+call :RequireFile "%PROTECTED_VOCABULARY%" "protected sentence vocabulary" || exit /b 1
 call :RequireFile "%HOOK_NATIVE_OUT%\TigerClaw.Hook.Native.exe" "TigerClaw.Hook.Native.exe" || exit /b 1
 call :RequireFile "%TSF_X64_DLL%" "TigerClaw.dll x64" || exit /b 1
 call :RequireFile "%TSF_X86_DLL%" "TigerClaw.dll Win32" || exit /b 1
@@ -302,13 +339,16 @@ call :CopyFileStrict "%DIALOG_OUT%\TigerClaw.Dialog.exe" "%RELEASE_DIR%\TigerCla
 if exist "%DIALOG_OUT%\TigerClaw.Dialog.exe.config" call :CopyFileStrict "%DIALOG_OUT%\TigerClaw.Dialog.exe.config" "%RELEASE_DIR%\TigerClaw.Dialog.exe.config" || exit /b 1
 if exist "%DIALOG_OUT%\TigerClaw.Dialog.pdb" del /q "%RELEASE_DIR%\TigerClaw.Dialog.pdb" >nul 2>&1
 
-for %%F in (TigerClaw.Sentence.exe TigerClaw.Sentence.exe.config Microsoft.ML.OnnxRuntime.dll System.Buffers.dll System.Memory.dll System.Numerics.Tensors.dll System.Numerics.Vectors.dll System.Runtime.CompilerServices.Unsafe.dll onnxruntime.dll onnxruntime_providers_shared.dll) do (
+for %%F in (TigerClaw.Sentence.exe TigerClaw.Sentence.exe.config TigerClaw.Shared.dll Microsoft.ML.OnnxRuntime.dll System.Buffers.dll System.Memory.dll System.Numerics.Tensors.dll System.Numerics.Vectors.dll System.Runtime.CompilerServices.Unsafe.dll onnxruntime.dll onnxruntime_providers_shared.dll) do (
     if exist "%SENTENCE_OUT%\%%F" call :CopyFileStrict "%SENTENCE_OUT%\%%F" "%RELEASE_SENTENCE%\%%F" || exit /b 1
 )
-call :CopyFileStrict "%SENTENCE_MODEL_ROOT%\sentence-transformer.onnx" "%RELEASE_SENTENCE%\Models\sentence-transformer.onnx" || exit /b 1
+if exist "%RELEASE_MODELS%\sentence-ngram.bin" del /q "%RELEASE_MODELS%\sentence-ngram.bin"
+if exist "%RELEASE_SENTENCE%\Models\sentence-transformer.onnx" del /q "%RELEASE_SENTENCE%\Models\sentence-transformer.onnx"
+if exist "%RELEASE_SENTENCE%\Models\sentence-vocabulary.json" del /q "%RELEASE_SENTENCE%\Models\sentence-vocabulary.json"
+call :CopyFileStrict "%PROTECTED_TRANSFORMER%" "%RELEASE_SENTENCE%\Models\sentence-transformer.tcmodel" || exit /b 1
 if exist "%SENTENCE_MODEL_ROOT%\sentence-transformer.json" call :CopyFileStrict "%SENTENCE_MODEL_ROOT%\sentence-transformer.json" "%RELEASE_SENTENCE%\Models\sentence-transformer.json" || exit /b 1
-call :CopyFileStrict "%SENTENCE_DATA_ROOT%\vocabulary.json" "%RELEASE_SENTENCE%\Models\sentence-vocabulary.json" || exit /b 1
-call :CopyFileStrict "%SENTENCE_MODEL_ROOT%\sentence-ngram.bin" "%RELEASE_MODELS%\sentence-ngram.bin" || exit /b 1
+call :CopyFileStrict "%PROTECTED_VOCABULARY%" "%RELEASE_SENTENCE%\Models\sentence-vocabulary.tcmodel" || exit /b 1
+call :CopyFileStrict "%PROTECTED_NGRAM%" "%RELEASE_MODELS%\sentence-ngram.tcmodel" || exit /b 1
 
 call :CopyFileStrict "%HOOK_NATIVE_OUT%\TigerClaw.Hook.Native.exe" "%RELEASE_DIR%\TigerClaw.exe" || exit /b 1
 if exist "%HOOK_NATIVE_OUT%\TigerClaw.Hook.Native.pdb" del /q "%RELEASE_DIR%\TigerClaw.pdb" >nul 2>&1
@@ -325,7 +365,7 @@ if exist "%RELEASE_DIR%\install.bat" del /q "%RELEASE_DIR%\install.bat" >nul 2>&
 if exist "%RELEASE_DIR%\uninstall.bat" del /q "%RELEASE_DIR%\uninstall.bat" >nul 2>&1
 
 echo.
-echo [11/12] Package release archive
+echo [12/13] Package release archive
 call "%PACK_SCRIPT%"
 if errorlevel 1 (
     echo ERROR: Release packaging failed.
@@ -333,7 +373,7 @@ if errorlevel 1 (
 )
 
 echo.
-echo [12/12] Done
+echo [13/13] Done
 echo Publish succeeded.
 echo   Core    : %RELEASE_DIR%\TigerClaw.Core.exe
 echo   Overlay : %RELEASE_DIR%\TigerClaw.Overlay.exe

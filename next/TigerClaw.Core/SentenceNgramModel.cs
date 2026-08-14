@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using TigerClaw.Shared;
 
 namespace TigerClaw.Core
 {
@@ -63,8 +64,23 @@ namespace TigerClaw.Core
 
         public static SentenceNgramModel Load(string path)
         {
+            if (string.Equals(Path.GetExtension(path), ".tcmodel", StringComparison.OrdinalIgnoreCase))
+            {
+                return EncryptedModelReader.Read(
+                    path,
+                    EncryptedModelKind.SentenceNgram,
+                    LoadFromStream);
+            }
+
             using (var stream = File.OpenRead(path))
-            using (var reader = new BinaryReader(stream, System.Text.Encoding.UTF8, leaveOpen: false))
+            {
+                return LoadFromStream(stream);
+            }
+        }
+
+        private static SentenceNgramModel LoadFromStream(Stream stream)
+        {
+            using (var reader = new BinaryReader(stream, System.Text.Encoding.UTF8, leaveOpen: true))
             {
                 string magic = new string(reader.ReadChars(Magic.Length));
                 if (!string.Equals(magic, Magic, StringComparison.Ordinal))
@@ -108,7 +124,7 @@ namespace TigerClaw.Core
                 ulong[] trigramContextKeys = ReadUInt64Array(reader, trigramContextCount);
                 long[] trigramContextCounts = ReadInt64Array(reader, trigramContextCount);
 
-                if (stream.Position != stream.Length)
+                if (reader.BaseStream.ReadByte() != -1)
                 {
                     throw new InvalidDataException("Sentence n-gram model has trailing data.");
                 }
@@ -166,7 +182,9 @@ namespace TigerClaw.Core
         private static IEnumerable<string> CandidatePaths(string baseDirectory)
         {
             string root = string.IsNullOrEmpty(baseDirectory) ? AppContext.BaseDirectory : baseDirectory;
+            yield return Path.Combine(root, "Models", "sentence-ngram.tcmodel");
             yield return Path.Combine(root, "Models", "sentence-ngram.bin");
+            yield return Path.Combine(root, "sentence-ngram.tcmodel");
             yield return Path.Combine(root, "sentence-ngram.bin");
         }
 
