@@ -102,7 +102,7 @@ set "SENTENCE_MODEL_ROOT=C:\Archive\tigerclaw_sentence_ml\runtime"
 set "SENTENCE_DATA_ROOT=C:\Archive\tigerclaw_sentence_ml\pilot200m"
 set "MODEL_PROTECTION_KEY=%SENTENCE_MODEL_ROOT%\model-protection.key"
 set "PROTECTED_MODEL_OUT=%ROOT%\next\_run\Release\protected-models"
-set "PROTECTED_NGRAM=%PROTECTED_MODEL_OUT%\sentence-ngram.tcmodel"
+set "PROTECTED_NGRAM=%PROTECTED_MODEL_OUT%\sentence-ngram-v2.tcmodel"
 set "PROTECTED_TRANSFORMER=%PROTECTED_MODEL_OUT%\sentence-transformer.tcmodel"
 set "PROTECTED_VOCABULARY=%PROTECTED_MODEL_OUT%\sentence-vocabulary.tcmodel"
 set "ORT_NATIVE_ROOT=%LocalAppData%\TigerClawML\venv-directml\Lib\site-packages\onnxruntime\capi"
@@ -239,7 +239,7 @@ if exist "%ORT_NATIVE_ROOT%\onnxruntime_providers_shared.dll" copy /Y "%ORT_NATI
 echo.
 echo [7/13] Protect sentence models
 if not exist "%PROTECTED_MODEL_OUT%" mkdir "%PROTECTED_MODEL_OUT%"
-powershell -NoProfile -ExecutionPolicy Bypass -File "%MODEL_PROTECTION_SCRIPT%" -Source "%SENTENCE_MODEL_ROOT%\sentence-ngram.bin" -Destination "%PROTECTED_NGRAM%" -Kind SentenceNgram -KeyFile "%MODEL_PROTECTION_KEY%"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%MODEL_PROTECTION_SCRIPT%" -Source "%SENTENCE_MODEL_ROOT%\sentence-ngram-v2.bin" -Destination "%PROTECTED_NGRAM%" -Kind SentenceNgram -KeyFile "%MODEL_PROTECTION_KEY%"
 if errorlevel 1 exit /b 1
 powershell -NoProfile -ExecutionPolicy Bypass -File "%MODEL_PROTECTION_SCRIPT%" -Source "%SENTENCE_MODEL_ROOT%\sentence-transformer.onnx" -Destination "%PROTECTED_TRANSFORMER%" -Kind SentenceTransformer -KeyFile "%MODEL_PROTECTION_KEY%"
 if errorlevel 1 exit /b 1
@@ -343,12 +343,14 @@ for %%F in (TigerClaw.Sentence.exe TigerClaw.Sentence.exe.config TigerClaw.Share
     if exist "%SENTENCE_OUT%\%%F" call :CopyFileStrict "%SENTENCE_OUT%\%%F" "%RELEASE_SENTENCE%\%%F" || exit /b 1
 )
 if exist "%RELEASE_MODELS%\sentence-ngram.bin" del /q "%RELEASE_MODELS%\sentence-ngram.bin"
+if exist "%RELEASE_MODELS%\sentence-ngram.tcmodel" del /q "%RELEASE_MODELS%\sentence-ngram.tcmodel"
+if exist "%RELEASE_MODELS%\sentence-ngram-v2.bin" del /q "%RELEASE_MODELS%\sentence-ngram-v2.bin"
 if exist "%RELEASE_SENTENCE%\Models\sentence-transformer.onnx" del /q "%RELEASE_SENTENCE%\Models\sentence-transformer.onnx"
 if exist "%RELEASE_SENTENCE%\Models\sentence-vocabulary.json" del /q "%RELEASE_SENTENCE%\Models\sentence-vocabulary.json"
 call :CopyFileStrict "%PROTECTED_TRANSFORMER%" "%RELEASE_SENTENCE%\Models\sentence-transformer.tcmodel" || exit /b 1
 if exist "%SENTENCE_MODEL_ROOT%\sentence-transformer.json" call :CopyFileStrict "%SENTENCE_MODEL_ROOT%\sentence-transformer.json" "%RELEASE_SENTENCE%\Models\sentence-transformer.json" || exit /b 1
 call :CopyFileStrict "%PROTECTED_VOCABULARY%" "%RELEASE_SENTENCE%\Models\sentence-vocabulary.tcmodel" || exit /b 1
-call :CopyFileStrict "%PROTECTED_NGRAM%" "%RELEASE_MODELS%\sentence-ngram.tcmodel" || exit /b 1
+call :CopyFileStrict "%PROTECTED_NGRAM%" "%RELEASE_MODELS%\sentence-ngram-v2.tcmodel" || exit /b 1
 
 call :CopyFileStrict "%HOOK_NATIVE_OUT%\TigerClaw.Hook.Native.exe" "%RELEASE_DIR%\TigerClaw.exe" || exit /b 1
 if exist "%HOOK_NATIVE_OUT%\TigerClaw.Hook.Native.pdb" del /q "%RELEASE_DIR%\TigerClaw.pdb" >nul 2>&1

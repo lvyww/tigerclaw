@@ -57,6 +57,7 @@ namespace TigerClaw.Core
         public void Dispose()
         {
             _sentenceRerankClient?.Dispose();
+            _engine?.Dispose();
         }
 
         private void OnSentenceRerankResult(long generation, string rawCode, double[] scores)

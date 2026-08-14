@@ -249,11 +249,17 @@ def decode_code_lattice(
                     score = item.score
                     previous2 = item.previous2
                     previous1 = item.previous1
-                    for character in candidate.text:
-                        score += language_model.log_probability(
-                            previous2, previous1, character
-                        )
-                        previous2, previous1 = previous1, character
+                    score_candidate = getattr(language_model, "score_candidate", None)
+                    if callable(score_candidate):
+                        score += score_candidate(item.text, candidate.text)
+                        for character in candidate.text:
+                            previous2, previous1 = previous1, character
+                    else:
+                        for character in candidate.text:
+                            score += language_model.log_probability(
+                                previous2, previous1, character
+                            )
+                            previous2, previous1 = previous1, character
                     if not selected_rank:
                         score -= rank_penalty * math.log1p(candidate.rank - 1)
                     destination.append(
@@ -271,16 +277,23 @@ def decode_code_lattice(
         previous = completed_by_text.get(item.text)
         if previous is None or item.score > previous.score:
             completed_by_text[item.text] = item
-    completed = [
-        BeamItem(
-            item.score
-            + language_model.log_probability(item.previous2, item.previous1, EOS),
-            item.text,
-            item.previous2,
-            item.previous1,
+    score_end = getattr(language_model, "score_end", None)
+    completed = []
+    for item in completed_by_text.values():
+        if callable(score_end):
+            final_score = item.score + score_end(item.text)
+        else:
+            final_score = item.score + language_model.log_probability(
+                item.previous2, item.previous1, EOS
+            )
+        completed.append(
+            BeamItem(
+                final_score,
+                item.text,
+                item.previous2,
+                item.previous1,
+            )
         )
-        for item in completed_by_text.values()
-    ]
     if not completed:
         raise ExperimentError("当前编码还不能完整切分为最优单字码或词语编码。")
     completed.sort(key=lambda item: item.score, reverse=True)

@@ -2,14 +2,13 @@
 {
     public static class BuildInfo
     {
-        public const string VersionLabel = "2026.08.11-1533";
-        public const string Commit = "a2c58427";
-        public const string BuildUtc = "2026-08-11T15:33:41Z";
+        public const string VersionLabel = "2026.08.14-1518";
+        public const string Commit = "966637b2";
+        public const string BuildUtc = "2026-08-14T15:18:51Z";
         public const string TrialExpireUtc = "2027-01-01T16:00:00Z";
 
         internal static byte[] GetModelProtectionKey()
         {
-            // Replaced with the release key by publish.bat. Plaintext development models do not use it.
             return new byte[32];
         }
     }

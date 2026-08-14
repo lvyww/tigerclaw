@@ -1,8 +1,8 @@
 # 整句神经模型离线实验
 
 这些工具用于离线数据处理、训练、评测和导出。TigerClaw.Core 使用导出的
-`sentence-ngram.bin`，可选的 `TigerClaw.Sentence.exe` 使用导出的 ONNX 模型；
-训练过程本身不进入输入法运行时。
+`sentence-ngram-v2.bin`（发布时为受保护的 `.tcmodel`），可选的
+`TigerClaw.Sentence.exe` 使用导出的 ONNX 模型；训练过程本身不进入输入法运行时。
 
 ## 工具
 
@@ -12,8 +12,12 @@
 - `train_sentence_neural.py`：训练、验证和可恢复 checkpoint。
 - `export_sentence_neural.py`：去除优化器状态，导出紧凑推理模型。
 - `export_sentence_neural_onnx.py`：把推理 checkpoint 导出为独立进程使用的 ONNX 模型。
-- `export_sentence_ngram_binary.py`：把实验 JSON n-gram 转为 Core 使用的紧凑二进制模型。
+- `export_sentence_ngram_binary.py`：把实验 JSON n-gram 转为旧版紧凑二进制模型，仅供历史离线对比。
 - `sentence_neural_reranker.py`：批量计算完整候选句的神经语言分。
+- `test_sentence_qwen.py`：使用本地 Qwen3 Base 模型独立比较候选句概率，不连接输入法运行时。
+- `benchmark_sentence_gram.py`：用同一套长编码、码表和 Beam Search 批量比较现有字符三元模型与 Rime BGC+BGW。
+- `prepare_sentence_benchmark_cases.py`：从独立验证语料生成按来源均衡、按原始记录限额的扩大测试集。
+- `rime_gram_model.py`：只读映射 `Rime::Grammar/1.0` 的 BGC/BGW 实验加载器。
 - `evaluate_sentence_decoder.py`：比较字符、词频和神经重排排名。
 - `evaluate_sentence_neural_pools.py`：在 Windows/DirectML 上重排由 WSL 导出的候选池。
 - `try_sentence_input.py`：独立的 Windows 图形实验程序，按单字最优码和词语编码自动切分长编码并实时显示候选。
@@ -32,6 +36,137 @@ model:  C:\Archive\tigerclaw_sentence_ml\model10m
 
 Python 是隔离的 Windows x64 3.12 环境，通过 `torch-directml` 使用 Adreno GPU；
 没有加入 PATH，也不替换系统 Python。
+
+## Qwen3 候选评分实验
+
+下载 `Qwen/Qwen3-0.6B-Base` 后，可在已有 Windows DirectML 隔离环境中运行：
+
+```bash
+/mnt/c/Users/yc/AppData/Local/TigerClawML/venv-directml/Scripts/python.exe \
+  tools/test_sentence_qwen.py --device cpu --dtype float32 --show-tokens
+```
+
+程序同时显示整句总对数概率、token 均分和汉字均分。它只读取本地模型，
+不连接 Core，也不会改动输入法配置。当前设备上的短句批量评分以 CPU 更快；
+`--device directml` 可用于对照测试，但不建议使用 DirectML FP16。
+
+## Rime BGC+BGW 离线对比
+
+下面的实验会从每条原始长编码重新构建完整格图并分别解码，不是只重排现成的
+前若干候选。两组使用相同码表、Beam 宽度和选重惩罚；不会启动或修改 Core：
+
+```bash
+python3 tools/benchmark_sentence_gram.py \
+  --max-cases 0 \
+  --output /mnt/c/Archive/tigerclaw_sentence_ml/baseline/bgc-bgw-character-vs-trigram-test-1000.json
+```
+
+默认逐字累计 BGC+BGW 搭配分，权重为调参集粗略选出的 `BGC=0.2`、`BGW=1.0`。
+`--gram-mode boundary` 可模拟更接近 Rime 插件的“每个词典候选边界查询一次”方式。
+2026-08-14 在 1000 条独立测试句加 1 条手工回归句上的结果为：现有三元模型
+Top-1 97.60%、MRR 0.9859、平均 25.78 ms；BGC+BGW Top-1 67.13%、MRR
+0.7627、平均 25.28 ms。这里的时间只统计已加载模型后的 Python 解码，不代表
+以后原生运行时的启动和内存开销。已知的“不带一丝矫揉造作”由错误首选
+“不蒙良为矫揉造作”改善为“**不带一丝**是远揉造作”，但正确整句仍排第二。
+因此 BGC+BGW 适合作为补充搭配特征继续试验，不适合直接替换现有三元模型。
+
+保留三元概率并把 BGW 作为小权重搭配奖励的实验命令为：
+
+```bash
+python3 tools/benchmark_sentence_gram.py \
+  --experiment trigram-bgw \
+  --max-cases 0 \
+  --output /mnt/c/Archive/tigerclaw_sentence_ml/baseline/trigram-bgw-002-vs-trigram-test-1000.json
+```
+
+在200条调参句上，`BGW=0.02` 和 `0.05` 没有改变任何首选；从 `0.8` 开始
+出现净负收益。取较保守的 `0.02` 后，在同一批1000条独立测试句加手工回归句
+上，Top-1 从97.60%升至97.70%，MRR从0.9859升至0.9866：原测试集首选
+全部保持不变，并将“不带一丝矫揉造作”从第二候选提升为首选。因此当前实验
+支持“现有三元模型为主、BGW低权重补充”，但在更多真实错例验证前仍不接入运行时。
+
+扩大测试集可用下面两条命令复现。Benchmark 默认使用16个工作进程；传入
+`--workers 1` 可串行执行并验证结果一致性：
+
+```bash
+python3 tools/prepare_sentence_benchmark_cases.py
+
+python3 tools/benchmark_sentence_gram.py \
+  --experiment trigram-bgw \
+  --cases /mnt/c/Archive/tigerclaw_sentence_ml/baseline/tiger-sentence-validation-10000-cases.json \
+  --max-cases 0 \
+  --output /mnt/c/Archive/tigerclaw_sentence_ml/baseline/trigram-bgw-002-vs-trigram-validation-10000.json
+```
+
+该测试集使用 webtext、news、baike 的独立验证文件。wiki 没有单独验证文件，
+所以计数器固定保留每100条中的第100条不训练，验证集只从这1%保留记录取样。
+四类来源各2500条，每条原始记录最多取1句，并排除原调参和测试集的2000条。
+16进程完整运行时，各工作进程解码CPU时间之和不能当作单句墙钟延迟。
+
+## Windows全量三元计数器
+
+`SentenceNgramTrainer` 是独立的 Windows `.NET 10` 离线工具。它使用有界队列、
+16个消费者的局部计数字典、有序运行段和多路归并；不连接Core，也不修改当前
+运行时模型。完整计数命令为：
+
+```batch
+dotnet run --project tools\SentenceNgramTrainer\TigerClaw.SentenceNgramTrainer.csproj ^
+  -c Release -- ^
+  --corpus-root C:\Archive\brightmart_nlp_chinese_corpus ^
+  --output C:\Archive\tigerclaw_sentence_ml\trainer_v2\full-counts-w16 ^
+  --workers 16 --entries-per-run 2000000 --merge-fan-in 64 ^
+  --min-bigram-count 1 --min-trigram-count 1
+```
+
+2026-08-14 的全量运行扫描15.7 GB输入和约902万条记录，处理54.12亿个
+加权字符转移，用时221.2秒，峰值工作集3.66 GiB；输出789万个二元和
+1.3065亿个未裁剪三元计数，共1.6 GB。wiki固定保留1%记录不参与训练，供
+后续独立验证。`--sample-modulus 100` 可扫描全部文件并只处理1%记录；该基准
+用时16.6秒、峰值1.66 GiB。1线程和16线程的小样本输出已做字节级一致性验证。
+
+## 全量Modified Kneser-Ney模型
+
+`build-model` 从上述精确计数生成字级三元 Modified Kneser-Ney 模型。它根据
+count-of-counts估计三档折扣，并使用续接概率作为二元和一元回退。裁掉的观察项
+所占概率质量会重新分配给回退项，因此任意裁剪阈值下每个上下文仍保持归一化。
+
+```batch
+dotnet run --project tools\SentenceNgramTrainer\TigerClaw.SentenceNgramTrainer.csproj ^
+  -c Release -- build-model ^
+  --counts C:\Archive\tigerclaw_sentence_ml\trainer_v2\full-counts-w16 ^
+  --output C:\Archive\tigerclaw_sentence_ml\trainer_v2\full-kn-m30-v2 ^
+  --min-bigram-export-count 30 --min-trigram-export-count 30
+```
+
+使用四类来源各2500条的非重叠验证集，并额外加入“不带一丝矫揉造作”回归句，
+Beam Width固定为2000。结果如下；修正/退化是相对原20000条采样三元模型的
+Top-1变化次数。
+
+| 最低导出计数 | 文件大小 | Top-1 | MRR | 修正 | 退化 |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 原采样三元 | 约14 MB | 95.17% | 0.97075 | - | - |
+| 3 | 797 MB | 99.45% | 0.99685 | 446 | 18 |
+| 10 | 390 MB | 99.27% | 0.99579 | 436 | 26 |
+| 20 | 273 MB | 98.93% | 0.99389 | 423 | 47 |
+| 30 | 226 MB | 98.82% | 0.99320 | 420 | 55 |
+
+当前离线推荐档是计数阈值30：它处于此前150--300 MB目标内，文件比阈值20
+减少约17%，Top-1只降低0.11个百分点，同时仍比原模型高3.65个百分点并修复
+手工回归句。阈值20保留为偏准确率的备选，阈值3则是准确率上限参考，不适合
+作为当前安装包默认模型。Core现已只读取该V2格式：开发版直接映射原始文件，
+发布版验证并解密到匿名页文件映射，不再兼容旧版紧凑三元模型。ARM64开发发布
+先使用未加密模型验证真实输入效果，x86/x64正式发布仍使用受保护容器。
+
+完整对比命令：
+
+```bash
+python3 tools/benchmark_sentence_gram.py \
+  --experiment kneser-ney \
+  --kneser-ney /mnt/c/Archive/tigerclaw_sentence_ml/trainer_v2/full-kn-m30-v2/sentence-ngram-v2.bin \
+  --cases /mnt/c/Archive/tigerclaw_sentence_ml/baseline/tiger-sentence-validation-10000-cases.json \
+  --workers 16 --max-cases 0 \
+  --output /mnt/c/Archive/tigerclaw_sentence_ml/baseline/kneser-ney-m30-vs-trigram-validation-10000.json
+```
 
 ## 主要命令
 
@@ -60,9 +195,8 @@ checkpoint 暂存缓冲长期占用共享内存。
 ## 运行时模型导出
 
 ```bash
-python3 tools/export_sentence_ngram_binary.py \
-  --input /mnt/c/Archive/tigerclaw_sentence_ml/baseline/ngram-20000.json.gz \
-  --output /mnt/c/Archive/tigerclaw_sentence_ml/runtime/sentence-ngram.bin
+cp /mnt/c/Archive/tigerclaw_sentence_ml/trainer_v2/full-kn-m30-v2/sentence-ngram-v2.bin \
+  /mnt/c/Archive/tigerclaw_sentence_ml/runtime/sentence-ngram-v2.bin
 
 /mnt/c/Users/yc/AppData/Local/TigerClawML/venv-directml/Scripts/python.exe \
   tools/export_sentence_neural_onnx.py \
@@ -70,6 +204,7 @@ python3 tools/export_sentence_ngram_binary.py \
   --output C:/Archive/tigerclaw_sentence_ml/runtime/sentence-transformer.onnx
 ```
 
+Core只识别V2文件名和V2格式，不再读取旧版 `sentence-ngram.bin`。
 `next/build_next.bat` 从上述 runtime 目录复制模型，并从隔离 Python 环境的
 `onnxruntime/capi` 复制 Windows x64 原生库。首次准备环境时安装与托管程序集
 同版本的 CPU wheel：

@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.IO.Compression;
+using System.IO.MemoryMappedFiles;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -46,6 +47,49 @@ namespace TigerClaw.Shared
                 expectedKind,
                 info,
                 stream => ReadExactly(stream, (int)info.PlaintextLength));
+        }
+
+        public static MemoryMappedFile ReadToMemoryMappedFile(
+            string path,
+            EncryptedModelKind expectedKind,
+            out long plaintextLength)
+        {
+            ContainerInfo info = ReadAndVerify(path, expectedKind);
+            if (info.PlaintextLength <= 0)
+            {
+                throw new InvalidDataException("Encrypted model payload is empty.");
+            }
+
+            MemoryMappedFile mapping = MemoryMappedFile.CreateNew(
+                null,
+                info.PlaintextLength,
+                MemoryMappedFileAccess.ReadWrite);
+            try
+            {
+                ReadPayload(
+                    path,
+                    expectedKind,
+                    info,
+                    stream =>
+                    {
+                        using (MemoryMappedViewStream output = mapping.CreateViewStream(
+                            0,
+                            info.PlaintextLength,
+                            MemoryMappedFileAccess.Write))
+                        {
+                            CopyExactly(stream, output, info.PlaintextLength);
+                            output.Flush();
+                        }
+                        return true;
+                    });
+                plaintextLength = info.PlaintextLength;
+                return mapping;
+            }
+            catch
+            {
+                mapping.Dispose();
+                throw;
+            }
         }
 
         private static T ReadPayload<T>(
@@ -193,6 +237,24 @@ namespace TigerClaw.Shared
                 offset += read;
             }
             return result;
+        }
+
+        private static void CopyExactly(Stream input, Stream output, long count)
+        {
+            var buffer = new byte[1024 * 1024];
+            long remaining = count;
+            while (remaining > 0)
+            {
+                int requested = (int)Math.Min(buffer.Length, remaining);
+                int read = input.Read(buffer, 0, requested);
+                if (read <= 0)
+                {
+                    throw new EndOfStreamException("Encrypted model ended unexpectedly.");
+                }
+                output.Write(buffer, 0, read);
+                remaining -= read;
+            }
+            Array.Clear(buffer, 0, buffer.Length);
         }
 
         private static bool FixedTimeEquals(byte[] first, byte[] second)

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Text;
 using System.Threading;
 using TigerClaw.Core;
 
@@ -40,6 +41,7 @@ namespace TigerClaw.Core.Tests
                 SentenceDecoderRejectsEmbeddedBareOneKeyCharacter();
                 SentenceDecoderRequiresExplicitSelectionForEveryCode();
                 SentenceDecoderUsesOnlyTheOptimalCharacterCode();
+                SentenceNgramV2LoadsFromMappedFile();
                 SentenceEngineCommitsDecodedCandidate();
                 SentenceEngineDisplaysPrimarySegmentation();
                 SentenceEngineHonorsSelectionSymbolSettings();
@@ -289,6 +291,43 @@ namespace TigerClaw.Core.Tests
                 Console.WriteLine((indexValue + 1) + "\t" + candidate.Text + "\t" + candidate.FinalScore.ToString("F4"));
             }
             return result.Candidates.Length > 0 ? 0 : 2;
+        }
+
+        private static void SentenceNgramV2LoadsFromMappedFile()
+        {
+            string path = Path.Combine(Path.GetTempPath(), "tigerclaw-ngram-v2-" + Guid.NewGuid().ToString("N") + ".bin");
+            try
+            {
+                using (var writer = new BinaryWriter(File.Create(path), Encoding.UTF8, false))
+                {
+                    writer.Write(Encoding.ASCII.GetBytes("TCSKNM01"));
+                    writer.Write(1);
+                    writer.Write(2);
+                    writer.Write(0);
+                    writer.Write(0.1f);
+                    writer.Write((int)'a');
+                    writer.Write(0.9f);
+                    writer.Write((long)0);
+                    writer.Write(0);
+                    writer.Write((long)0);
+                    writer.Write((long)0);
+                }
+
+                using (SentenceNgramModel model = SentenceNgramModel.Load(path))
+                {
+                    double known = Math.Exp(model.LogProbability("\x02", "\x02", "a"));
+                    double unknown = Math.Exp(model.LogProbability("\x02", "\x02", "b"));
+                    True(Math.Abs(known - 0.9) < 1e-6, nameof(SentenceNgramV2LoadsFromMappedFile) + ".known");
+                    True(Math.Abs(unknown - 0.1) < 1e-6, nameof(SentenceNgramV2LoadsFromMappedFile) + ".unknown");
+                }
+            }
+            finally
+            {
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                }
+            }
         }
 
         private static int RunSentenceClientSmoke()

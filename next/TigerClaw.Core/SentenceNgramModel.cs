@@ -1,243 +1,384 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
+using System.IO.MemoryMappedFiles;
+using System.Text;
 using TigerClaw.Shared;
 
 namespace TigerClaw.Core
 {
-    internal sealed class SentenceNgramModel : ISentenceLanguageModel
+    internal sealed class SentenceNgramModel : ISentenceLanguageModel, IDisposable
     {
-        private const string Magic = "TCSNGRM1";
-        private readonly Dictionary<string, int> _tokenIds;
-        private readonly long[] _unigramCounts;
-        private readonly long _unigramTotal;
-        private readonly ulong[] _bigramKeys;
-        private readonly int[] _bigramCounts;
-        private readonly long[] _bigramContexts;
-        private readonly ulong[] _trigramKeys;
-        private readonly int[] _trigramCounts;
-        private readonly ulong[] _trigramContextKeys;
-        private readonly long[] _trigramContextCounts;
+        private const string Magic = "TCSKNM01";
+        private const int Version = 1;
+        private const int ScalarBits = 21;
+        private const int ScalarMask = (1 << ScalarBits) - 1;
+        private const long MaximumModelLength = 4L * 1024 * 1024 * 1024;
 
-        private SentenceNgramModel(
-            Dictionary<string, int> tokenIds,
-            long[] unigramCounts,
-            long unigramTotal,
-            ulong[] bigramKeys,
-            int[] bigramCounts,
-            long[] bigramContexts,
-            ulong[] trigramKeys,
-            int[] trigramCounts,
-            ulong[] trigramContextKeys,
-            long[] trigramContextCounts)
+        private readonly MemoryMappedFile _mapping;
+        private readonly MemoryMappedViewAccessor _view;
+        private readonly long _length;
+        private readonly long _unigramOffset;
+        private readonly int _unigramCount;
+        private readonly long _bigramOffset;
+        private readonly long _bigramCount;
+        private readonly long _bigramContextOffset;
+        private readonly int _bigramContextCount;
+        private readonly long _trigramOffset;
+        private readonly long _trigramCount;
+        private readonly long _trigramContextOffset;
+        private readonly long _trigramContextCount;
+        private readonly float _unknownProbability;
+        private bool _disposed;
+
+        private SentenceNgramModel(MemoryMappedFile mapping, long length)
         {
-            _tokenIds = tokenIds;
-            _unigramCounts = unigramCounts;
-            _unigramTotal = unigramTotal;
-            _bigramKeys = bigramKeys;
-            _bigramCounts = bigramCounts;
-            _bigramContexts = bigramContexts;
-            _trigramKeys = trigramKeys;
-            _trigramCounts = trigramCounts;
-            _trigramContextKeys = trigramContextKeys;
-            _trigramContextCounts = trigramContextCounts;
+            _mapping = mapping ?? throw new ArgumentNullException(nameof(mapping));
+            if (length <= 0 || length > MaximumModelLength)
+            {
+                throw new InvalidDataException("Invalid sentence n-gram V2 model length.");
+            }
+
+            _length = length;
+            _view = mapping.CreateViewAccessor(0, length, MemoryMappedFileAccess.Read);
+            try
+            {
+                long position = 0;
+                string magic = ReadAscii(ref position, Magic.Length);
+                if (!string.Equals(magic, Magic, StringComparison.Ordinal))
+                {
+                    throw new InvalidDataException("Invalid sentence n-gram V2 model magic.");
+                }
+                if (ReadInt32(ref position) != Version)
+                {
+                    throw new InvalidDataException("Unsupported sentence n-gram V2 model version.");
+                }
+
+                _unigramCount = ReadNonNegativeInt32(ref position, "unigram");
+                _unigramOffset = ReserveSection(ref position, _unigramCount, 8, "unigram");
+
+                _bigramCount = ReadNonNegativeInt64(ref position, "bigram");
+                _bigramOffset = ReserveSection(ref position, _bigramCount, 12, "bigram");
+
+                _bigramContextCount = ReadNonNegativeInt32(ref position, "bigram context");
+                _bigramContextOffset = ReserveSection(
+                    ref position,
+                    _bigramContextCount,
+                    8,
+                    "bigram context");
+
+                _trigramCount = ReadNonNegativeInt64(ref position, "trigram");
+                _trigramOffset = ReserveSection(ref position, _trigramCount, 12, "trigram");
+
+                _trigramContextCount = ReadNonNegativeInt64(ref position, "trigram context");
+                _trigramContextOffset = ReserveSection(
+                    ref position,
+                    _trigramContextCount,
+                    12,
+                    "trigram context");
+
+                if (position != _length || _unigramCount == 0)
+                {
+                    throw new InvalidDataException("Sentence n-gram V2 model has invalid trailing data.");
+                }
+
+                _unknownProbability = LookupInt32(
+                    _unigramOffset,
+                    _unigramCount,
+                    0,
+                    0.0f);
+                if (!IsProbability(_unknownProbability) || _unknownProbability <= 0.0f)
+                {
+                    throw new InvalidDataException("Sentence n-gram V2 model has no unknown probability.");
+                }
+            }
+            catch
+            {
+                _view.Dispose();
+                throw;
+            }
         }
 
-        public static ISentenceLanguageModel LoadOrNeutral(string baseDirectory)
+        public static SentenceNgramModel LoadAvailable(string baseDirectory)
         {
             foreach (string path in CandidatePaths(baseDirectory))
             {
+                if (!File.Exists(path))
+                {
+                    continue;
+                }
+
                 try
                 {
-                    if (File.Exists(path))
-                    {
-                        return Load(path);
-                    }
+                    return Load(path);
                 }
-                catch
+                catch (Exception ex)
                 {
+                    Trace.TraceError("Failed to load sentence n-gram V2 model '{0}': {1}", path, ex.Message);
                 }
             }
 
-            return NeutralSentenceLanguageModel.Instance;
+            return null;
         }
 
         public static SentenceNgramModel Load(string path)
         {
-            if (string.Equals(Path.GetExtension(path), ".tcmodel", StringComparison.OrdinalIgnoreCase))
+            if (string.IsNullOrWhiteSpace(path))
             {
-                return EncryptedModelReader.Read(
-                    path,
-                    EncryptedModelKind.SentenceNgram,
-                    LoadFromStream);
+                throw new ArgumentException("Sentence n-gram V2 model path is required.", nameof(path));
             }
 
-            using (var stream = File.OpenRead(path))
+            MemoryMappedFile mapping = null;
+            try
             {
-                return LoadFromStream(stream);
+                long length;
+                if (string.Equals(Path.GetExtension(path), ".tcmodel", StringComparison.OrdinalIgnoreCase))
+                {
+                    mapping = EncryptedModelReader.ReadToMemoryMappedFile(
+                        path,
+                        EncryptedModelKind.SentenceNgram,
+                        out length);
+                }
+                else
+                {
+                    length = new FileInfo(path).Length;
+                    mapping = MemoryMappedFile.CreateFromFile(
+                        path,
+                        FileMode.Open,
+                        null,
+                        0,
+                        MemoryMappedFileAccess.Read);
+                }
+
+                var model = new SentenceNgramModel(mapping, length);
+                mapping = null;
+                return model;
             }
-        }
-
-        private static SentenceNgramModel LoadFromStream(Stream stream)
-        {
-            using (var reader = new BinaryReader(stream, System.Text.Encoding.UTF8, leaveOpen: true))
+            finally
             {
-                string magic = new string(reader.ReadChars(Magic.Length));
-                if (!string.Equals(magic, Magic, StringComparison.Ordinal))
-                {
-                    throw new InvalidDataException("Invalid sentence n-gram model magic.");
-                }
-
-                int version = reader.ReadInt32();
-                if (version != 1)
-                {
-                    throw new InvalidDataException("Unsupported sentence n-gram model version.");
-                }
-
-                int tokenCount = ReadCount(reader, "token");
-                var tokenIds = new Dictionary<string, int>(tokenCount, StringComparer.Ordinal);
-                for (int i = 0; i < tokenCount; i++)
-                {
-                    string token = reader.ReadString();
-                    tokenIds[token] = i;
-                }
-
-                var unigramCounts = new long[tokenCount];
-                long unigramTotal = 0;
-                for (int i = 0; i < tokenCount; i++)
-                {
-                    long count = reader.ReadInt64();
-                    unigramCounts[i] = count;
-                    unigramTotal += count;
-                }
-
-                int bigramCount = ReadCount(reader, "bigram");
-                ulong[] bigramKeys = ReadUInt64Array(reader, bigramCount);
-                int[] bigramCounts = ReadInt32Array(reader, bigramCount);
-                long[] bigramContexts = ReadInt64Array(reader, tokenCount);
-
-                int trigramCount = ReadCount(reader, "trigram");
-                ulong[] trigramKeys = ReadUInt64Array(reader, trigramCount);
-                int[] trigramCounts = ReadInt32Array(reader, trigramCount);
-
-                int trigramContextCount = ReadCount(reader, "trigram context");
-                ulong[] trigramContextKeys = ReadUInt64Array(reader, trigramContextCount);
-                long[] trigramContextCounts = ReadInt64Array(reader, trigramContextCount);
-
-                if (reader.BaseStream.ReadByte() != -1)
-                {
-                    throw new InvalidDataException("Sentence n-gram model has trailing data.");
-                }
-
-                return new SentenceNgramModel(
-                    tokenIds,
-                    unigramCounts,
-                    unigramTotal,
-                    bigramKeys,
-                    bigramCounts,
-                    bigramContexts,
-                    trigramKeys,
-                    trigramCounts,
-                    trigramContextKeys,
-                    trigramContextCounts);
+                mapping?.Dispose();
             }
         }
 
         public double LogProbability(string previous2, string previous1, string target)
         {
-            int targetId = ResolveToken(target);
-            double vocabularySize = Math.Max(_unigramCounts.Length, 1);
-            double unigramProbability = ((_unigramCounts[targetId]) + 0.1) /
-                                        (_unigramTotal + 0.1 * vocabularySize);
+            ThrowIfDisposed();
+            int first = ResolveScalar(previous2);
+            int second = ResolveScalar(previous1);
+            int third = ResolveScalar(target);
 
-            int previous1Id = ResolveToken(previous1);
-            ulong bigramKey = PackPair(previous1Id, targetId);
-            int bigramIndex = Array.BinarySearch(_bigramKeys, bigramKey);
-            int bigramCount = bigramIndex >= 0 ? _bigramCounts[bigramIndex] : 0;
-            double bigramProbability = (bigramCount + 5.0 * unigramProbability) /
-                                        (_bigramContexts[previous1Id] + 5.0);
+            double unigram = LookupInt32(
+                _unigramOffset,
+                _unigramCount,
+                third,
+                _unknownProbability);
+            double bigram = LookupUInt64(
+                _bigramOffset,
+                _bigramCount,
+                PackPair(second, third),
+                0.0f);
+            double bigramLambda = LookupInt32(
+                _bigramContextOffset,
+                _bigramContextCount,
+                second,
+                1.0f);
+            bigram += bigramLambda * unigram;
 
-            int previous2Id = ResolveToken(previous2);
-            ulong trigramKey = PackTriple(previous2Id, previous1Id, targetId);
-            int trigramIndex = Array.BinarySearch(_trigramKeys, trigramKey);
-            int trigramCount = trigramIndex >= 0 ? _trigramCounts[trigramIndex] : 0;
-            ulong contextKey = PackPair(previous2Id, previous1Id);
-            int contextIndex = Array.BinarySearch(_trigramContextKeys, contextKey);
-            long contextCount = contextIndex >= 0 ? _trigramContextCounts[contextIndex] : 0;
-            double trigramProbability = (trigramCount + 5.0 * bigramProbability) /
-                                        (contextCount + 5.0);
-            return Math.Log(Math.Max(trigramProbability, 1e-300));
+            ulong context = PackPair(first, second);
+            double trigram = LookupUInt64(
+                _trigramOffset,
+                _trigramCount,
+                PackTriple(first, second, third),
+                0.0f);
+            double trigramLambda = LookupUInt64(
+                _trigramContextOffset,
+                _trigramContextCount,
+                context,
+                1.0f);
+            trigram += trigramLambda * bigram;
+            return Math.Log(Math.Max(trigram, 1e-300));
         }
 
-        private int ResolveToken(string token)
+        public void Dispose()
         {
-            if (token != null && _tokenIds.TryGetValue(token, out int id))
+            if (_disposed)
             {
-                return id;
+                return;
             }
 
+            _disposed = true;
+            _view.Dispose();
+            _mapping.Dispose();
+        }
+
+        private static int ResolveScalar(string token)
+        {
+            if (string.IsNullOrEmpty(token))
+            {
+                return 0;
+            }
+            if (token.Length == 1)
+            {
+                return token[0];
+            }
+            if (token.Length == 2 && char.IsSurrogatePair(token, 0))
+            {
+                return char.ConvertToUtf32(token, 0);
+            }
             return 0;
         }
 
         private static IEnumerable<string> CandidatePaths(string baseDirectory)
         {
             string root = string.IsNullOrEmpty(baseDirectory) ? AppContext.BaseDirectory : baseDirectory;
-            yield return Path.Combine(root, "Models", "sentence-ngram.tcmodel");
-            yield return Path.Combine(root, "Models", "sentence-ngram.bin");
-            yield return Path.Combine(root, "sentence-ngram.tcmodel");
-            yield return Path.Combine(root, "sentence-ngram.bin");
+            yield return Path.Combine(root, "Models", "sentence-ngram-v2.tcmodel");
+            yield return Path.Combine(root, "Models", "sentence-ngram-v2.bin");
+            yield return Path.Combine(root, "sentence-ngram-v2.tcmodel");
+            yield return Path.Combine(root, "sentence-ngram-v2.bin");
         }
 
-        private static int ReadCount(BinaryReader reader, string name)
+        private string ReadAscii(ref long position, int count)
         {
-            int count = reader.ReadInt32();
-            if (count < 0 || count > 100000000)
+            EnsureAvailable(position, count, "header");
+            var bytes = new byte[count];
+            _view.ReadArray(position, bytes, 0, bytes.Length);
+            position += count;
+            return Encoding.ASCII.GetString(bytes);
+        }
+
+        private int ReadInt32(ref long position)
+        {
+            EnsureAvailable(position, 4, "header");
+            int value = _view.ReadInt32(position);
+            position += 4;
+            return value;
+        }
+
+        private long ReadInt64(ref long position)
+        {
+            EnsureAvailable(position, 8, "header");
+            long value = _view.ReadInt64(position);
+            position += 8;
+            return value;
+        }
+
+        private int ReadNonNegativeInt32(ref long position, string name)
+        {
+            int value = ReadInt32(ref position);
+            if (value < 0)
             {
                 throw new InvalidDataException("Invalid " + name + " count.");
             }
-
-            return count;
+            return value;
         }
 
-        private static ulong[] ReadUInt64Array(BinaryReader reader, int count)
+        private long ReadNonNegativeInt64(ref long position, string name)
         {
-            var values = new ulong[count];
-            for (int i = 0; i < count; i++)
+            long value = ReadInt64(ref position);
+            if (value < 0)
             {
-                values[i] = reader.ReadUInt64();
+                throw new InvalidDataException("Invalid " + name + " count.");
             }
-            return values;
+            return value;
         }
 
-        private static int[] ReadInt32Array(BinaryReader reader, int count)
+        private long ReserveSection(ref long position, long count, int recordSize, string name)
         {
-            var values = new int[count];
-            for (int i = 0; i < count; i++)
+            if (count > (_length - position) / recordSize)
             {
-                values[i] = reader.ReadInt32();
+                throw new InvalidDataException("Invalid " + name + " section length.");
             }
-            return values;
+            long offset = position;
+            position += count * recordSize;
+            return offset;
         }
 
-        private static long[] ReadInt64Array(BinaryReader reader, int count)
+        private void EnsureAvailable(long position, long count, string name)
         {
-            var values = new long[count];
-            for (int i = 0; i < count; i++)
+            if (position < 0 || count < 0 || position > _length - count)
             {
-                values[i] = reader.ReadInt64();
+                throw new InvalidDataException("Truncated sentence n-gram V2 " + name + ".");
             }
-            return values;
+        }
+
+        private float LookupInt32(long offset, int count, int key, float fallback)
+        {
+            int low = 0;
+            int high = count;
+            while (low < high)
+            {
+                int middle = low + ((high - low) / 2);
+                int value = _view.ReadInt32(offset + (long)middle * 8);
+                if (value < key)
+                {
+                    low = middle + 1;
+                }
+                else
+                {
+                    high = middle;
+                }
+            }
+            if (low >= count)
+            {
+                return fallback;
+            }
+            long position = offset + (long)low * 8;
+            return _view.ReadInt32(position) == key
+                ? _view.ReadSingle(position + 4)
+                : fallback;
+        }
+
+        private float LookupUInt64(long offset, long count, ulong key, float fallback)
+        {
+            long low = 0;
+            long high = count;
+            while (low < high)
+            {
+                long middle = low + ((high - low) / 2);
+                ulong value = _view.ReadUInt64(offset + middle * 12);
+                if (value < key)
+                {
+                    low = middle + 1;
+                }
+                else
+                {
+                    high = middle;
+                }
+            }
+            if (low >= count)
+            {
+                return fallback;
+            }
+            long position = offset + low * 12;
+            return _view.ReadUInt64(position) == key
+                ? _view.ReadSingle(position + 8)
+                : fallback;
+        }
+
+        private static bool IsProbability(float value)
+        {
+            return !float.IsNaN(value) && !float.IsInfinity(value) && value >= 0.0f && value <= 1.0f;
         }
 
         private static ulong PackPair(int first, int second)
         {
-            return ((ulong)(uint)first << 32) | (uint)second;
+            return ((ulong)(uint)first << ScalarBits) | ((uint)second & ScalarMask);
         }
 
         private static ulong PackTriple(int first, int second, int third)
         {
-            const int bits = 21;
-            return (uint)first | ((ulong)(uint)second << bits) | ((ulong)(uint)third << (bits * 2));
+            return ((ulong)(uint)first << (ScalarBits * 2)) |
+                   ((ulong)(uint)second << ScalarBits) |
+                   ((uint)third & ScalarMask);
+        }
+
+        private void ThrowIfDisposed()
+        {
+            if (_disposed)
+            {
+                throw new ObjectDisposedException(nameof(SentenceNgramModel));
+            }
         }
     }
 }

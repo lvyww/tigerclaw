@@ -11,7 +11,7 @@ using Forms = System.Windows.Forms;
 
 namespace TigerClaw.Core
 {
-    internal sealed class InputMethodEngine
+    internal sealed class InputMethodEngine : IDisposable
     {
         private enum CompositionState
         {
@@ -228,20 +228,44 @@ namespace TigerClaw.Core
                 if (!_state.GetSentenceInputEnabled())
                 {
                     _sentenceInputDecoder = null;
+                    DisposeSentenceLanguageModel();
                     _sentenceLanguageModel = null;
                     _sentenceDecodedLexiconVersion = -1;
                     return;
                 }
 
-                if (_sentenceLanguageModel == null ||
-                    ReferenceEquals(_sentenceLanguageModel, NeutralSentenceLanguageModel.Instance))
+                if (_sentenceLanguageModel == null)
                 {
-                    _sentenceLanguageModel = SentenceNgramModel.LoadOrNeutral(AppContext.BaseDirectory);
+                    _sentenceLanguageModel = SentenceNgramModel.LoadAvailable(AppContext.BaseDirectory);
+                }
+                if (_sentenceLanguageModel == null)
+                {
+                    _sentenceInputDecoder = null;
+                    _sentenceDecodedLexiconVersion = _state.LexiconVersion;
+                    return;
                 }
 
                 SentenceLexiconIndex lexicon = SentenceLexiconIndex.Build(_state.GetSentenceLexiconSnapshot());
                 _sentenceInputDecoder = new SentenceInputDecoder(lexicon, _sentenceLanguageModel);
                 _sentenceDecodedLexiconVersion = _state.LexiconVersion;
+            }
+        }
+
+        public void Dispose()
+        {
+            lock (_lock)
+            {
+                _sentenceInputDecoder = null;
+                DisposeSentenceLanguageModel();
+                _sentenceLanguageModel = null;
+            }
+        }
+
+        private void DisposeSentenceLanguageModel()
+        {
+            if (!_sentenceDecoderExternallyProvided && _sentenceLanguageModel is IDisposable disposable)
+            {
+                disposable.Dispose();
             }
         }
 
@@ -936,7 +960,7 @@ namespace TigerClaw.Core
 
             if (TryMapIdleCodeChar(vk, shift, out char idleCodeChar))
             {
-                if (_state.GetSentenceInputEnabled())
+                if (_state.GetSentenceInputEnabled() && _sentenceInputDecoder != null)
                 {
                     _compositionState = CompositionState.CnSentence;
                     StartSentenceInput(idleCodeChar);

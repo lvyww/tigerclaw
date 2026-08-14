@@ -65,7 +65,7 @@ Important behavior:
 
 - Core composition authority remains raw. Unlimited mixed Chinese/English input keeps the complete per-composition raw code, including letter casing, separately and full-decodes it on every edit; lexicon lookup is case-insensitive, while display and literal/raw commits preserve casing. The outward composition is derived as a resolved prefix plus an active code tail. Completed segments without candidates remain literal English in the resolved prefix.
 - Sentence input likewise keeps raw code authoritative. Its outward composition inserts spaces according to the currently selected candidate's segmentation; those spaces are display-only and never enter raw-code commits. Up/Down and, when Tab-clear is disabled, Tab/Shift+Tab traverse the visible sentence candidates without reordering them; Overlay highlights the selected index. Sentence mode leaves Ctrl+number shortcuts to the target application.
-- Sentence input is disabled by default. When enabled, Core rebuilds a variable-length lattice from the entire raw code after every edit on a latest-generation-only background worker, so TSF key responses never wait for Beam Search; deterministic commit/selection actions synchronously ensure the latest result when necessary. While decoding is pending TSF shows unsegmented raw code, then polls lightweight `query_state` updates so its composition segmentation follows the same current first candidate as Overlay, including later neural reranking. A one-key segment is legal only when it is the whole input; other segments consume at least two keys including an optional selector (`;` selects rank 2, `'` selects rank 3, digits select an explicit rank). Semicolon and quote selectors enter the code only when their corresponding selection settings are enabled. Multi-character lexicon entries are legal edges. Core's compact n-gram model is authoritative fallback; neural reranking is asynchronous and generation-checked.
+- Sentence input is disabled by default. When enabled, Core rebuilds a variable-length lattice from the entire raw code after every edit on a latest-generation-only background worker, so TSF key responses never wait for Beam Search; deterministic commit/selection actions synchronously ensure the latest result when necessary. While decoding is pending TSF shows unsegmented raw code, then polls lightweight `query_state` updates so its composition segmentation follows the same current first candidate as Overlay, including later neural reranking. A one-key segment is legal only when it is the whole input; other segments consume at least two keys including an optional selector (`;` selects rank 2, `'` selects rank 3, digits select an explicit rank). Semicolon and quote selectors enter the code only when their corresponding selection settings are enabled. Multi-character lexicon entries are legal edges. Core exclusively uses the full-corpus pruned Modified Kneser-Ney V2 model (`sentence-ngram-v2.*`); the old compact format is not loaded. Raw development models are file-mapped, while protected release containers are authenticated and decompressed into an anonymous page-file mapping. Neural reranking remains asynchronous and generation-checked.
 - TSF key requests carry a stable `client_session` + `event_id`. Test callbacks defer ambiguous failures to the matching real callback, and failed-key replay reuses the same identity; Core caches the first response so a timeout retry cannot execute a physical key twice.
 - Code masking (`编码伪装`) is display-only and is applied in `ProtocolHandler` before TSF/Overlay see outward display code.
 - Candidate display is owned by Overlay. TSF legacy candidate UI is not the active path.
@@ -132,7 +132,7 @@ Release output:
 release\
 release\x64\TigerClaw.dll
 release\Win32\TigerClaw.dll
-release\Models\sentence-ngram.tcmodel
+release\Models\sentence-ngram-v2.tcmodel
 release\sentence\TigerClaw.Sentence.exe
 release\虎爪输入法-限期YYYYMMDD.7z
 ```
@@ -174,6 +174,10 @@ stream the local brightmart corpus into a sampled character n-gram model and run
 two-code-constrained Beam Search, with optional large-word-frequency reranking;
 the `sentence_neural_*`/`prepare_sentence_neural_data.py` tools add an offline
 character-Transformer training and reranking path. See `tools/README_sentence_neural.md`.
+`tools/SentenceNgramTrainer/` is the Windows-native .NET 10 external-counting trainer;
+it uses bounded parallel local counters and sorted-run merging so the full corpus can
+be counted without loading every n-gram into memory. Its `build-model` subcommand
+exports the Modified Kneser-Ney V2 format consumed directly by Core.
 The active runtime uses the exported compact n-gram and ONNX artifacts, while training and evaluation remain offline.
 Generated runtime models remain outside Git under `C:\Archive\tigerclaw_sentence_ml\runtime`; debug and publish scripts copy them into `Models\` and `sentence\Models\`.
 

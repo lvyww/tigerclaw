@@ -54,7 +54,9 @@ if exist "%ORT_NATIVE_ROOT%\onnxruntime.dll" copy /Y "%ORT_NATIVE_ROOT%\onnxrunt
 if exist "%ORT_NATIVE_ROOT%\onnxruntime_providers_shared.dll" copy /Y "%ORT_NATIVE_ROOT%\onnxruntime_providers_shared.dll" "%SENTENCE_OUT%\onnxruntime_providers_shared.dll" >nul
 if not exist "%UNIFIED_OUT%\Models" mkdir "%UNIFIED_OUT%\Models"
 if not exist "%SENTENCE_OUT%\Models" mkdir "%SENTENCE_OUT%\Models"
-if exist "%SENTENCE_MODEL_ROOT%\sentence-ngram.bin" copy /Y "%SENTENCE_MODEL_ROOT%\sentence-ngram.bin" "%UNIFIED_OUT%\Models\sentence-ngram.bin" >nul
+if exist "%UNIFIED_OUT%\Models\sentence-ngram.bin" del /q "%UNIFIED_OUT%\Models\sentence-ngram.bin"
+if exist "%UNIFIED_OUT%\Models\sentence-ngram.tcmodel" del /q "%UNIFIED_OUT%\Models\sentence-ngram.tcmodel"
+if exist "%SENTENCE_MODEL_ROOT%\sentence-ngram-v2.bin" copy /Y "%SENTENCE_MODEL_ROOT%\sentence-ngram-v2.bin" "%UNIFIED_OUT%\Models\sentence-ngram-v2.bin" >nul
 if exist "%SENTENCE_MODEL_ROOT%\sentence-transformer.onnx" copy /Y "%SENTENCE_MODEL_ROOT%\sentence-transformer.onnx" "%SENTENCE_OUT%\Models\sentence-transformer.onnx" >nul
 if exist "%SENTENCE_MODEL_ROOT%\sentence-transformer.json" copy /Y "%SENTENCE_MODEL_ROOT%\sentence-transformer.json" "%SENTENCE_OUT%\Models\sentence-transformer.json" >nul
 if exist "%SENTENCE_DATA_ROOT%\vocabulary.json" copy /Y "%SENTENCE_DATA_ROOT%\vocabulary.json" "%SENTENCE_OUT%\Models\sentence-vocabulary.json" >nul
