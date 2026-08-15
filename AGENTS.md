@@ -2,7 +2,7 @@
 
 This file is the single project handoff entry for future agents. Treat it as the current source of truth before reading older documents. External documents are referenced only where they are still useful.
 
-Last reorganized: 2026-08-09.
+Last reorganized: 2026-08-15.
 
 ## Current Architecture
 
@@ -194,6 +194,8 @@ The selected 228 MiB model keeps count-30 terms and softly restores high-confide
 count-20--29 terms at 25% observed weight to avoid hard-threshold regressions.
 The active runtime uses the exported compact n-gram and Qwen Q8 GGUF artifacts, while training and evaluation remain offline.
 Generated runtime models remain outside Git under `C:\Archive\tigerclaw_sentence_ml\runtime`; debug and publish scripts copy them into `Models\` and `sentence\Models\`.
+
+An experimental standalone Rime 虎整句 pack lives under `rime/tiger_sentence/`. It is not part of the Windows TSF runtime. Regenerate it with `python3 tools/export_tiger_sentence_rime.py`. The scheme keeps TigerClaw selection suffixes and scores a local TCSKNM01 file (`sentence-ngram-v2.bin`, still outside Git) in pure Lua. Decode reuses the lattice incrementally and caches exact KN log-probabilities; EOS is applied only when emitting candidates. See `rime/tiger_sentence/README.md`.
 
 ## Common Workflows
 
