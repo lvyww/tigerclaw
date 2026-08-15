@@ -290,19 +290,25 @@ namespace TigerClaw.Core
             lock (_lock)
             {
                 SentenceCandidate[] candidates = _sentenceDecodeResult.Candidates ?? Array.Empty<SentenceCandidate>();
+                int rerankCount = Math.Min(5, candidates.Length);
                 if (_compositionState != CompositionState.CnSentence ||
                     generation != _sentenceGeneration ||
                     !string.Equals(rawCode, _sentenceRawBuffer.ToString(), StringComparison.Ordinal) ||
-                    scores == null || scores.Length != candidates.Length)
+                    scores == null || scores.Length != rerankCount)
                 {
                     return false;
                 }
 
-                for (int index = 0; index < candidates.Length; index++)
+                for (int index = 0; index < rerankCount; index++)
                 {
-                    candidates[index].FinalScore = candidates[index].BaseScore + 0.40 * scores[index];
+                    candidates[index].FinalScore = candidates[index].BaseScore + 0.84 * scores[index];
                 }
-                Array.Sort(candidates, (left, right) => right.FinalScore.CompareTo(left.FinalScore));
+                Array.Sort(
+                    candidates,
+                    0,
+                    rerankCount,
+                    Comparer<SentenceCandidate>.Create(
+                        (left, right) => right.FinalScore.CompareTo(left.FinalScore)));
                 _sentenceSelectedIndex = 0;
                 return true;
             }
@@ -2221,7 +2227,10 @@ namespace TigerClaw.Core
                 {
                     Generation = generation,
                     RawCode = rawCode,
-                    Candidates = candidates.Select(candidate => candidate.Text).ToArray()
+                    Candidates = candidates
+                        .Take(5)
+                        .Select(candidate => candidate.Text)
+                        .ToArray()
                 });
             }
         }

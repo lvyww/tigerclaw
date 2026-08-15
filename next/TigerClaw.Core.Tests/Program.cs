@@ -50,6 +50,7 @@ namespace TigerClaw.Core.Tests
                 SentenceEnginePassesCtrlNumberShortcut();
                 SentenceEngineCommitsSmartQuoteAfterCandidate();
                 SentenceEngineRejectsStaleNeuralResult();
+                SentenceEngineReranksOnlyTopFive();
                 KeyReplayCacheReturnsOriginalResultWithCurrentSequence();
                 SentenceEngineDecodesLongWorkOffTheKeyPath();
                 Console.WriteLine("TigerClaw.Core.Tests: all tests passed.");
@@ -652,6 +653,55 @@ namespace TigerClaw.Core.Tests
                 nameof(SentenceEngineRejectsStaleNeuralResult));
         }
 
+        private static void SentenceEngineReranksOnlyTopFive()
+        {
+            const string rawCode = "abcdefgh";
+            var lexicon = new Dictionary<string, List<string>>();
+            int textValue = 0x4E00;
+            for (int start = 0; start < rawCode.Length - 1; start++)
+            {
+                for (int length = 2; start + length <= rawCode.Length; length++)
+                {
+                    lexicon[rawCode.Substring(start, length)] =
+                        new List<string> { char.ConvertFromUtf32(textValue++) };
+                }
+            }
+
+            InputMethodEngine engine = CreateSentenceEngine(lexicon);
+            var reranker = new RecordingSentenceRerankService();
+            engine.SetSentenceRerankService(reranker);
+            TypeLetters(engine, rawCode);
+
+            EngineUiSnapshot before = engine.GetUiSnapshot(20);
+            True(before.Candidates.Length > 5, nameof(SentenceEngineReranksOnlyTopFive) + ".candidate_count");
+            True(reranker.LastRequest != null && reranker.LastRequest.Candidates.Length == 5,
+                nameof(SentenceEngineReranksOnlyTopFive) + ".request_count");
+            string promoted = before.Candidates[4];
+            var preservedTail = new string[before.Candidates.Length - 5];
+            Array.Copy(before.Candidates, 5, preservedTail, 0, preservedTail.Length);
+
+            True(!engine.ApplySentenceNeuralScores(
+                    reranker.LastRequest.Generation,
+                    rawCode,
+                    new[] { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 }),
+                nameof(SentenceEngineReranksOnlyTopFive) + ".reject_six_scores");
+            True(engine.ApplySentenceNeuralScores(
+                    reranker.LastRequest.Generation,
+                    rawCode,
+                    new[] { -100.0, -100.0, -100.0, -100.0, 0.0 }),
+                nameof(SentenceEngineReranksOnlyTopFive) + ".accept_five_scores");
+
+            EngineUiSnapshot after = engine.GetUiSnapshot(20);
+            Equal(promoted, after.Candidates[0], nameof(SentenceEngineReranksOnlyTopFive) + ".promoted");
+            for (int index = 0; index < preservedTail.Length; index++)
+            {
+                Equal(
+                    preservedTail[index],
+                    after.Candidates[index + 5],
+                    nameof(SentenceEngineReranksOnlyTopFive) + ".tail_" + index);
+            }
+        }
+
         private static InputMethodEngine CreateMixedEngine()
         {
             var state = new CoreRuntimeState();
@@ -797,6 +847,20 @@ namespace TigerClaw.Core.Tests
             {
                 Thread.Sleep(75);
                 return 0.0;
+            }
+        }
+
+        private sealed class RecordingSentenceRerankService : ISentenceRerankService
+        {
+            public SentenceRerankRequest LastRequest { get; private set; }
+
+            public void Request(SentenceRerankRequest request)
+            {
+                LastRequest = request;
+            }
+
+            public void Dispose()
+            {
             }
         }
 

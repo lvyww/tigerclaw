@@ -1,6 +1,6 @@
 # TigerClaw.Sentence IPC
 
-`TigerClaw.Sentence.exe` is an optional neural reranking sidecar. Core remains the
+`TigerClaw.Sentence.exe` is an optional Qwen reranking sidecar. Core remains the
 owner of composition state, lexicon lookup, lattice generation, n-gram scoring,
 candidate selection, and commit behavior.
 
@@ -21,7 +21,7 @@ Health check:
 {"type":"hello","seq":1}
 ```
 
-Rerank at most 20 n-gram candidates:
+Rerank the first 1 to 5 n-gram candidates:
 
 ```json
 {
@@ -42,14 +42,16 @@ Sentence returns neural log-probabilities in the same order:
   "generation":18,
   "raw_code":"otj2",
   "success":true,
-  "provider":"cpu",
+  "provider":"llama.cpp-cpu-q8",
   "scores":[-8.25,-13.7]
 }
 ```
 
 Core accepts a response only when `generation`, `raw_code`, and score count all
 still match the active composition. It combines scores as
-`ngram_score + 0.40 * neural_score`. Missing executable/model, connection errors,
-timeouts, crashes, and stale responses leave the n-gram order unchanged.
+`ngram_score + 0.84 * qwen_total_log_probability`. Only the first five candidates
+are reordered; later n-gram candidates retain their original order. Missing
+executable/model, connection errors, timeouts, crashes, and stale responses leave
+the n-gram order unchanged.
 
 The optional shutdown request is `{"type":"shutdown","seq":3}`.

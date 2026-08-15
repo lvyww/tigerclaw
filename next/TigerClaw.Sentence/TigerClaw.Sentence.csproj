@@ -2,7 +2,8 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net48</TargetFramework>
-    <PlatformTarget>x64</PlatformTarget>
+    <Platforms>AnyCPU;x64;ARM64</Platforms>
+    <PlatformTarget Condition="'$(PlatformTarget)' == ''">x64</PlatformTarget>
     <LangVersion>7.3</LangVersion>
     <Nullable>disable</Nullable>
     <AssemblyName>TigerClaw.Sentence</AssemblyName>
@@ -15,8 +16,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.ML.OnnxRuntime.Managed" Version="1.24.4" />
-    <Reference Include="System.Web.Extensions" />
     <ProjectReference Include="..\TigerClaw.Shared\TigerClaw.Shared.csproj" />
   </ItemGroup>
 </Project>

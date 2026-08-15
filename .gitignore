@@ -27,6 +27,7 @@
 
 # Runtime and temp directories
 next/_run/
+next/_native_build/
 next/**/bin/
 next/**/obj/
 .dotnet_home/

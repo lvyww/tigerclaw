@@ -4,15 +4,12 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.IO.Pipes;
-using System.Linq;
+using System.Runtime.InteropServices;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
-using System.Web.Script.Serialization;
-using Microsoft.ML.OnnxRuntime;
-using Microsoft.ML.OnnxRuntime.Tensors;
 using TigerClaw.Shared;
 
 namespace TigerClaw.Sentence
@@ -43,10 +40,10 @@ namespace TigerClaw.Sentence
                 }
 
                 StartParentWatcher(options.ParentPid);
-                NeuralSentenceScorer scorer;
+                QwenSentenceScorer scorer;
                 try
                 {
-                    scorer = new NeuralSentenceScorer(options.ModelPath, options.VocabularyPath);
+                    scorer = new QwenSentenceScorer(options.ModelPath);
                 }
                 catch (Exception ex)
                 {
@@ -92,14 +89,17 @@ namespace TigerClaw.Sentence
             using (var sha256 = SHA256.Create())
             {
                 byte[] hash = sha256.ComputeHash(source);
-                return @"Local\TigerClaw.Sentence.Test." + BitConverter.ToString(hash, 0, 8).Replace("-", string.Empty);
+                return @"Local\TigerClaw.Sentence.Test." +
+                    BitConverter.ToString(hash, 0, 8).Replace("-", string.Empty);
             }
         }
 
-        private static void ServeClient(Stream stream, NeuralSentenceScorer scorer)
+        private static void ServeClient(Stream stream, QwenSentenceScorer scorer)
         {
-            using (var reader = new StreamReader(stream, new UTF8Encoding(false), false, 4096, leaveOpen: true))
-            using (var writer = new StreamWriter(stream, new UTF8Encoding(false), 4096, leaveOpen: true)
+            using (var reader = new StreamReader(
+                stream, new UTF8Encoding(false), false, 4096, leaveOpen: true))
+            using (var writer = new StreamWriter(
+                stream, new UTF8Encoding(false), 4096, leaveOpen: true)
             {
                 AutoFlush = true,
                 NewLine = "\n"
@@ -138,7 +138,9 @@ namespace TigerClaw.Sentence
             }
         }
 
-        private static SentenceResponse HandleRequest(SentenceRequest request, NeuralSentenceScorer scorer)
+        private static SentenceResponse HandleRequest(
+            SentenceRequest request,
+            QwenSentenceScorer scorer)
         {
             string type = request.Type ?? string.Empty;
             if (type == "hello" || type == "ping")
@@ -155,7 +157,12 @@ namespace TigerClaw.Sentence
             if (type == "shutdown")
             {
                 _stopping = true;
-                return new SentenceResponse { Type = "response", Seq = request.Seq, Success = true };
+                return new SentenceResponse
+                {
+                    Type = "response",
+                    Seq = request.Seq,
+                    Success = true
+                };
             }
 
             if (type != "rerank")
@@ -164,9 +171,9 @@ namespace TigerClaw.Sentence
             }
 
             string[] candidates = request.Candidates ?? new string[0];
-            if (candidates.Length == 0 || candidates.Length > 20)
+            if (candidates.Length == 0 || candidates.Length > 5)
             {
-                throw new InvalidDataException("rerank candidates must contain 1 to 20 items.");
+                throw new InvalidDataException("rerank candidates must contain 1 to 5 items.");
             }
 
             return new SentenceResponse
@@ -217,178 +224,139 @@ namespace TigerClaw.Sentence
         }
     }
 
-    internal sealed class NeuralSentenceScorer : IDisposable
+    internal sealed class QwenSentenceScorer : IDisposable
     {
-        private readonly InferenceSession _session;
-        private readonly Dictionary<string, int> _vocabulary;
-        private readonly int _bos;
-        private readonly int _eos;
-        private readonly int _pad;
-        private readonly int _unknown;
-        private readonly int _contextLength;
+        private const string NativeLibrary = "TigerClaw.Sentence.Native.dll";
+        private IntPtr _handle;
 
-        public NeuralSentenceScorer(string modelPath, string vocabularyPath)
+        public QwenSentenceScorer(string modelPath)
         {
             if (!File.Exists(modelPath))
             {
-                throw new FileNotFoundException("Sentence ONNX model was not found.", modelPath);
-            }
-            if (!File.Exists(vocabularyPath))
-            {
-                throw new FileNotFoundException("Sentence vocabulary was not found.", vocabularyPath);
+                throw new FileNotFoundException("Sentence Qwen model was not found.", modelPath);
             }
 
-            string vocabularyJson = ReadVocabulary(vocabularyPath);
-            _vocabulary = new JavaScriptSerializer().Deserialize<Dictionary<string, int>>(vocabularyJson)
-                ?? throw new InvalidDataException("Invalid sentence vocabulary.");
-            _bos = ResolveRequired("<bos>");
-            _eos = ResolveRequired("<eos>");
-            _pad = ResolveRequired("<pad>");
-            _unknown = ResolveRequired("<unk>");
-            _contextLength = LoadContextLength(modelPath);
-            if (string.Equals(Path.GetExtension(modelPath), ".tcmodel", StringComparison.OrdinalIgnoreCase))
+            using (PinnedUtf8 path = PinnedUtf8.Create(modelPath))
             {
-                byte[] modelBytes = EncryptedModelReader.ReadAllBytes(
-                    modelPath,
-                    EncryptedModelKind.SentenceTransformer);
-                try
-                {
-                    _session = new InferenceSession(modelBytes);
-                }
-                finally
-                {
-                    Array.Clear(modelBytes, 0, modelBytes.Length);
-                }
+                Check(NativeMethods.CreateFromFile(path.Pointer, out _handle));
             }
-            else
+
+            if (_handle == IntPtr.Zero)
             {
-                _session = new InferenceSession(modelPath);
+                throw new InvalidDataException("Native Qwen loader returned an empty handle.");
             }
         }
 
-        public string Provider => "cpu";
+        public string Provider => "llama.cpp-cpu-q8";
 
         public double[] Score(IReadOnlyList<string> texts)
         {
-            List<int[]> encoded = texts.Select(Encode).ToList();
-            int width = encoded.Max(values => values.Length) - 1;
-            var inputValues = new long[encoded.Count * width];
-            for (int row = 0; row < encoded.Count; row++)
+            if (_handle == IntPtr.Zero)
             {
-                for (int column = 0; column < width; column++)
-                {
-                    inputValues[row * width + column] = _pad;
-                }
-                int[] values = encoded[row];
-                for (int column = 0; column < values.Length - 1; column++)
-                {
-                    inputValues[row * width + column] = values[column];
-                }
+                throw new ObjectDisposedException(nameof(QwenSentenceScorer));
+            }
+            if (texts == null || texts.Count < 1 || texts.Count > 5)
+            {
+                throw new ArgumentException("Qwen reranking requires 1 to 5 candidates.", nameof(texts));
             }
 
-            var tensor = new DenseTensor<long>(inputValues, new[] { encoded.Count, width });
-            using (IDisposableReadOnlyCollection<DisposableNamedOnnxValue> results = _session.Run(
-                new[] { NamedOnnxValue.CreateFromTensor("token_ids", tensor) }))
+            var pinned = new PinnedUtf8[texts.Count];
+            var pointers = new IntPtr[texts.Count];
+            try
             {
-                Tensor<float> logits = results.First().AsTensor<float>();
-                int vocabularySize = logits.Dimensions[2];
-                var scores = new double[encoded.Count];
-                for (int row = 0; row < encoded.Count; row++)
+                for (int index = 0; index < texts.Count; index++)
                 {
-                    int[] sequence = encoded[row];
-                    double score = 0.0;
-                    for (int position = 0; position < sequence.Length - 1; position++)
-                    {
-                        int target = sequence[position + 1];
-                        float maximum = float.NegativeInfinity;
-                        for (int token = 0; token < vocabularySize; token++)
-                        {
-                            maximum = Math.Max(maximum, logits[row, position, token]);
-                        }
-
-                        double sum = 0.0;
-                        for (int token = 0; token < vocabularySize; token++)
-                        {
-                            sum += Math.Exp(logits[row, position, token] - maximum);
-                        }
-                        score += logits[row, position, target] - maximum - Math.Log(sum);
-                    }
-                    scores[row] = score;
+                    pinned[index] = PinnedUtf8.Create(texts[index] ?? string.Empty);
+                    pointers[index] = pinned[index].Pointer;
                 }
+                var scores = new double[texts.Count];
+                Check(NativeMethods.Score(_handle, pointers, pointers.Length, scores));
                 return scores;
+            }
+            finally
+            {
+                for (int index = 0; index < pinned.Length; index++)
+                {
+                    pinned[index]?.Dispose();
+                }
             }
         }
 
         public void Dispose()
         {
-            _session.Dispose();
+            IntPtr handle = Interlocked.Exchange(ref _handle, IntPtr.Zero);
+            if (handle != IntPtr.Zero)
+            {
+                NativeMethods.Destroy(handle);
+            }
         }
 
-        private int[] Encode(string text)
+        private static void Check(int result)
         {
-            var values = new List<int> { _bos };
-            string source = text ?? string.Empty;
-            for (int index = 0; index < source.Length; index++)
+            if (result == 0)
             {
-                string token;
-                if (char.IsHighSurrogate(source[index]) && index + 1 < source.Length && char.IsLowSurrogate(source[index + 1]))
+                return;
+            }
+            IntPtr errorPointer = NativeMethods.LastError();
+            string error = errorPointer == IntPtr.Zero
+                ? null
+                : Marshal.PtrToStringAnsi(errorPointer);
+            throw new InvalidOperationException(
+                string.IsNullOrWhiteSpace(error) ? "Native Qwen operation failed." : error);
+        }
+
+        private sealed class PinnedUtf8 : IDisposable
+        {
+            private GCHandle _pin;
+
+            private PinnedUtf8(byte[] bytes)
+            {
+                _pin = GCHandle.Alloc(bytes, GCHandleType.Pinned);
+                Pointer = _pin.AddrOfPinnedObject();
+            }
+
+            public IntPtr Pointer { get; }
+
+            public static PinnedUtf8 Create(string value)
+            {
+                byte[] source = Encoding.UTF8.GetBytes(value ?? string.Empty);
+                var terminated = new byte[source.Length + 1];
+                Buffer.BlockCopy(source, 0, terminated, 0, source.Length);
+                return new PinnedUtf8(terminated);
+            }
+
+            public void Dispose()
+            {
+                if (_pin.IsAllocated)
                 {
-                    token = source.Substring(index, 2);
-                    index++;
+                    _pin.Free();
                 }
-                else
-                {
-                    token = source[index].ToString();
-                }
-                values.Add(_vocabulary.TryGetValue(token, out int id) ? id : _unknown);
-            }
-            values.Add(_eos);
-            if (values.Count - 1 > _contextLength)
-            {
-                values = values.Skip(values.Count - (_contextLength + 1)).ToList();
-                values[0] = _bos;
-            }
-            return values.ToArray();
-        }
-
-        private int ResolveRequired(string token)
-        {
-            if (_vocabulary.TryGetValue(token, out int id))
-            {
-                return id;
-            }
-            throw new InvalidDataException("Vocabulary is missing " + token + ".");
-        }
-
-        private static string ReadVocabulary(string vocabularyPath)
-        {
-            if (!string.Equals(Path.GetExtension(vocabularyPath), ".tcmodel", StringComparison.OrdinalIgnoreCase))
-            {
-                return File.ReadAllText(vocabularyPath);
-            }
-
-            byte[] vocabularyBytes = EncryptedModelReader.ReadAllBytes(
-                vocabularyPath,
-                EncryptedModelKind.SentenceVocabulary);
-            try
-            {
-                return Encoding.UTF8.GetString(vocabularyBytes);
-            }
-            finally
-            {
-                Array.Clear(vocabularyBytes, 0, vocabularyBytes.Length);
             }
         }
 
-        private static int LoadContextLength(string modelPath)
+        private static class NativeMethods
         {
-            string metadataPath = Path.ChangeExtension(modelPath, ".json");
-            if (!File.Exists(metadataPath))
-            {
-                return 64;
-            }
-            ModelMetadata metadata = JsonCodec.Deserialize<ModelMetadata>(File.ReadAllText(metadataPath));
-            return metadata != null && metadata.ContextLength > 0 ? metadata.ContextLength : 64;
+            [DllImport(NativeLibrary, CallingConvention = CallingConvention.Cdecl,
+                EntryPoint = "tcs_create_from_file")]
+            internal static extern int CreateFromFile(
+                IntPtr modelPathUtf8,
+                out IntPtr scorer);
+
+            [DllImport(NativeLibrary, CallingConvention = CallingConvention.Cdecl,
+                EntryPoint = "tcs_score")]
+            internal static extern int Score(
+                IntPtr scorer,
+                IntPtr[] candidatesUtf8,
+                int candidateCount,
+                [Out] double[] scores);
+
+            [DllImport(NativeLibrary, CallingConvention = CallingConvention.Cdecl,
+                EntryPoint = "tcs_destroy")]
+            internal static extern void Destroy(IntPtr scorer);
+
+            [DllImport(NativeLibrary, CallingConvention = CallingConvention.Cdecl,
+                EntryPoint = "tcs_last_error")]
+            internal static extern IntPtr LastError();
         }
     }
 
@@ -441,17 +409,10 @@ namespace TigerClaw.Sentence
         [DataMember(Name = "error")] public string Error { get; set; }
     }
 
-    [DataContract]
-    internal sealed class ModelMetadata
-    {
-        [DataMember(Name = "context_length")] public int ContextLength { get; set; }
-    }
-
     internal sealed class Options
     {
         public string PipeName { get; private set; } = "TigerClaw.Sentence.v1";
         public string ModelPath { get; private set; } = string.Empty;
-        public string VocabularyPath { get; private set; } = string.Empty;
         public int ParentPid { get; private set; }
 
         public static Options Parse(string[] args)
@@ -467,16 +428,23 @@ namespace TigerClaw.Sentence
                 string next = args[++index];
                 switch (value)
                 {
-                    case "--pipe": result.PipeName = next; break;
-                    case "--model": result.ModelPath = Path.GetFullPath(next); break;
-                    case "--vocabulary": result.VocabularyPath = Path.GetFullPath(next); break;
-                    case "--parent-pid": result.ParentPid = int.Parse(next, CultureInfo.InvariantCulture); break;
+                    case "--pipe":
+                        result.PipeName = next;
+                        break;
+                    case "--model":
+                        result.ModelPath = Path.GetFullPath(next);
+                        break;
+                    case "--parent-pid":
+                        result.ParentPid = int.Parse(next, CultureInfo.InvariantCulture);
+                        break;
+                    default:
+                        throw new ArgumentException("Unknown option: " + value + ".");
                 }
             }
 
-            if (string.IsNullOrWhiteSpace(result.ModelPath) || string.IsNullOrWhiteSpace(result.VocabularyPath))
+            if (string.IsNullOrWhiteSpace(result.ModelPath))
             {
-                throw new ArgumentException("--model and --vocabulary are required.");
+                throw new ArgumentException("--model is required.");
             }
             return result;
         }

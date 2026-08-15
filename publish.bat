@@ -13,6 +13,7 @@ set "EMBED_INFO=%ROOT%\BimeTSF2\SampleIME\EmbeddedBuildInfo.h"
 set "SHARED_BUILD_INFO=%ROOT%\next\TigerClaw.Shared\BuildInfo.cs"
 set "PACK_SCRIPT=%ROOT%\pack_release.bat"
 set "MODEL_PROTECTION_SCRIPT=%ROOT%\tools\protect_sentence_model.ps1"
+set "SENTENCE_NATIVE_BUILD=%ROOT%\next\build_sentence_native.bat"
 set "TEXT_LOG_ENABLED=0"
 set "CORE_HASH_VERIFY_ENABLED=1"
 set "TRIAL_EXPIRE_UTC="
@@ -92,6 +93,10 @@ if not exist "%PACK_SCRIPT%" (
     echo ERROR: Missing package script: %PACK_SCRIPT%
     exit /b 1
 )
+if not exist "%SENTENCE_NATIVE_BUILD%" (
+    echo ERROR: Missing sentence native build script: %SENTENCE_NATIVE_BUILD%
+    exit /b 1
+)
 
 set "CORE_OUT=%ROOT%\next\_run\Release\net48"
 set "CORE_EXE_FOR_HASH=%CORE_OUT%\TigerClaw.Core.exe"
@@ -99,13 +104,11 @@ set "OVERLAY_OUT=%ROOT%\next\_run\Release\net48"
 set "DIALOG_OUT=%ROOT%\next\_run\Release\net48"
 set "SENTENCE_OUT=%ROOT%\next\_run\Release\sentence"
 set "SENTENCE_MODEL_ROOT=C:\Archive\tigerclaw_sentence_ml\runtime"
-set "SENTENCE_DATA_ROOT=C:\Archive\tigerclaw_sentence_ml\pilot200m"
+set "SENTENCE_QWEN_MODEL=C:\Archive\tigerclaw_sentence_ml\qwen3-0.6b-gguf\downloaded\Qwen3-0.6B-Base-Q8_0.gguf"
+set "SENTENCE_QWEN_LICENSE=C:\Archive\tigerclaw_sentence_ml\qwen3-0.6b-base\LICENSE"
 set "MODEL_PROTECTION_KEY=%SENTENCE_MODEL_ROOT%\model-protection.key"
 set "PROTECTED_MODEL_OUT=%ROOT%\next\_run\Release\protected-models"
 set "PROTECTED_NGRAM=%PROTECTED_MODEL_OUT%\sentence-ngram-v2.tcmodel"
-set "PROTECTED_TRANSFORMER=%PROTECTED_MODEL_OUT%\sentence-transformer.tcmodel"
-set "PROTECTED_VOCABULARY=%PROTECTED_MODEL_OUT%\sentence-vocabulary.tcmodel"
-set "ORT_NATIVE_ROOT=%LocalAppData%\TigerClawML\venv-directml\Lib\site-packages\onnxruntime\capi"
 set "HOOK_NATIVE_OUT=%ROOT%\next\_run\Release\native"
 set "TSF_X64_DLL=%ROOT%\BimeTSF2\SampleIME\x64\Release\TigerClaw.dll"
 set "TSF_X86_DLL=%ROOT%\BimeTSF2\SampleIME\Win32\Release\TigerClaw.dll"
@@ -233,17 +236,16 @@ if errorlevel 1 (
     echo ERROR: TigerClaw.Sentence Release build failed.
     exit /b 1
 )
-if exist "%ORT_NATIVE_ROOT%\onnxruntime.dll" copy /Y "%ORT_NATIVE_ROOT%\onnxruntime.dll" "%SENTENCE_OUT%\onnxruntime.dll" >nul
-if exist "%ORT_NATIVE_ROOT%\onnxruntime_providers_shared.dll" copy /Y "%ORT_NATIVE_ROOT%\onnxruntime_providers_shared.dll" "%SENTENCE_OUT%\onnxruntime_providers_shared.dll" >nul
+call "%SENTENCE_NATIVE_BUILD%" x64 "%SENTENCE_OUT%" Release
+if errorlevel 1 (
+    echo ERROR: TigerClaw.Sentence.Native x64 build failed.
+    exit /b 1
+)
 
 echo.
-echo [7/13] Protect sentence models
+echo [7/13] Protect sentence n-gram model
 if not exist "%PROTECTED_MODEL_OUT%" mkdir "%PROTECTED_MODEL_OUT%"
 powershell -NoProfile -ExecutionPolicy Bypass -File "%MODEL_PROTECTION_SCRIPT%" -Source "%SENTENCE_MODEL_ROOT%\sentence-ngram-v2.bin" -Destination "%PROTECTED_NGRAM%" -Kind SentenceNgram -KeyFile "%MODEL_PROTECTION_KEY%"
-if errorlevel 1 exit /b 1
-powershell -NoProfile -ExecutionPolicy Bypass -File "%MODEL_PROTECTION_SCRIPT%" -Source "%SENTENCE_MODEL_ROOT%\sentence-transformer.onnx" -Destination "%PROTECTED_TRANSFORMER%" -Kind SentenceTransformer -KeyFile "%MODEL_PROTECTION_KEY%"
-if errorlevel 1 exit /b 1
-powershell -NoProfile -ExecutionPolicy Bypass -File "%MODEL_PROTECTION_SCRIPT%" -Source "%SENTENCE_DATA_ROOT%\vocabulary.json" -Destination "%PROTECTED_VOCABULARY%" -Kind SentenceVocabulary -KeyFile "%MODEL_PROTECTION_KEY%"
 if errorlevel 1 exit /b 1
 
 echo.
@@ -313,16 +315,18 @@ if not exist "%RELEASE_TSF_X64%" mkdir "%RELEASE_TSF_X64%"
 if not exist "%RELEASE_TSF_X86%" mkdir "%RELEASE_TSF_X86%"
 if not exist "%RELEASE_SENTENCE%" mkdir "%RELEASE_SENTENCE%"
 if not exist "%RELEASE_SENTENCE%\Models" mkdir "%RELEASE_SENTENCE%\Models"
+if not exist "%RELEASE_SENTENCE%\licenses" mkdir "%RELEASE_SENTENCE%\licenses"
 if not exist "%RELEASE_MODELS%" mkdir "%RELEASE_MODELS%"
 
 call :RequireFile "%CORE_OUT%\TigerClaw.Core.exe" "TigerClaw.Core.exe" || exit /b 1
 call :RequireFile "%OVERLAY_OUT%\TigerClaw.Overlay.exe" "TigerClaw.Overlay.exe" || exit /b 1
 call :RequireFile "%DIALOG_OUT%\TigerClaw.Dialog.exe" "TigerClaw.Dialog.exe" || exit /b 1
 call :RequireFile "%SENTENCE_OUT%\TigerClaw.Sentence.exe" "TigerClaw.Sentence.exe" || exit /b 1
-call :RequireFile "%SENTENCE_OUT%\onnxruntime.dll" "sentence onnxruntime.dll" || exit /b 1
+call :RequireFile "%SENTENCE_OUT%\TigerClaw.Sentence.Native.dll" "TigerClaw.Sentence.Native.dll" || exit /b 1
 call :RequireFile "%PROTECTED_NGRAM%" "protected sentence n-gram model" || exit /b 1
-call :RequireFile "%PROTECTED_TRANSFORMER%" "protected sentence transformer model" || exit /b 1
-call :RequireFile "%PROTECTED_VOCABULARY%" "protected sentence vocabulary" || exit /b 1
+call :RequireFile "%SENTENCE_QWEN_MODEL%" "Qwen Q8 model" || exit /b 1
+call :RequireFile "%ROOT%\third_party\llama.cpp\LICENSE" "llama.cpp license" || exit /b 1
+call :RequireFile "%SENTENCE_QWEN_LICENSE%" "Qwen license" || exit /b 1
 call :RequireFile "%HOOK_NATIVE_OUT%\TigerClaw.Hook.Native.exe" "TigerClaw.Hook.Native.exe" || exit /b 1
 call :RequireFile "%TSF_X64_DLL%" "TigerClaw.dll x64" || exit /b 1
 call :RequireFile "%TSF_X86_DLL%" "TigerClaw.dll Win32" || exit /b 1
@@ -339,18 +343,24 @@ call :CopyFileStrict "%DIALOG_OUT%\TigerClaw.Dialog.exe" "%RELEASE_DIR%\TigerCla
 if exist "%DIALOG_OUT%\TigerClaw.Dialog.exe.config" call :CopyFileStrict "%DIALOG_OUT%\TigerClaw.Dialog.exe.config" "%RELEASE_DIR%\TigerClaw.Dialog.exe.config" || exit /b 1
 if exist "%DIALOG_OUT%\TigerClaw.Dialog.pdb" del /q "%RELEASE_DIR%\TigerClaw.Dialog.pdb" >nul 2>&1
 
-for %%F in (TigerClaw.Sentence.exe TigerClaw.Sentence.exe.config TigerClaw.Shared.dll Microsoft.ML.OnnxRuntime.dll System.Buffers.dll System.Memory.dll System.Numerics.Tensors.dll System.Numerics.Vectors.dll System.Runtime.CompilerServices.Unsafe.dll onnxruntime.dll onnxruntime_providers_shared.dll) do (
+for %%F in (TigerClaw.Sentence.exe TigerClaw.Sentence.exe.config TigerClaw.Shared.dll TigerClaw.Sentence.Native.dll) do (
     if exist "%SENTENCE_OUT%\%%F" call :CopyFileStrict "%SENTENCE_OUT%\%%F" "%RELEASE_SENTENCE%\%%F" || exit /b 1
+)
+for %%F in (Microsoft.ML.OnnxRuntime.dll System.Buffers.dll System.Memory.dll System.Numerics.Tensors.dll System.Numerics.Vectors.dll System.Runtime.CompilerServices.Unsafe.dll onnxruntime.dll onnxruntime_providers_shared.dll) do (
+    if exist "%RELEASE_SENTENCE%\%%F" del /q "%RELEASE_SENTENCE%\%%F"
 )
 if exist "%RELEASE_MODELS%\sentence-ngram.bin" del /q "%RELEASE_MODELS%\sentence-ngram.bin"
 if exist "%RELEASE_MODELS%\sentence-ngram.tcmodel" del /q "%RELEASE_MODELS%\sentence-ngram.tcmodel"
 if exist "%RELEASE_MODELS%\sentence-ngram-v2.bin" del /q "%RELEASE_MODELS%\sentence-ngram-v2.bin"
 if exist "%RELEASE_SENTENCE%\Models\sentence-transformer.onnx" del /q "%RELEASE_SENTENCE%\Models\sentence-transformer.onnx"
 if exist "%RELEASE_SENTENCE%\Models\sentence-vocabulary.json" del /q "%RELEASE_SENTENCE%\Models\sentence-vocabulary.json"
-call :CopyFileStrict "%PROTECTED_TRANSFORMER%" "%RELEASE_SENTENCE%\Models\sentence-transformer.tcmodel" || exit /b 1
-if exist "%SENTENCE_MODEL_ROOT%\sentence-transformer.json" call :CopyFileStrict "%SENTENCE_MODEL_ROOT%\sentence-transformer.json" "%RELEASE_SENTENCE%\Models\sentence-transformer.json" || exit /b 1
-call :CopyFileStrict "%PROTECTED_VOCABULARY%" "%RELEASE_SENTENCE%\Models\sentence-vocabulary.tcmodel" || exit /b 1
+if exist "%RELEASE_SENTENCE%\Models\sentence-transformer.tcmodel" del /q "%RELEASE_SENTENCE%\Models\sentence-transformer.tcmodel"
+if exist "%RELEASE_SENTENCE%\Models\sentence-vocabulary.tcmodel" del /q "%RELEASE_SENTENCE%\Models\sentence-vocabulary.tcmodel"
+if exist "%RELEASE_SENTENCE%\Models\sentence-transformer.json" del /q "%RELEASE_SENTENCE%\Models\sentence-transformer.json"
+call :CopyFileStrict "%SENTENCE_QWEN_MODEL%" "%RELEASE_SENTENCE%\Models\sentence-qwen-q8.gguf" || exit /b 1
 call :CopyFileStrict "%PROTECTED_NGRAM%" "%RELEASE_MODELS%\sentence-ngram-v2.tcmodel" || exit /b 1
+call :CopyFileStrict "%ROOT%\third_party\llama.cpp\LICENSE" "%RELEASE_SENTENCE%\licenses\llama.cpp-LICENSE.txt" || exit /b 1
+call :CopyFileStrict "%SENTENCE_QWEN_LICENSE%" "%RELEASE_SENTENCE%\licenses\Qwen3-LICENSE.txt" || exit /b 1
 
 call :CopyFileStrict "%HOOK_NATIVE_OUT%\TigerClaw.Hook.Native.exe" "%RELEASE_DIR%\TigerClaw.exe" || exit /b 1
 if exist "%HOOK_NATIVE_OUT%\TigerClaw.Hook.Native.pdb" del /q "%RELEASE_DIR%\TigerClaw.pdb" >nul 2>&1

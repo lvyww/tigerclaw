@@ -1,8 +1,9 @@
 # 整句神经模型离线实验
 
 这些工具用于离线数据处理、训练、评测和导出。TigerClaw.Core 使用导出的
-`sentence-ngram-v2.bin`（发布时为受保护的 `.tcmodel`），可选的
-`TigerClaw.Sentence.exe` 使用导出的 ONNX 模型；训练过程本身不进入输入法运行时。
+`sentence-ngram-v2.bin`（发布时为受保护的 `.tcmodel`）。当前可选的
+`TigerClaw.Sentence.exe` 通过 llama.cpp 使用 Qwen3 0.6B Q8 GGUF 重排前 5 个候选；
+本页的小型字符 Transformer/ONNX 流程保留用于历史离线对比，不再进入输入法运行时。
 
 ## 工具
 
@@ -32,7 +33,9 @@ data:   C:\Archive\tigerclaw_sentence_ml\pilot200m
 model:  C:\Archive\tigerclaw_sentence_ml\model10m
 ```
 
-正式发布时，`publish.bat` 使用 `tools/protect_sentence_model.ps1` 将上述离线明文产物压缩并加密为经过 HMAC 校验的 `.tcmodel` 文件。发布密钥位于仓库外的 `C:\Archive\tigerclaw_sentence_ml\runtime\model-protection.key`，不要提交该密钥或把离线明文模型复制进发布包。Debug 构建仍可直接读取 `.bin`、`.onnx` 和 JSON，方便训练与实验。
+正式发布时，`publish.bat` 只把 n-gram 压缩并加密为经过 HMAC 校验的 `.tcmodel`；
+Qwen Q8 GGUF 不加密并直接随包提供。发布密钥位于仓库外的
+`C:\Archive\tigerclaw_sentence_ml\runtime\model-protection.key`，不要提交该密钥。
 
 Python 是隔离的 Windows x64 3.12 环境，通过 `torch-directml` 使用 Adreno GPU；
 没有加入 PATH，也不替换系统 Python。
@@ -196,26 +199,18 @@ python3 tools/prepare_sentence_neural_data.py \
 长时间 DirectML 训练使用 `run_sentence_training_segments.ps1` 分段重启，避免
 checkpoint 暂存缓冲长期占用共享内存。
 
-## 运行时模型导出
+## 运行时模型准备
 
 ```bash
 cp /mnt/c/Archive/tigerclaw_sentence_ml/trainer_v2/full-kn-m30-r20-p050-w025/sentence-ngram-v2.bin \
   /mnt/c/Archive/tigerclaw_sentence_ml/runtime/sentence-ngram-v2.bin
 
-/mnt/c/Users/yc/AppData/Local/TigerClawML/venv-directml/Scripts/python.exe \
-  tools/export_sentence_neural_onnx.py \
-  --checkpoint C:/Archive/tigerclaw_sentence_ml/model10m/best.pt \
-  --output C:/Archive/tigerclaw_sentence_ml/runtime/sentence-transformer.onnx
 ```
 
 Core只识别V2文件名和V2格式，不再读取旧版 `sentence-ngram.bin`。
-`next/build_next.bat` 从上述 runtime 目录复制模型，并从隔离 Python 环境的
-`onnxruntime/capi` 复制 Windows x64 原生库。首次准备环境时安装与托管程序集
-同版本的 CPU wheel：
-
-```batch
-C:\Users\yc\AppData\Local\TigerClawML\venv-directml\Scripts\python.exe -m pip install onnxruntime==1.24.4
-```
+`next/build_next.bat` 从上述 runtime 目录复制 n-gram，并从
+`C:\Archive\tigerclaw_sentence_ml\qwen3-0.6b-gguf\downloaded\Qwen3-0.6B-Base-Q8_0.gguf`
+复制 Qwen 模型。原生评分库由固定版本的 `third_party/llama.cpp` 子模块构建。
 
 ## 实时试用程序
 

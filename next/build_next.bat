@@ -28,8 +28,8 @@ set "HOOK_NATIVE_OUT=%~dp0_run\Debug\native"
 set "SENTENCE_PROJECT=%~dp0TigerClaw.Sentence\TigerClaw.Sentence.csproj"
 set "SENTENCE_OUT=%~dp0_run\Debug\sentence"
 set "SENTENCE_MODEL_ROOT=C:\Archive\tigerclaw_sentence_ml\runtime"
-set "SENTENCE_DATA_ROOT=C:\Archive\tigerclaw_sentence_ml\pilot200m"
-set "ORT_NATIVE_ROOT=%LocalAppData%\TigerClawML\venv-directml\Lib\site-packages\onnxruntime\capi"
+set "SENTENCE_QWEN_MODEL=C:\Archive\tigerclaw_sentence_ml\qwen3-0.6b-gguf\downloaded\Qwen3-0.6B-Base-Q8_0.gguf"
+set "SENTENCE_NATIVE_BUILD=%~dp0build_sentence_native.bat"
 
 echo [0/6] Stop running next processes (if any)
 for %%P in (TigerClaw.Core.exe TigerClaw.Overlay.exe TigerClaw.Dialog.exe TigerClaw.Sentence.exe TigerClaw.Hook.Native.exe) do (
@@ -50,16 +50,13 @@ echo [4/6] Build TigerClaw.Dialog (OutDir: Core)
 
 echo [5/6] Publish optional TigerClaw.Sentence sidecar
 "%DOTNET%" msbuild "%SENTENCE_PROJECT%" /restore /p:Configuration=Debug /p:Platform=x64 /p:OutDir="%SENTENCE_OUT%\\" /m || exit /b 1
-if exist "%ORT_NATIVE_ROOT%\onnxruntime.dll" copy /Y "%ORT_NATIVE_ROOT%\onnxruntime.dll" "%SENTENCE_OUT%\onnxruntime.dll" >nul
-if exist "%ORT_NATIVE_ROOT%\onnxruntime_providers_shared.dll" copy /Y "%ORT_NATIVE_ROOT%\onnxruntime_providers_shared.dll" "%SENTENCE_OUT%\onnxruntime_providers_shared.dll" >nul
+call "%SENTENCE_NATIVE_BUILD%" x64 "%SENTENCE_OUT%" Debug || exit /b 1
 if not exist "%UNIFIED_OUT%\Models" mkdir "%UNIFIED_OUT%\Models"
 if not exist "%SENTENCE_OUT%\Models" mkdir "%SENTENCE_OUT%\Models"
 if exist "%UNIFIED_OUT%\Models\sentence-ngram.bin" del /q "%UNIFIED_OUT%\Models\sentence-ngram.bin"
 if exist "%UNIFIED_OUT%\Models\sentence-ngram.tcmodel" del /q "%UNIFIED_OUT%\Models\sentence-ngram.tcmodel"
 if exist "%SENTENCE_MODEL_ROOT%\sentence-ngram-v2.bin" copy /Y "%SENTENCE_MODEL_ROOT%\sentence-ngram-v2.bin" "%UNIFIED_OUT%\Models\sentence-ngram-v2.bin" >nul
-if exist "%SENTENCE_MODEL_ROOT%\sentence-transformer.onnx" copy /Y "%SENTENCE_MODEL_ROOT%\sentence-transformer.onnx" "%SENTENCE_OUT%\Models\sentence-transformer.onnx" >nul
-if exist "%SENTENCE_MODEL_ROOT%\sentence-transformer.json" copy /Y "%SENTENCE_MODEL_ROOT%\sentence-transformer.json" "%SENTENCE_OUT%\Models\sentence-transformer.json" >nul
-if exist "%SENTENCE_DATA_ROOT%\vocabulary.json" copy /Y "%SENTENCE_DATA_ROOT%\vocabulary.json" "%SENTENCE_OUT%\Models\sentence-vocabulary.json" >nul
+if exist "%SENTENCE_QWEN_MODEL%" copy /Y "%SENTENCE_QWEN_MODEL%" "%SENTENCE_OUT%\Models\sentence-qwen-q8.gguf" >nul
 
 if exist "%HOOK_NATIVE_PROJECT%" (
   echo [6/6] Build TigerClaw.Hook.Native (OutDir: native)
@@ -80,6 +77,10 @@ if not exist "%UNIFIED_OUT%\TigerClaw.Dialog.exe" (
 )
 if not exist "%SENTENCE_OUT%\TigerClaw.Sentence.exe" (
   echo Missing output: %SENTENCE_OUT%\TigerClaw.Sentence.exe
+  exit /b 1
+)
+if not exist "%SENTENCE_OUT%\TigerClaw.Sentence.Native.dll" (
+  echo Missing output: %SENTENCE_OUT%\TigerClaw.Sentence.Native.dll
   exit /b 1
 )
 if exist "%HOOK_NATIVE_PROJECT%" if not exist "%HOOK_NATIVE_OUT%\TigerClaw.Hook.Native.exe" (

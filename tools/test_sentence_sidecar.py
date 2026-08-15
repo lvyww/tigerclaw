@@ -26,7 +26,6 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--exe", type=Path, required=True)
     parser.add_argument("--model", type=Path, required=True)
-    parser.add_argument("--vocabulary", type=Path, required=True)
     args = parser.parse_args()
 
     pipe_name = f"TigerClaw.Sentence.smoke.{os.getpid()}"
@@ -36,7 +35,6 @@ def main() -> int:
             "--parent-pid", str(os.getpid()),
             "--pipe", pipe_name,
             "--model", str(args.model),
-            "--vocabulary", str(args.vocabulary),
         ]
     )
     pipe_path = rf"\\.\pipe\{pipe_name}"
@@ -66,14 +64,61 @@ def main() -> int:
                         "今天早上我吃了两个面包三根油条",
                         "今天早上我吃了两个面有三根油条",
                         "今天早上我呆了两个面包三根油条",
+                        "今天早上我吃了两个人包三根油条",
+                        "今天早上我吃了两个面包三根油茶",
                     ],
                 },
             )
-        print(json.dumps({"hello": hello, "rerank": rerank}, ensure_ascii=False, indent=2))
+            brand = send(
+                pipe,
+                {
+                    "type": "rerank",
+                    "seq": 3,
+                    "generation": 8,
+                    "raw_code": "zhhmnwklfxhfgjax",
+                    "candidates": [
+                        "虎码官方整句版",
+                        "虎狂汸整句版",
+                        "虎码官方整句板",
+                        "虎码官房整句版",
+                        "虎马官方整句版",
+                    ],
+                },
+            )
+            too_many = send(
+                pipe,
+                {
+                    "type": "rerank",
+                    "seq": 4,
+                    "generation": 9,
+                    "raw_code": "limit",
+                    "candidates": ["一", "二", "三", "四", "五", "六"],
+                },
+            )
+        print(
+            json.dumps(
+                {
+                    "hello": hello,
+                    "rerank": rerank,
+                    "brand": brand,
+                    "too_many": too_many,
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
         if not hello.get("success") or not rerank.get("success"):
             return 2
-        if len(rerank.get("scores", [])) != 3:
+        scores = rerank.get("scores", [])
+        if len(scores) != 5:
             return 3
+        if scores[0] != max(scores):
+            return 4
+        brand_scores = brand.get("scores", [])
+        if len(brand_scores) != 5 or brand_scores[0] != max(brand_scores):
+            return 5
+        if too_many.get("success"):
+            return 6
         return 0
     finally:
         if process.poll() is None:

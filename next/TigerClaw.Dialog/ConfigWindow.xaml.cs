@@ -1151,7 +1151,7 @@ namespace TigerClaw.Dialog
                 case "整句输入":
                     return "连续输入整句编码，由本地语言模型自动切分并生成整句候选。";
                 case "整句神经重排":
-                    return "使用独立推理进程重排整句候选；不可用时自动保留三元模型结果。";
+                    return "使用独立 Qwen 推理进程重排前 5 个整句候选；不可用时自动保留三元模型结果。";
                 case "TAB清屏":
                     return "Tab 键在对应场景下是否直接清屏。";
                 case "竖排候选":

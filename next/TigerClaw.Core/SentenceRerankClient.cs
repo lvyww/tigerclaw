@@ -115,8 +115,8 @@ namespace TigerClaw.Core
         {
             try
             {
-                ResolveModelPaths(out string modelPath, out string vocabularyPath);
-                if (!File.Exists(modelPath) || !File.Exists(vocabularyPath))
+                string modelPath = ResolveModelPath();
+                if (!File.Exists(modelPath))
                 {
                     return;
                 }
@@ -124,8 +124,7 @@ namespace TigerClaw.Core
                 string arguments =
                     "--parent-pid " + Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture) +
                     " --pipe " + QuoteArgument(RuntimeConstants.SentencePipeShortName) +
-                    " --model " + QuoteArgument(modelPath) +
-                    " --vocabulary " + QuoteArgument(vocabularyPath);
+                    " --model " + QuoteArgument(modelPath);
                 if (!_launcher.TryLaunchSentence(arguments))
                 {
                     return;
@@ -177,11 +176,10 @@ namespace TigerClaw.Core
             }
         }
 
-        private static void ResolveModelPaths(out string modelPath, out string vocabularyPath)
+        private static string ResolveModelPath()
         {
             string baseDirectory = AppContext.BaseDirectory;
-            modelPath = Path.Combine(baseDirectory, "Models", "sentence-transformer.tcmodel");
-            vocabularyPath = Path.Combine(baseDirectory, "Models", "sentence-vocabulary.tcmodel");
+            string modelPath = Path.Combine(baseDirectory, "Models", "sentence-qwen-q8.gguf");
             string directory = baseDirectory;
             for (int level = 0; level < 6 && !string.IsNullOrEmpty(directory); level++)
             {
@@ -194,20 +192,16 @@ namespace TigerClaw.Core
                 };
                 foreach (string root in roots)
                 {
-                    string[,] filePairs =
+                    string[] fileNames =
                     {
-                        { "sentence-transformer.tcmodel", "sentence-vocabulary.tcmodel" },
-                        { "sentence-transformer.onnx", "sentence-vocabulary.json" }
+                        "sentence-qwen-q8.gguf"
                     };
-                    for (int pairIndex = 0; pairIndex < filePairs.GetLength(0); pairIndex++)
+                    foreach (string fileName in fileNames)
                     {
-                        string modelCandidate = Path.Combine(root, filePairs[pairIndex, 0]);
-                        string vocabularyCandidate = Path.Combine(root, filePairs[pairIndex, 1]);
-                        if (File.Exists(modelCandidate) && File.Exists(vocabularyCandidate))
+                        string modelCandidate = Path.Combine(root, fileName);
+                        if (File.Exists(modelCandidate))
                         {
-                            modelPath = modelCandidate;
-                            vocabularyPath = vocabularyCandidate;
-                            return;
+                            return modelCandidate;
                         }
                     }
                 }
@@ -219,6 +213,7 @@ namespace TigerClaw.Core
                 }
                 directory = parent;
             }
+            return modelPath;
         }
 
         private static string QuoteArgument(string value)
