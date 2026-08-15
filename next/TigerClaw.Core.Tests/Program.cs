@@ -41,6 +41,7 @@ namespace TigerClaw.Core.Tests
                 SentenceDecoderRejectsEmbeddedBareOneKeyCharacter();
                 SentenceDecoderRequiresExplicitSelectionForEveryCode();
                 SentenceDecoderUsesOnlyTheOptimalCharacterCode();
+                SentenceDecoderIncrementalMatchesFullRebuild();
                 SentenceNgramV2LoadsFromMappedFile();
                 SentenceEngineCommitsDecodedCandidate();
                 SentenceEngineDisplaysPrimarySegmentation();
@@ -420,6 +421,145 @@ namespace TigerClaw.Core.Tests
             SentenceDecodeResult semicolon = decoder.Decode("j;");
             Equal("什么", semicolon.Candidates[0].Text, nameof(SentenceDecoderRejectsEmbeddedBareOneKeyCharacter));
             True(semicolon.Candidates.Length == 1, nameof(SentenceDecoderRejectsEmbeddedBareOneKeyCharacter));
+        }
+
+        private static void SentenceDecoderIncrementalMatchesFullRebuild()
+        {
+            var decoder = new SentenceInputDecoder(
+                SentenceLexiconIndex.Build(new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["ot"] = new List<string> { "是" },
+                    ["ue"] = new List<string> { "的" },
+                    ["tu"] = new List<string> { "我" },
+                    ["j"] = new List<string> { "人", "什么", "怎样" },
+                    ["jq"] = new List<string> { "件" },
+                    ["fi"] = new List<string> { "一", "一般" }
+                }),
+                new DistinctSentenceLanguageModel(),
+                beamWidth: 20);
+
+            string[] samples =
+            {
+                "ot",
+                "ueot",
+                "ueottu",
+                "otj2",
+                "ueot;",
+                "j'",
+                "fiot",
+                "jqtusotu"
+            };
+
+            foreach (string sample in samples)
+            {
+                decoder.ResetDecodeCache();
+                SentenceDecodeResult grown = SentenceDecodeResult.Empty;
+                for (int length = 1; length <= sample.Length; length++)
+                {
+                    grown = decoder.Decode(sample.Substring(0, length));
+                }
+
+                AssertSentenceResultsEqual(
+                    grown,
+                    decoder.DecodeFull(sample),
+                    nameof(SentenceDecoderIncrementalMatchesFullRebuild) + ".grow." + sample);
+
+                SentenceDecodeResult same = decoder.Decode(sample);
+                AssertSentenceResultsEqual(
+                    same,
+                    decoder.DecodeFull(sample),
+                    nameof(SentenceDecoderIncrementalMatchesFullRebuild) + ".same." + sample);
+            }
+
+            decoder.ResetDecodeCache();
+            const string longCode = "jqtusotu";
+            decoder.Decode(longCode);
+            for (int length = longCode.Length - 1; length >= 1; length--)
+            {
+                string prefix = longCode.Substring(0, length);
+                AssertSentenceResultsEqual(
+                    decoder.Decode(prefix),
+                    decoder.DecodeFull(prefix),
+                    nameof(SentenceDecoderIncrementalMatchesFullRebuild) + ".back." + prefix);
+            }
+
+            decoder.ResetDecodeCache();
+            decoder.Decode("u");
+            AssertSentenceResultsEqual(
+                decoder.Decode("ue"),
+                decoder.DecodeFull("ue"),
+                nameof(SentenceDecoderIncrementalMatchesFullRebuild) + ".one_key_to_two");
+            AssertSentenceResultsEqual(
+                decoder.Decode("u"),
+                decoder.DecodeFull("u"),
+                nameof(SentenceDecoderIncrementalMatchesFullRebuild) + ".two_back_to_one");
+
+            decoder.ResetDecodeCache();
+            for (int length = 1; length <= 4; length++)
+            {
+                decoder.Decode("ueot".Substring(0, length));
+            }
+
+            AssertSentenceResultsEqual(
+                decoder.Decode("ueot;"),
+                decoder.DecodeFull("ueot;"),
+                nameof(SentenceDecoderIncrementalMatchesFullRebuild) + ".append_selector");
+            AssertSentenceResultsEqual(
+                decoder.Decode("ueot"),
+                decoder.DecodeFull("ueot"),
+                nameof(SentenceDecoderIncrementalMatchesFullRebuild) + ".backspace_selector");
+            AssertSentenceResultsEqual(
+                decoder.Decode("ueottu"),
+                decoder.DecodeFull("ueottu"),
+                nameof(SentenceDecoderIncrementalMatchesFullRebuild) + ".retype_after_selector");
+        }
+
+        private static void AssertSentenceResultsEqual(
+            SentenceDecodeResult left,
+            SentenceDecodeResult right,
+            string name)
+        {
+            SentenceCandidate[] leftCandidates = left.Candidates ?? Array.Empty<SentenceCandidate>();
+            SentenceCandidate[] rightCandidates = right.Candidates ?? Array.Empty<SentenceCandidate>();
+            True(leftCandidates.Length == rightCandidates.Length, name + ".count");
+            for (int index = 0; index < leftCandidates.Length; index++)
+            {
+                Equal(rightCandidates[index].Text, leftCandidates[index].Text, name + ".text." + index);
+                Equal(
+                    rightCandidates[index].SegmentedCode,
+                    leftCandidates[index].SegmentedCode,
+                    name + ".seg." + index);
+                True(
+                    leftCandidates[index].FinalScore == rightCandidates[index].FinalScore,
+                    name + ".score." + index);
+            }
+        }
+
+        private sealed class DistinctSentenceLanguageModel : ISentenceLanguageModel
+        {
+            public double LogProbability(string previous2, string previous1, string target)
+            {
+                return -(
+                    HashToken(previous2) * 0.031 +
+                    HashToken(previous1) * 0.017 +
+                    HashToken(target) * 0.011);
+            }
+
+            private static int HashToken(string token)
+            {
+                if (string.IsNullOrEmpty(token))
+                {
+                    return 1;
+                }
+
+                int hash = 17;
+                for (int index = 0; index < token.Length; index++)
+                {
+                    hash = unchecked(hash * 31 + token[index]);
+                }
+
+                return Math.Abs(hash % 997) + 1;
+            }
         }
 
         private static void SentenceDecoderUsesOnlyTheOptimalCharacterCode()

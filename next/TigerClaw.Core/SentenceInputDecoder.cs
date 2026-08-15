@@ -219,6 +219,12 @@ namespace TigerClaw.Core
         private readonly ISentenceLanguageModel _languageModel;
         private readonly int _beamWidth;
         private readonly double _rankPenalty;
+        private readonly int _maxCodeLength;
+        private readonly object _decodeLock = new object();
+        private string _cachedRaw;
+        private List<BeamState>[] _cachedStates;
+        private SentenceDecodeResult _cachedResult;
+        private int _cachedLimit;
 
         private sealed class BeamState
         {
@@ -239,9 +245,27 @@ namespace TigerClaw.Core
             _languageModel = languageModel ?? NeutralSentenceLanguageModel.Instance;
             _beamWidth = Math.Max(1, beamWidth);
             _rankPenalty = Math.Max(0.0, rankPenalty);
+            int maxCodeLength = 1;
+            foreach (int length in _lexicon.CodeLengths)
+            {
+                if (length > maxCodeLength)
+                {
+                    maxCodeLength = length;
+                }
+            }
+
+            _maxCodeLength = maxCodeLength;
         }
 
         public SentenceDecodeResult Decode(string rawCode, int candidateLimit = 20)
+        {
+            lock (_decodeLock)
+            {
+                return DecodeIncrementalLocked(rawCode, candidateLimit);
+            }
+        }
+
+        internal SentenceDecodeResult DecodeFull(string rawCode, int candidateLimit = 20)
         {
             string normalized = NormalizeRawCode(rawCode);
             if (normalized.Length == 0 || !normalized.Any(char.IsLetter))
@@ -249,7 +273,106 @@ namespace TigerClaw.Core
                 return SentenceDecodeResult.Empty;
             }
 
-            var states = new List<BeamState>[normalized.Length + 1];
+            List<BeamState>[] states = CreateStates(normalized.Length);
+            int expanded = ExpandRange(normalized, states, 0, normalized.Length);
+            return Emit(normalized, states, candidateLimit, expanded);
+        }
+
+        internal void ResetDecodeCache()
+        {
+            lock (_decodeLock)
+            {
+                ClearCache();
+            }
+        }
+
+        private SentenceDecodeResult DecodeIncrementalLocked(string rawCode, int candidateLimit)
+        {
+            string normalized = NormalizeRawCode(rawCode);
+            if (normalized.Length == 0 || !normalized.Any(char.IsLetter))
+            {
+                ClearCache();
+                _cachedRaw = normalized ?? string.Empty;
+                _cachedResult = SentenceDecodeResult.Empty;
+                _cachedLimit = candidateLimit;
+                return _cachedResult;
+            }
+
+            if (_cachedRaw == normalized &&
+                _cachedResult != null &&
+                _cachedLimit == candidateLimit)
+            {
+                return _cachedResult;
+            }
+
+            if (_cachedRaw == normalized && _cachedStates != null)
+            {
+                SentenceDecodeResult trimmed = Emit(normalized, _cachedStates, candidateLimit, 0);
+                _cachedResult = trimmed;
+                _cachedLimit = candidateLimit;
+                return trimmed;
+            }
+
+            int length = normalized.Length;
+            List<BeamState>[] states = null;
+            int expanded = 0;
+            string oldRaw = _cachedRaw;
+            List<BeamState>[] oldStates = _cachedStates;
+            if (oldStates != null && !string.IsNullOrEmpty(oldRaw))
+            {
+                int oldLength = oldRaw.Length;
+                // A one-key segment is legal only when the whole input is one key.
+                if (oldLength == 1 || length == 1)
+                {
+                    states = null;
+                }
+                else if (length > oldLength && normalized.StartsWith(oldRaw, StringComparison.Ordinal))
+                {
+                    int maxConsume = _maxCodeLength + TrailingSelectorSpan(normalized);
+                    int fromPos = Math.Max(0, oldLength + 1 - maxConsume);
+                    states = ResizeStates(oldStates, length);
+                    for (int index = oldLength + 1; index <= length; index++)
+                    {
+                        states[index] = new List<BeamState>();
+                    }
+
+                    expanded = ExpandRange(normalized, states, fromPos, length);
+                }
+                else if (length < oldLength && oldRaw.StartsWith(normalized, StringComparison.Ordinal))
+                {
+                    states = oldStates;
+                    for (int index = length + 1; index <= oldLength && index < states.Length; index++)
+                    {
+                        states[index] = null;
+                    }
+                }
+            }
+
+            if (states == null)
+            {
+                states = CreateStates(length);
+                expanded = ExpandRange(normalized, states, 0, length);
+            }
+
+            SentenceDecodeResult result = Emit(normalized, states, candidateLimit, expanded);
+            _cachedRaw = normalized;
+            _cachedStates = states;
+            _cachedResult = result;
+            _cachedLimit = candidateLimit;
+            return result;
+        }
+
+        private void ClearCache()
+        {
+            _cachedRaw = null;
+            _cachedStates = null;
+            _cachedResult = null;
+            _cachedLimit = 0;
+        }
+
+        private static List<BeamState>[] CreateStates(int length)
+        {
+            var states = new List<BeamState>[length + 1];
             for (int i = 0; i < states.Length; i++)
             {
                 states[i] = new List<BeamState>();
@@ -263,25 +386,61 @@ namespace TigerClaw.Core
                 Previous2 = Bos,
                 Previous1 = Bos
             });
-            int expandedStates = 0;
+            return states;
+        }
 
-            for (int position = 0; position < normalized.Length; position++)
+        private static List<BeamState>[] ResizeStates(List<BeamState>[] states, int length)
+        {
+            if (states.Length >= length + 1)
+            {
+                return states;
+            }
+
+            var resized = new List<BeamState>[length + 1];
+            Array.Copy(states, resized, states.Length);
+            return resized;
+        }
+
+        private static int TrailingSelectorSpan(string raw)
+        {
+            int index = raw.Length - 1;
+            while (index >= 0)
+            {
+                char mark = raw[index];
+                if (char.IsDigit(mark) || mark == ';' || mark == '\'')
+                {
+                    index--;
+                }
+                else
+                {
+                    break;
+                }
+            }
+
+            return raw.Length - 1 - index;
+        }
+
+        private int ExpandRange(string raw, List<BeamState>[] states, int fromPos, int length)
+        {
+            int expandedStates = 0;
+            for (int position = fromPos; position < length; position++)
             {
                 List<BeamState> current = DeduplicateAndLimit(states[position], _beamWidth);
+                states[position] = current;
                 if (current.Count == 0)
                 {
                     continue;
                 }
 
-                foreach (int length in _lexicon.CodeLengths)
+                foreach (int codeLength in _lexicon.CodeLengths)
                 {
-                    int codeEnd = position + length;
-                    if (codeEnd > normalized.Length)
+                    int codeEnd = position + codeLength;
+                    if (codeEnd > length)
                     {
                         continue;
                     }
 
-                    string code = normalized.Substring(position, length);
+                    string code = raw.Substring(position, codeLength);
                     SentenceLexiconCandidate[] candidates = _lexicon.GetCandidates(code);
                     if (candidates == null || candidates.Length == 0)
                     {
@@ -290,32 +449,32 @@ namespace TigerClaw.Core
 
                     int consumedEnd = codeEnd;
                     int selectedRank = 0;
-                    if (codeEnd < normalized.Length && normalized[codeEnd] == ';')
+                    if (codeEnd < length && raw[codeEnd] == ';')
                     {
                         selectedRank = 2;
                         consumedEnd++;
                     }
-                    else if (codeEnd < normalized.Length && normalized[codeEnd] == '\'')
+                    else if (codeEnd < length && raw[codeEnd] == '\'')
                     {
                         selectedRank = 3;
                         consumedEnd++;
                     }
-                    else if (codeEnd < normalized.Length && char.IsDigit(normalized[codeEnd]))
+                    else if (codeEnd < length && char.IsDigit(raw[codeEnd]))
                     {
                         int digitEnd = codeEnd;
-                        while (digitEnd < normalized.Length && char.IsDigit(normalized[digitEnd]))
+                        while (digitEnd < length && char.IsDigit(raw[digitEnd]))
                         {
                             digitEnd++;
                         }
 
-                        string token = normalized.Substring(codeEnd, digitEnd - codeEnd);
+                        string token = raw.Substring(codeEnd, digitEnd - codeEnd);
                         selectedRank = token == "0"
                             ? 10
                             : int.Parse(token, NumberStyles.None, CultureInfo.InvariantCulture);
                         consumedEnd = digitEnd;
                     }
 
-                    if (normalized.Length > 1 && consumedEnd - position < 2)
+                    if (length > 1 && consumedEnd - position < 2)
                     {
                         continue;
                     }
@@ -356,8 +515,8 @@ namespace TigerClaw.Core
                                 Score = score,
                                 Text = item.Text + candidate.Text,
                                 SegmentedCode = string.IsNullOrEmpty(item.SegmentedCode)
-                                    ? normalized.Substring(position, consumedEnd - position)
-                                    : item.SegmentedCode + " " + normalized.Substring(position, consumedEnd - position),
+                                    ? raw.Substring(position, consumedEnd - position)
+                                    : item.SegmentedCode + " " + raw.Substring(position, consumedEnd - position),
                                 Previous2 = previous2,
                                 Previous1 = previous1
                             });
@@ -367,6 +526,11 @@ namespace TigerClaw.Core
                 }
             }
 
+            return expandedStates;
+        }
+
+        private SentenceDecodeResult Emit(string normalized, List<BeamState>[] states, int candidateLimit, int expandedStates)
+        {
             List<BeamState> completed = DeduplicateAndLimit(states[normalized.Length], _beamWidth);
             var result = new List<SentenceCandidate>(completed.Count);
             foreach (BeamState item in completed)
@@ -381,7 +545,11 @@ namespace TigerClaw.Core
                 });
             }
 
-            result.Sort((left, right) => right.FinalScore.CompareTo(left.FinalScore));
+            result.Sort((left, right) =>
+            {
+                int compared = right.FinalScore.CompareTo(left.FinalScore);
+                return compared != 0 ? compared : string.CompareOrdinal(left.Text, right.Text);
+            });
             int limit = Math.Max(1, candidateLimit);
             if (result.Count > limit)
             {
@@ -413,7 +581,11 @@ namespace TigerClaw.Core
             }
 
             List<BeamState> result = bestByText.Values.ToList();
-            result.Sort((left, right) => right.Score.CompareTo(left.Score));
+            result.Sort((left, right) =>
+            {
+                int compared = right.Score.CompareTo(left.Score);
+                return compared != 0 ? compared : string.CompareOrdinal(left.Text, right.Text);
+            });
             if (result.Count > limit)
             {
                 result.RemoveRange(limit, result.Count - limit);
