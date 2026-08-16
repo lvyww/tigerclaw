@@ -41,6 +41,7 @@ namespace TigerClaw.Core.Tests
                 SentenceDecoderRejectsEmbeddedBareOneKeyCharacter();
                 SentenceDecoderRequiresExplicitSelectionForEveryCode();
                 SentenceDecoderUsesOnlyTheOptimalCharacterCode();
+                SentenceDecoderAllowsNonPrimaryCodesForRareCharacters();
                 SentenceDecoderIncrementalMatchesFullRebuild();
                 SentenceNgramV2LoadsFromMappedFile();
                 SentenceEngineCommitsDecodedCandidate();
@@ -595,16 +596,39 @@ namespace TigerClaw.Core.Tests
 
         private static void SentenceDecoderUsesOnlyTheOptimalCharacterCode()
         {
-            SentenceInputDecoder decoder = CreateSentenceDecoder(new Dictionary<string, List<string>>
+            SentenceInputDecoder decoder = new SentenceInputDecoder(
+                SentenceLexiconIndex.Build(
+                    new Dictionary<string, List<string>>
             {
-                ["ab"] = new List<string> { "乙", "甲" },
+                        ["ab"] = new List<string> { "甲" },
                 ["ac"] = new List<string> { "甲", "丙" }
-            });
+                    },
+                    new HashSet<string>(StringComparer.Ordinal) { "甲" }),
+                NeutralSentenceLanguageModel.Instance,
+                beamWidth: 100);
+
+            Equal("甲", decoder.Decode("ab").Candidates[0].Text, nameof(SentenceDecoderUsesOnlyTheOptimalCharacterCode));
+            True(
+                Array.TrueForAll(decoder.Decode("ac").Candidates, candidate => candidate.Text != "甲"),
+                nameof(SentenceDecoderUsesOnlyTheOptimalCharacterCode));
+        }
+
+        private static void SentenceDecoderAllowsNonPrimaryCodesForRareCharacters()
+        {
+            SentenceInputDecoder decoder = new SentenceInputDecoder(
+                SentenceLexiconIndex.Build(
+                    new Dictionary<string, List<string>>
+                    {
+                        ["ab"] = new List<string> { "甲" },
+                        ["ac"] = new List<string> { "甲", "丙" }
+                    },
+                    new HashSet<string>(StringComparer.Ordinal) { "乙" }),
+                NeutralSentenceLanguageModel.Instance,
+                beamWidth: 100);
 
             True(
-                Array.TrueForAll(decoder.Decode("ab").Candidates, candidate => candidate.Text != "甲"),
-                nameof(SentenceDecoderUsesOnlyTheOptimalCharacterCode));
-            Equal("甲", decoder.Decode("ac").Candidates[0].Text, nameof(SentenceDecoderUsesOnlyTheOptimalCharacterCode));
+                Array.Exists(decoder.Decode("ac").Candidates, candidate => candidate.Text == "甲"),
+                nameof(SentenceDecoderAllowsNonPrimaryCodesForRareCharacters));
         }
 
         private static void SentenceDecoderRequiresExplicitSelectionForEveryCode()

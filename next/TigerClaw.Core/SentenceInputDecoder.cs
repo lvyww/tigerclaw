@@ -52,8 +52,11 @@ namespace TigerClaw.Core
                 : null;
         }
 
-        public static SentenceLexiconIndex Build(IDictionary<string, List<string>> source)
+        public static SentenceLexiconIndex Build(
+            IDictionary<string, List<string>> source,
+            ISet<string> commonCharacters = null)
         {
+            ISet<string> common = commonCharacters ?? SentenceCommonCharacters.Top1500;
             var exact = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
             if (source != null)
             {
@@ -122,8 +125,11 @@ namespace TigerClaw.Core
                 for (int index = 0; index < pair.Value.Count; index++)
                 {
                     string text = pair.Value[index];
-                    if (pair.Key.Length == 1 ||
+                    bool allowNonPrimary =
+                        pair.Key.Length == 1 ||
                         !IsSingleTextElement(text) ||
+                        !IsCommonSingleCharacter(text, common);
+                    if (allowNonPrimary ||
                         (primaryBaseCodeByCharacter.TryGetValue(text, out string primaryCode) &&
                          string.Equals(primaryCode, pair.Key, StringComparison.OrdinalIgnoreCase)))
                     {
@@ -181,6 +187,13 @@ namespace TigerClaw.Core
             }
 
             return current;
+        }
+
+        private static bool IsCommonSingleCharacter(string text, ISet<string> commonCharacters)
+        {
+            return commonCharacters != null &&
+                   commonCharacters.Count > 0 &&
+                   commonCharacters.Contains(text);
         }
 
         private static bool IsSingleTextElement(string text)

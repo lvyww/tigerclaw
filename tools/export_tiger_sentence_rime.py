@@ -41,6 +41,28 @@ def is_single_char(text: str) -> bool:
     return len(text) == 1
 
 
+def default_common_chars() -> Path:
+    return (
+        Path(__file__).resolve().parents[1]
+        / "next"
+        / "TigerClaw.Core"
+        / "Data"
+        / "sentence_common_chars_1500.txt"
+    )
+
+
+def load_common_characters(path: Path) -> set:
+    texts: set = set()
+    if not path.is_file():
+        raise SystemExit("common-character list not found: %s" % path)
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        text = raw_line.strip()
+        if not text or text.startswith("#"):
+            continue
+        texts.add(text)
+    return texts
+
+
 def choose_primary_code(
     character: str,
     codes: Iterable[str],
@@ -63,6 +85,7 @@ def choose_primary_code(
 
 def build_index(
     entries: Sequence[Tuple[str, str]],
+    common_characters: Optional[set] = None,
 ) -> Tuple[Dict[str, List[Tuple[str, int]]], Dict[str, str]]:
     exact: Dict[str, List[str]] = defaultdict(list)
     for word, code in entries:
@@ -84,11 +107,13 @@ def build_index(
     for code, texts in exact.items():
         allowed: List[Tuple[str, int]] = []
         for index, text in enumerate(texts):
-            if (
+            allow_non_primary = (
                 len(code) == 1
                 or not is_single_char(text)
-                or primary.get(text) == code
-            ):
+                or not common_characters
+                or text not in common_characters
+            )
+            if allow_non_primary or primary.get(text) == code:
                 allowed.append((text, index + 1))
         if allowed:
             filtered[code] = allowed
@@ -237,12 +262,14 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", type=Path, default=default_source())
     parser.add_argument("--output", type=Path, default=default_output())
+    parser.add_argument("--common-chars", type=Path, default=default_common_chars())
     args = parser.parse_args()
     if not args.source.is_file():
         raise SystemExit("source lexicon not found: %s" % args.source)
 
     entries = parse_source(args.source)
-    filtered, primary = build_index(entries)
+    common_characters = load_common_characters(args.common_chars)
+    filtered, primary = build_index(entries, common_characters)
     args.output.mkdir(parents=True, exist_ok=True)
     (args.output / "lua").mkdir(parents=True, exist_ok=True)
     write_lua_lexicon(args.output / "lua" / "tiger_sentence_lexicon.lua", filtered)
@@ -276,9 +303,24 @@ def main() -> int:
     if any(item[0].startswith("的") and "u " in item[1] for item in decoded_long_u):
         raise SystemExit("one-key 的 leaked into multi-key decode")
 
+    rare_on_non_primary = 0
+    for code, items in filtered.items():
+        if len(code) < 2:
+            continue
+        for text, rank in items:
+            if is_single_char(text) and text not in common_characters and primary.get(text) not in (None, code):
+                rare_on_non_primary += 1
+                break
+    if rare_on_non_primary == 0:
+        raise SystemExit("expected rare characters to keep non-primary codes")
+    if "oqra" in filtered and not any(text == "尷" for text, _ in filtered["oqra"]):
+        raise SystemExit("rare 尷 should remain reachable by non-primary oqra")
+
     print("source_entries", len(entries))
     print("codes", len(filtered))
     print("primary_chars", len(primary))
+    print("common_chars", len(common_characters))
+    print("rare_non_primary_codes", rare_on_non_primary)
     print("primary_of_de", primary["的"])
     print("primary_of_shi", primary["是"])
     print("primary_of_wo", primary["我"])
