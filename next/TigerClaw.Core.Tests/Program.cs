@@ -56,6 +56,7 @@ namespace TigerClaw.Core.Tests
                 SentenceEngineDecodesLongWorkOffTheKeyPath();
                 SentenceEngineHoldsPreviousCandidatesWhileDecodeIsPending();
                 SentenceEngineKeepsPreviousSegmentationWhileDecodeIsPending();
+                SentenceAutoEnableUsesSchemaNameWithoutChangingSwitch();
                 Console.WriteLine("TigerClaw.Core.Tests: all tests passed.");
                 return 0;
             }
@@ -376,6 +377,34 @@ namespace TigerClaw.Core.Tests
                 Console.WriteLine("scores=" + string.Join(",", receivedScores ?? Array.Empty<double>()));
                 return receivedScores != null && receivedScores.Length == 3 ? 0 : 3;
             }
+        }
+
+        private static void SentenceAutoEnableUsesSchemaNameWithoutChangingSwitch()
+        {
+            var state = new CoreRuntimeState();
+            True(state.TrySetConfigValue("整句输入", "否", out _, out string offReason),
+                nameof(SentenceAutoEnableUsesSchemaNameWithoutChangingSwitch) + ": " + offReason);
+            True(state.TrySetConfigValue("自动启用整句模式", "是", out _, out string autoReason),
+                nameof(SentenceAutoEnableUsesSchemaNameWithoutChangingSwitch) + ": " + autoReason);
+            True(state.TrySetConfigValue("当前码表", "虎码", out _, out string schemaReason),
+                nameof(SentenceAutoEnableUsesSchemaNameWithoutChangingSwitch) + ": " + schemaReason);
+            True(!state.GetSentenceInputEnabled(), nameof(SentenceAutoEnableUsesSchemaNameWithoutChangingSwitch) + ".switch_off");
+            True(!state.IsSentenceInputActive(), nameof(SentenceAutoEnableUsesSchemaNameWithoutChangingSwitch) + ".plain_schema");
+
+            True(state.TrySetConfigValue("当前码表", "虎整句", out _, out string sentenceSchemaReason),
+                nameof(SentenceAutoEnableUsesSchemaNameWithoutChangingSwitch) + ": " + sentenceSchemaReason);
+            True(!state.GetSentenceInputEnabled(), nameof(SentenceAutoEnableUsesSchemaNameWithoutChangingSwitch) + ".switch_still_off");
+            True(state.IsSentenceInputActive(), nameof(SentenceAutoEnableUsesSchemaNameWithoutChangingSwitch) + ".named_schema");
+
+            True(state.TrySetConfigValue("自动启用整句模式", "否", out _, out string autoOffReason),
+                nameof(SentenceAutoEnableUsesSchemaNameWithoutChangingSwitch) + ": " + autoOffReason);
+            True(!state.IsSentenceInputActive(), nameof(SentenceAutoEnableUsesSchemaNameWithoutChangingSwitch) + ".auto_off");
+
+            True(state.TrySetConfigValue("整句输入", "是", out _, out string onReason),
+                nameof(SentenceAutoEnableUsesSchemaNameWithoutChangingSwitch) + ": " + onReason);
+            True(state.TrySetConfigValue("当前码表", "虎码", out _, out string plainAgainReason),
+                nameof(SentenceAutoEnableUsesSchemaNameWithoutChangingSwitch) + ": " + plainAgainReason);
+            True(state.IsSentenceInputActive(), nameof(SentenceAutoEnableUsesSchemaNameWithoutChangingSwitch) + ".manual_on");
         }
 
         private static void SentenceDecoderSupportsWordAndSelectionSuffix()

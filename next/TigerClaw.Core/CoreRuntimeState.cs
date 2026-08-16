@@ -46,6 +46,7 @@ namespace TigerClaw.Core
         private const string KeyMaxCodeLen = "\u6700\u5927\u7801\u957f"; // unicode: 鏈€澶х爜闀?
         private const string KeyUnlimitedMixedChineseEnglishInput = "\u4e2d\u82f1\u6587\u4e0d\u9650\u957f\u6df7\u5408\u8f93\u5165"; // unicode: 中英文不限长混合输入
         private const string KeySentenceInput = "\u6574\u53e5\u8f93\u5165"; // 整句输入
+        private const string KeyAutoEnableSentenceBySchema = "\u81ea\u52a8\u542f\u7528\u6574\u53e5\u6a21\u5f0f"; // 自动启用整句模式
         private const string KeySentenceNeuralRerank = "\u6574\u53e5\u795e\u7ecf\u91cd\u6392"; // 整句神经重排
         private const string KeyCnUseEnPunc = "\u4e2d\u6587\u72b6\u6001\u4e0b\u4f7f\u7528\u82f1\u6587\u6807\u70b9"; // unicode: 涓枃鐘舵€佷笅浣跨敤鑻辨枃鏍囩偣
 
@@ -187,6 +188,8 @@ namespace TigerClaw.Core
             new KeyValuePair<string, string>(KeyUnlimitedMixedChineseEnglishInput, No),
 
             new KeyValuePair<string, string>(KeySentenceInput, No),
+
+            new KeyValuePair<string, string>(KeyAutoEnableSentenceBySchema, Yes),
 
             new KeyValuePair<string, string>(KeySentenceNeuralRerank, Yes),
 
@@ -1296,6 +1299,25 @@ namespace TigerClaw.Core
         public bool GetUnlimitedMixedChineseEnglishInput() => GetBool(KeyUnlimitedMixedChineseEnglishInput, false);
 
         public bool GetSentenceInputEnabled() => GetBool(KeySentenceInput, false);
+
+        public bool GetAutoEnableSentenceBySchema() => GetBool(KeyAutoEnableSentenceBySchema, true);
+
+        public bool IsSentenceInputActive()
+        {
+            if (GetSentenceInputEnabled())
+            {
+                return true;
+            }
+
+            if (!GetAutoEnableSentenceBySchema())
+            {
+                return false;
+            }
+
+            string schema = GetCurrentSchema();
+            return !string.IsNullOrEmpty(schema) &&
+                   schema.IndexOf("\u6574\u53e5", StringComparison.Ordinal) >= 0; // 整句
+        }
 
         public bool GetSentenceNeuralRerankEnabled() => GetBool(KeySentenceNeuralRerank, true);
 

@@ -209,7 +209,7 @@ namespace TigerClaw.Core
             {
                 _sentenceDecodedLexiconVersion = _state.LexiconVersion;
             }
-            else if (_state.GetSentenceInputEnabled())
+            else if (_state.IsSentenceInputActive())
             {
                 ReloadSentenceResources();
             }
@@ -225,7 +225,7 @@ namespace TigerClaw.Core
                     return;
                 }
 
-                if (!_state.GetSentenceInputEnabled())
+                if (!_state.IsSentenceInputActive())
                 {
                     _sentenceInputDecoder = null;
                     DisposeSentenceLanguageModel();
@@ -735,6 +735,7 @@ namespace TigerClaw.Core
                         if (_state.TrySwitchRecentSchema(out _))
                         {
                             _oneShotActionKey = resolvedVk;
+                            ReloadSentenceResources();
                             if (IsMixedInputSession())
                             {
                                 _mixedInputDecoder.ClearCache();
@@ -966,7 +967,7 @@ namespace TigerClaw.Core
 
             if (TryMapIdleCodeChar(vk, shift, out char idleCodeChar))
             {
-                if (_state.GetSentenceInputEnabled() && _sentenceInputDecoder != null)
+                if (_state.IsSentenceInputActive() && _sentenceInputDecoder != null)
                 {
                     _compositionState = CompositionState.CnSentence;
                     StartSentenceInput(idleCodeChar);

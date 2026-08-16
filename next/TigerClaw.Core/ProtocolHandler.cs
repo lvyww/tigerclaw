@@ -636,10 +636,14 @@ namespace TigerClaw.Core
 
         private static bool IsSentenceInputConfigKey(string key)
         {
-            return string.Equals(
-                key?.Trim(),
-                "\u6574\u53e5\u8f93\u5165",
-                StringComparison.OrdinalIgnoreCase); // unicode: 整句输入
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                return false;
+            }
+
+            string trimmed = key.Trim();
+            return string.Equals(trimmed, "\u6574\u53e5\u8f93\u5165", StringComparison.OrdinalIgnoreCase) || // 整句输入
+                   string.Equals(trimmed, "\u81ea\u52a8\u542f\u7528\u6574\u53e5\u6a21\u5f0f", StringComparison.OrdinalIgnoreCase); // 自动启用整句模式
         }
 
         private static object GetFirstValue(SimpleJsonObject msg, params string[] keys)

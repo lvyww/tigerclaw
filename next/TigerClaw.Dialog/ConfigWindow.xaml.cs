@@ -1150,6 +1150,8 @@ namespace TigerClaw.Dialog
                     return "允许超过最大码长，暂存顶字上屏的候选字词，最后一起上屏。";
                 case "整句输入":
                     return "连续输入整句编码，由本地语言模型自动切分并生成整句候选。";
+                case "自动启用整句模式":
+                    return "方案名含“整句”时，自动启用整句模式。";
                 case "整句神经重排":
                     return "使用独立 Qwen 推理进程重排前 5 个整句候选；不可用时自动保留三元模型结果。";
                 case "TAB清屏":
@@ -1239,6 +1241,7 @@ namespace TigerClaw.Dialog
                 case "最大码长无重自动上屏":
                 case "中英文不限长混合输入":
                 case "整句输入":
+                case "自动启用整句模式":
                 case "整句神经重排":
                 case "空码自动清屏":
                     return SectionCodeInput;

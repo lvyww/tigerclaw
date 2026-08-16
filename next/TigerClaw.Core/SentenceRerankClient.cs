@@ -54,7 +54,7 @@ namespace TigerClaw.Core
         public void Request(SentenceRerankRequest request)
         {
             if (request?.Candidates == null || request.Candidates.Length == 0 ||
-                !_state.GetSentenceInputEnabled() || !_state.GetSentenceNeuralRerankEnabled())
+                !_state.IsSentenceInputActive() || !_state.GetSentenceNeuralRerankEnabled())
             {
                 return;
             }
