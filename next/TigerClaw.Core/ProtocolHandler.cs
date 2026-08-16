@@ -674,7 +674,7 @@ namespace TigerClaw.Core
                 {
                     int pageSize = _state.GetPageSize();
                     EngineUiSnapshot engineState = _engine.GetUiSnapshot(pageSize);
-                    _state.GetCaret(out int caretX, out int caretY, out _, out _);
+                    _state.GetCaret(out int caretX, out int caretY, out _, out int caretHeight);
                     bool hideStatusBar = _state.GetHideStatusBar() || (!_isNativeHookStatus && !_imeActive);
 
                     var state = new OverlayUiState
@@ -691,6 +691,7 @@ namespace TigerClaw.Core
                         CompositionState = engineState.CompositionState,
                         CaretX = caretX,
                         CaretY = caretY,
+                        CaretHeight = caretHeight,
                         VerticalCandidates = _state.GetVerticalCandidates(),
                         ShowCandidateIndex = _state.GetShowCandidateIndex(),
                         HideCandidateItems = _state.GetHideCandidateItems(),
@@ -721,6 +722,12 @@ namespace TigerClaw.Core
             if (!engineState.IsComposing)
             {
                 ClearFreshCaretAwaitState();
+                return false;
+            }
+
+            if ((engineState.Candidates == null || engineState.Candidates.Length == 0) &&
+                _engine.IsSentenceDecodePending)
+            {
                 return false;
             }
 

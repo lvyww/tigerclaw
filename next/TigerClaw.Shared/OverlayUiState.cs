@@ -82,6 +82,9 @@ namespace TigerClaw.Shared
 
         [DataMember(Order = 26)]
         public int SelectedCandidateIndex { get; set; } = -1;
+
+        [DataMember(Order = 27)]
+        public int CaretHeight { get; set; }
     }
 }
 

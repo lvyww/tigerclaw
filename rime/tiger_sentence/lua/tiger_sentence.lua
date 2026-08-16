@@ -342,6 +342,20 @@ local function processor(key_event, env)
     local repr = key_event:repr()
     local ch = is_plain_char_key(key_event, repr)
     if ch then
+        -- Digits are rank suffixes only while composing. Idle Chinese mode
+        -- should commit 0-9 like a normal Rime schema (including 全角).
+        if ch:match("%d") and not context:is_composing() then
+            if #repr == 1 then
+                return 2
+            end
+            if context:get_option("full_shape") then
+                local full = { "０", "１", "２", "３", "４", "５", "６", "７", "８", "９" }
+                env.engine:commit_text(full[tonumber(ch) + 1])
+            else
+                env.engine:commit_text(ch)
+            end
+            return 1
+        end
         context:push_input(ch)
         return 1
     end

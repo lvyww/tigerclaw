@@ -88,6 +88,7 @@ namespace TigerClaw.Overlay
                 CompositionState = state.CompositionState,
                 CaretX = state.CaretX,
                 CaretY = state.CaretY,
+                CaretHeight = state.CaretHeight,
                 VerticalCandidates = state.VerticalCandidates,
                 ShowCandidateIndex = state.ShowCandidateIndex,
                 HideCandidateItems = state.HideCandidateItems,

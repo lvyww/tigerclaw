@@ -3690,11 +3690,7 @@ namespace TigerClaw.Core
                         inputCode = GetSentenceDisplayCode();
                     }
                     string sentenceRawCode = _sentenceRawBuffer.ToString();
-                    SentenceCandidate[] sentenceCandidates =
-                        _sentenceResultLexiconVersion == _state.LexiconVersion &&
-                        string.Equals(_sentenceDecodeResult.RawCode, sentenceRawCode, StringComparison.Ordinal)
-                            ? _sentenceDecodeResult.Candidates ?? Array.Empty<SentenceCandidate>()
-                            : Array.Empty<SentenceCandidate>();
+                    SentenceCandidate[] sentenceCandidates = GetPublishedSentenceCandidates(sentenceRawCode);
                     allList = sentenceCandidates.Select(candidate => candidate.Text).ToList();
                     list = allList;
                 }
@@ -3752,24 +3748,93 @@ namespace TigerClaw.Core
             }
         }
 
+        private SentenceCandidate[] GetPublishedSentenceCandidates(string sentenceRawCode)
+        {
+            SentenceCandidate[] current = _sentenceDecodeResult.Candidates ?? Array.Empty<SentenceCandidate>();
+            if (_sentenceResultLexiconVersion != _state.LexiconVersion)
+            {
+                return Array.Empty<SentenceCandidate>();
+            }
+
+            if (string.Equals(_sentenceDecodeResult.RawCode, sentenceRawCode, StringComparison.Ordinal))
+            {
+                return current;
+            }
+
+            // Decode is still catching up. Keep the last list so Overlay does not
+            // collapse to a one-row code window between keys.
+            if (sentenceRawCode.Length > 0 && current.Length > 0)
+            {
+                return current;
+            }
+
+            return Array.Empty<SentenceCandidate>();
+        }
+
         private string GetSentenceDisplayCode()
         {
             string rawCode = _sentenceRawBuffer.ToString();
+            if (_sentenceResultLexiconVersion != _state.LexiconVersion)
+            {
+                return rawCode;
+            }
+
             SentenceCandidate[] candidates = _sentenceDecodeResult.Candidates ?? Array.Empty<SentenceCandidate>();
             int index = _sentenceSelectedIndex >= 0 && _sentenceSelectedIndex < candidates.Length
                 ? _sentenceSelectedIndex
                 : 0;
-            if (index < candidates.Length && !string.IsNullOrWhiteSpace(candidates[index].SegmentedCode))
+            string segmented = index < candidates.Length ? candidates[index].SegmentedCode : null;
+            if (string.IsNullOrEmpty(segmented))
             {
+                return rawCode;
+            }
+
                 string decodedRawCode = _sentenceDecodeResult.RawCode ?? string.Empty;
                 if (string.Equals(decodedRawCode, rawCode, StringComparison.Ordinal))
                 {
-                    return candidates[index].SegmentedCode;
+                return segmented;
                 }
 
+            if (rawCode.StartsWith(decodedRawCode, StringComparison.Ordinal))
+            {
+                return segmented + rawCode.Substring(decodedRawCode.Length);
+            }
+
+            if (decodedRawCode.StartsWith(rawCode, StringComparison.Ordinal))
+            {
+                return TrimSegmentedCodeToRawPrefix(segmented, rawCode);
             }
 
             return rawCode;
+        }
+
+        private static string TrimSegmentedCodeToRawPrefix(string segmented, string rawPrefix)
+        {
+            if (string.IsNullOrEmpty(segmented) || string.IsNullOrEmpty(rawPrefix))
+            {
+                return rawPrefix ?? string.Empty;
+            }
+
+            int kept = 0;
+            int rawCount = 0;
+            for (int i = 0; i < segmented.Length && rawCount < rawPrefix.Length; i++)
+            {
+                if (segmented[i] == ' ')
+                {
+                    kept = i + 1;
+                    continue;
+                }
+
+                if (segmented[i] != rawPrefix[rawCount])
+                {
+                    return rawPrefix;
+                }
+
+                rawCount++;
+                kept = i + 1;
+            }
+
+            return rawCount == rawPrefix.Length ? segmented.Substring(0, kept) : rawPrefix;
         }
 
         private void EnsureMixedDecodeCurrent()

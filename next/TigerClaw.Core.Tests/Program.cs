@@ -54,6 +54,8 @@ namespace TigerClaw.Core.Tests
                 SentenceEngineReranksOnlyTopFive();
                 KeyReplayCacheReturnsOriginalResultWithCurrentSequence();
                 SentenceEngineDecodesLongWorkOffTheKeyPath();
+                SentenceEngineHoldsPreviousCandidatesWhileDecodeIsPending();
+                SentenceEngineKeepsPreviousSegmentationWhileDecodeIsPending();
                 Console.WriteLine("TigerClaw.Core.Tests: all tests passed.");
                 return 0;
             }
@@ -978,6 +980,98 @@ namespace TigerClaw.Core.Tests
                 Equal("ab", snapshot.ActiveInputCode, nameof(SentenceEngineDecodesLongWorkOffTheKeyPath) + ".segmented_display");
                 True(snapshot.Candidates.Length > 0 && snapshot.Candidates[0] == "你",
                     nameof(SentenceEngineDecodesLongWorkOffTheKeyPath) + ".candidate");
+            }
+        }
+
+        private static void SentenceEngineKeepsPreviousSegmentationWhileDecodeIsPending()
+        {
+            var state = new CoreRuntimeState();
+            True(state.TrySetConfigValue("整句输入", "是", out _, out string reason),
+                nameof(SentenceEngineKeepsPreviousSegmentationWhileDecodeIsPending) + ": " + reason);
+            var decoder = new SentenceInputDecoder(
+                SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
+                {
+                    ["ue"] = new List<string> { "的" },
+                    ["ot"] = new List<string> { "是" },
+                    ["tu"] = new List<string> { "我" }
+                }),
+                new SlowSentenceLanguageModel(),
+                beamWidth: 10);
+            var engine = new InputMethodEngine(state, decoder, sentenceDecodeSynchronously: false);
+            using (var completed = new ManualResetEvent(false))
+            {
+                engine.SetSentenceDecodeCompletedCallback(() => completed.Set());
+                TypeLetters(engine, "ueot");
+                True(completed.WaitOne(3000), nameof(SentenceEngineKeepsPreviousSegmentationWhileDecodeIsPending) + ".prefix_ready");
+                Equal("ue ot", engine.GetUiSnapshot(5).ActiveInputCode,
+                    nameof(SentenceEngineKeepsPreviousSegmentationWhileDecodeIsPending) + ".prefix_seg");
+
+                completed.Reset();
+                Press(engine, 0x54);
+                True(engine.IsSentenceDecodePending, nameof(SentenceEngineKeepsPreviousSegmentationWhileDecodeIsPending) + ".append_pending");
+                EngineUiSnapshot appended = engine.GetUiSnapshot(5);
+                Equal("ue ott", appended.ActiveInputCode,
+                    nameof(SentenceEngineKeepsPreviousSegmentationWhileDecodeIsPending) + ".append_display");
+                engine.GetCompositionDisplayParts(out _, out string appendedComposition);
+                Equal("ue ott", appendedComposition,
+                    nameof(SentenceEngineKeepsPreviousSegmentationWhileDecodeIsPending) + ".append_composition");
+
+                True(completed.WaitOne(3000), nameof(SentenceEngineKeepsPreviousSegmentationWhileDecodeIsPending) + ".append_ready");
+
+                completed.Reset();
+                TypeLetters(engine, "u");
+                True(completed.WaitOne(3000), nameof(SentenceEngineKeepsPreviousSegmentationWhileDecodeIsPending) + ".full_ready");
+                Equal("ue ot tu", engine.GetUiSnapshot(5).ActiveInputCode,
+                    nameof(SentenceEngineKeepsPreviousSegmentationWhileDecodeIsPending) + ".full_seg");
+
+                completed.Reset();
+                Press(engine, 0x08);
+                if (engine.IsSentenceDecodePending)
+                {
+                    Equal("ue ot t", engine.GetUiSnapshot(5).ActiveInputCode,
+                        nameof(SentenceEngineKeepsPreviousSegmentationWhileDecodeIsPending) + ".back_display");
+                }
+            }
+        }
+
+        private static void SentenceEngineHoldsPreviousCandidatesWhileDecodeIsPending()
+        {
+            var state = new CoreRuntimeState();
+            True(state.TrySetConfigValue("整句输入", "是", out _, out string reason),
+                nameof(SentenceEngineHoldsPreviousCandidatesWhileDecodeIsPending) + ": " + reason);
+            var decoder = new SentenceInputDecoder(
+                SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
+                {
+                    ["ot"] = new List<string> { "是" },
+                    ["ue"] = new List<string> { "的" }
+                }),
+                new SlowSentenceLanguageModel(),
+                beamWidth: 10);
+            var engine = new InputMethodEngine(state, decoder, sentenceDecodeSynchronously: false);
+            using (var completed = new ManualResetEvent(false))
+            {
+                engine.SetSentenceDecodeCompletedCallback(() => completed.Set());
+                TypeLetters(engine, "ot");
+                True(completed.WaitOne(3000), nameof(SentenceEngineHoldsPreviousCandidatesWhileDecodeIsPending) + ".prefix_ready");
+                Equal("是", engine.GetUiSnapshot(5).Candidates[0], nameof(SentenceEngineHoldsPreviousCandidatesWhileDecodeIsPending) + ".prefix");
+
+                completed.Reset();
+                Press(engine, 0x55);
+                True(engine.IsSentenceDecodePending, nameof(SentenceEngineHoldsPreviousCandidatesWhileDecodeIsPending) + ".pending");
+                EngineUiSnapshot held = engine.GetUiSnapshot(5);
+                Equal("otu", held.ActiveInputCode, nameof(SentenceEngineHoldsPreviousCandidatesWhileDecodeIsPending) + ".live_code");
+                True(held.Candidates.Length > 0 && held.Candidates[0] == "是",
+                    nameof(SentenceEngineHoldsPreviousCandidatesWhileDecodeIsPending) + ".held");
+
+                True(completed.WaitOne(3000), nameof(SentenceEngineHoldsPreviousCandidatesWhileDecodeIsPending) + ".suffix_ready");
+                True(!engine.IsSentenceDecodePending, nameof(SentenceEngineHoldsPreviousCandidatesWhileDecodeIsPending) + ".caught_up");
+                True(engine.GetUiSnapshot(5).Candidates.Length == 0,
+                    nameof(SentenceEngineHoldsPreviousCandidatesWhileDecodeIsPending) + ".empty_when_done");
+
+                Press(engine, 0x1B);
+                EngineUiSnapshot cleared = engine.GetUiSnapshot(5);
+                True(!cleared.IsComposing && cleared.Candidates.Length == 0,
+                    nameof(SentenceEngineHoldsPreviousCandidatesWhileDecodeIsPending) + ".cleared");
             }
         }
 

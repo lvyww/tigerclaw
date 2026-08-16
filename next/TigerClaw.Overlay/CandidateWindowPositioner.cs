@@ -10,6 +10,8 @@ namespace TigerClaw.Overlay
     internal sealed class CandidateWindowPositioner
     {
         private const int StartMenuOffsetPx = 10;
+        private const int CaretGapPx = 5;
+        private const int DefaultCaretHeightPx = 20;
         private readonly OverlayLocalCaretTracker _localCaretTracker;
         private IntPtr _lastMonitor = IntPtr.Zero;
         private double _screenDpiX = 96.0;
@@ -21,6 +23,11 @@ namespace TigerClaw.Overlay
         private int _lastObservedFrontendCaretYPx = int.MinValue;
         private bool _frontendCaretChangedThisComposition;
         private bool _frontendCaretPendingForNextComposition;
+        private bool _placeAboveLocked;
+        private bool _hasCaretAnchor;
+        private int _anchorXPx;
+        private int _anchorYPx;
+        private int _anchorHeightPx;
 
         public CandidateWindowPositioner(OverlayLocalCaretTracker localCaretTracker)
         {
@@ -36,6 +43,8 @@ namespace TigerClaw.Overlay
             _lastObservedFrontendCaretYPx = int.MinValue;
             _frontendCaretChangedThisComposition = false;
             _frontendCaretPendingForNextComposition = false;
+            _placeAboveLocked = false;
+            ClearCaretAnchor();
         }
 
         public bool Update(Window window, FrameworkElement contentRoot, OverlayUiState state, bool nowComposing, double predictedWidthDip, double predictedHeightDip)
@@ -70,6 +79,8 @@ namespace TigerClaw.Overlay
                 _lastTargetXPx = int.MinValue;
                 _lastTargetYPx = int.MinValue;
                 _frontendCaretChangedThisComposition = false;
+                _placeAboveLocked = false;
+                ClearCaretAnchor();
                 return false;
             }
 
@@ -77,17 +88,31 @@ namespace TigerClaw.Overlay
             {
                 _frontendCaretChangedThisComposition = _frontendCaretPendingForNextComposition;
                 _frontendCaretPendingForNextComposition = false;
+                _placeAboveLocked = false;
+                ClearCaretAnchor();
             }
 
-            if (!TryResolveCaretPosition(state, out int caretX, out int caretY))
+            if (!TryResolveCaretPosition(state, out int caretX, out int caretY, out int caretHeightPx))
             {
                 _prevComposing = nowComposing;
                 return false;
             }
 
+            if (!_hasCaretAnchor)
+            {
+                _anchorXPx = caretX;
+                _anchorYPx = caretY;
+                _anchorHeightPx = Math.Max(1, caretHeightPx);
+                _hasCaretAnchor = true;
+            }
+
+            caretX = _anchorXPx;
+            caretY = _anchorYPx;
+            caretHeightPx = _anchorHeightPx;
+
             IntPtr hwnd = new System.Windows.Interop.WindowInteropHelper(window).Handle;
             int rawXPx = caretX;
-            int rawYPx = caretY + 5;
+            int rawYPx = caretY + CaretGapPx;
             NativeMethods.POINT caretPoint = new NativeMethods.POINT { X = rawXPx, Y = rawYPx };
             IntPtr monitor = NativeMethods.MonitorFromPoint(caretPoint, 2);
             if (monitor == IntPtr.Zero)
@@ -117,7 +142,25 @@ namespace TigerClaw.Overlay
             int maxXPx = Math.Max(workLeftPx, workRightPx - widthPx - 2);
             int maxYPx = Math.Max(workTopPx, workBottomPx - heightPx - 2);
             int targetXPx = isStartMenuLike ? workLeftPx + StartMenuOffsetPx : rawXPx;
-            int targetYPx = isStartMenuLike ? workTopPx + StartMenuOffsetPx : rawYPx;
+            int targetYPx;
+            if (isStartMenuLike)
+            {
+                targetYPx = workTopPx + StartMenuOffsetPx;
+            }
+            else
+            {
+                int caretBottomPx = caretY;
+                int caretTopPx = caretBottomPx - Math.Max(1, caretHeightPx);
+                if (ShouldPlaceAbove(caretTopPx, caretBottomPx, heightPx, workTopPx, workBottomPx))
+                {
+                    _placeAboveLocked = true;
+                    targetYPx = caretTopPx - CaretGapPx - heightPx;
+                }
+                else
+                {
+                    targetYPx = caretBottomPx + CaretGapPx;
+                }
+            }
             int clampedXPx = (int)Clamp(targetXPx, workLeftPx, maxXPx);
             int clampedYPx = (int)Clamp(targetYPx, workTopPx, maxYPx);
             bool outOfBounds = targetXPx != clampedXPx || targetYPx != clampedYPx;
@@ -157,16 +200,54 @@ namespace TigerClaw.Overlay
             return true;
         }
 
-        private bool TryResolveCaretPosition(OverlayUiState state, out int x, out int y)
+        private void ClearCaretAnchor()
+        {
+            _hasCaretAnchor = false;
+            _anchorXPx = 0;
+            _anchorYPx = 0;
+            _anchorHeightPx = DefaultCaretHeightPx;
+        }
+
+        private bool ShouldPlaceAbove(int caretTopPx, int caretBottomPx, int windowHeightPx, int workTopPx, int workBottomPx)
+        {
+            if (_placeAboveLocked)
+            {
+                return true;
+            }
+
+            bool fitsBelow = caretBottomPx + CaretGapPx + windowHeightPx <= workBottomPx;
+            if (fitsBelow)
+            {
+                return false;
+            }
+
+            bool fitsAbove = caretTopPx - CaretGapPx - windowHeightPx >= workTopPx;
+            if (fitsAbove)
+            {
+                return true;
+            }
+
+            int spaceAbove = caretTopPx - workTopPx;
+            int spaceBelow = workBottomPx - caretBottomPx;
+            return spaceAbove > spaceBelow;
+        }
+
+        private bool TryResolveCaretPosition(OverlayUiState state, out int x, out int y, out int height)
         {
             x = 0;
             y = 0;
+            height = DefaultCaretHeightPx;
 
             if (_localCaretTracker != null &&
                 _localCaretTracker.TryGetCachedAccessibleSnapshot(out LocalCaretSnapshot accessibleSnapshot))
             {
                 x = accessibleSnapshot.X;
                 y = accessibleSnapshot.Y;
+                if (accessibleSnapshot.Height > 0)
+                {
+                    height = accessibleSnapshot.Height;
+                }
+
                 return true;
             }
 
@@ -178,6 +259,11 @@ namespace TigerClaw.Overlay
                 {
                     x = frontendCaretX;
                     y = frontendCaretY;
+                    if (state != null && state.CaretHeight > 0)
+                    {
+                        height = state.CaretHeight;
+                    }
+
                     return true;
                 }
             }
