@@ -98,6 +98,20 @@ namespace TigerClaw.Overlay
             return (state.Candidates?.Length ?? 0) > 0;
         }
 
+        // Matches InputMethodEngine.CompositionState.CnSentence.
+        private const int SentenceCompositionState = 5;
+
+        private static int ResolveHighlightIndex(OverlayUiState state)
+        {
+            int selectedIndex = state.SelectedCandidateIndex;
+            if (state.CompositionState == SentenceCompositionState && selectedIndex == 0)
+            {
+                return -1;
+            }
+
+            return selectedIndex;
+        }
+
         private static bool HasInputCode(OverlayUiState state)
         {
             return !string.IsNullOrEmpty(state.InputCode);
@@ -122,6 +136,7 @@ namespace TigerClaw.Overlay
             string[] annotations = includeAnnotations ? (state.CandidateAnnotations ?? Array.Empty<string>()) : Array.Empty<string>();
             bool showIndex = state.ShowCandidateIndex;
             bool showCode = mode == CandidateDisplayMode.CodeAndCandidates;
+            int selectedIndex = ResolveHighlightIndex(state);
             var sb = new StringBuilder(256);
 
             if (state.VerticalCandidates)
@@ -133,7 +148,7 @@ namespace TigerClaw.Overlay
                     annotations,
                     showIndex,
                     showCode,
-                    state.SelectedCandidateIndex,
+                    selectedIndex,
                     ref selectionStart,
                     ref selectionLength);
             }
@@ -146,7 +161,7 @@ namespace TigerClaw.Overlay
                     annotations,
                     showIndex,
                     showCode,
-                    state.SelectedCandidateIndex,
+                    selectedIndex,
                     ref selectionStart,
                     ref selectionLength);
             }
