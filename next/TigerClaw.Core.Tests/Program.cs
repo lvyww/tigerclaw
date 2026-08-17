@@ -1,9 +1,13 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.Serialization;
+using System.Runtime.Serialization.Json;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using TigerClaw.Core;
 
 namespace TigerClaw.Core.Tests
@@ -17,6 +21,32 @@ namespace TigerClaw.Core.Tests
                 if (args.Length == 4 && string.Equals(args[0], "--sentence-smoke", StringComparison.OrdinalIgnoreCase))
                 {
                     return RunSentenceSmoke(args[1], args[2], args[3]);
+                }
+                if (args.Length >= 4 && string.Equals(args[0], "--sentence-eval", StringComparison.OrdinalIgnoreCase))
+                {
+                    return RunSentenceEval(
+                        args[1],
+                        args[2],
+                        args[3],
+                        args.Length > 4 ? args[4] : null,
+                        sweep: false);
+                }
+                if (args.Length >= 4 && string.Equals(args[0], "--sentence-tune", StringComparison.OrdinalIgnoreCase))
+                {
+                    return RunSentenceEval(
+                        args[1],
+                        args[2],
+                        args[3],
+                        args.Length > 4 ? args[4] : null,
+                        sweep: true);
+                }
+                if (args.Length >= 4 && string.Equals(args[0], "--sentence-compare", StringComparison.OrdinalIgnoreCase))
+                {
+                    return RunSentenceCompare(
+                        args[1],
+                        args[2],
+                        args[3],
+                        args.Length > 4 ? args[4] : null);
                 }
                 if (args.Length == 1 && string.Equals(args[0], "--sentence-client-smoke", StringComparison.OrdinalIgnoreCase))
                 {
@@ -64,6 +94,13 @@ namespace TigerClaw.Core.Tests
             catch (Exception ex)
             {
                 Console.Error.WriteLine("TigerClaw.Core.Tests: " + ex.Message);
+                Exception inner = ex.InnerException;
+                while (inner != null)
+                {
+                    Console.Error.WriteLine("inner: " + inner.Message);
+                    inner = inner.InnerException;
+                }
+
                 return 1;
             }
         }
@@ -250,7 +287,7 @@ namespace TigerClaw.Core.Tests
             Equal("abCd。", punctuation.TextToOutput, nameof(EnginePreservesShiftedLetterInMixedInput));
         }
 
-        private static int RunSentenceSmoke(string lexiconPath, string modelPath, string code)
+        private static Dictionary<string, List<string>> LoadSentenceLexiconSource(string lexiconPath)
         {
             var source = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
             foreach (string rawLine in File.ReadLines(lexiconPath))
@@ -280,6 +317,13 @@ namespace TigerClaw.Core.Tests
                 }
             }
 
+            return source;
+        }
+
+        private static int RunSentenceSmoke(string lexiconPath, string modelPath, string code)
+        {
+            Dictionary<string, List<string>> source = LoadSentenceLexiconSource(lexiconPath);
+
             Stopwatch watch = Stopwatch.StartNew();
             SentenceLexiconIndex index = SentenceLexiconIndex.Build(source);
             ISentenceLanguageModel model = SentenceNgramModel.Load(modelPath);
@@ -297,6 +341,617 @@ namespace TigerClaw.Core.Tests
                 Console.WriteLine((indexValue + 1) + "\t" + candidate.Text + "\t" + candidate.FinalScore.ToString("F4"));
             }
             return result.Candidates.Length > 0 ? 0 : 2;
+        }
+
+        private static int RunSentenceEval(
+            string casesPath,
+            string modelPath,
+            string lexiconPath,
+            string outputPath,
+            bool sweep)
+        {
+            List<EvalCaseDto> cases = LoadEvalCases(casesPath);
+            if (!sweep)
+            {
+                AppendHandcraftedEvalCases(cases);
+            }
+
+            Dictionary<string, List<string>> source = LoadSentenceLexiconSource(lexiconPath);
+            Stopwatch watch = Stopwatch.StartNew();
+            SentenceLexiconIndex index = SentenceLexiconIndex.Build(source);
+            ISentenceLanguageModel model = SentenceNgramModel.Load(modelPath);
+            var decoder = new SentenceInputDecoder(
+                index,
+                model,
+                isolationPenalty: sweep ? SentenceIsolationPenalty.None : null);
+            long loadMilliseconds = watch.ElapsedMilliseconds;
+            watch.Restart();
+
+            List<SentenceIsolationPenalty> configs = sweep
+                ? BuildIsolationSweep()
+                : new List<SentenceIsolationPenalty> { SentenceIsolationPenalty.CreateDefault() };
+            var tallies = new EvalTally[configs.Count];
+            for (int c = 0; c < configs.Count; c++)
+            {
+                tallies[c] = new EvalTally();
+            }
+
+            var rows = new List<string>(cases.Count);
+            for (int i = 0; i < cases.Count; i++)
+            {
+                EvalCaseDto item = cases[i];
+                SentenceDecodeResult decoded = decoder.Decode(item.Code, 20);
+                int baselineRank = RankOf(decoded, item.Text);
+                string topText = decoded.Candidates != null && decoded.Candidates.Length > 0
+                    ? decoded.Candidates[0].Text
+                    : string.Empty;
+                AccumulateTally(tallies[0], baselineRank);
+                if (!sweep)
+                {
+                    rows.Add(FormatEvalRow(item, baselineRank, topText));
+                    if (string.Equals(item.Source, "handcrafted-regression", StringComparison.Ordinal))
+                    {
+                        Console.WriteLine("handcrafted\trank=" + FormatRank(baselineRank) +
+                                          "\tgold=" + item.Text + "\ttop=" + topText);
+                    }
+                }
+                else
+                {
+                    for (int c = 1; c < configs.Count; c++)
+                    {
+                        AccumulateTally(tallies[c], RankAfterIsolationPenalty(decoded, item.Text, model, configs[c]));
+                    }
+                }
+
+                if ((i + 1) % 100 == 0)
+                {
+                    Console.Error.WriteLine("eval " + (i + 1) + "/" + cases.Count);
+                }
+            }
+
+            watch.Stop();
+            if (sweep)
+            {
+                ReportHandcraftedIsolationSweep(decoder, model, configs);
+            }
+
+            var summaries = new List<string>();
+            for (int c = 0; c < configs.Count; c++)
+            {
+                string label = configs[c] == null || !configs[c].Enabled ? "core-ngram-no-penalty" : configs[c].Label();
+                string summary = FormatEvalSummary(label, tallies[c], cases.Count, loadMilliseconds, watch.Elapsed.TotalSeconds);
+                summaries.Add(summary);
+                Console.WriteLine(summary);
+            }
+
+            if (!string.IsNullOrEmpty(outputPath))
+            {
+                string dir = Path.GetDirectoryName(outputPath);
+                if (!string.IsNullOrEmpty(dir))
+                {
+                    Directory.CreateDirectory(dir);
+                }
+
+                string payload = sweep
+                    ? "{\"summaries\":[" + string.Join(",", summaries.ToArray()) + "]}"
+                    : "{\"summary\":" + summaries[0] + ",\"cases\":[" + string.Join(",", rows.ToArray()) + "]}";
+                File.WriteAllText(outputPath, payload, new UTF8Encoding(false));
+            }
+
+            return 0;
+        }
+
+        private static int RunSentenceCompare(
+            string casesPath,
+            string modelPath,
+            string lexiconPath,
+            string outputPath)
+        {
+            List<EvalCaseDto> cases = LoadEvalCases(casesPath);
+            Dictionary<string, List<string>> source = LoadSentenceLexiconSource(lexiconPath);
+            Stopwatch watch = Stopwatch.StartNew();
+            SentenceLexiconIndex index = SentenceLexiconIndex.Build(source);
+            SentenceIsolationPenalty afterPenalty = SentenceIsolationPenalty.CreateDefault();
+            long loadMilliseconds = watch.ElapsedMilliseconds;
+            watch.Restart();
+
+            int workers = Math.Min(8, Math.Max(1, Environment.ProcessorCount));
+            var ownedModels = new ConcurrentBag<SentenceNgramModel>();
+            var locals = new ThreadLocal<CompareLocal>(() =>
+            {
+                SentenceNgramModel localModel = SentenceNgramModel.Load(modelPath);
+                ownedModels.Add(localModel);
+                return new CompareLocal
+                {
+                    Model = localModel,
+                    Decoder = new SentenceInputDecoder(
+                        index,
+                        localModel,
+                        isolationPenalty: SentenceIsolationPenalty.None)
+                };
+            });
+
+            var beforeTally = new EvalTally();
+            var afterTally = new EvalTally();
+            var gained = new ConcurrentBag<string>();
+            var lost = new ConcurrentBag<string>();
+            var recallLost = new ConcurrentBag<string>();
+            int done = 0;
+            try
+            {
+                Parallel.For(
+                    0,
+                    cases.Count,
+                    new ParallelOptions { MaxDegreeOfParallelism = workers },
+                    i =>
+                    {
+                        EvalCaseDto item = cases[i];
+                        CompareLocal local = locals.Value;
+                        SentenceDecodeResult decoded = local.Decoder.Decode(item.Code, 20);
+                        int beforeRank;
+                        string beforeTop;
+                        ScoreIsolation(decoded, item.Text, local.Model, null, out beforeRank, out beforeTop);
+                        int afterRank;
+                        string afterTop;
+                        ScoreIsolation(decoded, item.Text, local.Model, afterPenalty, out afterRank, out afterTop);
+                        lock (beforeTally)
+                        {
+                            AccumulateTally(beforeTally, beforeRank);
+                            AccumulateTally(afterTally, afterRank);
+                        }
+
+                        if (beforeRank != 1 && afterRank == 1)
+                        {
+                            gained.Add(FormatCompareFlip(item, beforeRank, afterRank, beforeTop, afterTop));
+                        }
+                        else if (beforeRank == 1 && afterRank != 1)
+                        {
+                            lost.Add(FormatCompareFlip(item, beforeRank, afterRank, beforeTop, afterTop));
+                        }
+
+                        if (beforeRank > 0 && afterRank <= 0)
+                        {
+                            recallLost.Add(FormatCompareFlip(item, beforeRank, afterRank, beforeTop, afterTop));
+                        }
+
+                        int finished = Interlocked.Increment(ref done);
+                        if (finished % 200 == 0)
+                        {
+                            Console.Error.WriteLine("compare " + finished + "/" + cases.Count);
+                        }
+                    });
+
+                watch.Stop();
+                string beforeSummary = FormatEvalSummary(
+                    "core-ngram-no-penalty",
+                    beforeTally,
+                    cases.Count,
+                    loadMilliseconds,
+                    watch.Elapsed.TotalSeconds);
+                string afterSummary = FormatEvalSummary(
+                    afterPenalty.Label(),
+                    afterTally,
+                    cases.Count,
+                    loadMilliseconds,
+                    watch.Elapsed.TotalSeconds);
+                Console.WriteLine(beforeSummary);
+                Console.WriteLine(afterSummary);
+                Console.WriteLine(
+                    "workers=" + workers +
+                    " gained_top1=" + gained.Count +
+                    " lost_top1=" + lost.Count +
+                    " recall_lost=" + recallLost.Count);
+
+                ReportCompareBag("gained-top1", gained);
+                ReportCompareBag("lost-top1", lost);
+                ReportCompareBag("recall-lost", recallLost);
+
+                List<EvalCaseDto> extras = new List<EvalCaseDto>();
+                AppendHandcraftedEvalCases(extras);
+                SentenceNgramModel extraModel = SentenceNgramModel.Load(modelPath);
+                ownedModels.Add(extraModel);
+                var extraDecoder = new SentenceInputDecoder(
+                    index,
+                    extraModel,
+                    isolationPenalty: SentenceIsolationPenalty.None);
+                for (int i = 0; i < extras.Count; i++)
+                {
+                    EvalCaseDto item = extras[i];
+                    SentenceDecodeResult decoded = extraDecoder.Decode(item.Code, 20);
+                    int beforeRank;
+                    string beforeTop;
+                    ScoreIsolation(decoded, item.Text, extraModel, null, out beforeRank, out beforeTop);
+                    int afterRank;
+                    string afterTop;
+                    ScoreIsolation(decoded, item.Text, extraModel, afterPenalty, out afterRank, out afterTop);
+                    Console.WriteLine(
+                        "handcrafted\tgold=" + item.Text +
+                        "\tbefore=" + FormatRank(beforeRank) +
+                        "\tafter=" + FormatRank(afterRank) +
+                        "\tbefore_top=" + beforeTop +
+                        "\tafter_top=" + afterTop);
+                }
+
+                if (!string.IsNullOrEmpty(outputPath))
+                {
+                    string dir = Path.GetDirectoryName(outputPath);
+                    if (!string.IsNullOrEmpty(dir))
+                    {
+                        Directory.CreateDirectory(dir);
+                    }
+
+                    string payload = "{\"before\":" + beforeSummary +
+                                     ",\"after\":" + afterSummary +
+                                     ",\"workers\":" + workers +
+                                     ",\"gained_top1\":" + gained.Count +
+                                     ",\"lost_top1\":" + lost.Count +
+                                     ",\"recall_lost\":" + recallLost.Count +
+                                     ",\"gained\":[" + string.Join(",", gained.ToArray()) + "]" +
+                                     ",\"lost\":[" + string.Join(",", lost.ToArray()) + "]" +
+                                     ",\"recall_lost_cases\":[" + string.Join(",", recallLost.ToArray()) + "]}";
+                    File.WriteAllText(outputPath, payload, new UTF8Encoding(false));
+                }
+            }
+            finally
+            {
+                locals.Dispose();
+                foreach (SentenceNgramModel owned in ownedModels)
+                {
+                    owned.Dispose();
+                }
+            }
+
+            return 0;
+        }
+
+        private sealed class CompareLocal
+        {
+            public ISentenceLanguageModel Model;
+            public SentenceInputDecoder Decoder;
+        }
+
+        private static void ReportCompareBag(string label, ConcurrentBag<string> rows)
+        {
+            string[] items = rows.ToArray();
+            Array.Sort(items, StringComparer.Ordinal);
+            int limit = Math.Min(items.Length, 20);
+            for (int i = 0; i < limit; i++)
+            {
+                Console.WriteLine(label + "\t" + items[i]);
+            }
+
+            if (items.Length > limit)
+            {
+                Console.WriteLine(label + "\t... " + (items.Length - limit) + " more");
+            }
+        }
+
+        private static string FormatCompareFlip(
+            EvalCaseDto item,
+            int beforeRank,
+            int afterRank,
+            string beforeTop,
+            string afterTop)
+        {
+            return "{\"text\":" + JsonString(item.Text) +
+                   ",\"code\":" + JsonString(item.Code) +
+                   ",\"before_rank\":" + (beforeRank > 0 ? beforeRank.ToString() : "null") +
+                   ",\"after_rank\":" + (afterRank > 0 ? afterRank.ToString() : "null") +
+                   ",\"before_top\":" + JsonString(beforeTop) +
+                   ",\"after_top\":" + JsonString(afterTop) + "}";
+        }
+
+        private static void ScoreIsolation(
+            SentenceDecodeResult decoded,
+            string gold,
+            ISentenceLanguageModel model,
+            SentenceIsolationPenalty penalty,
+            out int rank,
+            out string top)
+        {
+            rank = 0;
+            top = string.Empty;
+            if (decoded == null || decoded.Candidates == null || decoded.Candidates.Length == 0)
+            {
+                return;
+            }
+
+            if (penalty == null || !penalty.Enabled)
+            {
+                top = decoded.Candidates[0].Text;
+                rank = RankOf(decoded, gold);
+                return;
+            }
+
+            var scored = new List<KeyValuePair<double, string>>(decoded.Candidates.Length);
+            for (int i = 0; i < decoded.Candidates.Length; i++)
+            {
+                SentenceCandidate candidate = decoded.Candidates[i];
+                scored.Add(new KeyValuePair<double, string>(
+                    candidate.BaseScore - penalty.Apply(candidate.Text, model),
+                    candidate.Text));
+            }
+
+            scored.Sort((left, right) =>
+            {
+                int compared = right.Key.CompareTo(left.Key);
+                return compared != 0 ? compared : string.CompareOrdinal(left.Value, right.Value);
+            });
+            top = scored[0].Value;
+            for (int i = 0; i < scored.Count; i++)
+            {
+                if (string.Equals(scored[i].Value, gold, StringComparison.Ordinal))
+                {
+                    rank = i + 1;
+                    return;
+                }
+            }
+        }
+
+        private static List<SentenceIsolationPenalty> BuildIsolationSweep()
+        {
+            var configs = new List<SentenceIsolationPenalty>();
+            configs.Add(null);
+            int[] thresholds = { 3000, 4000, 5000, 8000 };
+            double[] lambdas = { 1.5, 2.0, 2.5, 3.0, 4.0, 5.0 };
+            bool[] modes = { false, true };
+            for (int t = 0; t < thresholds.Length; t++)
+            {
+                for (int l = 0; l < lambdas.Length; l++)
+                {
+                    for (int m = 0; m < modes.Length; m++)
+                    {
+                        configs.Add(new SentenceIsolationPenalty
+                        {
+                            RankThreshold = thresholds[t],
+                            Lambda = lambdas[l],
+                            UseLogRank = modes[m]
+                        });
+                    }
+                }
+            }
+
+            return configs;
+        }
+
+        private static void ReportHandcraftedIsolationSweep(
+            SentenceInputDecoder decoder,
+            ISentenceLanguageModel model,
+            List<SentenceIsolationPenalty> configs)
+        {
+            var extras = new List<EvalCaseDto>();
+            AppendHandcraftedEvalCases(extras);
+            for (int i = 0; i < extras.Count; i++)
+            {
+                EvalCaseDto item = extras[i];
+                SentenceDecodeResult decoded = decoder.Decode(item.Code, 20);
+                Console.WriteLine("handcrafted-gold\t" + item.Text);
+                for (int c = 0; c < configs.Count; c++)
+                {
+                    int rank = c == 0
+                        ? RankOf(decoded, item.Text)
+                        : RankAfterIsolationPenalty(decoded, item.Text, model, configs[c]);
+                    string label = configs[c] == null || !configs[c].Enabled ? "none" : configs[c].Label();
+                    Console.WriteLine("handcrafted\t" + label + "\trank=" + FormatRank(rank));
+                }
+            }
+        }
+
+        private static int RankAfterIsolationPenalty(
+            SentenceDecodeResult decoded,
+            string gold,
+            ISentenceLanguageModel model,
+            SentenceIsolationPenalty penalty)
+        {
+            if (decoded == null || decoded.Candidates == null || decoded.Candidates.Length == 0)
+            {
+                return 0;
+            }
+
+            var scored = new List<KeyValuePair<double, string>>(decoded.Candidates.Length);
+            for (int i = 0; i < decoded.Candidates.Length; i++)
+            {
+                SentenceCandidate candidate = decoded.Candidates[i];
+                double score = candidate.BaseScore - penalty.Apply(candidate.Text, model);
+                scored.Add(new KeyValuePair<double, string>(score, candidate.Text));
+            }
+
+            scored.Sort((left, right) =>
+            {
+                int compared = right.Key.CompareTo(left.Key);
+                return compared != 0 ? compared : string.CompareOrdinal(left.Value, right.Value);
+            });
+            for (int i = 0; i < scored.Count; i++)
+            {
+                if (string.Equals(scored[i].Value, gold, StringComparison.Ordinal))
+                {
+                    return i + 1;
+                }
+            }
+
+            return 0;
+        }
+
+        private static void AccumulateTally(EvalTally tally, int rank)
+        {
+            if (rank <= 0)
+            {
+                return;
+            }
+
+            tally.Recalled++;
+            tally.Mrr += 1.0 / rank;
+            if (rank <= 1)
+            {
+                tally.Top1++;
+            }
+
+            if (rank <= 5)
+            {
+                tally.Top5++;
+            }
+
+            if (rank <= 10)
+            {
+                tally.Top10++;
+            }
+        }
+
+        private static string FormatEvalRow(EvalCaseDto item, int rank, string topText)
+        {
+            return "{\"source\":" + JsonString(item.Source) +
+                   ",\"text\":" + JsonString(item.Text) +
+                   ",\"code\":" + JsonString(item.Code) +
+                   ",\"rank\":" + (rank > 0 ? rank.ToString() : "null") +
+                   ",\"top\":" + JsonString(topText) +
+                   ",\"hit\":" + (rank == 1 ? "true" : "false") + "}";
+        }
+
+        private static string FormatEvalSummary(string label, EvalTally tally, int cases, long loadMilliseconds, double seconds)
+        {
+            int total = Math.Max(cases, 1);
+            return "{\"model\":" + JsonString(label) +
+                   ",\"cases\":" + cases +
+                   ",\"recalled\":" + tally.Recalled +
+                   ",\"recall\":" + (tally.Recalled / (double)total).ToString("G9") +
+                   ",\"top_1\":" + (tally.Top1 / (double)total).ToString("G9") +
+                   ",\"top_5\":" + (tally.Top5 / (double)total).ToString("G9") +
+                   ",\"top_10\":" + (tally.Top10 / (double)total).ToString("G9") +
+                   ",\"mrr\":" + (tally.Mrr / total).ToString("G9") +
+                   ",\"load_ms\":" + loadMilliseconds +
+                   ",\"seconds\":" + seconds.ToString("G9") +
+                   ",\"milliseconds_per_case\":" + (seconds * 1000.0 / total).ToString("G9") + "}";
+        }
+
+        private static string FormatRank(int rank)
+        {
+            return rank > 0 ? rank.ToString() : "miss";
+        }
+
+        private sealed class EvalTally
+        {
+            public int Recalled;
+            public int Top1;
+            public int Top5;
+            public int Top10;
+            public double Mrr;
+        }
+
+        private static void AppendHandcraftedEvalCases(List<EvalCaseDto> cases)
+        {
+            AddEvalCaseIfMissing(cases, "好了不用全记最简码了", "bhrlcbtyjnsvjoqramnrl");
+            AddEvalCaseIfMissing(cases, "一百五十艘战船的明国大船", "fifuwunsipgydpiodueovrnmdiod");
+        }
+
+        private static void AddEvalCaseIfMissing(List<EvalCaseDto> cases, string text, string code)
+        {
+            for (int i = 0; i < cases.Count; i++)
+            {
+                if (string.Equals(cases[i].Text, text, StringComparison.Ordinal))
+                {
+                    return;
+                }
+            }
+
+            cases.Add(new EvalCaseDto
+            {
+                Text = text,
+                Code = code,
+                Source = "handcrafted-regression"
+            });
+        }
+
+        private static int RankOf(SentenceDecodeResult decoded, string gold)
+        {
+            if (decoded == null || decoded.Candidates == null)
+            {
+                return 0;
+            }
+
+            for (int i = 0; i < decoded.Candidates.Length; i++)
+            {
+                if (string.Equals(decoded.Candidates[i].Text, gold, StringComparison.Ordinal))
+                {
+                    return i + 1;
+                }
+            }
+
+            return 0;
+        }
+
+        private static List<EvalCaseDto> LoadEvalCases(string path)
+        {
+            using (var stream = File.OpenRead(path))
+            {
+                var serializer = new DataContractJsonSerializer(typeof(EvalCaseDto[]));
+                var loaded = serializer.ReadObject(stream) as EvalCaseDto[];
+                var result = new List<EvalCaseDto>();
+                if (loaded == null)
+                {
+                    return result;
+                }
+
+                for (int i = 0; i < loaded.Length; i++)
+                {
+                    EvalCaseDto item = loaded[i];
+                    if (item == null || string.IsNullOrEmpty(item.Text) || string.IsNullOrEmpty(item.Code))
+                    {
+                        continue;
+                    }
+
+                    result.Add(item);
+                }
+
+                return result;
+            }
+        }
+
+        private static string JsonString(string value)
+        {
+            if (value == null)
+            {
+                return "null";
+            }
+
+            var sb = new StringBuilder(value.Length + 2);
+            sb.Append('"');
+            for (int i = 0; i < value.Length; i++)
+            {
+                char ch = value[i];
+                if (ch == '"' || ch == '\\')
+                {
+                    sb.Append('\\');
+                    sb.Append(ch);
+                }
+                else if (ch == '\n')
+                {
+                    sb.Append("\\n");
+                }
+                else if (ch == '\r')
+                {
+                    sb.Append("\\r");
+                }
+                else
+                {
+                    sb.Append(ch);
+                }
+            }
+
+            sb.Append('"');
+            return sb.ToString();
+        }
+
+        [DataContract]
+        private sealed class EvalCaseDto
+        {
+            [DataMember(Name = "text")]
+            public string Text { get; set; }
+
+            [DataMember(Name = "code")]
+            public string Code { get; set; }
+
+            [DataMember(Name = "source")]
+            public string Source { get; set; }
         }
 
         private static void SentenceNgramV2LoadsFromMappedFile()
@@ -575,6 +1230,11 @@ namespace TigerClaw.Core.Tests
                     HashToken(previous2) * 0.031 +
                     HashToken(previous1) * 0.017 +
                     HashToken(target) * 0.011);
+            }
+
+            public bool HasObservedBigram(string previous, string target)
+            {
+                return false;
             }
 
             private static int HashToken(string token)
@@ -1134,6 +1794,11 @@ namespace TigerClaw.Core.Tests
             {
                 Thread.Sleep(75);
                 return 0.0;
+            }
+
+            public bool HasObservedBigram(string previous, string target)
+            {
+                return false;
             }
         }
 

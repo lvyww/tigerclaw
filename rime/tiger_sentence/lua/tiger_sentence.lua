@@ -1,9 +1,12 @@
 -- TigerClaw-style sentence lattice for Rime, with optional Lua KN scoring.
 local lexicon = require("tiger_sentence_lexicon")
 local kn_reader = require("tiger_sentence_kn")
+local ranks = require("tiger_sentence_ranks")
 
 local beam_width = 200
 local candidate_limit = 20
+local isolation_threshold = 3000
+local isolation_lambda = 2.0
 local BOS = kn_reader.BOS
 local EOS = kn_reader.EOS
 local kn_model = false
@@ -78,6 +81,26 @@ local function utf_chars(text)
     end
     chars[1] = text
     return chars
+end
+
+local function isolation_penalty(text)
+    local model = ensure_kn()
+    if not model or not model.has_observed_bigram or not text or text == "" then
+        return 0
+    end
+    local chars = utf_chars(text)
+    local penalty = 0
+    for index = 1, #chars do
+        local rank = ranks.rank(chars[index])
+        if rank > isolation_threshold then
+            local left_hit = index > 1 and model.has_observed_bigram(chars[index - 1], chars[index])
+            local right_hit = index < #chars and model.has_observed_bigram(chars[index], chars[index + 1])
+            if not left_hit and not right_hit then
+                penalty = penalty + isolation_lambda
+            end
+        end
+    end
+    return penalty
 end
 
 local function parse_selector(raw, code_end)
@@ -207,7 +230,7 @@ local function emit(states, length)
     for i = 1, #completed do
         local item = completed[i]
         result[i] = {
-            score = item.score + logp(item.prev2, item.prev1, EOS),
+            score = item.score + logp(item.prev2, item.prev1, EOS) - isolation_penalty(item.text),
             text = item.text,
             segmented = item.segmented,
             prev2 = item.prev2,

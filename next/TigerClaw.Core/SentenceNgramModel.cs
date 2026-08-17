@@ -142,13 +142,27 @@ namespace TigerClaw.Core
                 }
                 else
                 {
-                    length = new FileInfo(path).Length;
-                    mapping = MemoryMappedFile.CreateFromFile(
+                    var stream = new FileStream(
                         path,
                         FileMode.Open,
-                        null,
-                        0,
-                        MemoryMappedFileAccess.Read);
+                        FileAccess.Read,
+                        FileShare.Read);
+                    try
+                    {
+                        length = stream.Length;
+                        mapping = MemoryMappedFile.CreateFromFile(
+                            stream,
+                            null,
+                            0,
+                            MemoryMappedFileAccess.Read,
+                            HandleInheritability.None,
+                            false);
+                        stream = null;
+                    }
+                    finally
+                    {
+                        stream?.Dispose();
+                    }
                 }
 
                 var model = new SentenceNgramModel(mapping, length);
@@ -198,6 +212,14 @@ namespace TigerClaw.Core
                 1.0f);
             trigram += trigramLambda * bigram;
             return Math.Log(Math.Max(trigram, 1e-300));
+        }
+
+        public bool HasObservedBigram(string previous, string target)
+        {
+            ThrowIfDisposed();
+            int left = ResolveScalar(previous);
+            int right = ResolveScalar(target);
+            return ContainsUInt64(_bigramOffset, _bigramCount, PackPair(left, right));
         }
 
         public void Dispose()
@@ -354,6 +376,32 @@ namespace TigerClaw.Core
             return _view.ReadUInt64(position) == key
                 ? _view.ReadSingle(position + 8)
                 : fallback;
+        }
+
+        private bool ContainsUInt64(long offset, long count, ulong key)
+        {
+            long low = 0;
+            long high = count;
+            while (low < high)
+            {
+                long middle = low + ((high - low) / 2);
+                ulong value = _view.ReadUInt64(offset + middle * 12);
+                if (value < key)
+                {
+                    low = middle + 1;
+                }
+                else
+                {
+                    high = middle;
+                }
+            }
+
+            if (low >= count)
+            {
+                return false;
+            }
+
+            return _view.ReadUInt64(offset + low * 12) == key;
         }
 
         private static bool IsProbability(float value)

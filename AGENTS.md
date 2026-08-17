@@ -195,7 +195,7 @@ count-20--29 terms at 25% observed weight to avoid hard-threshold regressions.
 The active runtime uses the exported compact n-gram and Qwen Q8 GGUF artifacts, while training and evaluation remain offline.
 Generated runtime models remain outside Git under `C:\Archive\tigerclaw_sentence_ml\runtime`; debug and publish scripts copy them into `Models\` and `sentence\Models\`.
 
-An experimental standalone Rime 虎整句 pack lives under `rime/tiger_sentence/`. It is not part of the Windows TSF runtime. Regenerate it with `python3 tools/export_tiger_sentence_rime.py`. The scheme keeps TigerClaw selection suffixes and scores a local TCSKNM01 file (`sentence-ngram-v2.bin`, still outside Git) in pure Lua. Decode reuses the lattice incrementally and caches exact KN log-probabilities; EOS is applied only when emitting candidates. See `rime/tiger_sentence/README.md`.
+An experimental standalone Rime 虎整句 pack lives under `rime/tiger_sentence/`. It is not part of the Windows TSF runtime. Regenerate it with `python3 tools/export_tiger_sentence_rime.py`. The scheme keeps TigerClaw selection suffixes and scores a local TCSKNM01 file (`sentence-ngram-v2.bin`, still outside Git) in pure Lua. Decode reuses the lattice incrementally and caches exact KN log-probabilities; EOS is applied only when emitting candidates. Emit also subtracts the same rare-character isolation penalty as Core (rank > 3000, constant 2, left or right observed KN bigram cancels). See `rime/tiger_sentence/README.md`.
 
 ## Common Workflows
 

@@ -151,10 +151,28 @@ function M.load(path)
         return math.log(trigram)
     end
 
+    local function has_observed_bigram(prev, target)
+        local left = scalar(prev)
+        local right = scalar(target)
+        local key = pack2(left, right)
+        local low, high = 0, bi_count
+        while low < high do
+            local middle = low + ((high - low) // 2)
+            local value = u64(bi_off + middle * 12)
+            if value < key then
+                low = middle + 1
+            else
+                high = middle
+            end
+        end
+        return low < bi_count and u64(bi_off + low * 12) == key
+    end
+
     return {
         path = path,
         bytes = #data,
-        logp = logp
+        logp = logp,
+        has_observed_bigram = has_observed_bigram
     }
 end
 

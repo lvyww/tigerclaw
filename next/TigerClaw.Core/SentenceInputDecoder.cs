@@ -8,6 +8,8 @@ namespace TigerClaw.Core
     internal interface ISentenceLanguageModel
     {
         double LogProbability(string previous2, string previous1, string target);
+
+        bool HasObservedBigram(string previous, string target);
     }
 
     internal sealed class NeutralSentenceLanguageModel : ISentenceLanguageModel
@@ -21,6 +23,11 @@ namespace TigerClaw.Core
         public double LogProbability(string previous2, string previous1, string target)
         {
             return 0.0;
+        }
+
+        public bool HasObservedBigram(string previous, string target)
+        {
+            return false;
         }
     }
 
@@ -232,6 +239,7 @@ namespace TigerClaw.Core
         private readonly ISentenceLanguageModel _languageModel;
         private readonly int _beamWidth;
         private readonly double _rankPenalty;
+        private readonly SentenceIsolationPenalty _isolationPenalty;
         private readonly int _maxCodeLength;
         private readonly object _decodeLock = new object();
         private string _cachedRaw;
@@ -252,12 +260,14 @@ namespace TigerClaw.Core
             SentenceLexiconIndex lexicon,
             ISentenceLanguageModel languageModel,
             int beamWidth = 2000,
-            double rankPenalty = 0.03)
+            double rankPenalty = 0.03,
+            SentenceIsolationPenalty isolationPenalty = null)
         {
             _lexicon = lexicon ?? throw new ArgumentNullException(nameof(lexicon));
             _languageModel = languageModel ?? NeutralSentenceLanguageModel.Instance;
             _beamWidth = Math.Max(1, beamWidth);
             _rankPenalty = Math.Max(0.0, rankPenalty);
+            _isolationPenalty = isolationPenalty ?? SentenceIsolationPenalty.CreateDefault();
             int maxCodeLength = 1;
             foreach (int length in _lexicon.CodeLengths)
             {
@@ -549,6 +559,10 @@ namespace TigerClaw.Core
             foreach (BeamState item in completed)
             {
                 double score = item.Score + _languageModel.LogProbability(item.Previous2, item.Previous1, Eos);
+                if (_isolationPenalty != null)
+                {
+                    score -= _isolationPenalty.Apply(item.Text, _languageModel);
+                }
                 result.Add(new SentenceCandidate
                 {
                     Text = item.Text,

@@ -22,5 +22,6 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Data\sentence_common_chars_1500.txt" />
+    <EmbeddedResource Include="Data\sentence_char_ranks.txt" />
   </ItemGroup>
 </Project>
