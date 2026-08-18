@@ -80,6 +80,7 @@ namespace TigerClaw.Core
         private readonly bool _sentenceDecodeSynchronously;
         private SentenceDecodeResult _sentenceDecodeResult = SentenceDecodeResult.Empty;
         private int _sentenceDecodedLexiconVersion = -1;
+        private bool _sentenceAllowSpacedOneKey;
         private int _sentenceResultLexiconVersion = -1;
         private int _sentenceSelectedIndex;
         private long _sentenceGeneration;
@@ -246,8 +247,14 @@ namespace TigerClaw.Core
                 }
 
                 SentenceLexiconIndex lexicon = SentenceLexiconIndex.Build(_state.GetSentenceLexiconSnapshot());
-                _sentenceInputDecoder = new SentenceInputDecoder(lexicon, _sentenceLanguageModel);
+                bool allowSpacedOneKey = _state.GetAllowOneKeyInSentence();
+                _sentenceInputDecoder = new SentenceInputDecoder(
+                    lexicon,
+                    _sentenceLanguageModel,
+                    isolationPenalty: null,
+                    allowSpacedOneKey: allowSpacedOneKey);
                 _sentenceDecodedLexiconVersion = _state.LexiconVersion;
+                _sentenceAllowSpacedOneKey = allowSpacedOneKey;
             }
         }
 
@@ -307,8 +314,7 @@ namespace TigerClaw.Core
                     candidates,
                     0,
                     rerankCount,
-                    Comparer<SentenceCandidate>.Create(
-                        (left, right) => right.FinalScore.CompareTo(left.FinalScore)));
+                    Comparer<SentenceCandidate>.Create(SentenceCandidate.CompareByLexiconRankThenScore));
                 _sentenceSelectedIndex = 0;
                 return true;
             }
@@ -1307,6 +1313,15 @@ namespace TigerClaw.Core
 
             if (vk == VK_RETURN)
             {
+                if (_state.GetAllowOneKeyInSentence())
+                {
+                    EnsureSentenceDecodeCurrent();
+                    if (_sentenceDecodeResult.Candidates != null && _sentenceDecodeResult.Candidates.Length > 0)
+                    {
+                        return CompleteSentenceCandidate(_sentenceSelectedIndex);
+                    }
+                }
+
                 string output = _state.GetEnterClear() ? string.Empty : _sentenceRawBuffer.ToString();
                 ClearCompositionInput();
                 _compositionState = CompositionState.CnIdle;
@@ -1315,6 +1330,13 @@ namespace TigerClaw.Core
 
             if (vk == VK_TAB)
             {
+                EnsureSentenceDecodeCurrent();
+                if (_sentenceDecodeResult.Candidates != null && _sentenceDecodeResult.Candidates.Length > 0)
+                {
+                    MoveSentenceSelection(shift ? -1 : 1);
+                    return KeyEngineResult.CreateHandled(true, null, _sentenceRawBuffer.ToString(), true);
+                }
+
                 if (_state.GetTabClear())
                 {
                     ClearCompositionInput();
@@ -1323,13 +1345,17 @@ namespace TigerClaw.Core
                     return KeyEngineResult.CreateHandled(true, null, string.Empty, false);
                 }
 
-                EnsureSentenceDecodeCurrent();
-                MoveSentenceSelection(shift ? -1 : 1);
                 return KeyEngineResult.CreateHandled(true, null, _sentenceRawBuffer.ToString(), true);
             }
 
             if (vk == VK_SPACE)
             {
+                if (_state.GetAllowOneKeyInSentence())
+                {
+                    AppendSentenceInput(' ');
+                    return KeyEngineResult.CreateHandled(true, null, _sentenceRawBuffer.ToString(), true);
+                }
+
                 EnsureSentenceDecodeCurrent();
                 if (_sentenceDecodeResult.Candidates == null || _sentenceDecodeResult.Candidates.Length == 0)
                 {
@@ -2256,7 +2282,9 @@ namespace TigerClaw.Core
         private void EnsureSentenceDecoderCurrent()
         {
             if (_sentenceDecoderExternallyProvided ||
-                (_sentenceInputDecoder != null && _sentenceDecodedLexiconVersion == _state.LexiconVersion))
+                (_sentenceInputDecoder != null &&
+                 _sentenceDecodedLexiconVersion == _state.LexiconVersion &&
+                 _sentenceAllowSpacedOneKey == _state.GetAllowOneKeyInSentence()))
             {
                 return;
             }

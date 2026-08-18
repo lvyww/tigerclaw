@@ -643,7 +643,8 @@ namespace TigerClaw.Core
 
             string trimmed = key.Trim();
             return string.Equals(trimmed, "\u6574\u53e5\u8f93\u5165", StringComparison.OrdinalIgnoreCase) || // 整句输入
-                   string.Equals(trimmed, "\u81ea\u52a8\u542f\u7528\u6574\u53e5\u6a21\u5f0f", StringComparison.OrdinalIgnoreCase); // 自动启用整句模式
+                   string.Equals(trimmed, "\u81ea\u52a8\u542f\u7528\u6574\u53e5\u6a21\u5f0f", StringComparison.OrdinalIgnoreCase) || // 自动启用整句模式
+                   string.Equals(trimmed, "\u5141\u8bb8\u4e00\u7b80\u7ec4\u6574\u53e5", StringComparison.OrdinalIgnoreCase); // 允许一简组整句
         }
 
         private static object GetFirstValue(SimpleJsonObject msg, params string[] keys)

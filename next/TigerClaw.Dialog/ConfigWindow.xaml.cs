@@ -1154,8 +1154,10 @@ namespace TigerClaw.Dialog
                     return "方案名含“整句”时，自动启用整句模式。";
                 case "整句神经重排":
                     return "使用独立 Qwen 推理进程重排前 5 个整句候选；不可用时自动保留三元模型结果。";
+                case "允许一简组整句":
+                    return "一码首选可作整句最优码，但必须在该码后加空格切分；此时空格不再上屏，改由回车上屏当前整句。";
                 case "TAB清屏":
-                    return "Tab 键在对应场景下是否直接清屏。";
+                    return "Tab 键在对应场景下是否直接清屏。整句有候选时，Tab / Shift+Tab 仍遍历整句候选，不会清屏。";
                 case "竖排候选":
                     return "候选窗改为竖排布局。";
                 case "显示候选序号":
@@ -1243,6 +1245,7 @@ namespace TigerClaw.Dialog
                 case "整句输入":
                 case "自动启用整句模式":
                 case "整句神经重排":
+                case "允许一简组整句":
                 case "空码自动清屏":
                     return SectionCodeInput;
 
