@@ -238,8 +238,6 @@ namespace TigerClaw.Core
 
         private HashSet<string> _nonTerminal = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        private HashSet<char> _leading = new HashSet<char>();
-
         private bool _shortSymbolSemicolon;
 
         private bool _shortSymbolSlash;
@@ -267,7 +265,6 @@ namespace TigerClaw.Core
             public Dictionary<string, string> ConstructCodeMap;
             public HashSet<string> Unique;
             public HashSet<string> NonTerminal;
-            public HashSet<char> Leading;
             public bool ShortSymbolSemicolon;
             public bool ShortSymbolSlash;
             public bool ShortSymbolLBracket;
@@ -592,7 +589,7 @@ namespace TigerClaw.Core
 
                 Dictionary<string, string> fullCodeMap = BuildFullCodeMap(map);
 
-                RebuildMeta(map, out HashSet<string> unique, out HashSet<string> nonTerm, out HashSet<char> leading);
+                RebuildMeta(map, out HashSet<string> unique, out HashSet<string> nonTerm);
 
                 RebuildShortSymbolMeta(map,
 
@@ -616,7 +613,6 @@ namespace TigerClaw.Core
                     ConstructCodeMap = constructCodeMapFinal,
                     Unique = unique,
                     NonTerminal = nonTerm,
-                    Leading = leading,
                     ShortSymbolSemicolon = shortSemi,
                     ShortSymbolSlash = shortSlash,
                     ShortSymbolLBracket = shortLBracket,
@@ -640,7 +636,6 @@ namespace TigerClaw.Core
                 _constructCodeMap = s.ConstructCodeMap;
                 _unique = s.Unique;
                 _nonTerminal = s.NonTerminal;
-                _leading = s.Leading;
                 _shortSymbolSemicolon = s.ShortSymbolSemicolon;
                 _shortSymbolSlash = s.ShortSymbolSlash;
                 _shortSymbolLBracket = s.ShortSymbolLBracket;
@@ -666,7 +661,6 @@ namespace TigerClaw.Core
                     ConstructCodeMap = _constructCodeMap,
                     Unique = _unique,
                     NonTerminal = _nonTerminal,
-                    Leading = _leading,
                     ShortSymbolSemicolon = _shortSymbolSemicolon,
                     ShortSymbolSlash = _shortSymbolSlash,
                     ShortSymbolLBracket = _shortSymbolLBracket,
@@ -828,16 +822,6 @@ namespace TigerClaw.Core
 
 
 
-        public bool HasLeadingCode(char c)
-
-        {
-
-            lock (_lock) { return _leading.Contains(char.ToLowerInvariant(c)); }
-
-        }
-
-
-
         public bool GetBackQueryEnabled() => GetBool(KeyBackQuery, true);
 
 
@@ -954,7 +938,7 @@ namespace TigerClaw.Core
 
                     list.Add(t);
 
-                    RebuildMeta(_lexicon, out _unique, out _nonTerminal, out _leading);
+                    RebuildMeta(_lexicon, out _unique, out _nonTerminal);
 
                     RebuildShortSymbolMeta(_lexicon,
 
@@ -1028,7 +1012,7 @@ namespace TigerClaw.Core
 
                     {
 
-                        RebuildMeta(_lexicon, out _unique, out _nonTerminal, out _leading);
+                        RebuildMeta(_lexicon, out _unique, out _nonTerminal);
 
                         RebuildShortSymbolMeta(_lexicon,
 
@@ -1126,7 +1110,7 @@ namespace TigerClaw.Core
 
                         changed = true;
 
-                        RebuildMeta(_lexicon, out _unique, out _nonTerminal, out _leading);
+                        RebuildMeta(_lexicon, out _unique, out _nonTerminal);
 
                         RebuildShortSymbolMeta(_lexicon,
 
@@ -1208,7 +1192,7 @@ namespace TigerClaw.Core
 
                             changed = true;
 
-                            RebuildMeta(_lexicon, out _unique, out _nonTerminal, out _leading);
+                            RebuildMeta(_lexicon, out _unique, out _nonTerminal);
 
                             RebuildShortSymbolMeta(_lexicon,
 
@@ -2796,15 +2780,13 @@ namespace TigerClaw.Core
 
 
 
-        private static void RebuildMeta(Dictionary<string, List<string>> map, out HashSet<string> unique, out HashSet<string> nonTerminal, out HashSet<char> leading)
+        private static void RebuildMeta(Dictionary<string, List<string>> map, out HashSet<string> unique, out HashSet<string> nonTerminal)
 
         {
 
             unique = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             nonTerminal = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            leading = new HashSet<char>();
 
             var hasLonger = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -2813,8 +2795,6 @@ namespace TigerClaw.Core
             {
 
                 if (string.IsNullOrEmpty(kv.Key) || kv.Value == null || kv.Value.Count == 0) { continue; }
-
-                leading.Add(char.ToLowerInvariant(kv.Key[0]));
 
                 for (int i = 1; i < kv.Key.Length; i++) { hasLonger.Add(kv.Key.Substring(0, i)); }
 

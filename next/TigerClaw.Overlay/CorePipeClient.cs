@@ -10,7 +10,6 @@ namespace TigerClaw.Overlay
     internal sealed class CoreRequestResult
     {
         public bool Success { get; set; }
-        public string ResponseLine { get; set; }
         public string Error { get; set; }
     }
 
@@ -142,7 +141,6 @@ namespace TigerClaw.Overlay
                 return new CoreRequestResult
                 {
                     Success = ok,
-                    ResponseLine = string.Empty,
                     Error = error ?? string.Empty
                 };
             });
@@ -416,7 +414,6 @@ namespace TigerClaw.Overlay
                 return new CoreRequestResult
                 {
                     Success = ok,
-                    ResponseLine = string.Empty,
                     Error = error ?? string.Empty
                 };
             });

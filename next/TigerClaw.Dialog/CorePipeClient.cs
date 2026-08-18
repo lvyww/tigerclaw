@@ -69,21 +69,6 @@ namespace TigerClaw.Dialog
             return TrySendRequest(request, timeoutMs, out _, out error);
         }
 
-        public static bool TryGetMbFolderPath(int timeoutMs, out string path, out string error)
-        {
-            path = string.Empty;
-            error = string.Empty;
-
-            string request = "{\"type\":\"open_mb_folder\",\"seq\":" + DefaultSeq + "}";
-            if (!TrySendRequest(request, timeoutMs, out string responseLine, out error))
-            {
-                return false;
-            }
-
-            path = ExtractJsonField(responseLine, "path");
-            return true;
-        }
-
         public static bool TryOpenOfficial(int timeoutMs, out string error)
         {
             string request = "{\"type\":\"open_official\",\"seq\":" + DefaultSeq + "}";

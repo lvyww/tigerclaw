@@ -328,41 +328,28 @@ namespace TigerClaw.Core
         {
             lock (_lock)
             {
-                SetChineseInternal(isChinese, commitOnSwitchToEn: true, out textToCommit);
-            }
-        }
-
-        public void SetChineseWithoutCommit(bool isChinese)
-        {
-            lock (_lock)
-            {
-                SetChineseInternal(isChinese, commitOnSwitchToEn: false, out _);
-            }
-        }
-
-        private void SetChineseInternal(bool isChinese, bool commitOnSwitchToEn, out string textToCommit)
-        {
-            textToCommit = string.Empty;
-            bool currentChinese = _compositionState != CompositionState.En;
-            if (currentChinese == isChinese)
-            {
-                return;
-            }
-
-            if (!isChinese && commitOnSwitchToEn && HasCompositionInput())
-            {
-                textToCommit = CommitCodeBuffer();
-                if (!string.IsNullOrEmpty(textToCommit))
+                textToCommit = string.Empty;
+                bool currentChinese = _compositionState != CompositionState.En;
+                if (currentChinese == isChinese)
                 {
-                    AppendSendHistory(textToCommit);
+                    return;
                 }
-                ClearCompositionInput();
-            }
 
-            _isChinese = isChinese;
-            _compositionState = isChinese ? CompositionState.CnIdle : CompositionState.En;
-            ResetCandidatePageTracker();
-            _dotAfterDigitArmed = false;
+                if (!isChinese && HasCompositionInput())
+                {
+                    textToCommit = CommitCodeBuffer();
+                    if (!string.IsNullOrEmpty(textToCommit))
+                    {
+                        AppendSendHistory(textToCommit);
+                    }
+                    ClearCompositionInput();
+                }
+
+                _isChinese = isChinese;
+                _compositionState = isChinese ? CompositionState.CnIdle : CompositionState.En;
+                ResetCandidatePageTracker();
+                _dotAfterDigitArmed = false;
+            }
         }
 
         public void ToggleChinese(out string textToCommit)
@@ -454,26 +441,6 @@ namespace TigerClaw.Core
                     }
 
                     File.WriteAllText(path, BuildSelectionKeyFileText(bindings), new UTF8Encoding(true));
-                    LoadCustomSelectionKeyConfig();
-                    error = string.Empty;
-                    return true;
-                }
-                catch (Exception ex)
-                {
-                    error = ex.Message;
-                    return false;
-                }
-            }
-        }
-
-        public bool ResetCustomSelectionKeyConfig(out string error)
-        {
-            lock (_lock)
-            {
-                string path = _state.GetCustomSelectionKeyConfigPath();
-                try
-                {
-                    WriteDefaultCustomSelectionKeyConfig(path);
                     LoadCustomSelectionKeyConfig();
                     error = string.Empty;
                     return true;
@@ -2951,7 +2918,7 @@ namespace TigerClaw.Core
         private bool TryHandleModifierSelectionOnKeyDown(int vk, out KeyEngineResult result)
         {
             result = null;
-            if (!IsModifierVirtualKey(vk))
+            if (!IsModifierKey(vk))
             {
                 return false;
             }
@@ -3015,15 +2982,6 @@ namespace TigerClaw.Core
             }
 
             return vk;
-        }
-
-        private static bool IsModifierVirtualKey(int vk)
-        {
-            return vk == VK_SHIFT || vk == VK_LSHIFT || vk == VK_RSHIFT ||
-                   vk == VK_CONTROL || vk == VK_LCONTROL || vk == VK_RCONTROL ||
-                   vk == VK_MENU || vk == VK_LMENU || vk == VK_RMENU ||
-                   vk == VK_LWIN || vk == VK_RWIN ||
-                   vk == VK_CAPITAL;
         }
 
         private static bool IsDigitSelectionKey(int vk)
@@ -3623,15 +3581,6 @@ namespace TigerClaw.Core
             }
         }
 
-        public string GetCurrentInputCode()
-        {
-            lock (_lock)
-            {
-                EnsureMixedDecodeCurrent();
-                return GetMixedResolvedPrefixText() + _inputBuffer;
-            }
-        }
-
         public void GetCompositionDisplayParts(out string prefix, out string activeCode)
         {
             lock (_lock)
@@ -3899,11 +3848,6 @@ namespace TigerClaw.Core
         public void SetOpenAddCiWindow(bool openAddCiWindow)
         {
             OpenAddCiWindow = openAddCiWindow;
-        }
-
-        public void SetCancelComposition(bool cancelComposition)
-        {
-            CancelComposition = cancelComposition;
         }
 
         public static KeyEngineResult Pass(bool isChinese)

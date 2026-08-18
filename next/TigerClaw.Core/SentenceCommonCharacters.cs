@@ -18,11 +18,6 @@ namespace TigerClaw.Core
             get { return Top1500Set; }
         }
 
-        public static bool IsCommonSingleCharacter(string text)
-        {
-            return !string.IsNullOrEmpty(text) && Top1500Set.Contains(text);
-        }
-
         private static HashSet<string> LoadTop1500()
         {
             var result = new HashSet<string>(StringComparer.Ordinal);

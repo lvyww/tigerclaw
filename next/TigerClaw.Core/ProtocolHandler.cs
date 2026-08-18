@@ -426,15 +426,11 @@ namespace TigerClaw.Core
             bool numLock = ConvertToBool(GetFirstValue(msg, "numLock", "num_lock"), false);
             int repeat = ConvertToInt(msg.GetValue("repeat"), 1);
             bool extended = ConvertToBool(msg.GetValue("extended"), false);
-            string tsfStage = ConvertToString(msg.GetValue("tsf_stage"));
 
             object caretXRaw = msg.GetValue("caret_x");
             object caretYRaw = msg.GetValue("caret_y");
             bool isKeyDown = string.Equals(action, "down", StringComparison.OrdinalIgnoreCase) ||
                              string.Equals(action, "key_down", StringComparison.OrdinalIgnoreCase);
-
-
-            System.Diagnostics.Debug.WriteLine($"vk:{vk} {(isKeyDown ? "down":"up")} stage:{tsfStage}");
             bool hasKeyCaret = caretXRaw != null && caretYRaw != null;
             if (isKeyDown && _state.GetKeySoundEnabled())
             {
@@ -451,7 +447,6 @@ namespace TigerClaw.Core
                 int width = ConvertToInt(msg.GetValue("width"), previousWidth);
                 int height = ConvertToInt(msg.GetValue("height"), previousHeight);
                 _state.UpdateCaret(caretX, caretY, width, height);
-           //     Console.WriteLine($"key: x:{caretX}, y:{caretY}");
             }
 
             KeyEngineResult result = _engine.ProcessKey(vk, scan, action, shift, ctrl, alt, win, capsLock, numLock, repeat, extended);
@@ -492,7 +487,6 @@ namespace TigerClaw.Core
             int height = ConvertToInt(msg.GetValue("height"), 20);
             ClearFreshCaretAwaitState();
             _state.UpdateCaret(x, y, width, height);
-        //    Console.WriteLine($"caret: x:{x}, y:{y}");
         }
 
         private void HandleFocusMessage(SimpleJsonObject msg)

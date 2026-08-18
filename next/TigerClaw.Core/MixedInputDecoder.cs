@@ -21,7 +21,6 @@ namespace TigerClaw.Core
 
     internal sealed class MixedInputDecodeSegment
     {
-        public int Start { get; set; }
         public string Code { get; set; }
         public string CandidateText { get; set; }
 
@@ -115,7 +114,6 @@ namespace TigerClaw.Core
 
                 segments[i] = new MixedInputDecodeSegment
                 {
-                    Start = start,
                     Code = code,
                     CandidateText = candidateText ?? string.Empty
                 };

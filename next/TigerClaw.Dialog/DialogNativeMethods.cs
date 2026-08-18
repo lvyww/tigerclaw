@@ -11,12 +11,9 @@ namespace TigerClaw.Dialog
 
         internal const uint SWP_NOSIZE = 0x0001;
         internal const uint SWP_NOMOVE = 0x0002;
-        internal const uint SWP_NOACTIVATE = 0x0010;
         internal const uint SWP_NOOWNERZORDER = 0x0200;
         internal const uint SWP_SHOWWINDOW = 0x0040;
         internal const int SW_SHOWNORMAL = 1;
-
-        internal const uint ASFW_ANY = 0xFFFFFFFF;
 
         [DllImport("user32.dll", SetLastError = true)]
         internal static extern bool SetWindowPos(
@@ -51,8 +48,5 @@ namespace TigerClaw.Dialog
 
         [DllImport("user32.dll", SetLastError = true)]
         internal static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
-
-        [DllImport("user32.dll")]
-        internal static extern bool AllowSetForegroundWindow(uint dwProcessId);
     }
 }

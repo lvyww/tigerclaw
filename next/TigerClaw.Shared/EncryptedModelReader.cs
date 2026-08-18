@@ -23,32 +23,6 @@ namespace TigerClaw.Shared
         private const byte DeflateFlag = 1;
         private const long MaximumPlaintextLength = 1024L * 1024L * 1024L;
 
-        public static T Read<T>(string path, EncryptedModelKind expectedKind, Func<Stream, T> reader)
-        {
-            if (reader == null)
-            {
-                throw new ArgumentNullException(nameof(reader));
-            }
-
-            ContainerInfo info = ReadAndVerify(path, expectedKind);
-            return ReadPayload(path, expectedKind, info, reader);
-        }
-
-        public static byte[] ReadAllBytes(string path, EncryptedModelKind expectedKind)
-        {
-            ContainerInfo info = ReadAndVerify(path, expectedKind);
-            if (info.PlaintextLength > int.MaxValue)
-            {
-                throw new InvalidDataException("Encrypted model is too large for an in-memory load.");
-            }
-
-            return ReadPayload(
-                path,
-                expectedKind,
-                info,
-                stream => ReadExactly(stream, (int)info.PlaintextLength));
-        }
-
         public static MemoryMappedFile ReadToMemoryMappedFile(
             string path,
             EncryptedModelKind expectedKind,

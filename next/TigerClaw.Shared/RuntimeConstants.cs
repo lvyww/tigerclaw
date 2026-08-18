@@ -17,7 +17,6 @@ namespace TigerClaw.Shared
         public const string SentencePipeName = @"\\.\pipe\TigerClaw.Sentence.v1";
 
         public const string UiStateMmfName = @"Local\TigerClaw.UiState.v1";
-        public const string UiCommandMmfName = @"Local\TigerClaw.UiCmd.v1";
         public const string HeartbeatMmfName = @"Local\TigerClaw.Heartbeat.v1";
         public const string OverlayHeartbeatMmfName = @"Local\TigerClaw.OverlayHeartbeat.v1";
         public const string ShowMenuEventName = @"Local\TigerClaw.ShowMenu.v1";

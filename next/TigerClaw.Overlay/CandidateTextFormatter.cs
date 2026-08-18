@@ -7,11 +7,6 @@ namespace TigerClaw.Overlay
 {
     internal sealed class CandidateTextFormatter
     {
-        public CandidateDisplayMode GetDisplayMode(OverlayUiState state)
-        {
-            return GetDisplayMode(state, showCandidates: true);
-        }
-
         public CandidateDisplayMode GetDisplayMode(OverlayUiState state, bool showCandidates)
         {
             if (!IsCandidateVisible(state))
@@ -81,11 +76,6 @@ namespace TigerClaw.Overlay
                 SelectionStart = selectionStart,
                 SelectionLength = selectionLength
             };
-        }
-
-        public CandidateWindowViewModel BuildViewModel(OverlayUiState state, bool includeAnnotations)
-        {
-            return BuildViewModel(state, showCandidates: true, includeAnnotations: includeAnnotations);
         }
 
         private static bool IsCandidateVisible(OverlayUiState state)
