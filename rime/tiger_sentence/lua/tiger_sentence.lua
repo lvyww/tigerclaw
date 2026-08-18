@@ -5,6 +5,7 @@ local ranks = require("tiger_sentence_ranks")
 
 local beam_width = 200
 local candidate_limit = 20
+local rank_penalty = 0.03
 local isolation_threshold = 3000
 local isolation_lambda = 2.0
 local BOS = kn_reader.BOS
@@ -138,11 +139,15 @@ local function dedup_limit(states, limit)
     for i = 1, #states do
         local item = states[i]
         local previous = best[item.text]
+        local item_rank = item.max_rank or 1
         if not previous then
             order[#order + 1] = item.text
             best[item.text] = item
-        elseif item.score > previous.score then
-            best[item.text] = item
+        else
+            local previous_rank = previous.max_rank or 1
+            if item_rank < previous_rank or (item_rank == previous_rank and item.score > previous.score) then
+                best[item.text] = item
+            end
         end
     end
     local result = {}
@@ -150,6 +155,14 @@ local function dedup_limit(states, limit)
         result[#result + 1] = best[order[i]]
     end
     table.sort(result, function(left, right)
+        local left_rank = left.max_rank or 1
+        local right_rank = right.max_rank or 1
+        if left_rank ~= right_rank then
+            return left_rank < right_rank
+        end
+        if left.score == right.score then
+            return left.text < right.text
+        end
         return left.score > right.score
     end)
     if #result > limit then
@@ -167,11 +180,12 @@ local function new_states(length)
     for index = 0, length do
         states[index] = {}
     end
-    states[0][1] = { score = 0, text = "", segmented = "", prev2 = BOS, prev1 = BOS }
+    states[0][1] = { score = 0, text = "", segmented = "", prev2 = BOS, prev1 = BOS, max_rank = 1 }
     return states
 end
 
 local function expand_range(raw, states, from_pos, length)
+    local allow_all_ranks = length <= 4
     for position = from_pos, length - 1 do
         local current = dedup_limit(states[position], beam_width)
         states[position] = current
@@ -184,12 +198,13 @@ local function expand_range(raw, states, from_pos, length)
                     if candidates then
                         local selected_rank, consumed_end = parse_selector(raw, position + code_length)
                         if not (length > 1 and consumed_end - position < 2) then
-                            local required_rank = selected_rank > 0 and selected_rank or 1
                             for c = 1, #current do
                                 local item = current[c]
                                 for k = 1, #candidates do
                                     local candidate = candidates[k]
-                                    if candidate.r == required_rank then
+                                    local rank_ok = selected_rank > 0 and candidate.r == selected_rank
+                                        or selected_rank == 0 and (allow_all_ranks or candidate.r == 1)
+                                    if rank_ok then
                                         local score = item.score
                                         local prev2, prev1 = item.prev2, item.prev1
                                         local chars = utf_chars(candidate.t)
@@ -197,6 +212,9 @@ local function expand_range(raw, states, from_pos, length)
                                             score = score + logp(prev2, prev1, chars[ci])
                                             prev2 = prev1
                                             prev1 = chars[ci]
+                                        end
+                                        if selected_rank == 0 then
+                                            score = score - rank_penalty * math.log(1.0 + candidate.r - 1)
                                         end
                                         local piece = raw:sub(position + 1, consumed_end)
                                         local segmented = item.segmented
@@ -211,7 +229,8 @@ local function expand_range(raw, states, from_pos, length)
                                             text = item.text .. candidate.t,
                                             segmented = segmented,
                                             prev2 = prev2,
-                                            prev1 = prev1
+                                            prev1 = prev1,
+                                            max_rank = math.max(item.max_rank or 1, candidate.r)
                                         }
                                     end
                                 end
@@ -234,10 +253,14 @@ local function emit(states, length)
             text = item.text,
             segmented = item.segmented,
             prev2 = item.prev2,
-            prev1 = item.prev1
+            prev1 = item.prev1,
+            max_rank = math.max(1, item.max_rank or 1)
         }
     end
     table.sort(result, function(left, right)
+        if left.max_rank ~= right.max_rank then
+            return left.max_rank < right.max_rank
+        end
         if left.score == right.score then
             return left.text < right.text
         end
@@ -297,8 +320,9 @@ local function decode(raw_code)
     if old_states and type(old_raw) == "string" and old_raw ~= "" then
         local old_n = #old_raw
         -- A one-key segment is legal only when the whole input is one key.
-        -- Crossing that boundary changes which edges exist at position 1.
-        if old_n == 1 or length == 1 then
+        -- Crossing that boundary, or the four-key all-rank boundary, changes
+        -- which edges exist in the reused prefix.
+        if old_n == 1 or length == 1 or (old_n <= 4) ~= (length <= 4) then
             states = nil
         elseif length > old_n and raw:sub(1, old_n) == old_raw then
             local max_consume = max_code_len + trailing_selector_span(raw)

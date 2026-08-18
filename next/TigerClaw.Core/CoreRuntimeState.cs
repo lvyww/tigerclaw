@@ -48,7 +48,6 @@ namespace TigerClaw.Core
         private const string KeySentenceInput = "\u6574\u53e5\u8f93\u5165"; // 整句输入
         private const string KeyAutoEnableSentenceBySchema = "\u81ea\u52a8\u542f\u7528\u6574\u53e5\u6a21\u5f0f"; // 自动启用整句模式
         private const string KeySentenceNeuralRerank = "\u6574\u53e5\u795e\u7ecf\u91cd\u6392"; // 整句神经重排
-        private const string KeyAllowOneKeyInSentence = "\u5141\u8bb8\u4e00\u7b80\u7ec4\u6574\u53e5"; // 允许一简组整句
         private const string KeyCnUseEnPunc = "\u4e2d\u6587\u72b6\u6001\u4e0b\u4f7f\u7528\u82f1\u6587\u6807\u70b9"; // unicode: 涓枃鐘舵€佷笅浣跨敤鑻辨枃鏍囩偣
 
         private const string KeyVerticalCandidates = "\u7ad6\u6392\u5019\u9009"; // unicode: 绔栨帓鍊欓€?
@@ -193,8 +192,6 @@ namespace TigerClaw.Core
             new KeyValuePair<string, string>(KeyAutoEnableSentenceBySchema, Yes),
 
             new KeyValuePair<string, string>(KeySentenceNeuralRerank, Yes),
-
-            new KeyValuePair<string, string>(KeyAllowOneKeyInSentence, No),
 
             new KeyValuePair<string, string>(KeyMaxAuto, Yes),
 
@@ -1323,8 +1320,6 @@ namespace TigerClaw.Core
         }
 
         public bool GetSentenceNeuralRerankEnabled() => GetBool(KeySentenceNeuralRerank, true);
-
-        public bool GetAllowOneKeyInSentence() => GetBool(KeyAllowOneKeyInSentence, false);
 
         public bool GetShiftToggleEnabled() => GetBool(KeyShiftToggle, true);
 

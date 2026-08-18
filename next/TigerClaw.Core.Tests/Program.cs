@@ -49,14 +49,6 @@ namespace TigerClaw.Core.Tests
                         args[3],
                         args.Length > 4 ? args[4] : null);
                 }
-                if (args.Length >= 4 && string.Equals(args[0], "--sentence-onekey-eval", StringComparison.OrdinalIgnoreCase))
-                {
-                    return RunSentenceOneKeyEval(
-                        args[1],
-                        args[2],
-                        args[3],
-                        args.Length > 4 ? args[4] : null);
-                }
                 if (args.Length == 1 && string.Equals(args[0], "--sentence-client-smoke", StringComparison.OrdinalIgnoreCase))
                 {
                     return RunSentenceClientSmoke();
@@ -87,8 +79,6 @@ namespace TigerClaw.Core.Tests
                 SentenceEngineCommitsDecodedCandidate();
                 SentenceEngineDisplaysPrimarySegmentation();
                 SentenceEngineHonorsSelectionSymbolSettings();
-                SentenceDecoderAcceptsSpacedOneKeyWhenEnabled();
-                SentenceEngineUsesSpacedOneKeyAndEnterCommit();
                 SentenceEngineKeepsArrowSelectionInPlace();
                 SentenceEngineUsesTabToTraverseCandidates();
                 SentenceEnginePassesCtrlNumberShortcut();
@@ -616,439 +606,6 @@ namespace TigerClaw.Core.Tests
             return 0;
         }
 
-        private static int RunSentenceOneKeyEval(
-            string casesPath,
-            string modelPath,
-            string lexiconPath,
-            string outputPath)
-        {
-            List<EvalCaseDto> cases = LoadEvalCases(casesPath);
-            Dictionary<string, List<string>> source = LoadSentenceLexiconSource(lexiconPath);
-            OneKeySentenceEncoder encoder = OneKeySentenceEncoder.Build(source);
-            Stopwatch watch = Stopwatch.StartNew();
-            SentenceLexiconIndex index = SentenceLexiconIndex.Build(source);
-            long loadMilliseconds = watch.ElapsedMilliseconds;
-            watch.Restart();
-
-            int workers = Math.Min(8, Math.Max(1, Environment.ProcessorCount));
-            var ownedModels = new ConcurrentBag<SentenceNgramModel>();
-            var locals = new ThreadLocal<OneKeyEvalLocal>(() =>
-            {
-                SentenceNgramModel localModel = SentenceNgramModel.Load(modelPath);
-                ownedModels.Add(localModel);
-                return new OneKeyEvalLocal
-                {
-                    Baseline = new SentenceInputDecoder(
-                        index,
-                        localModel,
-                        isolationPenalty: SentenceIsolationPenalty.CreateDefault(),
-                        allowSpacedOneKey: false),
-                    Challenger = new SentenceInputDecoder(
-                        index,
-                        localModel,
-                        isolationPenalty: SentenceIsolationPenalty.CreateDefault(),
-                        allowSpacedOneKey: true)
-                };
-            });
-
-            var beforeTally = new EvalTally();
-            var afterTally = new EvalTally();
-            var gained = new ConcurrentBag<string>();
-            var lost = new ConcurrentBag<string>();
-            var encodeFailed = new ConcurrentBag<string>();
-            int oneKeyCharacters = 0;
-            int totalCharacters = 0;
-            int oneKeyCases = 0;
-            int beforeCodeLength = 0;
-            int afterCodeLength = 0;
-            int done = 0;
-            try
-            {
-                Parallel.For(
-                    0,
-                    cases.Count,
-                    new ParallelOptions { MaxDegreeOfParallelism = workers },
-                    i =>
-                    {
-                        EvalCaseDto item = cases[i];
-                        OneKeyEvalLocal local = locals.Value;
-                        SentenceDecodeResult beforeDecoded = local.Baseline.Decode(item.Code, 20);
-                        int beforeRank;
-                        string beforeTop;
-                        ScoreIsolation(beforeDecoded, item.Text, null, null, out beforeRank, out beforeTop);
-
-                        string encoded;
-                        int usedOneKey;
-                        int characterCount;
-                        if (!string.IsNullOrEmpty(item.OneKeyCode))
-                        {
-                            encoded = item.OneKeyCode;
-                            encoder.CountUsage(item.Text, out usedOneKey, out characterCount);
-                        }
-                        else if (!encoder.TryEncode(item.Text, out encoded, out usedOneKey, out characterCount))
-                        {
-                            encodeFailed.Add(JsonString(item.Text));
-                            lock (beforeTally)
-                            {
-                                AccumulateTally(beforeTally, beforeRank);
-                            }
-
-                            Interlocked.Increment(ref done);
-                            return;
-                        }
-
-                        SentenceDecodeResult afterDecoded = local.Challenger.Decode(encoded, 20);
-                        int afterRank;
-                        string afterTop;
-                        ScoreIsolation(afterDecoded, item.Text, null, null, out afterRank, out afterTop);
-                        lock (beforeTally)
-                        {
-                            AccumulateTally(beforeTally, beforeRank);
-                            AccumulateTally(afterTally, afterRank);
-                            oneKeyCharacters += usedOneKey;
-                            totalCharacters += characterCount;
-                            beforeCodeLength += item.Code == null ? 0 : item.Code.Length;
-                            afterCodeLength += encoded.Length;
-                            if (usedOneKey > 0)
-                            {
-                                oneKeyCases++;
-                            }
-                        }
-
-                        if (beforeRank != 1 && afterRank == 1)
-                        {
-                            gained.Add(FormatOneKeyFlip(item, encoded, beforeRank, afterRank, beforeTop, afterTop));
-                        }
-                        else if (beforeRank == 1 && afterRank != 1)
-                        {
-                            lost.Add(FormatOneKeyFlip(item, encoded, beforeRank, afterRank, beforeTop, afterTop));
-                        }
-
-                        int finished = Interlocked.Increment(ref done);
-                        if (finished % 200 == 0)
-                        {
-                            Console.Error.WriteLine("onekey " + finished + "/" + cases.Count);
-                        }
-                    });
-
-                watch.Stop();
-                string beforeSummary = FormatEvalSummary(
-                    "current-optimal",
-                    beforeTally,
-                    cases.Count,
-                    loadMilliseconds,
-                    watch.Elapsed.TotalSeconds);
-                string afterSummary = FormatEvalSummary(
-                    "onekey-space-optimal",
-                    afterTally,
-                    cases.Count,
-                    loadMilliseconds,
-                    watch.Elapsed.TotalSeconds);
-                Console.WriteLine(beforeSummary);
-                Console.WriteLine(afterSummary);
-                Console.WriteLine(
-                    "workers=" + workers +
-                    " onekey_chars=" + oneKeyCharacters + "/" + totalCharacters +
-                    " onekey_cases=" + oneKeyCases +
-                    " encode_failed=" + encodeFailed.Count +
-                    " mean_code_len_before=" + (cases.Count == 0 ? 0 : beforeCodeLength / (double)cases.Count).ToString("0.###") +
-                    " mean_code_len_after=" + (cases.Count == 0 ? 0 : afterCodeLength / (double)cases.Count).ToString("0.###") +
-                    " gained_top1=" + gained.Count +
-                    " lost_top1=" + lost.Count);
-                Console.WriteLine("onekey_letters\t" + encoder.DescribeOneKeyLetters());
-
-                ReportCompareBag("gained-top1", gained);
-                ReportCompareBag("lost-top1", lost);
-
-                var extras = new List<EvalCaseDto>();
-                AppendHandcraftedEvalCases(extras);
-                using (SentenceNgramModel extraModel = SentenceNgramModel.Load(modelPath))
-                {
-                    var baseline = new SentenceInputDecoder(
-                        index,
-                        extraModel,
-                        isolationPenalty: SentenceIsolationPenalty.CreateDefault(),
-                        allowSpacedOneKey: false);
-                    var challenger = new SentenceInputDecoder(
-                        index,
-                        extraModel,
-                        isolationPenalty: SentenceIsolationPenalty.CreateDefault(),
-                        allowSpacedOneKey: true);
-                    for (int i = 0; i < extras.Count; i++)
-                    {
-                        EvalCaseDto item = extras[i];
-                        SentenceDecodeResult beforeDecoded = baseline.Decode(item.Code, 20);
-                        int beforeRank;
-                        string beforeTop;
-                        ScoreIsolation(beforeDecoded, item.Text, null, null, out beforeRank, out beforeTop);
-                        string encoded;
-                        int usedOneKey;
-                        int characterCount;
-                        encoder.TryEncode(item.Text, out encoded, out usedOneKey, out characterCount);
-                        SentenceDecodeResult afterDecoded = challenger.Decode(encoded ?? string.Empty, 20);
-                        int afterRank;
-                        string afterTop;
-                        ScoreIsolation(afterDecoded, item.Text, extraModel, null, out afterRank, out afterTop);
-                        Console.WriteLine(
-                            "handcrafted\tgold=" + item.Text +
-                            "\told=" + item.Code +
-                            "\tnew=" + encoded +
-                            "\tbefore=" + FormatRank(beforeRank) +
-                            "\tafter=" + FormatRank(afterRank) +
-                            "\tbefore_top=" + beforeTop +
-                            "\tafter_top=" + afterTop);
-                    }
-                }
-
-                if (!string.IsNullOrEmpty(outputPath))
-                {
-                    string dir = Path.GetDirectoryName(outputPath);
-                    if (!string.IsNullOrEmpty(dir))
-                    {
-                        Directory.CreateDirectory(dir);
-                    }
-
-                    string payload = "{\"before\":" + beforeSummary +
-                                     ",\"after\":" + afterSummary +
-                                     ",\"onekey_chars\":" + oneKeyCharacters +
-                                     ",\"total_chars\":" + totalCharacters +
-                                     ",\"onekey_cases\":" + oneKeyCases +
-                                     ",\"encode_failed\":" + encodeFailed.Count +
-                                     ",\"gained_top1\":" + gained.Count +
-                                     ",\"lost_top1\":" + lost.Count +
-                                     ",\"gained\":[" + string.Join(",", gained.ToArray()) + "]" +
-                                     ",\"lost\":[" + string.Join(",", lost.ToArray()) + "]}";
-                    File.WriteAllText(outputPath, payload, new UTF8Encoding(false));
-                }
-            }
-            finally
-            {
-                locals.Dispose();
-                foreach (SentenceNgramModel owned in ownedModels)
-                {
-                    owned.Dispose();
-                }
-            }
-
-            return 0;
-        }
-
-        private sealed class OneKeyEvalLocal
-        {
-            public SentenceInputDecoder Baseline;
-            public SentenceInputDecoder Challenger;
-        }
-
-        private static string FormatOneKeyFlip(
-            EvalCaseDto item,
-            string encoded,
-            int beforeRank,
-            int afterRank,
-            string beforeTop,
-            string afterTop)
-        {
-            return "{\"text\":" + JsonString(item.Text) +
-                   ",\"old_code\":" + JsonString(item.Code) +
-                   ",\"new_code\":" + JsonString(encoded) +
-                   ",\"before_rank\":" + (beforeRank > 0 ? beforeRank.ToString() : "null") +
-                   ",\"after_rank\":" + (afterRank > 0 ? afterRank.ToString() : "null") +
-                   ",\"before_top\":" + JsonString(beforeTop) +
-                   ",\"after_top\":" + JsonString(afterTop) + "}";
-        }
-
-        private sealed class OneKeySentenceEncoder
-        {
-            private readonly Dictionary<string, string> _oneKeyByCharacter;
-            private readonly Dictionary<string, string> _sentenceCodeByCharacter;
-
-            private OneKeySentenceEncoder(
-                Dictionary<string, string> oneKeyByCharacter,
-                Dictionary<string, string> sentenceCodeByCharacter)
-            {
-                _oneKeyByCharacter = oneKeyByCharacter;
-                _sentenceCodeByCharacter = sentenceCodeByCharacter;
-            }
-
-            public static OneKeySentenceEncoder Build(Dictionary<string, List<string>> source)
-            {
-                var oneKey = new Dictionary<string, string>(StringComparer.Ordinal);
-                foreach (KeyValuePair<string, List<string>> pair in source)
-                {
-                    if (pair.Key.Length != 1 || pair.Value == null || pair.Value.Count == 0)
-                    {
-                        continue;
-                    }
-
-                    string first = pair.Value[0];
-                    if (new StringInfo(first).LengthInTextElements == 1 && !oneKey.ContainsKey(first))
-                    {
-                        oneKey[first] = pair.Key;
-                    }
-                }
-
-                var codesByCharacter = new Dictionary<string, List<string>>(StringComparer.Ordinal);
-                foreach (KeyValuePair<string, List<string>> pair in source)
-                {
-                    if (pair.Value == null)
-                    {
-                        continue;
-                    }
-
-                    foreach (string text in pair.Value)
-                    {
-                        if (new StringInfo(text).LengthInTextElements != 1)
-                        {
-                            continue;
-                        }
-
-                        List<string> codes;
-                        if (!codesByCharacter.TryGetValue(text, out codes))
-                        {
-                            codes = new List<string>();
-                            codesByCharacter[text] = codes;
-                        }
-
-                        if (!codes.Contains(pair.Key))
-                        {
-                            codes.Add(pair.Key);
-                        }
-                    }
-                }
-
-                var sentence = new Dictionary<string, string>(StringComparer.Ordinal);
-                foreach (KeyValuePair<string, List<string>> pair in codesByCharacter)
-                {
-                    string code = ChooseSentenceCode(pair.Key, pair.Value, source);
-                    if (!string.IsNullOrEmpty(code))
-                    {
-                        sentence[pair.Key] = code;
-                    }
-                }
-
-                return new OneKeySentenceEncoder(oneKey, sentence);
-            }
-
-            public void CountUsage(string text, out int usedOneKey, out int characterCount)
-            {
-                string ignored;
-                TryEncode(text, out ignored, out usedOneKey, out characterCount);
-            }
-
-            public bool TryEncode(string text, out string encoded, out int usedOneKey, out int characterCount)
-            {
-                encoded = null;
-                usedOneKey = 0;
-                characterCount = 0;
-                if (string.IsNullOrEmpty(text))
-                {
-                    return false;
-                }
-
-                var builder = new StringBuilder();
-                TextElementEnumerator enumerator = StringInfo.GetTextElementEnumerator(text);
-                while (enumerator.MoveNext())
-                {
-                    string character = enumerator.GetTextElement();
-                    characterCount++;
-                    string oneKey;
-                    if (_oneKeyByCharacter.TryGetValue(character, out oneKey))
-                    {
-                        builder.Append(oneKey);
-                        builder.Append(' ');
-                        usedOneKey++;
-                        continue;
-                    }
-
-                    string sentenceCode;
-                    if (!_sentenceCodeByCharacter.TryGetValue(character, out sentenceCode))
-                    {
-                        return false;
-                    }
-
-                    builder.Append(sentenceCode);
-                }
-
-                encoded = builder.ToString();
-                return characterCount > 0;
-            }
-
-            public string DescribeOneKeyLetters()
-            {
-                var items = new List<string>();
-                foreach (KeyValuePair<string, string> pair in _oneKeyByCharacter)
-                {
-                    items.Add(pair.Value + "=" + pair.Key);
-                }
-
-                items.Sort(StringComparer.Ordinal);
-                return string.Join(" ", items.ToArray());
-            }
-
-            private static string ChooseSentenceCode(
-                string character,
-                List<string> codes,
-                Dictionary<string, List<string>> source)
-            {
-                string bestFirst = null;
-                string bestAny = null;
-                foreach (string code in codes)
-                {
-                    if (string.IsNullOrEmpty(code) || code.Length < 2)
-                    {
-                        continue;
-                    }
-
-                    List<string> candidates;
-                    if (!source.TryGetValue(code, out candidates) || candidates.Count == 0)
-                    {
-                        continue;
-                    }
-
-                    bestAny = Shorter(bestAny, code);
-                    if (string.Equals(candidates[0], character, StringComparison.Ordinal))
-                    {
-                        bestFirst = Shorter(bestFirst, code);
-                    }
-                }
-
-                string chosen = bestFirst ?? bestAny;
-                if (string.IsNullOrEmpty(chosen))
-                {
-                    return null;
-                }
-
-                int rank = source[chosen].IndexOf(character) + 1;
-                if (rank <= 1)
-                {
-                    return chosen;
-                }
-
-                if (rank == 2)
-                {
-                    return chosen + ";";
-                }
-
-                if (rank == 3)
-                {
-                    return chosen + "'";
-                }
-
-                return chosen + (rank == 10 ? "0" : rank.ToString(CultureInfo.InvariantCulture));
-            }
-
-            private static string Shorter(string current, string candidate)
-            {
-                if (string.IsNullOrEmpty(current) ||
-                    candidate.Length < current.Length ||
-                    (candidate.Length == current.Length && string.CompareOrdinal(candidate, current) < 0))
-                {
-                    return candidate;
-                }
-
-                return current;
-            }
-        }
-
         private sealed class CompareLocal
         {
             public ISentenceLanguageModel Model;
@@ -1397,9 +954,6 @@ namespace TigerClaw.Core.Tests
 
             [DataMember(Name = "source")]
             public string Source { get; set; }
-
-            [DataMember(Name = "onekey_code")]
-            public string OneKeyCode { get; set; }
         }
 
         private static void SentenceNgramV2LoadsFromMappedFile()
@@ -1557,58 +1111,6 @@ namespace TigerClaw.Core.Tests
             True(semicolon.Candidates.Length == 1, nameof(SentenceDecoderRejectsEmbeddedBareOneKeyCharacter));
         }
 
-        private static void SentenceDecoderAcceptsSpacedOneKeyWhenEnabled()
-        {
-            var lexicon = new Dictionary<string, List<string>>
-            {
-                ["u"] = new List<string> { "的" },
-                ["ue"] = new List<string> { "的" },
-                ["ot"] = new List<string> { "是" }
-            };
-            SentenceInputDecoder allowed = new SentenceInputDecoder(
-                SentenceLexiconIndex.Build(lexicon),
-                NeutralSentenceLanguageModel.Instance,
-                beamWidth: 20,
-                isolationPenalty: SentenceIsolationPenalty.None,
-                allowSpacedOneKey: true);
-            Equal("的是", allowed.Decode("u ot").Candidates[0].Text, nameof(SentenceDecoderAcceptsSpacedOneKeyWhenEnabled));
-            Equal("u ot", allowed.Decode("u ot").Candidates[0].SegmentedCode,
-                nameof(SentenceDecoderAcceptsSpacedOneKeyWhenEnabled) + ".seg");
-            Equal("的", allowed.Decode("u").Candidates[0].Text, nameof(SentenceDecoderAcceptsSpacedOneKeyWhenEnabled) + ".standalone");
-            True(allowed.Decode("uot").Candidates.Length == 0, nameof(SentenceDecoderAcceptsSpacedOneKeyWhenEnabled) + ".bare");
-
-            SentenceInputDecoder disabled = CreateSentenceDecoder(lexicon);
-            True(disabled.Decode("u ot").Candidates.Length == 0, nameof(SentenceDecoderAcceptsSpacedOneKeyWhenEnabled) + ".off");
-        }
-
-        private static void SentenceEngineUsesSpacedOneKeyAndEnterCommit()
-        {
-            var state = new CoreRuntimeState();
-            True(state.TrySetConfigValue("整句输入", "是", out _, out string sentenceReason),
-                nameof(SentenceEngineUsesSpacedOneKeyAndEnterCommit) + ": " + sentenceReason);
-            True(state.TrySetConfigValue("允许一简组整句", "是", out _, out string oneKeyReason),
-                nameof(SentenceEngineUsesSpacedOneKeyAndEnterCommit) + ": " + oneKeyReason);
-            var engine = new InputMethodEngine(
-                state,
-                CreateSentenceDecoder(
-                    new Dictionary<string, List<string>>
-                    {
-                        ["u"] = new List<string> { "的" },
-                        ["ot"] = new List<string> { "是" }
-                    },
-                    allowSpacedOneKey: true));
-
-            TypeLetters(engine, "u ot");
-            EngineUiSnapshot snapshot = engine.GetUiSnapshot(5);
-            Equal("u ot", snapshot.InputCode, nameof(SentenceEngineUsesSpacedOneKeyAndEnterCommit) + ".raw");
-            Equal("u ot", snapshot.ActiveInputCode, nameof(SentenceEngineUsesSpacedOneKeyAndEnterCommit) + ".display");
-            True(snapshot.Candidates.Length > 0 && snapshot.Candidates[0] == "的是",
-                nameof(SentenceEngineUsesSpacedOneKeyAndEnterCommit) + ".candidate");
-            True(engine.IsSentenceCompositionActive, nameof(SentenceEngineUsesSpacedOneKeyAndEnterCommit) + ".still_composing");
-            Equal("的是", Press(engine, 0x0D).TextToOutput, nameof(SentenceEngineUsesSpacedOneKeyAndEnterCommit) + ".enter");
-            True(!engine.GetUiSnapshot(5).IsComposing, nameof(SentenceEngineUsesSpacedOneKeyAndEnterCommit) + ".committed");
-        }
-
         private static void SentenceDecoderIncrementalMatchesFullRebuild()
         {
             var decoder = new SentenceInputDecoder(
@@ -1633,6 +1135,7 @@ namespace TigerClaw.Core.Tests
                 "ueot;",
                 "j'",
                 "fiot",
+                "fiota",
                 "jqtusotu"
             };
 
@@ -2206,16 +1709,12 @@ namespace TigerClaw.Core.Tests
                 candidate => candidate);
         }
 
-        private static SentenceInputDecoder CreateSentenceDecoder(
-            Dictionary<string, List<string>> lexicon,
-            bool allowSpacedOneKey = false)
+        private static SentenceInputDecoder CreateSentenceDecoder(Dictionary<string, List<string>> lexicon)
         {
             return new SentenceInputDecoder(
                 SentenceLexiconIndex.Build(lexicon),
                 NeutralSentenceLanguageModel.Instance,
-                beamWidth: 100,
-                isolationPenalty: allowSpacedOneKey ? SentenceIsolationPenalty.None : null,
-                allowSpacedOneKey: allowSpacedOneKey);
+                beamWidth: 100);
         }
 
         private static void KeyReplayCacheReturnsOriginalResultWithCurrentSequence()

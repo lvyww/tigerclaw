@@ -253,7 +253,6 @@ namespace TigerClaw.Core
         private readonly int _beamWidth;
         private readonly double _rankPenalty;
         private readonly SentenceIsolationPenalty _isolationPenalty;
-        private readonly bool _allowSpacedOneKey;
         private readonly int _maxCodeLength;
         private readonly object _decodeLock = new object();
         private string _cachedRaw;
@@ -276,15 +275,13 @@ namespace TigerClaw.Core
             ISentenceLanguageModel languageModel,
             int beamWidth = 2000,
             double rankPenalty = 0.03,
-            SentenceIsolationPenalty isolationPenalty = null,
-            bool allowSpacedOneKey = false)
+            SentenceIsolationPenalty isolationPenalty = null)
         {
             _lexicon = lexicon ?? throw new ArgumentNullException(nameof(lexicon));
             _languageModel = languageModel ?? NeutralSentenceLanguageModel.Instance;
             _beamWidth = Math.Max(1, beamWidth);
             _rankPenalty = Math.Max(0.0, rankPenalty);
             _isolationPenalty = isolationPenalty ?? SentenceIsolationPenalty.CreateDefault();
-            _allowSpacedOneKey = allowSpacedOneKey;
             int maxCodeLength = 1;
             foreach (int length in _lexicon.CodeLengths)
             {
@@ -362,7 +359,8 @@ namespace TigerClaw.Core
             {
                 int oldLength = oldRaw.Length;
                 // A one-key segment is legal only when the whole input is one key.
-                if (oldLength == 1 || length == 1)
+                // Crossing four keys also changes whether bare segments keep every rank.
+                if (oldLength == 1 || length == 1 || (oldLength <= 4) != (length <= 4))
                 {
                     states = null;
                 }
@@ -442,14 +440,13 @@ namespace TigerClaw.Core
             return resized;
         }
 
-        private int TrailingSelectorSpan(string raw)
+        private static int TrailingSelectorSpan(string raw)
         {
             int index = raw.Length - 1;
             while (index >= 0)
             {
                 char mark = raw[index];
-                if (char.IsDigit(mark) || mark == ';' || mark == '\'' ||
-                    (_allowSpacedOneKey && mark == ' '))
+                if (char.IsDigit(mark) || mark == ';' || mark == '\'')
                 {
                     index--;
                 }
@@ -465,6 +462,7 @@ namespace TigerClaw.Core
         private int ExpandRange(string raw, List<BeamState>[] states, int fromPos, int length)
         {
             int expandedStates = 0;
+            bool allowAllRanks = raw.Length <= 4;
             for (int position = fromPos; position < length; position++)
             {
                 List<BeamState> current = DeduplicateAndLimit(states[position], _beamWidth);
@@ -482,44 +480,14 @@ namespace TigerClaw.Core
                         continue;
                     }
 
-                    string code = raw.Substring(position, codeLength);
-                    SentenceLexiconCandidate[] candidates = _lexicon.GetCandidates(code);
+                    SentenceLexiconCandidate[] candidates = _lexicon.GetCandidates(raw.Substring(position, codeLength));
                     if (candidates == null || candidates.Length == 0)
                     {
                         continue;
                     }
 
-                    int consumedEnd = codeEnd;
-                    int selectedRank = 0;
-                    if (codeEnd < length && raw[codeEnd] == ';')
-                    {
-                        selectedRank = 2;
-                        consumedEnd++;
-                    }
-                    else if (codeEnd < length && raw[codeEnd] == '\'')
-                    {
-                        selectedRank = 3;
-                        consumedEnd++;
-                    }
-                    else if (codeEnd < length && char.IsDigit(raw[codeEnd]))
-                    {
-                        int digitEnd = codeEnd;
-                        while (digitEnd < length && char.IsDigit(raw[digitEnd]))
-                        {
-                            digitEnd++;
-                        }
-
-                        string token = raw.Substring(codeEnd, digitEnd - codeEnd);
-                        selectedRank = token == "0"
-                            ? 10
-                            : int.Parse(token, NumberStyles.None, CultureInfo.InvariantCulture);
-                        consumedEnd = digitEnd;
-                    }
-                    else if (_allowSpacedOneKey && codeEnd < length && raw[codeEnd] == ' ')
-                    {
-                        consumedEnd++;
-                    }
-
+                    int selectedRank;
+                    int consumedEnd = ReadCodeSuffix(raw, codeEnd, out selectedRank);
                     if (length > 1 && consumedEnd - position < 2)
                     {
                         continue;
@@ -529,12 +497,10 @@ namespace TigerClaw.Core
                     {
                         foreach (SentenceLexiconCandidate candidate in candidates)
                         {
-                            // Bare segments are first-choice only once the whole input is longer
-                            // than four encoding keys. Shorter inputs may use every lexicon entry
-                            // on that code. `;`, `'`, and digits still pin an explicit rank.
-                            int requiredRank = selectedRank > 0 ? selectedRank : 1;
-                            bool allowAllRanks = selectedRank == 0 && CountEncodingLength(raw) <= 4;
-                            if (!allowAllRanks && candidate.Rank != requiredRank)
+                            bool rankMatches = selectedRank > 0
+                                ? candidate.Rank == selectedRank
+                                : allowAllRanks || candidate.Rank == 1;
+                            if (!rankMatches)
                             {
                                 continue;
                             }
@@ -576,6 +542,45 @@ namespace TigerClaw.Core
             return expandedStates;
         }
 
+        private int ReadCodeSuffix(string raw, int codeEnd, out int selectedRank)
+        {
+            selectedRank = 0;
+            if (codeEnd >= raw.Length)
+            {
+                return codeEnd;
+            }
+
+            char mark = raw[codeEnd];
+            if (mark == ';')
+            {
+                selectedRank = 2;
+                return codeEnd + 1;
+            }
+
+            if (mark == '\'')
+            {
+                selectedRank = 3;
+                return codeEnd + 1;
+            }
+
+            if (char.IsDigit(mark))
+            {
+                int digitEnd = codeEnd;
+                while (digitEnd < raw.Length && char.IsDigit(raw[digitEnd]))
+                {
+                    digitEnd++;
+                }
+
+                string token = raw.Substring(codeEnd, digitEnd - codeEnd);
+                selectedRank = token == "0"
+                    ? 10
+                    : int.Parse(token, NumberStyles.None, CultureInfo.InvariantCulture);
+                return digitEnd;
+            }
+
+            return codeEnd;
+        }
+
         private SentenceDecodeResult Emit(string normalized, List<BeamState>[] states, int candidateLimit, int expandedStates)
         {
             List<BeamState> completed = DeduplicateAndLimit(states[normalized.Length], _beamWidth);
@@ -583,10 +588,7 @@ namespace TigerClaw.Core
             foreach (BeamState item in completed)
             {
                 double score = item.Score + _languageModel.LogProbability(item.Previous2, item.Previous1, Eos);
-                if (_isolationPenalty != null)
-                {
-                    score -= _isolationPenalty.Apply(item.Text, _languageModel);
-                }
+                score -= _isolationPenalty.Apply(item.Text, _languageModel);
                 result.Add(new SentenceCandidate
                 {
                     Text = item.Text,
@@ -631,17 +633,7 @@ namespace TigerClaw.Core
             }
 
             List<BeamState> result = bestByText.Values.ToList();
-            result.Sort((left, right) =>
-            {
-                int rank = left.MaxLexiconRank.CompareTo(right.MaxLexiconRank);
-                if (rank != 0)
-                {
-                    return rank;
-                }
-
-                int compared = right.Score.CompareTo(left.Score);
-                return compared != 0 ? compared : string.CompareOrdinal(left.Text, right.Text);
-            });
+            result.Sort(CompareBeamStates);
             if (result.Count > limit)
             {
                 result.RemoveRange(limit, result.Count - limit);
@@ -650,23 +642,16 @@ namespace TigerClaw.Core
             return result;
         }
 
-        private static int CountEncodingLength(string raw)
+        private static int CompareBeamStates(BeamState left, BeamState right)
         {
-            int count = 0;
-            if (string.IsNullOrEmpty(raw))
+            int rank = left.MaxLexiconRank.CompareTo(right.MaxLexiconRank);
+            if (rank != 0)
             {
-                return 0;
+                return rank;
             }
 
-            for (int index = 0; index < raw.Length; index++)
-            {
-                if (raw[index] != ' ')
-                {
-                    count++;
-                }
-            }
-
-            return count;
+            int compared = right.Score.CompareTo(left.Score);
+            return compared != 0 ? compared : string.CompareOrdinal(left.Text, right.Text);
         }
 
         private static string JoinSegmentedCode(string prefix, string piece)
@@ -681,15 +666,10 @@ namespace TigerClaw.Core
                 return prefix;
             }
 
-            if (prefix[prefix.Length - 1] == ' ' || piece[0] == ' ')
-            {
-                return prefix + piece;
-            }
-
             return prefix + " " + piece;
         }
 
-        private string NormalizeRawCode(string rawCode)
+        private static string NormalizeRawCode(string rawCode)
         {
             if (string.IsNullOrEmpty(rawCode))
             {
@@ -697,7 +677,7 @@ namespace TigerClaw.Core
             }
 
             return new string(rawCode
-                .Where(character => !char.IsWhiteSpace(character) || (_allowSpacedOneKey && character == ' '))
+                .Where(character => !char.IsWhiteSpace(character))
                 .Select(char.ToLowerInvariant)
                 .ToArray());
         }
