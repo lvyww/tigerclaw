@@ -3892,27 +3892,32 @@ namespace TigerClaw.Core
                 return rawCode;
             }
 
-                string decodedRawCode = _sentenceDecodeResult.RawCode ?? string.Empty;
-                if (string.Equals(decodedRawCode, fullRawCode, StringComparison.Ordinal))
-                {
-                    if (_sentenceCommittedRawLength > 0)
-                    {
-                        return TrimSegmentedCodeAfterRawPrefix(segmented, _sentenceCommittedRawLength);
-                    }
-                    return segmented;
-                }
-
-            if (fullRawCode.StartsWith(decodedRawCode, StringComparison.Ordinal))
+            string decodedRawCode = _sentenceDecodeResult.RawCode ?? string.Empty;
+            string fullDisplayCode;
+            if (string.Equals(decodedRawCode, fullRawCode, StringComparison.Ordinal))
             {
-                return segmented + fullRawCode.Substring(decodedRawCode.Length);
+                fullDisplayCode = segmented;
+            }
+            else if (fullRawCode.StartsWith(decodedRawCode, StringComparison.Ordinal))
+            {
+                fullDisplayCode = segmented + fullRawCode.Substring(decodedRawCode.Length);
+            }
+            else if (decodedRawCode.StartsWith(fullRawCode, StringComparison.Ordinal))
+            {
+                fullDisplayCode = TrimSegmentedCodeToRawPrefix(segmented, fullRawCode);
+            }
+            else
+            {
+                return rawCode;
             }
 
-            if (decodedRawCode.StartsWith(fullRawCode, StringComparison.Ordinal))
+            if (_sentenceCommittedRawLength > 0)
             {
-                return TrimSegmentedCodeToRawPrefix(segmented, fullRawCode);
+                string trimmed = TrimSegmentedCodeAfterRawPrefix(fullDisplayCode, _sentenceCommittedRawLength);
+                return string.IsNullOrEmpty(trimmed) && rawCode.Length > 0 ? rawCode : trimmed;
             }
 
-            return rawCode;
+            return fullDisplayCode;
         }
 
         private static string TrimSegmentedCodeAfterRawPrefix(string segmented, int rawPrefixLength)
