@@ -2134,19 +2134,31 @@ namespace TigerClaw.Core
             if (string.Equals(proposal, _sentenceAutoCommitProposal, StringComparison.Ordinal)) _sentenceAutoCommitStable++;
             else { _sentenceAutoCommitProposal = proposal; _sentenceAutoCommitStable = 1; }
             if (_sentenceAutoCommitStable < 2) return null;
-            // Keep an active raw-code tail in the composition. If the proposed
-            // prefix consumes the whole current input, returning commit_text
-            // together with an empty input_buffer makes TSF close the
-            // composition and collapse the candidate window. Wait for the next
-            // key so the committed prefix is always followed by a live tail.
-            if (_sentenceRawBuffer.Length <= _sentenceCommittedRawLength)
+            string commit = proposal.Substring(_sentenceCommittedText.Length);
+            int committedRawLength = FindSentenceRawLengthForText(proposal);
+            if (committedRawLength <= _sentenceCommittedRawLength || committedRawLength > _sentenceRawBuffer.Length)
             {
                 return null;
             }
-            string commit = proposal.Substring(_sentenceCommittedText.Length);
             _sentenceCommittedText = proposal;
-            _sentenceCommittedRawLength = _sentenceRawBuffer.Length;
+            _sentenceCommittedRawLength = committedRawLength;
             return commit;
+        }
+
+        private int FindSentenceRawLengthForText(string text)
+        {
+            string raw = _sentenceRawBuffer.ToString();
+            for (int length = Math.Max(1, _sentenceCommittedRawLength + 1); length <= raw.Length; length++)
+            {
+                SentenceDecodeResult result = _sentenceInputDecoder?.Decode(raw.Substring(0, length), 20);
+                SentenceCandidate[] candidates = result?.Candidates ?? Array.Empty<SentenceCandidate>();
+                if (candidates.Any(candidate => string.Equals(candidate.Text, text, StringComparison.Ordinal)))
+                {
+                    return length;
+                }
+            }
+
+            return 0;
         }
 
         private void RebuildSentenceInput()
@@ -3863,7 +3875,7 @@ namespace TigerClaw.Core
                 {
                     if (_sentenceCommittedRawLength > 0)
                     {
-                        return TrimSegmentedCodeToRawPrefix(segmented, rawCode);
+                        return TrimSegmentedCodeAfterRawPrefix(segmented, _sentenceCommittedRawLength);
                     }
                     return segmented;
                 }
@@ -3879,6 +3891,32 @@ namespace TigerClaw.Core
             }
 
             return rawCode;
+        }
+
+        private static string TrimSegmentedCodeAfterRawPrefix(string segmented, int rawPrefixLength)
+        {
+            if (string.IsNullOrEmpty(segmented) || rawPrefixLength <= 0)
+            {
+                return segmented ?? string.Empty;
+            }
+
+            int rawCount = 0;
+            int index = 0;
+            while (index < segmented.Length && rawCount < rawPrefixLength)
+            {
+                if (segmented[index] != ' ')
+                {
+                    rawCount++;
+                }
+                index++;
+            }
+
+            while (index < segmented.Length && segmented[index] == ' ')
+            {
+                index++;
+            }
+
+            return index < segmented.Length ? segmented.Substring(index) : string.Empty;
         }
 
         private static string TrimSegmentedCodeToRawPrefix(string segmented, string rawPrefix)
