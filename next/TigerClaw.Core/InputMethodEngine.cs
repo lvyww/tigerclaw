@@ -3828,10 +3828,11 @@ namespace TigerClaw.Core
 
         private string GetSentenceDisplayCode()
         {
-            string rawCode = _sentenceRawBuffer.ToString();
-            if (_sentenceCommittedRawLength > 0 && _sentenceCommittedRawLength <= rawCode.Length)
+            string fullRawCode = _sentenceRawBuffer.ToString();
+            string rawCode = fullRawCode;
+            if (_sentenceCommittedRawLength > 0 && _sentenceCommittedRawLength <= fullRawCode.Length)
             {
-                rawCode = rawCode.Substring(_sentenceCommittedRawLength);
+                rawCode = fullRawCode.Substring(_sentenceCommittedRawLength);
             }
             if (_sentenceResultLexiconVersion != _state.LexiconVersion)
             {
@@ -3849,19 +3850,23 @@ namespace TigerClaw.Core
             }
 
                 string decodedRawCode = _sentenceDecodeResult.RawCode ?? string.Empty;
-                if (string.Equals(decodedRawCode, rawCode, StringComparison.Ordinal))
+                if (string.Equals(decodedRawCode, fullRawCode, StringComparison.Ordinal))
                 {
-                return segmented;
+                    if (_sentenceCommittedRawLength > 0)
+                    {
+                        return TrimSegmentedCodeToRawPrefix(segmented, rawCode);
+                    }
+                    return segmented;
                 }
 
-            if (rawCode.StartsWith(decodedRawCode, StringComparison.Ordinal))
+            if (fullRawCode.StartsWith(decodedRawCode, StringComparison.Ordinal))
             {
-                return segmented + rawCode.Substring(decodedRawCode.Length);
+                return segmented + fullRawCode.Substring(decodedRawCode.Length);
             }
 
-            if (decodedRawCode.StartsWith(rawCode, StringComparison.Ordinal))
+            if (decodedRawCode.StartsWith(fullRawCode, StringComparison.Ordinal))
             {
-                return TrimSegmentedCodeToRawPrefix(segmented, rawCode);
+                return TrimSegmentedCodeToRawPrefix(segmented, fullRawCode);
             }
 
             return rawCode;
