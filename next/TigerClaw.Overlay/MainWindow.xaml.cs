@@ -22,8 +22,7 @@ namespace TigerClaw.Overlay
         private readonly CandidateTextFormatter _candidateTextFormatter = new CandidateTextFormatter();
         private readonly OverlayThemeResolver _themeResolver = new OverlayThemeResolver();
         private readonly OverlayFontResolver _fontResolver = new OverlayFontResolver();
-        private readonly OverlayLocalCaretTracker _localCaretTracker = new OverlayLocalCaretTracker();
-        private readonly CandidateWindowPositioner _positioner;
+        private readonly CandidateWindowPositioner _positioner = new CandidateWindowPositioner();
         private readonly OverlayStateSource _stateSource;
         private readonly OverlayHeartbeatWatcher _heartbeatWatcher = new OverlayHeartbeatWatcher(TimeSpan.FromMilliseconds(250), TimeSpan.FromSeconds(10));
         private readonly OverlayMenuSignalListener _menuSignalListener = new OverlayMenuSignalListener(TimeSpan.FromMilliseconds(50));
@@ -56,8 +55,7 @@ namespace TigerClaw.Overlay
         public MainWindow()
         {
             InitializeComponent();
-            _positioner = new CandidateWindowPositioner(_localCaretTracker);
-            _stateSource = new OverlayStateSource(TimeSpan.FromMilliseconds(5), _localCaretTracker);
+            _stateSource = new OverlayStateSource(TimeSpan.FromMilliseconds(5));
             _candidateExpandTimer.Tick += CandidateExpandTimer_Tick;
             _annotationExpandTimer.Tick += AnnotationExpandTimer_Tick;
 

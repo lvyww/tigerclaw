@@ -2,14 +2,9 @@
 {
     public static class BuildInfo
     {
-        public const string VersionLabel = "2026.08.14-1852";
-        public const string Commit = "bb814739";
-        public const string BuildUtc = "2026-08-14T18:52:38Z";
-        public const string TrialExpireUtc = "2027-01-01T16:00:00Z";
-
-        internal static byte[] GetModelProtectionKey()
-        {
-            return new byte[32];
-        }
+        public const string VersionLabel = "2026.08.19-0555";
+        public const string Commit = "009a3aee";
+        public const string BuildUtc = "2026-08-19T05:55:25Z";
+        public const string TrialExpireUtc = "2027-01-02T16:00:00Z";
     }
 }

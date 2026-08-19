@@ -12,7 +12,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Reference Include="Accessibility" />
     <ProjectReference Include="..\TigerClaw.Shared\TigerClaw.Shared.csproj" />
   </ItemGroup>
 

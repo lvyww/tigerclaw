@@ -49,6 +49,30 @@ namespace TigerClaw.Core.Tests
                         args[3],
                         args.Length > 4 ? args[4] : null);
                 }
+                if (args.Length >= 4 && string.Equals(args[0], "--sentence-boundary-compare", StringComparison.OrdinalIgnoreCase))
+                {
+                    return RunSentenceBoundaryCompare(
+                        args[1],
+                        args[2],
+                        args[3],
+                        args.Length > 4 ? args[4] : null);
+                }
+                if (args.Length >= 4 && string.Equals(args[0], "--sentence-softpin-compare", StringComparison.OrdinalIgnoreCase))
+                {
+                    return RunSentenceSoftPinCompare(
+                        args[1],
+                        args[2],
+                        args[3],
+                        args.Length > 4 ? args[4] : null);
+                }
+                if (args.Length >= 4 && string.Equals(args[0], "--sentence-length-compare", StringComparison.OrdinalIgnoreCase))
+                {
+                    return RunSentenceLengthCompare(
+                        args[1],
+                        args[2],
+                        args[3],
+                        args.Length > 4 ? args[4] : null);
+                }
                 if (args.Length == 1 && string.Equals(args[0], "--sentence-client-smoke", StringComparison.OrdinalIgnoreCase))
                 {
                     return RunSentenceClientSmoke();
@@ -443,6 +467,247 @@ namespace TigerClaw.Core.Tests
             return 0;
         }
 
+        private static int RunSentenceLengthCompare(
+            string casesPath,
+            string modelPath,
+            string lexiconPath,
+            string outputPath)
+        {
+            List<EvalCaseDto> cases = LoadEvalCases(casesPath);
+            Dictionary<string, List<string>> source = LoadSentenceLexiconSource(lexiconPath);
+            Stopwatch watch = Stopwatch.StartNew();
+            SentenceLexiconIndex index = SentenceLexiconIndex.Build(source);
+            long loadMilliseconds = watch.ElapsedMilliseconds;
+            watch.Restart();
+
+            var configs = new List<LengthBiasConfig>();
+            configs.Add(new LengthBiasConfig { Label = "current-no-length-bias", Mode = "none", Weight = 0.0 });
+            double[] additives = { 0.1, 0.3, 0.5, 1.0 };
+            for (int i = 0; i < additives.Length; i++)
+            {
+                configs.Add(new LengthBiasConfig
+                {
+                    Label = "add-" + additives[i].ToString("0.#", CultureInfo.InvariantCulture),
+                    Mode = "add",
+                    Weight = additives[i]
+                });
+            }
+
+            double[] logs = { 0.5, 1.0, 2.0 };
+            for (int i = 0; i < logs.Length; i++)
+            {
+                configs.Add(new LengthBiasConfig
+                {
+                    Label = "logn-" + logs[i].ToString("0.#", CultureInfo.InvariantCulture),
+                    Mode = "logn",
+                    Weight = logs[i]
+                });
+            }
+
+            int workers = 8;
+            var ownedModels = new ConcurrentBag<SentenceNgramModel>();
+            var locals = new ThreadLocal<SentenceInputDecoder>(() =>
+            {
+                SentenceNgramModel localModel = SentenceNgramModel.Load(modelPath);
+                ownedModels.Add(localModel);
+                return new SentenceInputDecoder(index, localModel);
+            });
+
+            var tallies = new EvalTally[configs.Count];
+            var gained = new ConcurrentBag<string>[configs.Count];
+            var lost = new ConcurrentBag<string>[configs.Count];
+            for (int c = 0; c < configs.Count; c++)
+            {
+                tallies[c] = new EvalTally();
+                gained[c] = new ConcurrentBag<string>();
+                lost[c] = new ConcurrentBag<string>();
+            }
+
+            int done = 0;
+            try
+            {
+                ReportLengthBiasHandcrafted(locals.Value, configs);
+
+                Parallel.For(
+                    0,
+                    cases.Count,
+                    new ParallelOptions { MaxDegreeOfParallelism = workers },
+                    i =>
+                    {
+                        EvalCaseDto item = cases[i];
+                        SentenceDecodeResult decoded = locals.Value.Decode(item.Code, 20);
+                        int beforeRank;
+                        string beforeTop;
+                        RankWithLengthBias(decoded, item.Text, configs[0], out beforeRank, out beforeTop);
+                        lock (tallies[0])
+                        {
+                            AccumulateTally(tallies[0], beforeRank);
+                        }
+
+                        for (int c = 1; c < configs.Count; c++)
+                        {
+                            int afterRank;
+                            string afterTop;
+                            RankWithLengthBias(decoded, item.Text, configs[c], out afterRank, out afterTop);
+                            lock (tallies[c])
+                            {
+                                AccumulateTally(tallies[c], afterRank);
+                            }
+
+                            if (beforeRank != 1 && afterRank == 1)
+                            {
+                                gained[c].Add(FormatCompareFlip(item, beforeRank, afterRank, beforeTop, afterTop));
+                            }
+                            else if (beforeRank == 1 && afterRank != 1)
+                            {
+                                lost[c].Add(FormatCompareFlip(item, beforeRank, afterRank, beforeTop, afterTop));
+                            }
+                        }
+
+                        int finished = Interlocked.Increment(ref done);
+                        if (finished % 200 == 0)
+                        {
+                            Console.Error.WriteLine("length-compare " + finished + "/" + cases.Count);
+                        }
+                    });
+
+                watch.Stop();
+                var summaries = new List<string>();
+                for (int c = 0; c < configs.Count; c++)
+                {
+                    string summary = FormatEvalSummary(
+                        configs[c].Label,
+                        tallies[c],
+                        cases.Count,
+                        loadMilliseconds,
+                        watch.Elapsed.TotalSeconds);
+                    summaries.Add(summary);
+                    Console.WriteLine(summary);
+                    if (c > 0)
+                    {
+                        Console.WriteLine(
+                            "workers=" + workers +
+                            " " + configs[c].Label +
+                            " gained_top1=" + gained[c].Count +
+                            " lost_top1=" + lost[c].Count);
+                        ReportCompareBag("gained-top1@" + configs[c].Label, gained[c]);
+                        ReportCompareBag("lost-top1@" + configs[c].Label, lost[c]);
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(outputPath))
+                {
+                    string dir = Path.GetDirectoryName(outputPath);
+                    if (!string.IsNullOrEmpty(dir))
+                    {
+                        Directory.CreateDirectory(dir);
+                    }
+
+                    File.WriteAllText(
+                        outputPath,
+                        "{\"summaries\":[" + string.Join(",", summaries.ToArray()) + "]}",
+                        new UTF8Encoding(false));
+                }
+            }
+            finally
+            {
+                locals.Dispose();
+                foreach (SentenceNgramModel owned in ownedModels)
+                {
+                    owned.Dispose();
+                }
+            }
+
+            return 0;
+        }
+
+        private sealed class LengthBiasConfig
+        {
+            public string Label;
+            public string Mode;
+            public double Weight;
+        }
+
+        private static void RankWithLengthBias(
+            SentenceDecodeResult decoded,
+            string gold,
+            LengthBiasConfig config,
+            out int rank,
+            out string top)
+        {
+            rank = 0;
+            top = string.Empty;
+            if (decoded == null || decoded.Candidates == null || decoded.Candidates.Length == 0)
+            {
+                return;
+            }
+
+            var scored = new List<SentenceCandidate>(decoded.Candidates.Length);
+            for (int i = 0; i < decoded.Candidates.Length; i++)
+            {
+                SentenceCandidate candidate = decoded.Candidates[i];
+                int length = CountTextElements(candidate.Text);
+                double score = candidate.FinalScore;
+                if (config != null && config.Weight != 0.0 && length > 0)
+                {
+                    if (string.Equals(config.Mode, "add", StringComparison.Ordinal))
+                    {
+                        score += config.Weight * length;
+                    }
+                    else if (string.Equals(config.Mode, "logn", StringComparison.Ordinal))
+                    {
+                        score += config.Weight * Math.Log(length);
+                    }
+                }
+
+                scored.Add(new SentenceCandidate
+                {
+                    Text = candidate.Text ?? string.Empty,
+                    FinalScore = score,
+                    MaxLexiconRank = candidate.MaxLexiconRank
+                });
+            }
+
+            scored.Sort(SentenceCandidate.CompareByLexiconRankThenScore);
+            top = scored[0].Text;
+            for (int i = 0; i < scored.Count; i++)
+            {
+                if (string.Equals(scored[i].Text, gold, StringComparison.Ordinal))
+                {
+                    rank = i + 1;
+                    return;
+                }
+            }
+        }
+
+        private static void ReportLengthBiasHandcrafted(
+            SentenceInputDecoder decoder,
+            List<LengthBiasConfig> configs)
+        {
+            var extras = new[]
+            {
+                new EvalCaseDto { Text = "坐皮艇", Code = "jjgrpitgu" },
+                new EvalCaseDto { Text = "坐皮艇划回去", Code = "jjgrpitgupprdgk" }
+            };
+            for (int i = 0; i < extras.Length; i++)
+            {
+                SentenceDecodeResult decoded = decoder.Decode(extras[i].Code, 20);
+                for (int c = 0; c < configs.Count; c++)
+                {
+                    int rank;
+                    string top;
+                    RankWithLengthBias(decoded, extras[i].Text, configs[c], out rank, out top);
+                    Console.WriteLine(
+                        "handcrafted\t" + configs[c].Label +
+                        "\tgold=" + extras[i].Text +
+                        "\tlen=" + CountTextElements(extras[i].Text) +
+                        "\ttop=" + top +
+                        "\ttoplen=" + CountTextElements(top) +
+                        "\trank=" + FormatRank(rank));
+                }
+            }
+        }
+
         private static int RunSentenceCompare(
             string casesPath,
             string modelPath,
@@ -604,6 +869,541 @@ namespace TigerClaw.Core.Tests
             }
 
             return 0;
+        }
+
+        private static int RunSentenceBoundaryCompare(
+            string casesPath,
+            string modelPath,
+            string lexiconPath,
+            string outputPath)
+        {
+            List<EvalCaseDto> cases = LoadEvalCases(casesPath);
+            Dictionary<string, List<string>> source = LoadSentenceLexiconSource(lexiconPath);
+            Stopwatch watch = Stopwatch.StartNew();
+            SentenceLexiconIndex index = SentenceLexiconIndex.Build(source);
+            long loadMilliseconds = watch.ElapsedMilliseconds;
+            watch.Restart();
+
+            int workers = 12;
+            var ownedModels = new ConcurrentBag<SentenceNgramModel>();
+            var locals = new ThreadLocal<BoundaryCompareLocal>(() =>
+            {
+                SentenceNgramModel localModel = SentenceNgramModel.Load(modelPath);
+                ownedModels.Add(localModel);
+                return new BoundaryCompareLocal
+                {
+                    WithBoundary = new SentenceInputDecoder(index, localModel),
+                    WithoutBoundary = new SentenceInputDecoder(
+                        index,
+                        localModel,
+                        isolationPenalty: SentenceIsolationPenalty.CreateDefault(),
+                        scoreSentenceBoundaries: false)
+                };
+            });
+
+            var beforeTally = new EvalTally();
+            var afterTally = new EvalTally();
+            var gained = new ConcurrentBag<string>();
+            var lost = new ConcurrentBag<string>();
+            var recallLost = new ConcurrentBag<string>();
+            int done = 0;
+            try
+            {
+                Parallel.For(
+                    0,
+                    cases.Count,
+                    new ParallelOptions { MaxDegreeOfParallelism = workers },
+                    i =>
+                    {
+                        EvalCaseDto item = cases[i];
+                        BoundaryCompareLocal local = locals.Value;
+                        SentenceDecodeResult beforeDecoded = local.WithBoundary.Decode(item.Code, 20);
+                        SentenceDecodeResult afterDecoded = local.WithoutBoundary.Decode(item.Code, 20);
+                        int beforeRank = RankOf(beforeDecoded, item.Text);
+                        int afterRank = RankOf(afterDecoded, item.Text);
+                        string beforeTop = beforeDecoded.Candidates != null && beforeDecoded.Candidates.Length > 0
+                            ? beforeDecoded.Candidates[0].Text
+                            : string.Empty;
+                        string afterTop = afterDecoded.Candidates != null && afterDecoded.Candidates.Length > 0
+                            ? afterDecoded.Candidates[0].Text
+                            : string.Empty;
+                        lock (beforeTally)
+                        {
+                            AccumulateTally(beforeTally, beforeRank);
+                            AccumulateTally(afterTally, afterRank);
+                        }
+
+                        if (beforeRank != 1 && afterRank == 1)
+                        {
+                            gained.Add(FormatCompareFlip(item, beforeRank, afterRank, beforeTop, afterTop));
+                        }
+                        else if (beforeRank == 1 && afterRank != 1)
+                        {
+                            lost.Add(FormatCompareFlip(item, beforeRank, afterRank, beforeTop, afterTop));
+                        }
+
+                        if (beforeRank > 0 && afterRank <= 0)
+                        {
+                            recallLost.Add(FormatCompareFlip(item, beforeRank, afterRank, beforeTop, afterTop));
+                        }
+
+                        int finished = Interlocked.Increment(ref done);
+                        if (finished % 200 == 0)
+                        {
+                            Console.Error.WriteLine("boundary-compare " + finished + "/" + cases.Count);
+                        }
+                    });
+
+                watch.Stop();
+                string beforeSummary = FormatEvalSummary(
+                    "current-bos-eos",
+                    beforeTally,
+                    cases.Count,
+                    loadMilliseconds,
+                    watch.Elapsed.TotalSeconds);
+                string afterSummary = FormatEvalSummary(
+                    "bos-eos-bigram-no-unigram",
+                    afterTally,
+                    cases.Count,
+                    loadMilliseconds,
+                    watch.Elapsed.TotalSeconds);
+                Console.WriteLine(beforeSummary);
+                Console.WriteLine(afterSummary);
+                Console.WriteLine(
+                    "workers=" + workers +
+                    " gained_top1=" + gained.Count +
+                    " lost_top1=" + lost.Count +
+                    " recall_lost=" + recallLost.Count);
+                ReportCompareBag("gained-top1", gained);
+                ReportCompareBag("lost-top1", lost);
+                ReportCompareBag("recall-lost", recallLost);
+
+                if (!string.IsNullOrEmpty(outputPath))
+                {
+                    string dir = Path.GetDirectoryName(outputPath);
+                    if (!string.IsNullOrEmpty(dir))
+                    {
+                        Directory.CreateDirectory(dir);
+                    }
+
+                    File.WriteAllText(
+                        outputPath,
+                        "{\"before\":" + beforeSummary +
+                        ",\"after\":" + afterSummary +
+                        ",\"gained_top1\":[" + string.Join(",", gained.ToArray()) +
+                        "],\"lost_top1\":[" + string.Join(",", lost.ToArray()) +
+                        "],\"recall_lost\":[" + string.Join(",", recallLost.ToArray()) + "]}",
+                        new UTF8Encoding(false));
+                }
+            }
+            finally
+            {
+                locals.Dispose();
+                foreach (SentenceNgramModel owned in ownedModels)
+                {
+                    owned.Dispose();
+                }
+            }
+
+            return 0;
+        }
+
+        private static int RunSentenceSoftPinCompare(
+            string casesPath,
+            string modelPath,
+            string lexiconPath,
+            string outputPath)
+        {
+            List<EvalCaseDto> cases = LoadEvalCases(casesPath);
+            Dictionary<string, List<string>> source = LoadSentenceLexiconSource(lexiconPath);
+            Stopwatch watch = Stopwatch.StartNew();
+            SentenceLexiconIndex index = SentenceLexiconIndex.Build(source);
+            long loadMilliseconds = watch.ElapsedMilliseconds;
+            watch.Restart();
+
+            double[] bonuses = { 0.5, 1.0, 2.0, 3.0 };
+            int workers = 8;
+            var ownedModels = new ConcurrentBag<SentenceNgramModel>();
+            var locals = new ThreadLocal<SentenceInputDecoder>(() =>
+            {
+                SentenceNgramModel localModel = SentenceNgramModel.Load(modelPath);
+                ownedModels.Add(localModel);
+                return new SentenceInputDecoder(index, localModel);
+            });
+
+            var baselineTally = new EvalTally();
+            var tallies = new EvalTally[bonuses.Length];
+            var gained = new ConcurrentBag<string>[bonuses.Length];
+            var lost = new ConcurrentBag<string>[bonuses.Length];
+            for (int b = 0; b < bonuses.Length; b++)
+            {
+                tallies[b] = new EvalTally();
+                gained[b] = new ConcurrentBag<string>();
+                lost[b] = new ConcurrentBag<string>();
+            }
+
+            int done = 0;
+            try
+            {
+                ReportSoftPinHandcrafted(locals.Value, bonuses);
+
+                Parallel.For(
+                    0,
+                    cases.Count,
+                    new ParallelOptions { MaxDegreeOfParallelism = workers },
+                    i =>
+                    {
+                        EvalCaseDto item = cases[i];
+                        SentenceInputDecoder decoder = locals.Value;
+                        List<SoftPinSnapshot> snapshots = CollectSoftPinSnapshots(decoder, item.Code, 50);
+                        int beforeRank;
+                        string beforeTop;
+                        ReplaySoftPin(snapshots, 0.0, item.Text, out beforeRank, out beforeTop);
+                        lock (baselineTally)
+                        {
+                            AccumulateTally(baselineTally, beforeRank);
+                        }
+
+                        for (int b = 0; b < bonuses.Length; b++)
+                        {
+                            int afterRank;
+                            string afterTop;
+                            ReplaySoftPin(snapshots, bonuses[b], item.Text, out afterRank, out afterTop);
+                            lock (baselineTally)
+                            {
+                                AccumulateTally(tallies[b], afterRank);
+                            }
+
+                            if (beforeRank != 1 && afterRank == 1)
+                            {
+                                gained[b].Add(FormatCompareFlip(item, beforeRank, afterRank, beforeTop, afterTop));
+                            }
+                            else if (beforeRank == 1 && afterRank != 1)
+                            {
+                                lost[b].Add(FormatCompareFlip(item, beforeRank, afterRank, beforeTop, afterTop));
+                            }
+                        }
+
+                        int finished = Interlocked.Increment(ref done);
+                        if (finished % 200 == 0)
+                        {
+                            Console.Error.WriteLine("softpin-compare " + finished + "/" + cases.Count);
+                        }
+                    });
+
+                watch.Stop();
+                var summaries = new List<string>();
+                string baselineSummary = FormatEvalSummary(
+                    "current-no-softpin",
+                    baselineTally,
+                    cases.Count,
+                    loadMilliseconds,
+                    watch.Elapsed.TotalSeconds);
+                summaries.Add(baselineSummary);
+                Console.WriteLine(baselineSummary);
+                for (int b = 0; b < bonuses.Length; b++)
+                {
+                    string label = "softpin-" + bonuses[b].ToString("0.#", CultureInfo.InvariantCulture);
+                    string summary = FormatEvalSummary(
+                        label,
+                        tallies[b],
+                        cases.Count,
+                        loadMilliseconds,
+                        watch.Elapsed.TotalSeconds);
+                    summaries.Add(summary);
+                    Console.WriteLine(summary);
+                    Console.WriteLine(
+                        "workers=" + workers +
+                        " bonus=" + bonuses[b].ToString("0.#", CultureInfo.InvariantCulture) +
+                        " gained_top1=" + gained[b].Count +
+                        " lost_top1=" + lost[b].Count);
+                    ReportCompareBag("gained-top1@" + bonuses[b].ToString("0.#", CultureInfo.InvariantCulture), gained[b]);
+                    ReportCompareBag("lost-top1@" + bonuses[b].ToString("0.#", CultureInfo.InvariantCulture), lost[b]);
+                }
+
+                if (!string.IsNullOrEmpty(outputPath))
+                {
+                    string dir = Path.GetDirectoryName(outputPath);
+                    if (!string.IsNullOrEmpty(dir))
+                    {
+                        Directory.CreateDirectory(dir);
+                    }
+
+                    var payload = new StringBuilder();
+                    payload.Append("{\"summaries\":[");
+                    payload.Append(string.Join(",", summaries.ToArray()));
+                    payload.Append("],\"sweeps\":[");
+                    for (int b = 0; b < bonuses.Length; b++)
+                    {
+                        if (b > 0)
+                        {
+                            payload.Append(',');
+                        }
+
+                        payload.Append("{\"bonus\":");
+                        payload.Append(bonuses[b].ToString("G9", CultureInfo.InvariantCulture));
+                        payload.Append(",\"gained_top1\":[");
+                        payload.Append(string.Join(",", gained[b].ToArray()));
+                        payload.Append("],\"lost_top1\":[");
+                        payload.Append(string.Join(",", lost[b].ToArray()));
+                        payload.Append("]}");
+                    }
+
+                    payload.Append("]}");
+                    File.WriteAllText(outputPath, payload.ToString(), new UTF8Encoding(false));
+                }
+            }
+            finally
+            {
+                locals.Dispose();
+                foreach (SentenceNgramModel owned in ownedModels)
+                {
+                    owned.Dispose();
+                }
+            }
+
+            return 0;
+        }
+
+        private sealed class SoftPinSnapshot
+        {
+            public string[] Texts;
+            public double[] Scores;
+            public int[] Ranks;
+        }
+
+        private static List<SoftPinSnapshot> CollectSoftPinSnapshots(
+            SentenceInputDecoder decoder,
+            string code,
+            int candidateLimit)
+        {
+            decoder.ResetDecodeCache();
+            var snapshots = new List<SoftPinSnapshot>();
+            if (string.IsNullOrEmpty(code))
+            {
+                return snapshots;
+            }
+
+            for (int length = 1; length <= code.Length; length++)
+            {
+                SentenceDecodeResult decoded = decoder.Decode(code.Substring(0, length), candidateLimit);
+                snapshots.Add(CopySoftPinSnapshot(decoded));
+            }
+
+            return snapshots;
+        }
+
+        private static SoftPinSnapshot CopySoftPinSnapshot(SentenceDecodeResult decoded)
+        {
+            if (decoded == null || decoded.Candidates == null || decoded.Candidates.Length == 0)
+            {
+                return new SoftPinSnapshot
+                {
+                    Texts = Array.Empty<string>(),
+                    Scores = Array.Empty<double>(),
+                    Ranks = Array.Empty<int>()
+                };
+            }
+
+            var snap = new SoftPinSnapshot
+            {
+                Texts = new string[decoded.Candidates.Length],
+                Scores = new double[decoded.Candidates.Length],
+                Ranks = new int[decoded.Candidates.Length]
+            };
+            for (int i = 0; i < decoded.Candidates.Length; i++)
+            {
+                snap.Texts[i] = decoded.Candidates[i].Text ?? string.Empty;
+                snap.Scores[i] = decoded.Candidates[i].FinalScore;
+                snap.Ranks[i] = decoded.Candidates[i].MaxLexiconRank;
+            }
+
+            return snap;
+        }
+
+        private static void ReplaySoftPin(
+            List<SoftPinSnapshot> snapshots,
+            double bonus,
+            string gold,
+            out int rank,
+            out string top)
+        {
+            rank = 0;
+            top = string.Empty;
+            if (snapshots == null || snapshots.Count == 0)
+            {
+                return;
+            }
+
+            SoftPinSnapshot last = snapshots[snapshots.Count - 1];
+            if (last.Texts == null || last.Texts.Length == 0)
+            {
+                return;
+            }
+
+            string unpinnedTop = last.Texts[0];
+            string pin = string.Empty;
+            if (bonus > 0.0)
+            {
+                for (int s = snapshots.Count - 2; s >= 0; s--)
+                {
+                    SoftPinSnapshot snap = snapshots[s];
+                    if (snap.Texts == null || snap.Texts.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    string prefixTop = snap.Texts[0];
+                    if (CountTextElements(prefixTop) < 2)
+                    {
+                        continue;
+                    }
+
+                    if (unpinnedTop.StartsWith(prefixTop, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    bool survives = false;
+                    int surviveLimit = Math.Min(3, last.Texts.Length);
+                    for (int i = 0; i < surviveLimit; i++)
+                    {
+                        if (last.Texts[i].StartsWith(prefixTop, StringComparison.Ordinal))
+                        {
+                            survives = true;
+                            break;
+                        }
+                    }
+
+                    if (survives)
+                    {
+                        pin = prefixTop;
+                        break;
+                    }
+                }
+
+                if (gold != null && gold.IndexOf("坐皮艇划回去", StringComparison.Ordinal) >= 0)
+                {
+                    Console.WriteLine(
+                        "softpin-pin\tbonus=" + bonus.ToString("0.#", CultureInfo.InvariantCulture) +
+                        "\tpin=" + pin +
+                        "\trank0=" + last.Ranks[0] +
+                        "\trank1=" + (last.Ranks.Length > 1 ? last.Ranks[1].ToString() : "") +
+                        "\ttext0=" + last.Texts[0] +
+                        "\ttext1=" + (last.Texts.Length > 1 ? last.Texts[1] : ""));
+                }
+            }
+
+            var order = new int[last.Texts.Length];
+            for (int i = 0; i < order.Length; i++)
+            {
+                order[i] = i;
+            }
+
+            Array.Sort(order, (left, right) =>
+            {
+                int rankCompare = last.Ranks[left].CompareTo(last.Ranks[right]);
+                if (rankCompare != 0)
+                {
+                    return rankCompare;
+                }
+
+                double leftScore = last.Scores[left];
+                double rightScore = last.Scores[right];
+                if (pin.Length > 0)
+                {
+                    if (last.Texts[left].StartsWith(pin, StringComparison.Ordinal))
+                    {
+                        leftScore += bonus;
+                    }
+
+                    if (last.Texts[right].StartsWith(pin, StringComparison.Ordinal))
+                    {
+                        rightScore += bonus;
+                    }
+                }
+
+                int scoreCompare = rightScore.CompareTo(leftScore);
+                return scoreCompare != 0
+                    ? scoreCompare
+                    : string.CompareOrdinal(last.Texts[left], last.Texts[right]);
+            });
+
+            top = last.Texts[order[0]];
+            for (int i = 0; i < order.Length; i++)
+            {
+                if (string.Equals(last.Texts[order[i]], gold, StringComparison.Ordinal))
+                {
+                    rank = i + 1;
+                    return;
+                }
+            }
+        }
+
+        private static int CountTextElements(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                return 0;
+            }
+
+            return new StringInfo(text).LengthInTextElements;
+        }
+
+        private static void ReportSoftPinHandcrafted(SentenceInputDecoder decoder, double[] bonuses)
+        {
+            var extras = new[]
+            {
+                new EvalCaseDto { Text = "坐皮艇", Code = "jjgrpitgu" },
+                new EvalCaseDto { Text = "坐皮艇划回去", Code = "jjgrpitgupprdgk" },
+                new EvalCaseDto { Text = "从坡艇划回去", Code = "jjgrpitgupprdgk" }
+            };
+            for (int i = 0; i < extras.Length; i++)
+            {
+                EvalCaseDto item = extras[i];
+                List<SoftPinSnapshot> snapshots = CollectSoftPinSnapshots(decoder, item.Code, 50);
+                if (string.Equals(item.Text, "坐皮艇划回去", StringComparison.Ordinal))
+                {
+                    for (int s = 0; s < snapshots.Count; s++)
+                    {
+                        SoftPinSnapshot snap = snapshots[s];
+                        if (snap.Texts == null || snap.Texts.Length == 0)
+                        {
+                            continue;
+                        }
+
+                        Console.WriteLine(
+                            "softpin-trace\tlen=" + (s + 1) +
+                            "\ttop=" + snap.Texts[0] +
+                            "\tsecond=" + (snap.Texts.Length > 1 ? snap.Texts[1] : "") +
+                            "\tscore0=" + snap.Scores[0].ToString("F3", CultureInfo.InvariantCulture) +
+                            "\tscore1=" + (snap.Texts.Length > 1 ? snap.Scores[1].ToString("F3", CultureInfo.InvariantCulture) : ""));
+                    }
+                }
+
+                int beforeRank;
+                string beforeTop;
+                ReplaySoftPin(snapshots, 0.0, item.Text, out beforeRank, out beforeTop);
+                Console.WriteLine(
+                    "handcrafted\tbonus=0\tgold=" + item.Text +
+                    "\trank=" + FormatRank(beforeRank) + "\ttop=" + beforeTop);
+                for (int b = 0; b < bonuses.Length; b++)
+                {
+                    int afterRank;
+                    string afterTop;
+                    ReplaySoftPin(snapshots, bonuses[b], item.Text, out afterRank, out afterTop);
+                    Console.WriteLine(
+                        "handcrafted\tbonus=" + bonuses[b].ToString("0.#", CultureInfo.InvariantCulture) +
+                        "\tgold=" + item.Text +
+                        "\trank=" + FormatRank(afterRank) + "\ttop=" + afterTop);
+                }
+            }
+        }
+
+        private sealed class BoundaryCompareLocal
+        {
+            public SentenceInputDecoder WithBoundary;
+            public SentenceInputDecoder WithoutBoundary;
         }
 
         private sealed class CompareLocal
@@ -970,7 +1770,9 @@ namespace TigerClaw.Core.Tests
                     writer.Write(0.1f);
                     writer.Write((int)'a');
                     writer.Write(0.9f);
-                    writer.Write((long)0);
+                    writer.Write((long)1);
+                    writer.Write(((ulong)'a' << 21) | (uint)'b');
+                    writer.Write(0.5f);
                     writer.Write(0);
                     writer.Write((long)0);
                     writer.Write((long)0);
@@ -980,8 +1782,19 @@ namespace TigerClaw.Core.Tests
                 {
                     double known = Math.Exp(model.LogProbability("\x02", "\x02", "a"));
                     double unknown = Math.Exp(model.LogProbability("\x02", "\x02", "b"));
+                    double knownCached = Math.Exp(model.LogProbability("\x02", "\x02", "a"));
+                    double withoutUnigram = Math.Exp(model.LogProbability("\x02", "\x02", "a", false));
+                    double withoutUnigramCached = Math.Exp(model.LogProbability("\x02", "\x02", "a", false));
                     True(Math.Abs(known - 0.9) < 1e-6, nameof(SentenceNgramV2LoadsFromMappedFile) + ".known");
                     True(Math.Abs(unknown - 0.1) < 1e-6, nameof(SentenceNgramV2LoadsFromMappedFile) + ".unknown");
+                    True(knownCached == known, nameof(SentenceNgramV2LoadsFromMappedFile) + ".known_cached");
+                    True(
+                        withoutUnigramCached == withoutUnigram && withoutUnigram < 1e-299,
+                        nameof(SentenceNgramV2LoadsFromMappedFile) + ".without_unigram_cached");
+                    True(model.HasObservedBigram("a", "b"), nameof(SentenceNgramV2LoadsFromMappedFile) + ".bigram");
+                    True(model.HasObservedBigram("a", "b"), nameof(SentenceNgramV2LoadsFromMappedFile) + ".bigram_cached");
+                    True(!model.HasObservedBigram("b", "a"), nameof(SentenceNgramV2LoadsFromMappedFile) + ".missing_bigram");
+                    True(!model.HasObservedBigram("b", "a"), nameof(SentenceNgramV2LoadsFromMappedFile) + ".missing_bigram_cached");
                 }
             }
             finally

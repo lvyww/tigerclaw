@@ -12,7 +12,6 @@ set "CONFIG_FILE=%ROOT%\publish_config.txt"
 set "EMBED_INFO=%ROOT%\BimeTSF2\SampleIME\EmbeddedBuildInfo.h"
 set "SHARED_BUILD_INFO=%ROOT%\next\TigerClaw.Shared\BuildInfo.cs"
 set "PACK_SCRIPT=%ROOT%\pack_release.bat"
-set "MODEL_PROTECTION_SCRIPT=%ROOT%\tools\protect_sentence_model.ps1"
 set "SENTENCE_NATIVE_BUILD=%ROOT%\next\build_sentence_native.bat"
 set "TEXT_LOG_ENABLED=0"
 set "CORE_HASH_VERIFY_ENABLED=1"
@@ -104,11 +103,9 @@ set "OVERLAY_OUT=%ROOT%\next\_run\Release\net48"
 set "DIALOG_OUT=%ROOT%\next\_run\Release\net48"
 set "SENTENCE_OUT=%ROOT%\next\_run\Release\sentence"
 set "SENTENCE_MODEL_ROOT=C:\Archive\tigerclaw_sentence_ml\runtime"
+set "SENTENCE_NGRAM_MODEL=%SENTENCE_MODEL_ROOT%\sentence-ngram-v2.bin"
 set "SENTENCE_QWEN_MODEL=C:\Archive\tigerclaw_sentence_ml\qwen3-0.6b-gguf\downloaded\Qwen3-0.6B-Base-Q8_0.gguf"
 set "SENTENCE_QWEN_LICENSE=C:\Archive\tigerclaw_sentence_ml\qwen3-0.6b-base\LICENSE"
-set "MODEL_PROTECTION_KEY=%SENTENCE_MODEL_ROOT%\model-protection.key"
-set "PROTECTED_MODEL_OUT=%ROOT%\next\_run\Release\protected-models"
-set "PROTECTED_NGRAM=%PROTECTED_MODEL_OUT%\sentence-ngram-v2.tcmodel"
 set "HOOK_NATIVE_OUT=%ROOT%\next\_run\Release\native"
 set "TSF_X64_DLL=%ROOT%\BimeTSF2\SampleIME\x64\Release\TigerClaw.dll"
 set "TSF_X86_DLL=%ROOT%\BimeTSF2\SampleIME\Win32\Release\TigerClaw.dll"
@@ -145,16 +142,8 @@ if not exist "%SHARED_BUILD_INFO%" (
     echo ERROR: Missing shared build info source: %SHARED_BUILD_INFO%
     exit /b 1
 )
-if not exist "%MODEL_PROTECTION_SCRIPT%" (
-    echo ERROR: Missing model protection script: %MODEL_PROTECTION_SCRIPT%
-    exit /b 1
-)
-if not exist "%MODEL_PROTECTION_KEY%" (
-    echo ERROR: Missing model protection key: %MODEL_PROTECTION_KEY%
-    exit /b 1
-)
-for %%I in ("%MODEL_PROTECTION_KEY%") do if not "%%~zI"=="32" (
-    echo ERROR: Model protection key must contain exactly 32 bytes.
+if not exist "%SENTENCE_NGRAM_MODEL%" (
+    echo ERROR: Missing sentence n-gram model: %SENTENCE_NGRAM_MODEL%
     exit /b 1
 )
 echo   text_log_enabled=%TEXT_LOG_ENABLED%
@@ -173,10 +162,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$commit = '%BUILD_COMMIT%';" ^
   "$buildUtc = '%BUILD_UTC%';" ^
   "$trialUtc = '%TRIAL_EXPIRE_UTC%';" ^
-  "$modelKeyPath = '%MODEL_PROTECTION_KEY%';" ^
-  "$modelKey = [System.IO.File]::ReadAllBytes($modelKeyPath);" ^
-  "if ($modelKey.Length -ne 32) { throw 'Model protection key must contain exactly 32 bytes.' };" ^
-  "$modelKeyLiteral = (($modelKey | ForEach-Object { '0x{0:X2}' -f $_ }) -join ', ');" ^
   "$lines = @(" ^
   "  'namespace TigerClaw.Shared'," ^
   "  '{'," ^
@@ -186,11 +171,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "  ('        public const string Commit = \"' + $commit + '\";')," ^
   "  ('        public const string BuildUtc = \"' + $buildUtc + '\";')," ^
   "  ('        public const string TrialExpireUtc = \"' + $trialUtc + '\";')," ^
-  "  ''," ^
-  "  '        internal static byte[] GetModelProtectionKey()'," ^
-  "  '        {'," ^
-  "  ('            return new byte[] { ' + $modelKeyLiteral + ' };')," ^
-  "  '        }'," ^
   "  '    }'," ^
   "  '}'" ^
   ");" ^
@@ -198,8 +178,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "Set-Content -LiteralPath $path -Value $raw -Encoding UTF8 -NoNewline;" ^
   "Write-Host ('  version=' + $version);" ^
   "Write-Host ('  commit=' + $commit);" ^
-  "Write-Host ('  build_utc=' + $buildUtc);" ^
-  "Write-Host '  model_protection=enabled';"
+  "Write-Host ('  build_utc=' + $buildUtc);"
 if errorlevel 1 (
     echo ERROR: Failed to update BuildInfo.cs
     exit /b 1
@@ -243,10 +222,8 @@ if errorlevel 1 (
 )
 
 echo.
-echo [7/13] Protect sentence n-gram model
-if not exist "%PROTECTED_MODEL_OUT%" mkdir "%PROTECTED_MODEL_OUT%"
-powershell -NoProfile -ExecutionPolicy Bypass -File "%MODEL_PROTECTION_SCRIPT%" -Source "%SENTENCE_MODEL_ROOT%\sentence-ngram-v2.bin" -Destination "%PROTECTED_NGRAM%" -Kind SentenceNgram -KeyFile "%MODEL_PROTECTION_KEY%"
-if errorlevel 1 exit /b 1
+echo [7/13] Validate sentence n-gram model
+call :RequireFile "%SENTENCE_NGRAM_MODEL%" "sentence n-gram model" || exit /b 1
 
 echo.
 echo [8/13] Update EmbeddedBuildInfo.h
@@ -323,7 +300,7 @@ call :RequireFile "%OVERLAY_OUT%\TigerClaw.Overlay.exe" "TigerClaw.Overlay.exe" 
 call :RequireFile "%DIALOG_OUT%\TigerClaw.Dialog.exe" "TigerClaw.Dialog.exe" || exit /b 1
 call :RequireFile "%SENTENCE_OUT%\TigerClaw.Sentence.exe" "TigerClaw.Sentence.exe" || exit /b 1
 call :RequireFile "%SENTENCE_OUT%\TigerClaw.Sentence.Native.dll" "TigerClaw.Sentence.Native.dll" || exit /b 1
-call :RequireFile "%PROTECTED_NGRAM%" "protected sentence n-gram model" || exit /b 1
+call :RequireFile "%SENTENCE_NGRAM_MODEL%" "sentence n-gram model" || exit /b 1
 call :RequireFile "%SENTENCE_QWEN_MODEL%" "Qwen Q8 model" || exit /b 1
 call :RequireFile "%ROOT%\third_party\llama.cpp\LICENSE" "llama.cpp license" || exit /b 1
 call :RequireFile "%SENTENCE_QWEN_LICENSE%" "Qwen license" || exit /b 1
@@ -352,13 +329,14 @@ for %%F in (Microsoft.ML.OnnxRuntime.dll System.Buffers.dll System.Memory.dll Sy
 if exist "%RELEASE_MODELS%\sentence-ngram.bin" del /q "%RELEASE_MODELS%\sentence-ngram.bin"
 if exist "%RELEASE_MODELS%\sentence-ngram.tcmodel" del /q "%RELEASE_MODELS%\sentence-ngram.tcmodel"
 if exist "%RELEASE_MODELS%\sentence-ngram-v2.bin" del /q "%RELEASE_MODELS%\sentence-ngram-v2.bin"
+if exist "%RELEASE_MODELS%\sentence-ngram-v2.tcmodel" del /q "%RELEASE_MODELS%\sentence-ngram-v2.tcmodel"
 if exist "%RELEASE_SENTENCE%\Models\sentence-transformer.onnx" del /q "%RELEASE_SENTENCE%\Models\sentence-transformer.onnx"
 if exist "%RELEASE_SENTENCE%\Models\sentence-vocabulary.json" del /q "%RELEASE_SENTENCE%\Models\sentence-vocabulary.json"
 if exist "%RELEASE_SENTENCE%\Models\sentence-transformer.tcmodel" del /q "%RELEASE_SENTENCE%\Models\sentence-transformer.tcmodel"
 if exist "%RELEASE_SENTENCE%\Models\sentence-vocabulary.tcmodel" del /q "%RELEASE_SENTENCE%\Models\sentence-vocabulary.tcmodel"
 if exist "%RELEASE_SENTENCE%\Models\sentence-transformer.json" del /q "%RELEASE_SENTENCE%\Models\sentence-transformer.json"
 call :CopyFileStrict "%SENTENCE_QWEN_MODEL%" "%RELEASE_SENTENCE%\Models\sentence-qwen-q8.gguf" || exit /b 1
-call :CopyFileStrict "%PROTECTED_NGRAM%" "%RELEASE_MODELS%\sentence-ngram-v2.tcmodel" || exit /b 1
+call :CopyFileStrict "%SENTENCE_NGRAM_MODEL%" "%RELEASE_MODELS%\sentence-ngram-v2.bin" || exit /b 1
 call :CopyFileStrict "%ROOT%\third_party\llama.cpp\LICENSE" "%RELEASE_SENTENCE%\licenses\llama.cpp-LICENSE.txt" || exit /b 1
 call :CopyFileStrict "%SENTENCE_QWEN_LICENSE%" "%RELEASE_SENTENCE%\licenses\Qwen3-LICENSE.txt" || exit /b 1
 

@@ -4,7 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.IO.MemoryMappedFiles;
 using System.Text;
-using TigerClaw.Shared;
+using System.Threading;
 
 namespace TigerClaw.Core
 {
@@ -15,6 +15,9 @@ namespace TigerClaw.Core
         private const int ScalarBits = 21;
         private const int ScalarMask = (1 << ScalarBits) - 1;
         private const long MaximumModelLength = 4L * 1024 * 1024 * 1024;
+        private const int LogProbabilityCacheSize = 1 << 18;
+        private const int ObservedBigramCacheSize = 1 << 16;
+        private const ulong NoUnigramCacheKeyFlag = 1UL << 63;
 
         private readonly MemoryMappedFile _mapping;
         private readonly MemoryMappedViewAccessor _view;
@@ -30,6 +33,10 @@ namespace TigerClaw.Core
         private readonly long _trigramContextOffset;
         private readonly long _trigramContextCount;
         private readonly float _unknownProbability;
+        private readonly FixedSizeCache<double> _logProbabilityCache =
+            new FixedSizeCache<double>(LogProbabilityCacheSize);
+        private readonly FixedSizeCache<bool> _observedBigramCache =
+            new FixedSizeCache<bool>(ObservedBigramCacheSize);
         private bool _disposed;
 
         private SentenceNgramModel(MemoryMappedFile mapping, long length)
@@ -133,36 +140,26 @@ namespace TigerClaw.Core
             try
             {
                 long length;
-                if (string.Equals(Path.GetExtension(path), ".tcmodel", StringComparison.OrdinalIgnoreCase))
+                var stream = new FileStream(
+                    path,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.Read);
+                try
                 {
-                    mapping = EncryptedModelReader.ReadToMemoryMappedFile(
-                        path,
-                        EncryptedModelKind.SentenceNgram,
-                        out length);
+                    length = stream.Length;
+                    mapping = MemoryMappedFile.CreateFromFile(
+                        stream,
+                        null,
+                        0,
+                        MemoryMappedFileAccess.Read,
+                        HandleInheritability.None,
+                        false);
+                    stream = null;
                 }
-                else
+                finally
                 {
-                    var stream = new FileStream(
-                        path,
-                        FileMode.Open,
-                        FileAccess.Read,
-                        FileShare.Read);
-                    try
-                    {
-                        length = stream.Length;
-                        mapping = MemoryMappedFile.CreateFromFile(
-                            stream,
-                            null,
-                            0,
-                            MemoryMappedFileAccess.Read,
-                            HandleInheritability.None,
-                            false);
-                        stream = null;
-                    }
-                    finally
-                    {
-                        stream?.Dispose();
-                    }
+                    stream?.Dispose();
                 }
 
                 var model = new SentenceNgramModel(mapping, length);
@@ -177,16 +174,32 @@ namespace TigerClaw.Core
 
         public double LogProbability(string previous2, string previous1, string target)
         {
+            return LogProbability(previous2, previous1, target, includeUnigram: true);
+        }
+
+        public double LogProbability(string previous2, string previous1, string target, bool includeUnigram)
+        {
             ThrowIfDisposed();
             int first = ResolveScalar(previous2);
             int second = ResolveScalar(previous1);
             int third = ResolveScalar(target);
+            ulong cacheKey = PackTriple(first, second, third);
+            if (!includeUnigram)
+            {
+                cacheKey |= NoUnigramCacheKeyFlag;
+            }
+            if (_logProbabilityCache.TryGetValue(cacheKey, out double cached))
+            {
+                return cached;
+            }
 
-            double unigram = LookupInt32(
-                _unigramOffset,
-                _unigramCount,
-                third,
-                _unknownProbability);
+            double unigram = includeUnigram
+                ? LookupInt32(
+                    _unigramOffset,
+                    _unigramCount,
+                    third,
+                    _unknownProbability)
+                : 0.0;
             double bigram = LookupUInt64(
                 _bigramOffset,
                 _bigramCount,
@@ -211,7 +224,9 @@ namespace TigerClaw.Core
                 context,
                 1.0f);
             trigram += trigramLambda * bigram;
-            return Math.Log(Math.Max(trigram, 1e-300));
+            double result = Math.Log(Math.Max(trigram, 1e-300));
+            _logProbabilityCache.Set(cacheKey, result);
+            return result;
         }
 
         public bool HasObservedBigram(string previous, string target)
@@ -219,7 +234,15 @@ namespace TigerClaw.Core
             ThrowIfDisposed();
             int left = ResolveScalar(previous);
             int right = ResolveScalar(target);
-            return ContainsUInt64(_bigramOffset, _bigramCount, PackPair(left, right));
+            ulong cacheKey = PackPair(left, right);
+            if (_observedBigramCache.TryGetValue(cacheKey, out bool cached))
+            {
+                return cached;
+            }
+
+            bool result = ContainsUInt64(_bigramOffset, _bigramCount, cacheKey);
+            _observedBigramCache.Set(cacheKey, result);
+            return result;
         }
 
         public void Dispose()
@@ -254,9 +277,7 @@ namespace TigerClaw.Core
         private static IEnumerable<string> CandidatePaths(string baseDirectory)
         {
             string root = string.IsNullOrEmpty(baseDirectory) ? AppContext.BaseDirectory : baseDirectory;
-            yield return Path.Combine(root, "Models", "sentence-ngram-v2.tcmodel");
             yield return Path.Combine(root, "Models", "sentence-ngram-v2.bin");
-            yield return Path.Combine(root, "sentence-ngram-v2.tcmodel");
             yield return Path.Combine(root, "sentence-ngram-v2.bin");
         }
 
@@ -419,6 +440,66 @@ namespace TigerClaw.Core
             return ((ulong)(uint)first << (ScalarBits * 2)) |
                    ((ulong)(uint)second << ScalarBits) |
                    ((uint)third & ScalarMask);
+        }
+
+        private sealed class FixedSizeCache<T>
+        {
+            private readonly Entry[] _entries;
+            private readonly int _mask;
+
+            internal FixedSizeCache(int size)
+            {
+                if (size <= 0 || (size & (size - 1)) != 0)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(size));
+                }
+
+                _entries = new Entry[size];
+                _mask = size - 1;
+            }
+
+            internal bool TryGetValue(ulong key, out T value)
+            {
+                Entry entry = Volatile.Read(ref _entries[GetIndex(key)]);
+                if (entry != null && entry.Key == key)
+                {
+                    value = entry.Value;
+                    return true;
+                }
+
+                value = default(T);
+                return false;
+            }
+
+            internal void Set(ulong key, T value)
+            {
+                Volatile.Write(ref _entries[GetIndex(key)], new Entry(key, value));
+            }
+
+            private int GetIndex(ulong key)
+            {
+                unchecked
+                {
+                    key ^= key >> 33;
+                    key *= 0xff51afd7ed558ccdUL;
+                    key ^= key >> 33;
+                    key *= 0xc4ceb9fe1a85ec53UL;
+                    key ^= key >> 33;
+                    return (int)key & _mask;
+                }
+            }
+
+            private sealed class Entry
+            {
+                internal readonly ulong Key;
+                internal readonly T Value;
+
+                internal Entry(ulong key, T value)
+                {
+                    Key = key;
+                    Value = value;
+                }
+            }
         }
 
         private void ThrowIfDisposed()

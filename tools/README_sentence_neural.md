@@ -1,7 +1,7 @@
 # 整句神经模型离线实验
 
 这些工具用于离线数据处理、训练、评测和导出。TigerClaw.Core 使用导出的
-`sentence-ngram-v2.bin`（发布时为受保护的 `.tcmodel`）。当前可选的
+`sentence-ngram-v2.bin`（开发和发布均直接使用只读文件映射）。当前可选的
 `TigerClaw.Sentence.exe` 通过 llama.cpp 使用 Qwen3 0.6B Q8 GGUF 重排前 5 个候选；
 本页的小型字符 Transformer/ONNX 流程保留用于历史离线对比，不再进入输入法运行时。
 
@@ -33,9 +33,8 @@ data:   C:\Archive\tigerclaw_sentence_ml\pilot200m
 model:  C:\Archive\tigerclaw_sentence_ml\model10m
 ```
 
-正式发布时，`publish.bat` 只把 n-gram 压缩并加密为经过 HMAC 校验的 `.tcmodel`；
-Qwen Q8 GGUF 不加密并直接随包提供。发布密钥位于仓库外的
-`C:\Archive\tigerclaw_sentence_ml\runtime\model-protection.key`，不要提交该密钥。
+正式发布时，`publish.bat` 直接复制 n-gram `.bin` 和 Qwen Q8 GGUF；两者都不加密，
+并在运行时从发布文件进行只读映射。
 
 Python 是隔离的 Windows x64 3.12 环境，通过 `torch-directml` 使用 Adreno GPU；
 没有加入 PATH，也不替换系统 Python。

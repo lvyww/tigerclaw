@@ -7,20 +7,16 @@ namespace TigerClaw.Overlay
 {
     internal sealed class OverlayStateSource : IDisposable
     {
-        private const int AccessiblePollEveryNLoops = 20;
         private readonly UiStateReader _reader = new UiStateReader();
-        private readonly OverlayLocalCaretTracker _localCaretTracker;
         private readonly TimeSpan _pollInterval;
         private readonly AutoResetEvent _stopSignal = new AutoResetEvent(false);
         private Thread _thread;
         private volatile bool _running;
         private long _lastUiSeq;
-        private int _loopCount;
 
-        public OverlayStateSource(TimeSpan pollInterval, OverlayLocalCaretTracker localCaretTracker)
+        public OverlayStateSource(TimeSpan pollInterval)
         {
             _pollInterval = pollInterval;
-            _localCaretTracker = localCaretTracker;
         }
 
         public event Action<OverlayUiState, long, long> StateChanged;
@@ -45,13 +41,6 @@ namespace TigerClaw.Overlay
         {
             while (_running)
             {
-                _loopCount++;
-                bool shouldRefreshAccessibleThisLoop = _loopCount >= AccessiblePollEveryNLoops;
-                if (shouldRefreshAccessibleThisLoop)
-                {
-                    _loopCount = 0;
-                }
-
                 try
                 {
                     if (_reader.TryReadIfChanged(_lastUiSeq, out OverlayUiState state, out long uiSeq, out long tick64) &&
@@ -63,17 +52,6 @@ namespace TigerClaw.Overlay
                 }
                 catch
                 {
-                }
-
-                if (shouldRefreshAccessibleThisLoop)
-                {
-                    try
-                    {
-                        _localCaretTracker?.TryRefreshAccessibleSnapshot();
-                    }
-                    catch
-                    {
-                    }
                 }
 
                 if (_stopSignal.WaitOne(_pollInterval))

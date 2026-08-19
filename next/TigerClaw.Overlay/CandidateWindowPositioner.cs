@@ -12,37 +12,23 @@ namespace TigerClaw.Overlay
         private const int StartMenuOffsetPx = 10;
         private const int CaretGapPx = 5;
         private const int DefaultCaretHeightPx = 20;
-        private readonly OverlayLocalCaretTracker _localCaretTracker;
         private IntPtr _lastMonitor = IntPtr.Zero;
         private double _screenDpiX = 96.0;
         private double _screenDpiY = 96.0;
         private bool _prevComposing;
         private int _lastTargetXPx = int.MinValue;
         private int _lastTargetYPx = int.MinValue;
-        private int _lastObservedFrontendCaretXPx = int.MinValue;
-        private int _lastObservedFrontendCaretYPx = int.MinValue;
-        private bool _frontendCaretChangedThisComposition;
-        private bool _frontendCaretPendingForNextComposition;
         private bool _placeAboveLocked;
         private bool _hasCaretAnchor;
         private int _anchorXPx;
         private int _anchorYPx;
         private int _anchorHeightPx;
 
-        public CandidateWindowPositioner(OverlayLocalCaretTracker localCaretTracker)
-        {
-            _localCaretTracker = localCaretTracker;
-        }
-
         public void Reset()
         {
             _prevComposing = false;
             _lastTargetXPx = int.MinValue;
             _lastTargetYPx = int.MinValue;
-            _lastObservedFrontendCaretXPx = int.MinValue;
-            _lastObservedFrontendCaretYPx = int.MinValue;
-            _frontendCaretChangedThisComposition = false;
-            _frontendCaretPendingForNextComposition = false;
             _placeAboveLocked = false;
             ClearCaretAnchor();
         }
@@ -54,31 +40,11 @@ namespace TigerClaw.Overlay
                 return false;
             }
 
-            int frontendCaretX = state?.CaretX ?? 0;
-            int frontendCaretY = state?.CaretY ?? 0;
-            if (frontendCaretX != _lastObservedFrontendCaretXPx || frontendCaretY != _lastObservedFrontendCaretYPx)
-            {
-                _lastObservedFrontendCaretXPx = frontendCaretX;
-                _lastObservedFrontendCaretYPx = frontendCaretY;
-                if (IsUsableCaret(frontendCaretX, frontendCaretY))
-                {
-                    if (_prevComposing)
-                    {
-                        _frontendCaretChangedThisComposition = true;
-                    }
-                    else
-                    {
-                        _frontendCaretPendingForNextComposition = true;
-                    }
-                }
-            }
-
             if (!nowComposing)
             {
                 _prevComposing = false;
                 _lastTargetXPx = int.MinValue;
                 _lastTargetYPx = int.MinValue;
-                _frontendCaretChangedThisComposition = false;
                 _placeAboveLocked = false;
                 ClearCaretAnchor();
                 return false;
@@ -86,8 +52,6 @@ namespace TigerClaw.Overlay
 
             if (!_prevComposing)
             {
-                _frontendCaretChangedThisComposition = _frontendCaretPendingForNextComposition;
-                _frontendCaretPendingForNextComposition = false;
                 _placeAboveLocked = false;
                 ClearCaretAnchor();
             }
@@ -238,37 +202,21 @@ namespace TigerClaw.Overlay
             y = 0;
             height = DefaultCaretHeightPx;
 
-            if (_localCaretTracker != null &&
-                _localCaretTracker.TryGetCachedAccessibleSnapshot(out LocalCaretSnapshot accessibleSnapshot))
+            int frontendCaretX = state?.CaretX ?? 0;
+            int frontendCaretY = state?.CaretY ?? 0;
+            if (!IsUsableCaret(frontendCaretX, frontendCaretY))
             {
-                x = accessibleSnapshot.X;
-                y = accessibleSnapshot.Y;
-                if (accessibleSnapshot.Height > 0)
-                {
-                    height = accessibleSnapshot.Height;
-                }
-
-                return true;
+                return false;
             }
 
-            if (_frontendCaretChangedThisComposition)
+            x = frontendCaretX;
+            y = frontendCaretY;
+            if (state != null && state.CaretHeight > 0)
             {
-                int frontendCaretX = state?.CaretX ?? 0;
-                int frontendCaretY = state?.CaretY ?? 0;
-                if (IsUsableCaret(frontendCaretX, frontendCaretY))
-                {
-                    x = frontendCaretX;
-                    y = frontendCaretY;
-                    if (state != null && state.CaretHeight > 0)
-                    {
-                        height = state.CaretHeight;
-                    }
-
-                    return true;
-                }
+                height = state.CaretHeight;
             }
 
-            return false;
+            return true;
         }
 
         private void GetWorkAreaPx(IntPtr monitor, bool monitorChanged, out int left, out int top, out int right, out int bottom)

@@ -91,7 +91,7 @@ for /f "usebackq delims=" %%I in (`powershell -NoProfile -ExecutionPolicy Bypass
 for /f "usebackq delims=" %%I in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "(Get-Date).ToUniversalTime().ToString('yyyy.MM.dd-HHmm')"`) do set "BUILD_VERSION=%%I"
 for /f "usebackq delims=" %%I in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='SilentlyContinue';Set-Location -LiteralPath '%ROOT%';git rev-parse --short=8 HEAD"`) do if not defined BUILD_COMMIT set "BUILD_COMMIT=%%I"
 if not defined BUILD_COMMIT set "BUILD_COMMIT=unknown"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$p='%SHARED_BUILD_INFO%';$q=[char]34;$lines=@('namespace TigerClaw.Shared','{','    public static class BuildInfo','    {',('        public const string VersionLabel = '+$q+'%BUILD_VERSION%'+$q+';'),('        public const string Commit = '+$q+'%BUILD_COMMIT%'+$q+';'),('        public const string BuildUtc = '+$q+'%BUILD_UTC%'+$q+';'),('        public const string TrialExpireUtc = '+$q+'%TRIAL_EXPIRE_UTC%'+$q+';'),'','        internal static byte[] GetModelProtectionKey()','        {','            return new byte[32];','        }','    }','}');[IO.File]::WriteAllText($p,[string]::Join([Environment]::NewLine,$lines),(New-Object Text.UTF8Encoding($true)))" || exit /b 1
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$p='%SHARED_BUILD_INFO%';$q=[char]34;$lines=@('namespace TigerClaw.Shared','{','    public static class BuildInfo','    {',('        public const string VersionLabel = '+$q+'%BUILD_VERSION%'+$q+';'),('        public const string Commit = '+$q+'%BUILD_COMMIT%'+$q+';'),('        public const string BuildUtc = '+$q+'%BUILD_UTC%'+$q+';'),('        public const string TrialExpireUtc = '+$q+'%TRIAL_EXPIRE_UTC%'+$q+';'),'    }','}');[IO.File]::WriteAllText($p,[string]::Join([Environment]::NewLine,$lines),(New-Object Text.UTF8Encoding($true)))" || exit /b 1
 
 echo.
 echo [2/10] Build .NET payload
@@ -104,6 +104,7 @@ if not exist "%CORE_OUT%\Models" mkdir "%CORE_OUT%\Models"
 if not exist "%SENTENCE_OUT%\Models" mkdir "%SENTENCE_OUT%\Models"
 if exist "%CORE_OUT%\Models\sentence-ngram.bin" del /q "%CORE_OUT%\Models\sentence-ngram.bin"
 if exist "%CORE_OUT%\Models\sentence-ngram.tcmodel" del /q "%CORE_OUT%\Models\sentence-ngram.tcmodel"
+if exist "%CORE_OUT%\Models\sentence-ngram-v2.tcmodel" del /q "%CORE_OUT%\Models\sentence-ngram-v2.tcmodel"
 copy /Y "%SENTENCE_MODEL_ROOT%\sentence-ngram-v2.bin" "%CORE_OUT%\Models\sentence-ngram-v2.bin" >nul || exit /b 1
 copy /Y "%SENTENCE_QWEN_MODEL%" "%SENTENCE_OUT%\Models\sentence-qwen-q8.gguf" >nul || exit /b 1
 

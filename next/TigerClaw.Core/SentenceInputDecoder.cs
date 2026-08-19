@@ -253,6 +253,7 @@ namespace TigerClaw.Core
         private readonly int _beamWidth;
         private readonly double _rankPenalty;
         private readonly SentenceIsolationPenalty _isolationPenalty;
+        private readonly bool _scoreSentenceBoundaries;
         private readonly int _maxCodeLength;
         private readonly object _decodeLock = new object();
         private string _cachedRaw;
@@ -275,13 +276,15 @@ namespace TigerClaw.Core
             ISentenceLanguageModel languageModel,
             int beamWidth = 2000,
             double rankPenalty = 0.03,
-            SentenceIsolationPenalty isolationPenalty = null)
+            SentenceIsolationPenalty isolationPenalty = null,
+            bool scoreSentenceBoundaries = true)
         {
             _lexicon = lexicon ?? throw new ArgumentNullException(nameof(lexicon));
             _languageModel = languageModel ?? NeutralSentenceLanguageModel.Instance;
             _beamWidth = Math.Max(1, beamWidth);
             _rankPenalty = Math.Max(0.0, rankPenalty);
             _isolationPenalty = isolationPenalty ?? SentenceIsolationPenalty.CreateDefault();
+            _scoreSentenceBoundaries = scoreSentenceBoundaries;
             int maxCodeLength = 1;
             foreach (int length in _lexicon.CodeLengths)
             {
@@ -408,6 +411,24 @@ namespace TigerClaw.Core
             _cachedLimit = 0;
         }
 
+        private double TransitionScore(string previous2, string previous1, string target)
+        {
+            bool isBoundary =
+                string.Equals(previous2, Bos, StringComparison.Ordinal) ||
+                string.Equals(previous1, Bos, StringComparison.Ordinal) ||
+                string.Equals(target, Eos, StringComparison.Ordinal);
+            if (!_scoreSentenceBoundaries && isBoundary)
+            {
+                var ngram = _languageModel as SentenceNgramModel;
+                if (ngram != null)
+                {
+                    return ngram.LogProbability(previous2, previous1, target, includeUnigram: false);
+                }
+            }
+
+            return _languageModel.LogProbability(previous2, previous1, target);
+        }
+
         private static List<BeamState>[] CreateStates(int length)
         {
             var states = new List<BeamState>[length + 1];
@@ -512,7 +533,7 @@ namespace TigerClaw.Core
                             while (enumerator.MoveNext())
                             {
                                 string target = enumerator.GetTextElement();
-                                score += _languageModel.LogProbability(previous2, previous1, target);
+                                score += TransitionScore(previous2, previous1, target);
                                 previous2 = previous1;
                                 previous1 = target;
                             }
@@ -587,7 +608,7 @@ namespace TigerClaw.Core
             var result = new List<SentenceCandidate>(completed.Count);
             foreach (BeamState item in completed)
             {
-                double score = item.Score + _languageModel.LogProbability(item.Previous2, item.Previous1, Eos);
+                double score = item.Score + TransitionScore(item.Previous2, item.Previous1, Eos);
                 score -= _isolationPenalty.Apply(item.Text, _languageModel);
                 result.Add(new SentenceCandidate
                 {
