@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
 using System.Text;
@@ -22,6 +23,14 @@ namespace TigerClaw.Core.Tests
                 if (args.Length == 4 && string.Equals(args[0], "--sentence-smoke", StringComparison.OrdinalIgnoreCase))
                 {
                     return RunSentenceSmoke(args[1], args[2], args[3]);
+                }
+                if (args.Length >= 4 && string.Equals(args[0], "--sentence-stream-eval", StringComparison.OrdinalIgnoreCase))
+                {
+                    return RunSentenceStreamEval(
+                        args[1], args[2], args[3],
+                        args.Length > 4 ? args[4] : null,
+                        args.Length > 5 ? ParseDouble(args[5], 0.98) : 0.98,
+                        args.Length > 6 ? ParseInt(args[6], 2) : 2);
                 }
                 if (args.Length >= 4 && string.Equals(args[0], "--sentence-eval", StringComparison.OrdinalIgnoreCase))
                 {
@@ -369,6 +378,106 @@ namespace TigerClaw.Core.Tests
             }
             return result.Candidates.Length > 0 ? 0 : 2;
         }
+
+        private static int RunSentenceStreamEval(
+            string casesPath, string modelPath, string lexiconPath, string outputPath,
+            double threshold, int stabilityRequired)
+        {
+            List<EvalCaseDto> cases = LoadEvalCases(casesPath);
+            AppendHandcraftedEvalCases(cases);
+            var decoder = new SentenceInputDecoder(
+                SentenceLexiconIndex.Build(LoadSentenceLexiconSource(lexiconPath)),
+                SentenceNgramModel.Load(modelPath));
+            threshold = Math.Max(0.0, Math.Min(1.0, threshold));
+            stabilityRequired = Math.Max(1, stabilityRequired);
+
+            int committedSamples = 0, safeSamples = 0, exactSamples = 0;
+            long committedChars = 0, safeChars = 0, wrongChars = 0;
+            var rows = new List<string> { "text,code,committed_chars,safe_chars,wrong_chars,final_top1_correct" };
+            foreach (EvalCaseDto item in cases)
+            {
+                string committed = string.Empty, proposed = string.Empty;
+                int stable = 0;
+                for (int length = 1; length <= item.Code.Length; length++)
+                {
+                    SentenceDecodeResult decoded = decoder.Decode(item.Code.Substring(0, length), 20);
+                    string next = ChooseConfidentPrefix(decoded, threshold);
+                    if (next == proposed && next.Length > committed.Length)
+                    {
+                        stable++;
+                    }
+                    else if (next != proposed)
+                    {
+                        proposed = next;
+                        stable = 1;
+                    }
+
+                    if (proposed.Length > committed.Length && stable >= stabilityRequired)
+                    {
+                        committed = proposed;
+                    }
+                }
+
+                int safe = CommonPrefixLength(committed, item.Text);
+                int wrong = committed.Length - safe;
+                bool finalCorrect = string.Equals(decoder.Decode(item.Code, 20).Candidates.FirstOrDefault()?.Text, item.Text, StringComparison.Ordinal);
+                if (committed.Length > 0) committedSamples++;
+                if (safe == committed.Length) safeSamples++;
+                if (committed.Length == item.Text.Length && safe == committed.Length) exactSamples++;
+                committedChars += committed.Length;
+                safeChars += safe;
+                wrongChars += Math.Max(0, wrong);
+                rows.Add(JsonString(item.Text) + "," + JsonString(item.Code) + "," + committed.Length + "," + safe + "," + Math.Max(0, wrong) + "," + finalCorrect.ToString().ToLowerInvariant());
+            }
+
+            string summary = "samples=" + cases.Count +
+                ",threshold=" + threshold.ToString("F4", CultureInfo.InvariantCulture) +
+                ",stability=" + stabilityRequired +
+                ",early_sample_rate=" + Ratio(committedSamples, cases.Count).ToString("F4", CultureInfo.InvariantCulture) +
+                ",safe_sample_rate=" + Ratio(safeSamples, cases.Count).ToString("F4", CultureInfo.InvariantCulture) +
+                ",exact_sample_rate=" + Ratio(exactSamples, cases.Count).ToString("F4", CultureInfo.InvariantCulture) +
+                ",committed_chars=" + committedChars +
+                ",safe_chars=" + safeChars +
+                ",wrong_chars=" + wrongChars;
+            Console.WriteLine(summary);
+            if (!string.IsNullOrEmpty(outputPath)) File.WriteAllLines(outputPath, rows, new UTF8Encoding(false));
+            return 0;
+        }
+
+        private static string ChooseConfidentPrefix(SentenceDecodeResult decoded, double threshold)
+        {
+            if (decoded == null || decoded.Candidates == null || decoded.Candidates.Length == 0) return string.Empty;
+            double max = decoded.Candidates.Max(candidate => candidate.FinalScore);
+            double total = decoded.Candidates.Sum(candidate => Math.Exp(candidate.FinalScore - max));
+            string best = string.Empty;
+            foreach (SentenceCandidate candidate in decoded.Candidates)
+            {
+                string prefix = candidate.Text;
+                while (prefix.Length > 0)
+                {
+                    double mass = decoded.Candidates.Where(item => item.Text.StartsWith(prefix, StringComparison.Ordinal))
+                        .Sum(item => Math.Exp(item.FinalScore - max)) / total;
+                    if (mass >= threshold && prefix.Length < candidate.Text.Length)
+                    {
+                        best = prefix;
+                        break;
+                    }
+                    prefix = prefix.Substring(0, prefix.Length - 1);
+                }
+            }
+            return best;
+        }
+
+        private static int CommonPrefixLength(string left, string right)
+        {
+            int length = Math.Min(left.Length, right.Length), index = 0;
+            while (index < length && left[index] == right[index]) index++;
+            return index;
+        }
+
+        private static double Ratio(long value, long total) { return total <= 0 ? 0.0 : (double)value / total; }
+        private static double ParseDouble(string value, double fallback) { double parsed; return double.TryParse(value, NumberStyles.Float, CultureInfo.InvariantCulture, out parsed) ? parsed : fallback; }
+        private static int ParseInt(string value, int fallback) { int parsed; return int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out parsed) ? parsed : fallback; }
 
         private static int RunSentenceEval(
             string casesPath,
