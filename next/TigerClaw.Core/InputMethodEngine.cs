@@ -2134,6 +2134,15 @@ namespace TigerClaw.Core
             if (string.Equals(proposal, _sentenceAutoCommitProposal, StringComparison.Ordinal)) _sentenceAutoCommitStable++;
             else { _sentenceAutoCommitProposal = proposal; _sentenceAutoCommitStable = 1; }
             if (_sentenceAutoCommitStable < 2) return null;
+            // Keep an active raw-code tail in the composition. If the proposed
+            // prefix consumes the whole current input, returning commit_text
+            // together with an empty input_buffer makes TSF close the
+            // composition and collapse the candidate window. Wait for the next
+            // key so the committed prefix is always followed by a live tail.
+            if (_sentenceRawBuffer.Length <= _sentenceCommittedRawLength)
+            {
+                return null;
+            }
             string commit = proposal.Substring(_sentenceCommittedText.Length);
             _sentenceCommittedText = proposal;
             _sentenceCommittedRawLength = _sentenceRawBuffer.Length;
