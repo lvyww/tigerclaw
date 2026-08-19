@@ -83,6 +83,7 @@ namespace TigerClaw.Core
         private int _sentenceResultLexiconVersion = -1;
         private int _sentenceSelectedIndex;
         private string _sentenceCommittedText = string.Empty;
+        private int _sentenceCommittedRawLength;
         private string _sentenceAutoCommitProposal = string.Empty;
         private int _sentenceAutoCommitStable;
         private long _sentenceGeneration;
@@ -1251,17 +1252,18 @@ namespace TigerClaw.Core
         {
             if (vk == VK_BACK)
             {
-                if (_sentenceCommittedText.Length > 0)
-                {
-                    // The host cannot retract an already committed prefix. Stop
-                    // speculative tracking so later completion never duplicates it.
-                    _sentenceCommittedText = string.Empty;
-                    _sentenceAutoCommitProposal = string.Empty;
-                    _sentenceAutoCommitStable = 0;
-                }
                 if (_sentenceRawBuffer.Length > 0)
                 {
                     _sentenceRawBuffer.Length -= 1;
+                }
+
+                if (_sentenceCommittedRawLength > _sentenceRawBuffer.Length)
+                {
+                    // The host cannot retract committed text. Keep it excluded
+                    // from the remaining composition and stop proposing more.
+                    _sentenceCommittedRawLength = _sentenceRawBuffer.Length;
+                    _sentenceAutoCommitProposal = _sentenceCommittedText;
+                    _sentenceAutoCommitStable = 0;
                 }
 
                 if (_sentenceRawBuffer.Length == 0)
@@ -1272,7 +1274,7 @@ namespace TigerClaw.Core
                 }
 
                 RebuildSentenceInput();
-                return KeyEngineResult.CreateHandled(true, null, _sentenceRawBuffer.ToString(), true);
+                return KeyEngineResult.CreateHandled(true, null, GetSentenceDisplayCode(), true);
             }
 
             if (vk == VK_ESCAPE)
@@ -1284,7 +1286,12 @@ namespace TigerClaw.Core
 
             if (vk == VK_RETURN)
             {
-                string output = _state.GetEnterClear() ? string.Empty : _sentenceRawBuffer.ToString();
+                string remainingRaw = _sentenceRawBuffer.ToString();
+                if (_sentenceCommittedRawLength > 0 && _sentenceCommittedRawLength <= remainingRaw.Length)
+                {
+                    remainingRaw = remainingRaw.Substring(_sentenceCommittedRawLength);
+                }
+                string output = _state.GetEnterClear() ? string.Empty : remainingRaw;
                 ClearCompositionInput();
                 _compositionState = CompositionState.CnIdle;
                 return KeyEngineResult.CreateHandled(true, output.Length > 0 ? output : null, string.Empty, false);
@@ -1296,7 +1303,7 @@ namespace TigerClaw.Core
                 if (HasSentenceCandidates())
                 {
                     MoveSentenceSelection(shift ? -1 : 1);
-                    return KeyEngineResult.CreateHandled(true, null, _sentenceRawBuffer.ToString(), true);
+                    return KeyEngineResult.CreateHandled(true, null, GetSentenceDisplayCode(), true);
                 }
 
                 if (_state.GetTabClear())
@@ -1307,7 +1314,7 @@ namespace TigerClaw.Core
                     return KeyEngineResult.CreateHandled(true, null, string.Empty, false);
                 }
 
-                return KeyEngineResult.CreateHandled(true, null, _sentenceRawBuffer.ToString(), true);
+                return KeyEngineResult.CreateHandled(true, null, GetSentenceDisplayCode(), true);
             }
 
             if (vk == VK_SPACE)
@@ -1315,7 +1322,7 @@ namespace TigerClaw.Core
                 EnsureSentenceDecodeCurrent();
                 if (!HasSentenceCandidates())
                 {
-                    return KeyEngineResult.CreateHandled(true, null, _sentenceRawBuffer.ToString(), true);
+                    return KeyEngineResult.CreateHandled(true, null, GetSentenceDisplayCode(), true);
                 }
 
                 return CompleteSentenceCandidate(_sentenceSelectedIndex);
@@ -1325,37 +1332,37 @@ namespace TigerClaw.Core
             {
                 EnsureSentenceDecodeCurrent();
                 MoveSentenceSelection(vk == VK_UP ? -1 : 1);
-                return KeyEngineResult.CreateHandled(true, null, _sentenceRawBuffer.ToString(), true);
+                return KeyEngineResult.CreateHandled(true, null, GetSentenceDisplayCode(), true);
             }
 
             if (!shift && vk == VK_OEM_1 && _state.GetSecondCandidateSemicolon())
             {
                 string commit = AppendSentenceInput(';');
-                return KeyEngineResult.CreateHandled(true, commit, _sentenceRawBuffer.ToString(), true);
+                return KeyEngineResult.CreateHandled(true, commit, GetSentenceDisplayCode(), true);
             }
 
             if (!shift && vk == VK_OEM_7 && _state.GetThirdCandidateQuote())
             {
                 string commit = AppendSentenceInput('\'');
-                return KeyEngineResult.CreateHandled(true, commit, _sentenceRawBuffer.ToString(), true);
+                return KeyEngineResult.CreateHandled(true, commit, GetSentenceDisplayCode(), true);
             }
 
             if (!shift && vk >= VK_0 && vk <= VK_9)
             {
                 string commit = AppendSentenceInput((char)('0' + (vk - VK_0)));
-                return KeyEngineResult.CreateHandled(true, commit, _sentenceRawBuffer.ToString(), true);
+                return KeyEngineResult.CreateHandled(true, commit, GetSentenceDisplayCode(), true);
             }
 
             if (!shift && vk >= VK_NUMPAD0 && vk <= VK_NUMPAD9)
             {
                 string commit = AppendSentenceInput((char)('0' + (vk - VK_NUMPAD0)));
-                return KeyEngineResult.CreateHandled(true, commit, _sentenceRawBuffer.ToString(), true);
+                return KeyEngineResult.CreateHandled(true, commit, GetSentenceDisplayCode(), true);
             }
 
             if (TryMapLetter(vk, out char letter))
             {
                 string commit = AppendSentenceInput(letter);
-                return KeyEngineResult.CreateHandled(true, commit, _sentenceRawBuffer.ToString(), true);
+                return KeyEngineResult.CreateHandled(true, commit, GetSentenceDisplayCode(), true);
             }
 
             if (vk == VK_OEM_7)
@@ -2084,6 +2091,7 @@ namespace TigerClaw.Core
         {
             ClearCompositionInput();
             _sentenceCommittedText = string.Empty;
+            _sentenceCommittedRawLength = 0;
             _sentenceAutoCommitProposal = string.Empty;
             _sentenceAutoCommitStable = 0;
             _sentenceRawBuffer.Append(char.ToLowerInvariant(firstCodeChar));
@@ -2128,6 +2136,7 @@ namespace TigerClaw.Core
             if (_sentenceAutoCommitStable < 2) return null;
             string commit = proposal.Substring(_sentenceCommittedText.Length);
             _sentenceCommittedText = proposal;
+            _sentenceCommittedRawLength = _sentenceRawBuffer.Length;
             return commit;
         }
 
@@ -2137,7 +2146,7 @@ namespace TigerClaw.Core
             _sentenceSelectedIndex = 0;
             _sentenceGeneration++;
             _inputBuffer.Clear();
-            _inputBuffer.Append(_sentenceRawBuffer);
+            _inputBuffer.Append(GetSentenceDisplayCode());
             ResetCandidatePageTracker();
 
             if (_sentenceDecodeSynchronously)
@@ -2300,7 +2309,7 @@ namespace TigerClaw.Core
             SentenceCandidate[] candidates = _sentenceDecodeResult.Candidates ?? Array.Empty<SentenceCandidate>();
             if (index < 0 || index >= candidates.Length)
             {
-                return KeyEngineResult.CreateHandled(true, null, _sentenceRawBuffer.ToString(), true);
+                return KeyEngineResult.CreateHandled(true, null, GetSentenceDisplayCode(), true);
             }
 
             string output = candidates[index].Text;
@@ -3772,14 +3781,46 @@ namespace TigerClaw.Core
 
             if (string.Equals(_sentenceDecodeResult.RawCode, sentenceRawCode, StringComparison.Ordinal))
             {
-                return current;
+                if (_sentenceCommittedText.Length == 0)
+                {
+                    return current;
+                }
+
+                return current
+                    .Where(candidate => candidate.Text.StartsWith(_sentenceCommittedText, StringComparison.Ordinal))
+                    .Select(candidate => new SentenceCandidate
+                    {
+                        Text = candidate.Text.Substring(_sentenceCommittedText.Length),
+                        SegmentedCode = candidate.SegmentedCode,
+                        BaseScore = candidate.BaseScore,
+                        FinalScore = candidate.FinalScore,
+                        MaxLexiconRank = candidate.MaxLexiconRank
+                    })
+                    .Where(candidate => candidate.Text.Length > 0)
+                    .ToArray();
             }
 
             // Decode is still catching up. Keep the last list so Overlay does not
             // collapse to a one-row code window between keys.
             if (sentenceRawCode.Length > 0 && current.Length > 0)
             {
-                return current;
+                if (_sentenceCommittedText.Length == 0)
+                {
+                    return current;
+                }
+
+                return current
+                    .Where(candidate => candidate.Text.StartsWith(_sentenceCommittedText, StringComparison.Ordinal))
+                    .Select(candidate => new SentenceCandidate
+                    {
+                        Text = candidate.Text.Substring(_sentenceCommittedText.Length),
+                        SegmentedCode = candidate.SegmentedCode,
+                        BaseScore = candidate.BaseScore,
+                        FinalScore = candidate.FinalScore,
+                        MaxLexiconRank = candidate.MaxLexiconRank
+                    })
+                    .Where(candidate => candidate.Text.Length > 0)
+                    .ToArray();
             }
 
             return Array.Empty<SentenceCandidate>();
@@ -3788,6 +3829,10 @@ namespace TigerClaw.Core
         private string GetSentenceDisplayCode()
         {
             string rawCode = _sentenceRawBuffer.ToString();
+            if (_sentenceCommittedRawLength > 0 && _sentenceCommittedRawLength <= rawCode.Length)
+            {
+                rawCode = rawCode.Substring(_sentenceCommittedRawLength);
+            }
             if (_sentenceResultLexiconVersion != _state.LexiconVersion)
             {
                 return rawCode;
