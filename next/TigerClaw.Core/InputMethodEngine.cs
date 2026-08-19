@@ -1252,6 +1252,20 @@ namespace TigerClaw.Core
         {
             if (vk == VK_BACK)
             {
+                // The raw buffer retains the committed prefix so the decoder
+                // can keep its full context, but that prefix no longer belongs
+                // to the active TSF composition. Backspace must consume only
+                // the live tail; once the tail is empty, end the composition
+                // instead of replaying backspace over already committed text.
+                if (_sentenceCommittedRawLength > 0 &&
+                    _sentenceRawBuffer.Length <= _sentenceCommittedRawLength + 1)
+                {
+                    ClearCompositionInput();
+                    _compositionState = CompositionState.CnIdle;
+                    ResetCandidatePageTracker();
+                    return KeyEngineResult.CreateHandled(true, null, string.Empty, false);
+                }
+
                 if (_sentenceRawBuffer.Length > 0)
                 {
                     _sentenceRawBuffer.Length -= 1;
