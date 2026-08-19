@@ -2135,7 +2135,7 @@ namespace TigerClaw.Core
             else { _sentenceAutoCommitProposal = proposal; _sentenceAutoCommitStable = 1; }
             if (_sentenceAutoCommitStable < 2) return null;
             string commit = proposal.Substring(_sentenceCommittedText.Length);
-            int committedRawLength = FindSentenceRawLengthForText(proposal);
+            int committedRawLength = FindSentenceRawLengthForText(proposal, candidates);
             if (committedRawLength <= _sentenceCommittedRawLength || committedRawLength > _sentenceRawBuffer.Length)
             {
                 return null;
@@ -2145,16 +2145,24 @@ namespace TigerClaw.Core
             return commit;
         }
 
-        private int FindSentenceRawLengthForText(string text)
+        private int FindSentenceRawLengthForText(string text, SentenceCandidate[] currentCandidates)
         {
-            string raw = _sentenceRawBuffer.ToString();
-            for (int length = Math.Max(1, _sentenceCommittedRawLength + 1); length <= raw.Length; length++)
+            if (currentCandidates != null)
             {
-                SentenceDecodeResult result = _sentenceInputDecoder?.Decode(raw.Substring(0, length), 20);
-                SentenceCandidate[] candidates = result?.Candidates ?? Array.Empty<SentenceCandidate>();
-                if (candidates.Any(candidate => string.Equals(candidate.Text, text, StringComparison.Ordinal)))
+                SentenceCandidate matching = currentCandidates.FirstOrDefault(candidate =>
+                    candidate.Text.StartsWith(text, StringComparison.Ordinal) &&
+                    !string.IsNullOrEmpty(candidate.SegmentedCode));
+                if (matching != null)
                 {
-                    return length;
+                    string[] segments = matching.SegmentedCode
+                        .Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                    if (segments.Length > 0)
+                    {
+                        // A committed text prefix must consume complete decoder
+                        // edges. For "一时" (fi + ok), committing "一" consumes
+                        // the first edge "fi", never the ambiguous one-key "f".
+                        return _sentenceCommittedRawLength + segments[0].Length;
+                    }
                 }
             }
 
