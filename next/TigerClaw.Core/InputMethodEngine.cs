@@ -2156,12 +2156,26 @@ namespace TigerClaw.Core
                 {
                     string[] segments = matching.SegmentedCode
                         .Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
-                    if (segments.Length > 0)
+                    string raw = _sentenceRawBuffer.ToString();
+                    int consumed = 0;
+                    for (int index = 0; index < segments.Length; index++)
                     {
-                        // A committed text prefix must consume complete decoder
-                        // edges. For "一时" (fi + ok), committing "一" consumes
-                        // the first edge "fi", never the ambiguous one-key "f".
-                        return _sentenceCommittedRawLength + segments[0].Length;
+                        consumed += segments[index].Length;
+                        if (consumed > raw.Length)
+                        {
+                            break;
+                        }
+
+                        // Verify the text boundary by decoding the complete raw
+                        // prefix. This handles multi-character early commits:
+                        // "今天天" must consume "jae fi", not only "jae".
+                        SentenceDecodeResult prefixResult = _sentenceInputDecoder?.Decode(
+                            raw.Substring(0, consumed), 20);
+                        if (prefixResult?.Candidates != null && prefixResult.Candidates.Any(candidate =>
+                            string.Equals(candidate.Text, text, StringComparison.Ordinal)))
+                        {
+                            return consumed;
+                        }
                     }
                 }
             }
