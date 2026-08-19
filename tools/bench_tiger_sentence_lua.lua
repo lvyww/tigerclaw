@@ -1,6 +1,6 @@
 -- Benchmark the Rime Lua sentence lattice, with optional language-model scoring.
 -- Usage:
---   lua tools/bench_tiger_sentence_lua.lua [repo_root] [--mode none|dummy|kn] [--repeat N]
+--   lua tools/bench_tiger_sentence_lua.lua [repo_root] [--mode none|dummy|mobile|knlua|kn] [--repeat N]
 --   luajit tools/bench_tiger_sentence_lua.lua ... --mode kn
 
 local repo = arg[1] or "."
@@ -502,6 +502,15 @@ elseif mode == "kn" then
     io.write(string.format(
         "loaded KN mmap %.1f MiB  uni=%d bi=%d tri=%d\n",
         kn_or_err.length / 1048576, kn_or_err.uni, kn_or_err.bi, kn_or_err.tri))
+elseif mode == "mobile" then
+    local t0 = os.clock()
+    local reader = require("tiger_sentence_kn")
+    local kn = reader.load("/mnt/c/Archive/tigerclaw_sentence_ml/runtime/sentence-ngram-mobile.bin")
+    io.write(string.format(
+        "loaded KN mobile %.1f MiB in %.2fs  resident-index=%.2fMiB cache-limit=%.1fMiB\n",
+        kn.bytes / 1048576, os.clock() - t0,
+        kn.resident_index_bytes / 1048576, kn.cache_limit_bytes / 1048576))
+    logp = kn.logp
 elseif mode ~= "none" then
     io.stderr:write("unknown mode: " .. mode .. "\n")
     os.exit(2)

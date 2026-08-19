@@ -21,10 +21,23 @@ python3 tools/export_tiger_sentence_rime.py
 - 一码字只在整段就是那一码时合法
 - 整段不超过 4 码时检索该码位全部字词，非首选按码表顺序排在首选之后；超过 4 码后裸码只取首选
 
-语言模型用仓库外的 `sentence-ngram-v2.bin`（TCSKNM01），由 Lua 在首次解码时整文件读入。查找顺序：
+移动端优先使用仓库外的 `sentence-ngram-mobile.bin`（TCSKNM02）。它保留
+`sentence-ngram-v2.bin` 的全部 n-gram 和原始 float32 概率，只把数据重排为上下文页；
+Lua 常驻 unigram 和约 2.1MB 的稀疏索引，并用上限 8MB 的 LRU 缓存按需读取上下文页，
+不再把 228MB 模型一次性读入内存。生成命令：
 
-1. `%APPDATA%\Rime\models\sentence-ngram-v2.bin`
-2. `%APPDATA%\Rime\sentence-ngram-v2.bin`
-3. `C:\Archive\tigerclaw_sentence_ml\runtime\sentence-ngram-v2.bin`
+```bash
+python3 tools/convert_sentence_ngram_mobile.py \
+  /mnt/c/Archive/tigerclaw_sentence_ml/runtime/sentence-ngram-v2.bin \
+  /mnt/c/Archive/tigerclaw_sentence_ml/runtime/sentence-ngram-mobile.bin
+```
 
-当前是纯 Lua 查表。解码对准确率无损：增量复用格网（追加只重解后缀、退格直接取前缀状态），并缓存精确 KN logp；EOS 只在出候选时另算，不写回 beam。出候选时再减去与 Core 相同的孤立生僻字惩罚：字频排名大于 3000、且左右都没有模型里真实出现过的二元组，每个字减 2。字频表由导出脚本写成 `lua/tiger_sentence_ranks.lua`。短码全检索与首选优先规则也与 Core 一致。不要把 228MB 模型提交进 Git。
+查找顺序优先 mobile 文件，找不到时仍兼容原来的 TCSKNM01 文件：
+
+1. Rime 用户目录下的 `models/sentence-ngram-mobile.bin`
+2. Rime 用户目录下的 `sentence-ngram-mobile.bin`
+3. Rime 共享目录下的 `models/sentence-ngram-mobile.bin`
+4. 上述位置对应的 `sentence-ngram-v2.bin`
+5. 开发机 `C:\Archive\tigerclaw_sentence_ml\runtime` 下的 mobile、再到原模型
+
+当前是纯 Lua 查表。解码对准确率无损：增量复用格网（追加只重解后缀、退格直接取前缀状态），并缓存精确 KN logp；该缓存限制为 32768 项，防止长时间使用后持续增长。EOS 只在出候选时另算，不写回 beam。出候选时再减去与 Core 相同的孤立生僻字惩罚：字频排名大于 3000、且左右都没有模型里真实出现过的二元组，每个字减 2。字频表由导出脚本写成 `lua/tiger_sentence_ranks.lua`。短码全检索与首选优先规则也与 Core 一致。不要把大模型提交进 Git。

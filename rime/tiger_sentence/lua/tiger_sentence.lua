@@ -18,7 +18,10 @@ for i = 1, #lexicon.lengths do
     end
 end
 
+local logp_cache_limit = 32768
 local logp_cache = {}
+local logp_cache_keys = {}
+local logp_cache_next = 1
 local decode_cache = {
     raw = nil,
     states = nil,
@@ -36,7 +39,7 @@ end
 local function logp(prev2, prev1, target)
     local key = prev2 .. "\0" .. prev1 .. "\0" .. target
     local cached = logp_cache[key]
-    if cached then
+    if cached ~= nil then
         return cached
     end
     local model = ensure_kn()
@@ -44,7 +47,13 @@ local function logp(prev2, prev1, target)
     if model then
         value = model.logp(prev2, prev1, target)
     end
+    local old_key = logp_cache_keys[logp_cache_next]
+    if old_key then
+        logp_cache[old_key] = nil
+    end
     logp_cache[key] = value
+    logp_cache_keys[logp_cache_next] = key
+    logp_cache_next = logp_cache_next % logp_cache_limit + 1
     return value
 end
 

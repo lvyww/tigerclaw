@@ -501,6 +501,16 @@ namespace TigerClaw.Core
                         continue;
                     }
 
+                    // Codes beginning with the short-symbol markers are valid
+                    // sentence entries only at the beginning of the sentence.
+                    // In the middle of a sentence these entries would otherwise
+                    // become ordinary segmentation paths, even though the
+                    // corresponding shortcuts are intended as leading codes.
+                    if (position > 0 && IsShortSymbolCode(raw[position]))
+                    {
+                        continue;
+                    }
+
                     SentenceLexiconCandidate[] candidates = _lexicon.GetCandidates(raw.Substring(position, codeLength));
                     if (candidates == null || candidates.Length == 0)
                     {
@@ -600,6 +610,11 @@ namespace TigerClaw.Core
             }
 
             return codeEnd;
+        }
+
+        private static bool IsShortSymbolCode(char value)
+        {
+            return value == ';' || value == '/' || value == '[';
         }
 
         private SentenceDecodeResult Emit(string normalized, List<BeamState>[] states, int candidateLimit, int expandedStates)

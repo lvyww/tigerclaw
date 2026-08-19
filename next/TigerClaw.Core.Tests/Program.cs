@@ -94,6 +94,7 @@ namespace TigerClaw.Core.Tests
                 EnginePreservesShiftedLetterInMixedInput();
                 SentenceDecoderSupportsWordAndSelectionSuffix();
                 SentenceDecoderRejectsEmbeddedBareOneKeyCharacter();
+                SentenceDecoderAllowsLeadingShortSymbolOnly();
                 SentenceDecoderRequiresExplicitSelectionForEveryCode();
                 SentenceDecoderKeepsFirstChoiceAheadOnShortCodes();
                 SentenceDecoderUsesOnlyTheOptimalCharacterCode();
@@ -2104,6 +2105,30 @@ namespace TigerClaw.Core.Tests
             True(
                 Array.Exists(decoder.Decode("ac").Candidates, candidate => candidate.Text == "甲"),
                 nameof(SentenceDecoderAllowsNonPrimaryCodesForRareCharacters));
+        }
+
+        private static void SentenceDecoderAllowsLeadingShortSymbolOnly()
+        {
+            SentenceInputDecoder decoder = new SentenceInputDecoder(
+                SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
+                {
+                    [";a"] = new List<string> { "甲" },
+                    ["ab"] = new List<string> { "乙" },
+                    [";b"] = new List<string> { "丙" }
+                }),
+                NeutralSentenceLanguageModel.Instance,
+                beamWidth: 100,
+                isolationPenalty: SentenceIsolationPenalty.None);
+
+            SentenceDecodeResult leading = decoder.Decode(";aab");
+            True(
+                Array.Exists(leading.Candidates, candidate => candidate.Text == "甲乙"),
+                nameof(SentenceDecoderAllowsLeadingShortSymbolOnly) + ".leading_allowed");
+
+            SentenceDecodeResult embedded = decoder.Decode("ab;b");
+            True(
+                Array.TrueForAll(embedded.Candidates, candidate => candidate.Text != "乙丙"),
+                nameof(SentenceDecoderAllowsLeadingShortSymbolOnly) + ".embedded_rejected");
         }
 
         private static void SentenceDecoderRequiresExplicitSelectionForEveryCode()
