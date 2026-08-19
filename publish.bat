@@ -186,7 +186,7 @@ if errorlevel 1 (
 
 echo.
 echo [3/13] Build TigerClaw.Core Release
-"%DOTNET%" msbuild "%CORE_PROJECT%" /restore /p:Configuration=Release /p:Platform=AnyCPU /p:OutDir="%CORE_OUT%\\" /v:minimal
+"%DOTNET%" msbuild /m /nr:false "%CORE_PROJECT%" /restore /p:Configuration=Release /p:Platform=AnyCPU /p:OutDir="%CORE_OUT%\\" /v:minimal
 if errorlevel 1 (
     echo ERROR: TigerClaw.Core Release build failed.
     exit /b 1
@@ -194,7 +194,7 @@ if errorlevel 1 (
 
 echo.
 echo [4/13] Build TigerClaw.Overlay Release
-"%DOTNET%" msbuild "%OVERLAY_PROJECT%" /restore /p:Configuration=Release /p:Platform=AnyCPU /p:OutDir="%OVERLAY_OUT%\\" /v:minimal
+"%DOTNET%" msbuild /m /nr:false "%OVERLAY_PROJECT%" /restore /p:Configuration=Release /p:Platform=AnyCPU /p:OutDir="%OVERLAY_OUT%\\" /v:minimal
 if errorlevel 1 (
     echo ERROR: TigerClaw.Overlay Release build failed.
     exit /b 1
@@ -202,7 +202,7 @@ if errorlevel 1 (
 
 echo.
 echo [5/13] Build TigerClaw.Dialog Release
-"%DOTNET%" msbuild "%DIALOG_PROJECT%" /restore /p:Configuration=Release /p:Platform=AnyCPU /p:OutDir="%DIALOG_OUT%\\" /v:minimal
+"%DOTNET%" msbuild /m /nr:false "%DIALOG_PROJECT%" /restore /p:Configuration=Release /p:Platform=AnyCPU /p:OutDir="%DIALOG_OUT%\\" /v:minimal
 if errorlevel 1 (
     echo ERROR: TigerClaw.Dialog Release build failed.
     exit /b 1
@@ -210,7 +210,7 @@ if errorlevel 1 (
 
 echo.
 echo [6/13] Build TigerClaw.Sentence Release
-"%DOTNET%" msbuild "%SENTENCE_PROJECT%" /restore /p:Configuration=Release /p:Platform=x64 /p:OutDir="%SENTENCE_OUT%\\" /v:minimal
+"%DOTNET%" msbuild /m /nr:false "%SENTENCE_PROJECT%" /restore /p:Configuration=Release /p:Platform=x64 /p:OutDir="%SENTENCE_OUT%\\" /v:minimal
 if errorlevel 1 (
     echo ERROR: TigerClaw.Sentence Release build failed.
     exit /b 1
@@ -266,7 +266,7 @@ if errorlevel 1 (
 
 echo.
 echo [9/13] Build TigerClaw.Hook.Native Release
-"%MSBUILD%" "%HOOK_NATIVE_PROJECT%" /p:Configuration=Release /p:Platform=x64 /p:OutDir="%HOOK_NATIVE_OUT%\\" /v:minimal
+"%MSBUILD%" /m /nr:false "%HOOK_NATIVE_PROJECT%" /p:Configuration=Release /p:Platform=x64 /p:OutDir="%HOOK_NATIVE_OUT%\\" /v:minimal
 if errorlevel 1 (
     echo ERROR: TigerClaw.Hook.Native Release build failed.
     exit /b 1
@@ -408,6 +408,6 @@ if defined TSF_TOOLSET_ARGS (
     echo   TSF platform=%TSF_PLATFORM% toolset=%TSF_TOOLSET_ARGS%
 )
 
-"%MSBUILD%" "%TSF_PROJECT%" /p:Configuration=Release /p:Platform=%TSF_PLATFORM% /p:WholeProgramOptimization=false /v:minimal %TSF_TOOLSET_ARGS%
+"%MSBUILD%" /m /nr:false "%TSF_PROJECT%" /p:Configuration=Release /p:Platform=%TSF_PLATFORM% /p:WholeProgramOptimization=false /v:minimal %TSF_TOOLSET_ARGS%
 if errorlevel 1 exit /b 1
 exit /b 0

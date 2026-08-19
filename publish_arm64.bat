@@ -95,10 +95,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "$p='%SHARED_BUILD_INFO%'
 
 echo.
 echo [2/10] Build .NET payload
-"%DOTNET%" msbuild "%CORE_PROJECT%" /restore /p:Configuration=Release /p:Platform=AnyCPU /p:TigerClawTargetFramework=net481 /p:PlatformTarget=ARM64 /p:Prefer32Bit=false /p:OutDir="%CORE_OUT%\\" /v:minimal || exit /b 1
-"%DOTNET%" msbuild "%OVERLAY_PROJECT%" /restore /p:Configuration=Release /p:Platform=AnyCPU /p:TigerClawTargetFramework=net481 /p:PlatformTarget=ARM64 /p:Prefer32Bit=false /p:OutDir="%CORE_OUT%\\" /v:minimal || exit /b 1
-"%DOTNET%" msbuild "%DIALOG_PROJECT%" /restore /p:Configuration=Release /p:Platform=AnyCPU /p:TigerClawTargetFramework=net481 /p:PlatformTarget=ARM64 /p:Prefer32Bit=false /p:OutDir="%CORE_OUT%\\" /v:minimal || exit /b 1
-"%DOTNET%" msbuild "%SENTENCE_PROJECT%" /restore /p:Configuration=Release /p:Platform=ARM64 /p:PlatformTarget=ARM64 /p:OutDir="%SENTENCE_OUT%\\" /v:minimal || exit /b 1
+"%DOTNET%" msbuild /m /nr:false "%CORE_PROJECT%" /restore /p:Configuration=Release /p:Platform=AnyCPU /p:TigerClawTargetFramework=net481 /p:PlatformTarget=ARM64 /p:Prefer32Bit=false /p:OutDir="%CORE_OUT%\\" /v:minimal || exit /b 1
+"%DOTNET%" msbuild /m /nr:false "%OVERLAY_PROJECT%" /restore /p:Configuration=Release /p:Platform=AnyCPU /p:TigerClawTargetFramework=net481 /p:PlatformTarget=ARM64 /p:Prefer32Bit=false /p:OutDir="%CORE_OUT%\\" /v:minimal || exit /b 1
+"%DOTNET%" msbuild /m /nr:false "%DIALOG_PROJECT%" /restore /p:Configuration=Release /p:Platform=AnyCPU /p:TigerClawTargetFramework=net481 /p:PlatformTarget=ARM64 /p:Prefer32Bit=false /p:OutDir="%CORE_OUT%\\" /v:minimal || exit /b 1
+"%DOTNET%" msbuild /m /nr:false "%SENTENCE_PROJECT%" /restore /p:Configuration=Release /p:Platform=ARM64 /p:PlatformTarget=ARM64 /p:OutDir="%SENTENCE_OUT%\\" /v:minimal || exit /b 1
 call "%SENTENCE_NATIVE_BUILD%" ARM64 "%SENTENCE_OUT%" Release || exit /b 1
 if not exist "%CORE_OUT%\Models" mkdir "%CORE_OUT%\Models"
 if not exist "%SENTENCE_OUT%\Models" mkdir "%SENTENCE_OUT%\Models"
@@ -114,7 +114,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%UPDATE_EMBED_SCRIPT%" -Pat
 
 echo.
 echo [4/10] Build Hook.Native ARM64
-"%MSBUILD%" "%HOOK_PROJECT%" /p:Configuration=Release /p:Platform=ARM64 /p:OutDir="%HOOK_OUT%\\" /v:minimal || exit /b 1
+"%MSBUILD%" /m /nr:false "%HOOK_PROJECT%" /p:Configuration=Release /p:Platform=ARM64 /p:OutDir="%HOOK_OUT%\\" /v:minimal || exit /b 1
 
 echo.
 echo [5/10] Build TSF Win32/x64/ARM64
@@ -124,7 +124,7 @@ call :BuildTsf ARM64 || exit /b 1
 
 echo.
 echo [6/10] Build TSF LocalServer ARM64
-"%MSBUILD%" "%TSF_SERVER_PROJECT%" /p:Configuration=Release /p:Platform=ARM64 /p:WholeProgramOptimization=false /v:minimal %TSF_TOOLSET_ARGS% || exit /b 1
+"%MSBUILD%" /m /nr:false "%TSF_SERVER_PROJECT%" /p:Configuration=Release /p:Platform=ARM64 /p:WholeProgramOptimization=false /v:minimal %TSF_TOOLSET_ARGS% || exit /b 1
 
 echo.
 echo [7/10] Build ARM64X wrapper
@@ -200,5 +200,5 @@ exit /b 0
 :BuildTsf
 set "TSF_PLATFORM=%~1"
 echo   TSF platform=%TSF_PLATFORM% toolset=%TSF_TOOLSET_ARGS%
-"%MSBUILD%" "%TSF_PROJECT%" /p:Configuration=Release /p:Platform=%TSF_PLATFORM% /p:WholeProgramOptimization=false /v:minimal %TSF_TOOLSET_ARGS%
+"%MSBUILD%" /m /nr:false "%TSF_PROJECT%" /p:Configuration=Release /p:Platform=%TSF_PLATFORM% /p:WholeProgramOptimization=false /v:minimal %TSF_TOOLSET_ARGS%
 exit /b %errorlevel%
