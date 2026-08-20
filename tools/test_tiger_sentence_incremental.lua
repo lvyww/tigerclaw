@@ -171,10 +171,19 @@ if #commits_on == 0 then
 end
 print("OK  enabled early commit commits a stable prefix")
 
-properties_on.tiger_sentence_confidence = "旧\31" .. "1\31abcde"
+env_on._tiger_sentence_transient = {
+    proposal = "旧",
+    stable = 1,
+    evidence_raw = "abcde"
+}
 sentence.processor(fake_key("BackSpace"), env_on)
-if properties_on.tiger_sentence_confidence ~= "\31" .. "0\31" then
+if env_on._tiger_sentence_transient.proposal ~= "" or
+    env_on._tiger_sentence_transient.stable ~= 0 or
+    env_on._tiger_sentence_transient.evidence_raw ~= "" then
     fail("backspace did not invalidate early-commit evidence")
+end
+if properties_on.tiger_sentence_confidence ~= nil then
+    fail("transient confidence leaked into a Rime context property")
 end
 print("OK  backspace invalidates early-commit evidence")
 

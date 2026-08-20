@@ -35,9 +35,10 @@ local decode_cache = {
 }
 local state_separator = "\31"
 
--- Keep early-commit state in Rime context properties. The Lua binding may
--- create a different userdata wrapper for the same context on each callback,
--- so a weak table keyed by that wrapper cannot preserve the stability count.
+-- Only committed-prefix state must be visible to both the processor and
+-- translator. Keep per-key confidence state on the processor environment so
+-- it does not emit a Rime property update (and a redundant UI refresh) for
+-- every physical key. The old properties are read once for live migration.
 local state_keys = {
     committed_text = "tiger_sentence_committed_text",
     committed_raw = "tiger_sentence_committed_raw",
@@ -48,21 +49,36 @@ local state_keys = {
     evidence_raw = "tiger_sentence_evidence_raw"
 }
 
-local function sentence_state(context)
-    local confidence = context:get_property(state_keys.confidence) or ""
-    local proposal, stable, evidence_raw = confidence:match(
-        "^(.-)" .. state_separator .. "(%d+)" .. state_separator .. "(.*)$")
-    if proposal == nil then
-        proposal = context:get_property(state_keys.proposal) or ""
-        stable = context:get_property(state_keys.stable) or "0"
-        evidence_raw = context:get_property(state_keys.evidence_raw) or ""
+local function transient_state(context, env)
+    if not env then
+        return { proposal = "", stable = 0, evidence_raw = "" }
     end
+    if not env._tiger_sentence_transient then
+        local confidence = context:get_property(state_keys.confidence) or ""
+        local proposal, stable, evidence_raw = confidence:match(
+            "^(.-)" .. state_separator .. "(%d+)" .. state_separator .. "(.*)$")
+        if proposal == nil then
+            proposal = context:get_property(state_keys.proposal) or ""
+            stable = context:get_property(state_keys.stable) or "0"
+            evidence_raw = context:get_property(state_keys.evidence_raw) or ""
+        end
+        env._tiger_sentence_transient = {
+            proposal = proposal,
+            stable = tonumber(stable) or 0,
+            evidence_raw = evidence_raw
+        }
+    end
+    return env._tiger_sentence_transient
+end
+
+local function sentence_state(context, env)
+    local transient = transient_state(context, env)
     return {
         committed_text = context:get_property(state_keys.committed_text) or "",
         committed_raw = context:get_property(state_keys.committed_raw) or "",
-        proposal = proposal,
-        stable = tonumber(stable) or 0,
-        evidence_raw = evidence_raw
+        proposal = transient.proposal,
+        stable = transient.stable,
+        evidence_raw = transient.evidence_raw
     }
 end
 
@@ -73,25 +89,37 @@ local function set_property_if_changed(context, key, value)
     end
 end
 
-local function save_sentence_state(context, state)
-    set_property_if_changed(context, state_keys.committed_text, state.committed_text)
-    set_property_if_changed(context, state_keys.committed_raw, state.committed_raw)
-    local confidence = (state.proposal or "") .. state_separator ..
-        tostring(state.stable or 0) .. state_separator .. (state.evidence_raw or "")
-    set_property_if_changed(context, state_keys.confidence, confidence)
-    set_property_if_changed(context, state_keys.proposal, "")
-    set_property_if_changed(context, state_keys.stable, "")
-    set_property_if_changed(context, state_keys.evidence_raw, "")
+local function save_transient_state(context, state, env)
+    if env then
+        env._tiger_sentence_transient = {
+            proposal = state.proposal or "",
+            stable = state.stable or 0,
+            evidence_raw = state.evidence_raw or ""
+        }
+    end
+    if env and not env._tiger_sentence_legacy_cleared then
+        set_property_if_changed(context, state_keys.confidence, "")
+        set_property_if_changed(context, state_keys.proposal, "")
+        set_property_if_changed(context, state_keys.stable, "")
+        set_property_if_changed(context, state_keys.evidence_raw, "")
+        env._tiger_sentence_legacy_cleared = true
+    end
 end
 
-local function reset_sentence_state(context)
+local function save_sentence_state(context, state, env)
+    set_property_if_changed(context, state_keys.committed_text, state.committed_text)
+    set_property_if_changed(context, state_keys.committed_raw, state.committed_raw)
+    save_transient_state(context, state, env)
+end
+
+local function reset_sentence_state(context, env)
     save_sentence_state(context, {
         committed_text = "",
         committed_raw = "",
         proposal = "",
         stable = 0,
         evidence_raw = ""
-    })
+    }, env)
 end
 
 local function ensure_kn()
@@ -592,14 +620,14 @@ end
 
 local function try_early_commit(env)
     local context = env.engine.context
-    local state = sentence_state(context)
+    local state = sentence_state(context, env)
     local live_raw = context.input or ""
 
     if not context:get_option("tiger_sentence_early_commit") then
         state.proposal = ""
         state.stable = 0
         state.evidence_raw = ""
-        save_sentence_state(context, state)
+        save_transient_state(context, state, env)
         return
     end
 
@@ -608,7 +636,7 @@ local function try_early_commit(env)
         state.proposal = ""
         state.stable = 0
         state.evidence_raw = ""
-        save_sentence_state(context, state)
+        save_transient_state(context, state, env)
         return
     end
 
@@ -626,7 +654,7 @@ local function try_early_commit(env)
         state.proposal = ""
         state.stable = 0
         state.evidence_raw = ""
-        save_sentence_state(context, state)
+        save_transient_state(context, state, env)
         return
     end
 
@@ -635,7 +663,7 @@ local function try_early_commit(env)
         state.proposal = ""
         state.stable = 0
         state.evidence_raw = ""
-        save_sentence_state(context, state)
+        save_transient_state(context, state, env)
         return
     end
 
@@ -649,7 +677,7 @@ local function try_early_commit(env)
         state.stable = 1
     end
     state.evidence_raw = full_raw
-    save_sentence_state(context, state)
+    save_transient_state(context, state, env)
     if state.stable < 2 then return end
 
     local consumed = find_raw_length_for_text(proposal, candidates)
@@ -662,7 +690,7 @@ local function try_early_commit(env)
     state.evidence_raw = ""
     env.engine:commit_text(commit)
     context:clear()
-    save_sentence_state(context, state)
+    save_sentence_state(context, state, env)
     local remaining = full_raw:sub(consumed + 1)
     if remaining ~= "" then context:push_input(remaining) end
 end
@@ -701,13 +729,13 @@ local function processor(key_event, env)
         return 2
     end
     local context = env.engine.context
-    local state = sentence_state(context)
+    local state = sentence_state(context, env)
     local repr = key_event:repr()
     local ch = is_plain_char_key(key_event, repr)
     if ch then
         if not context:is_composing() and state.committed_raw ~= "" then
-            reset_sentence_state(context)
-            state = sentence_state(context)
+            reset_sentence_state(context, env)
+            state = sentence_state(context, env)
         end
         if #state.committed_raw + #(context.input or "") >= max_raw_length then
             return 1
@@ -736,26 +764,26 @@ local function processor(key_event, env)
     if repr == "Return" or repr == "KP_Enter" then
         env.engine:commit_text(context.input)
         context:clear()
-        reset_sentence_state(context)
+        reset_sentence_state(context, env)
         return 1
     end
     if repr == "Escape" then
         context:clear()
-        reset_sentence_state(context)
+        reset_sentence_state(context, env)
         return 1
     end
     if repr == "BackSpace" or repr == "Delete" then
         state.proposal = ""
         state.stable = 0
         state.evidence_raw = ""
-        save_sentence_state(context, state)
+        save_transient_state(context, state, env)
         return 2
     end
     if repr == "space" then
         if context:has_menu() then
             context:confirm_current_selection()
         end
-        reset_sentence_state(context)
+        reset_sentence_state(context, env)
         return 1
     end
     return 2
@@ -763,9 +791,8 @@ end
 
 local function translator(input, seg, env)
     local context = env.engine.context
-    local state = sentence_state(context)
-    local committed_text = state.committed_text or ""
-    local committed_raw = state.committed_raw or ""
+    local committed_text = context:get_property(state_keys.committed_text) or ""
+    local committed_raw = context:get_property(state_keys.committed_raw) or ""
     local raw = committed_raw .. input
     local results = decode(raw)
     for i = 1, #results do
