@@ -58,7 +58,9 @@ local function scalar(token)
 end
 
 local function pack2(first, second)
-    return first * SHIFT + (second & MASK)
+    -- Keep compatibility with Lua 5.1/5.2 used by common Rime builds;
+    -- bitwise operators and integer-division syntax are not available there.
+    return first * SHIFT + (second % SHIFT)
 end
 
 local function load_legacy(path)
@@ -103,7 +105,7 @@ local function load_legacy(path)
     local function lookup_i32(offset, count, key, fallback)
         local low, high = 0, count
         while low < high do
-            local middle = low + ((high - low) // 2)
+        local middle = low + math.floor((high - low) / 2)
             local value = i32(offset + middle * 8)
             if value < key then
                 low = middle + 1
@@ -124,7 +126,7 @@ local function load_legacy(path)
     local function lookup_u64(offset, count, key, fallback)
         local low, high = 0, count
         while low < high do
-            local middle = low + ((high - low) // 2)
+        local middle = low + math.floor((high - low) / 2)
             local value = u64(offset + middle * 12)
             if value < key then
                 low = middle + 1
@@ -143,7 +145,7 @@ local function load_legacy(path)
     end
 
     local function pack3(first, second, third)
-        return pack2(first, second) * SHIFT + (third & MASK)
+        return pack2(first, second) * SHIFT + (third % SHIFT)
     end
 
     local function logp(prev2, prev1, target)
@@ -169,7 +171,7 @@ local function load_legacy(path)
         local key = pack2(left, right)
         local low, high = 0, bi_count
         while low < high do
-            local middle = low + ((high - low) // 2)
+        local middle = low + math.floor((high - low) / 2)
             local value = u64(bi_off + middle * 12)
             if value < key then
                 low = middle + 1
@@ -259,7 +261,7 @@ local function load_mobile(path)
     local function find_page(data, count, key)
         local low, high = 0, count
         while low < high do
-            local middle = low + ((high - low) // 2)
+        local middle = low + math.floor((high - low) / 2)
             if index_key(data, middle) <= key then
                 low = middle + 1
             else
@@ -299,7 +301,7 @@ local function load_mobile(path)
     local function lookup_unigram(key, fallback)
         local low, high = 0, uni_count
         while low < high do
-            local middle = low + ((high - low) // 2)
+            local middle = low + math.floor((high - low) / 2)
             local value = string.unpack("<i4", unigrams, middle * 8 + 1)
             if value < key then low = middle + 1 else high = middle end
         end
@@ -326,7 +328,7 @@ local function load_mobile(path)
             if context_key == key then
                 local low, high = 0, successor_count
                 while low < high do
-                    local middle = low + ((high - low) // 2)
+            local middle = low + math.floor((high - low) / 2)
                     local value = string.unpack("<I4", data, position + middle * 8)
                     if value < target then low = middle + 1 else high = middle end
                 end

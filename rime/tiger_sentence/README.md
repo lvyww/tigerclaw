@@ -10,13 +10,14 @@ python3 tools/export_tiger_sentence_rime.py
 
 ## 部署到小狼毫
 
-把本目录的 `tiger_sentence.schema.yaml`、`tiger_sentence.dict.yaml`、`rime.lua` 拷到 `%APPDATA%\Rime`，把 `lua\` 拷到 `%APPDATA%\Rime\lua`，再在 `default.custom.yaml` 里加入 `tiger_sentence`，然后「重新部署」。
+把本目录的 `tiger_sentence.schema.yaml`、`tiger_sentence.dict.yaml`、`rime.lua` 拷到 `%APPDATA%\Rime`，把 `lua\` 拷到 `%APPDATA%\Rime\lua`，再在 `default.custom.yaml` 里加入 `tiger_sentence`，然后「重新部署」。默认把编码显示在候选窗口；用户自行开启 `inline_preedit` / `preedit_type: composition` 时，Lua 仍通过 `Candidate.preedit` 维护当前候选的分段编码和提前上屏后的实时尾码。
 
 ## 按键
 
 - 字母连打整段编码
 - 空码时数字直接上屏；有编码时 `;` / `'` / 数字写入编码，分别选第 2、第 3、第 N 候选（`0` 为第 10）
 - 空格上屏当前整句；回车上屏原始编码；Esc 清码
+- 开启提前上屏：原始编码超过 4 键后，连续两次达到 0.995 置信度的稳定前缀会提交；始终保留候选最后一个字，已提交前缀继续作为后续解码上下文
 - 上下方向键或 Tab / Shift+Tab 遍历候选
 - 一码字只在整段就是那一码时合法
 - 整段不超过 4 码时检索该码位全部字词，非首选按码表顺序排在首选之后；超过 4 码后裸码只取首选

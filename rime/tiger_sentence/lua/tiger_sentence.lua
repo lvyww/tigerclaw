@@ -28,6 +28,41 @@ local decode_cache = {
     result = nil
 }
 
+-- Keep early-commit state in Rime context properties. The Lua binding may
+-- create a different userdata wrapper for the same context on each callback,
+-- so a weak table keyed by that wrapper cannot preserve the stability count.
+local state_keys = {
+    committed_text = "tiger_sentence_committed_text",
+    committed_raw = "tiger_sentence_committed_raw",
+    proposal = "tiger_sentence_proposal",
+    stable = "tiger_sentence_stable"
+}
+
+local function sentence_state(context)
+    return {
+        committed_text = context:get_property(state_keys.committed_text) or "",
+        committed_raw = context:get_property(state_keys.committed_raw) or "",
+        proposal = context:get_property(state_keys.proposal) or "",
+        stable = tonumber(context:get_property(state_keys.stable)) or 0
+    }
+end
+
+local function save_sentence_state(context, state)
+    context:set_property(state_keys.committed_text, state.committed_text or "")
+    context:set_property(state_keys.committed_raw, state.committed_raw or "")
+    context:set_property(state_keys.proposal, state.proposal or "")
+    context:set_property(state_keys.stable, tostring(state.stable or 0))
+end
+
+local function reset_sentence_state(context)
+    save_sentence_state(context, {
+        committed_text = "",
+        committed_raw = "",
+        proposal = "",
+        stable = 0
+    })
+end
+
 local function ensure_kn()
     if kn_model ~= false then
         return kn_model
@@ -361,6 +396,132 @@ local function decode(raw_code)
     return result
 end
 
+local function trim_segmented_after_raw_prefix(segmented, raw_prefix_length)
+    if not segmented or segmented == "" or raw_prefix_length <= 0 then
+        return segmented or ""
+    end
+    local raw_count = 0
+    local index = 1
+    while index <= #segmented and raw_count < raw_prefix_length do
+        if segmented:sub(index, index) ~= " " then
+            raw_count = raw_count + 1
+        end
+        index = index + 1
+    end
+    while index <= #segmented and segmented:sub(index, index) == " " do
+        index = index + 1
+    end
+    return index <= #segmented and segmented:sub(index) or ""
+end
+
+local function find_raw_length_for_text(text, raw, candidates)
+    for i = 1, #candidates do
+        local candidate = candidates[i]
+        if candidate.text:sub(1, #text) == text and candidate.segmented ~= "" then
+            local consumed = 0
+            for piece in candidate.segmented:gmatch("[^ ]+") do
+                consumed = consumed + #piece
+                if consumed <= #raw then
+                    local prefix = decode_full(raw:sub(1, consumed))
+                    for p = 1, #prefix do
+                        if prefix[p].text == text then
+                            return consumed
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return 0
+end
+
+local function try_early_commit(env)
+    local context = env.engine.context
+    local state = sentence_state(context)
+    local live_raw = context.input or ""
+
+    -- The first four raw encoding keys are never counted as stable evidence.
+    if #live_raw + #state.committed_raw <= 4 then
+        state.proposal = ""
+        state.stable = 0
+        save_sentence_state(context, state)
+        return
+    end
+
+    local full_raw = state.committed_raw .. live_raw
+    local decoded = decode(full_raw)
+    local candidates = {}
+    for i = 1, #decoded do
+        local candidate = decoded[i]
+        if state.committed_text == "" or
+            candidate.text:sub(1, #state.committed_text) == state.committed_text then
+            candidates[#candidates + 1] = candidate
+        end
+    end
+    if #candidates == 0 then
+        state.proposal = ""
+        state.stable = 0
+        save_sentence_state(context, state)
+        return
+    end
+
+    local max_score = candidates[1].score
+    for i = 2, #candidates do
+        if candidates[i].score > max_score then max_score = candidates[i].score end
+    end
+    local total = 0
+    for i = 1, #candidates do total = total + math.exp(candidates[i].score - max_score) end
+
+    local proposal = ""
+    for i = 1, #candidates do
+        local chars = utf_chars(candidates[i].text)
+        for length = 1, #chars - 1 do
+            local prefix = table.concat(chars, "", 1, length)
+            local mass = 0
+            for j = 1, #candidates do
+                if candidates[j].text:sub(1, #prefix) == prefix then
+                    mass = mass + math.exp(candidates[j].score - max_score)
+                end
+            end
+            if mass / total >= 0.995 and #utf_chars(prefix) > #utf_chars(proposal) then
+                proposal = prefix
+            end
+        end
+    end
+    local proposal_chars = utf_chars(proposal)
+    if #proposal_chars > 1 then
+        proposal = table.concat(proposal_chars, "", 1, #proposal_chars - 1)
+    end
+    if proposal == "" or #proposal <= #state.committed_text then
+        state.proposal = ""
+        state.stable = 0
+        save_sentence_state(context, state)
+        return
+    end
+
+    if proposal == state.proposal then
+        state.stable = state.stable + 1
+    else
+        state.proposal = proposal
+        state.stable = 1
+    end
+    save_sentence_state(context, state)
+    if state.stable < 2 then return end
+
+    local consumed = find_raw_length_for_text(proposal, full_raw, candidates)
+    if consumed <= #state.committed_raw or consumed > #full_raw then return end
+    local commit = proposal:sub(#state.committed_text + 1)
+    state.committed_text = proposal
+    state.committed_raw = full_raw:sub(1, consumed)
+    state.proposal = proposal
+    state.stable = 0
+    env.engine:commit_text(commit)
+    context:clear()
+    save_sentence_state(context, state)
+    local remaining = full_raw:sub(consumed + 1)
+    if remaining ~= "" then context:push_input(remaining) end
+end
+
 local function reset_decode_cache()
     decode_cache.raw = nil
     decode_cache.states = nil
@@ -395,9 +556,14 @@ local function processor(key_event, env)
         return 2
     end
     local context = env.engine.context
+    local state = sentence_state(context)
     local repr = key_event:repr()
     local ch = is_plain_char_key(key_event, repr)
     if ch then
+        if not context:is_composing() and state.committed_raw ~= "" then
+            reset_sentence_state(context)
+            state = sentence_state(context)
+        end
         -- Digits are rank suffixes only while composing. Idle Chinese mode
         -- should commit 0-9 like a normal Rime schema (including 全角).
         if ch:match("%d") and not context:is_composing() then
@@ -413,6 +579,7 @@ local function processor(key_event, env)
             return 1
         end
         context:push_input(ch)
+        try_early_commit(env)
         return 1
     end
     if not context:is_composing() then
@@ -421,28 +588,43 @@ local function processor(key_event, env)
     if repr == "Return" or repr == "KP_Enter" then
         env.engine:commit_text(context.input)
         context:clear()
+        reset_sentence_state(context)
         return 1
     end
     if repr == "Escape" then
         context:clear()
+        reset_sentence_state(context)
         return 1
     end
     if repr == "space" then
         if context:has_menu() then
             context:confirm_current_selection()
         end
+        reset_sentence_state(context)
         return 1
     end
     return 2
 end
 
 local function translator(input, seg, env)
-    local results = decode(input)
+    local context = env.engine.context
+    local state = sentence_state(context)
+    local committed_text = state.committed_text or ""
+    local committed_raw = state.committed_raw or ""
+    local raw = committed_raw .. input
+    local results = decode(raw)
     for i = 1, #results do
         local item = results[i]
-        local cand = Candidate("sentence", seg.start, seg._end, item.text, "")
-        cand.preedit = item.segmented
-        yield(cand)
+        if committed_text == "" or item.text:sub(1, #committed_text) == committed_text then
+            local text = committed_text == "" and item.text or item.text:sub(#committed_text + 1)
+            local preedit = committed_raw == "" and item.segmented or
+                trim_segmented_after_raw_prefix(item.segmented, #committed_raw)
+            if text ~= "" then
+                local cand = Candidate("sentence", seg.start, seg._end, text, "")
+                cand.preedit = preedit
+                yield(cand)
+            end
+        end
     end
 end
 
