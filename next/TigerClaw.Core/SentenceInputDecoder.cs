@@ -267,6 +267,7 @@ namespace TigerClaw.Core
         private readonly double _rankPenalty;
         private readonly SentenceIsolationPenalty _isolationPenalty;
         private readonly bool _scoreSentenceBoundaries;
+        private readonly double _emittedCharacterReward;
         private readonly int _maxCodeLength;
         private readonly object _decodeLock = new object();
         private string _cachedRaw;
@@ -292,7 +293,8 @@ namespace TigerClaw.Core
             int beamWidth = 2000,
             double rankPenalty = 0.03,
             SentenceIsolationPenalty isolationPenalty = null,
-            bool scoreSentenceBoundaries = true)
+            bool scoreSentenceBoundaries = true,
+            double emittedCharacterReward = 0.0)
         {
             _lexicon = lexicon ?? throw new ArgumentNullException(nameof(lexicon));
             _languageModel = languageModel ?? NeutralSentenceLanguageModel.Instance;
@@ -300,6 +302,7 @@ namespace TigerClaw.Core
             _rankPenalty = Math.Max(0.0, rankPenalty);
             _isolationPenalty = isolationPenalty ?? SentenceIsolationPenalty.CreateDefault();
             _scoreSentenceBoundaries = scoreSentenceBoundaries;
+            _emittedCharacterReward = Math.Max(0.0, emittedCharacterReward);
             int maxCodeLength = 1;
             foreach (int length in _lexicon.CodeLengths)
             {
@@ -560,6 +563,7 @@ namespace TigerClaw.Core
                             {
                                 string target = enumerator.GetTextElement();
                                 score += TransitionScore(previous2, previous1, target);
+                                score += _emittedCharacterReward;
                                 previous2 = previous1;
                                 previous1 = target;
                             }

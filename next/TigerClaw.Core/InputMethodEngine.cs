@@ -63,6 +63,7 @@ namespace TigerClaw.Core
         private const int VK_A = 0x41;
         private const int VK_M = 0x4D;
         private const int VK_Z = 0x5A;
+        private const double SentenceEmittedCharacterReward = 2.0;
 
         private readonly object _lock = new object();
         private readonly StringBuilder _inputBuffer = new StringBuilder(64);
@@ -255,7 +256,10 @@ namespace TigerClaw.Core
                 }
 
                 SentenceLexiconIndex lexicon = SentenceLexiconIndex.Build(_state.GetSentenceLexiconSnapshot());
-                _sentenceInputDecoder = new SentenceInputDecoder(lexicon, _sentenceLanguageModel);
+                _sentenceInputDecoder = new SentenceInputDecoder(
+                    lexicon,
+                    _sentenceLanguageModel,
+                    emittedCharacterReward: SentenceEmittedCharacterReward);
                 _sentenceDecodedLexiconVersion = _state.LexiconVersion;
             }
         }

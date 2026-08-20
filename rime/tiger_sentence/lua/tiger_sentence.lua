@@ -7,6 +7,7 @@ local beam_width = 200
 local candidate_limit = 20
 local max_raw_length = 128
 local rank_penalty = 0.03
+local emitted_character_reward = 2.0
 local isolation_threshold = 3000
 local isolation_lambda = 2.0
 local BOS = kn_reader.BOS
@@ -423,6 +424,7 @@ local function expand_range(raw, states, from_pos, length)
                                     local chars = candidate_chars(candidate)
                                     for ci = 1, #chars do
                                         score = score + logp(prev2, prev1, chars[ci])
+                                        score = score + emitted_character_reward
                                         prev2 = prev1
                                         prev1 = chars[ci]
                                     end

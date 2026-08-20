@@ -30,7 +30,8 @@ namespace TigerClaw.Core.Tests
                         args[1], args[2], args[3],
                         args.Length > 4 ? args[4] : null,
                         args.Length > 5 ? ParseDouble(args[5], 0.98) : 0.98,
-                        args.Length > 6 ? ParseInt(args[6], 2) : 2);
+                        args.Length > 6 ? ParseInt(args[6], 2) : 2,
+                        args.Length > 7 ? ParseDouble(args[7], 0.0) : 0.0);
                 }
                 if (args.Length >= 4 && string.Equals(args[0], "--sentence-eval", StringComparison.OrdinalIgnoreCase))
                 {
@@ -80,7 +81,17 @@ namespace TigerClaw.Core.Tests
                         args[1],
                         args[2],
                         args[3],
-                        args.Length > 4 ? args[4] : null);
+                        args.Length > 4 ? args[4] : null,
+                        null);
+                }
+                if (args.Length >= 4 && string.Equals(args[0], "--sentence-length-validate", StringComparison.OrdinalIgnoreCase))
+                {
+                    return RunSentenceLengthCompare(
+                        args[1],
+                        args[2],
+                        args[3],
+                        args.Length > 4 ? args[4] : null,
+                        new[] { args.Length > 5 ? ParseDouble(args[5], 2.0) : 2.0 });
                 }
                 if (args.Length == 1 && string.Equals(args[0], "--sentence-client-smoke", StringComparison.OrdinalIgnoreCase))
                 {
@@ -106,6 +117,7 @@ namespace TigerClaw.Core.Tests
                 SentenceDecoderAllowsLeadingShortSymbolOnly();
                 SentenceDecoderRequiresExplicitSelectionForEveryCode();
                 SentenceDecoderKeepsFirstChoiceAheadOnShortCodes();
+                SentenceDecoderAppliesCharacterRewardInsideBeam();
                 SentenceDecoderUsesOnlyTheOptimalCharacterCode();
                 SentenceDecoderAllowsNonPrimaryCodesForRareCharacters();
                 SentenceDecoderIncrementalMatchesFullRebuild();
@@ -387,13 +399,14 @@ namespace TigerClaw.Core.Tests
 
         private static int RunSentenceStreamEval(
             string casesPath, string modelPath, string lexiconPath, string outputPath,
-            double threshold, int stabilityRequired)
+            double threshold, int stabilityRequired, double emittedCharacterReward)
         {
             List<EvalCaseDto> cases = LoadEvalCases(casesPath);
             AppendHandcraftedEvalCases(cases);
             var decoder = new SentenceInputDecoder(
                 SentenceLexiconIndex.Build(LoadSentenceLexiconSource(lexiconPath)),
-                SentenceNgramModel.Load(modelPath));
+                SentenceNgramModel.Load(modelPath),
+                emittedCharacterReward: emittedCharacterReward);
             threshold = Math.Max(0.0, Math.Min(1.0, threshold));
             stabilityRequired = Math.Max(1, stabilityRequired);
 
@@ -587,7 +600,8 @@ namespace TigerClaw.Core.Tests
             string casesPath,
             string modelPath,
             string lexiconPath,
-            string outputPath)
+            string outputPath,
+            double[] requestedWeights)
         {
             List<EvalCaseDto> cases = LoadEvalCases(casesPath);
             Dictionary<string, List<string>> source = LoadSentenceLexiconSource(lexiconPath);
@@ -596,37 +610,36 @@ namespace TigerClaw.Core.Tests
             long loadMilliseconds = watch.ElapsedMilliseconds;
             watch.Restart();
 
-            var configs = new List<LengthBiasConfig>();
-            configs.Add(new LengthBiasConfig { Label = "current-no-length-bias", Mode = "none", Weight = 0.0 });
-            double[] additives = { 0.1, 0.3, 0.5, 1.0 };
-            for (int i = 0; i < additives.Length; i++)
+            var configs = new List<LengthBiasConfig>
             {
+                new LengthBiasConfig { Label = "current-no-length-bias", Weight = 0.0 }
+            };
+            double[] weights = requestedWeights ?? new[] { 1.5, 1.8, 2.0, 2.2, 2.4, 2.6 };
+            for (int i = 0; i < weights.Length; i++)
+            {
+                double weight = Math.Max(0.0, weights[i]);
                 configs.Add(new LengthBiasConfig
                 {
-                    Label = "add-" + additives[i].ToString("0.#", CultureInfo.InvariantCulture),
-                    Mode = "add",
-                    Weight = additives[i]
-                });
-            }
-
-            double[] logs = { 0.5, 1.0, 2.0 };
-            for (int i = 0; i < logs.Length; i++)
-            {
-                configs.Add(new LengthBiasConfig
-                {
-                    Label = "logn-" + logs[i].ToString("0.#", CultureInfo.InvariantCulture),
-                    Mode = "logn",
-                    Weight = logs[i]
+                    Label = "add-" + weight.ToString("0.0###", CultureInfo.InvariantCulture),
+                    Weight = weight
                 });
             }
 
             int workers = 8;
             var ownedModels = new ConcurrentBag<SentenceNgramModel>();
-            var locals = new ThreadLocal<SentenceInputDecoder>(() =>
+            var locals = new ThreadLocal<LengthBiasLocal>(() =>
             {
                 SentenceNgramModel localModel = SentenceNgramModel.Load(modelPath);
                 ownedModels.Add(localModel);
-                return new SentenceInputDecoder(index, localModel);
+                return new LengthBiasLocal
+                {
+                    Decoders = configs
+                        .Select(config => new SentenceInputDecoder(
+                            index,
+                            localModel,
+                            emittedCharacterReward: config.Weight))
+                        .ToArray()
+                };
             });
 
             var tallies = new EvalTally[configs.Count];
@@ -642,7 +655,7 @@ namespace TigerClaw.Core.Tests
             int done = 0;
             try
             {
-                ReportLengthBiasHandcrafted(locals.Value, configs);
+                ReportLengthBiasHandcrafted(locals.Value.Decoders, configs);
 
                 Parallel.For(
                     0,
@@ -651,26 +664,25 @@ namespace TigerClaw.Core.Tests
                     i =>
                     {
                         EvalCaseDto item = cases[i];
-                        SentenceDecodeResult decoded = locals.Value.Decode(item.Code, 20);
-                        int beforeRank;
-                        string beforeTop;
-                        RankWithLengthBias(decoded, item.Text, configs[0], out beforeRank, out beforeTop);
-                        lock (tallies[0])
+                        int beforeRank = 0;
+                        string beforeTop = string.Empty;
+                        for (int c = 0; c < configs.Count; c++)
                         {
-                            AccumulateTally(tallies[0], beforeRank);
-                        }
-
-                        for (int c = 1; c < configs.Count; c++)
-                        {
+                            SentenceDecodeResult decoded = locals.Value.Decoders[c].Decode(item.Code, 20);
                             int afterRank;
                             string afterTop;
-                            RankWithLengthBias(decoded, item.Text, configs[c], out afterRank, out afterTop);
+                            RankDecoded(decoded, item.Text, out afterRank, out afterTop);
                             lock (tallies[c])
                             {
                                 AccumulateTally(tallies[c], afterRank);
                             }
 
-                            if (beforeRank != 1 && afterRank == 1)
+                            if (c == 0)
+                            {
+                                beforeRank = afterRank;
+                                beforeTop = afterTop;
+                            }
+                            else if (beforeRank != 1 && afterRank == 1)
                             {
                                 gained[c].Add(FormatCompareFlip(item, beforeRank, afterRank, beforeTop, afterTop));
                             }
@@ -740,14 +752,17 @@ namespace TigerClaw.Core.Tests
         private sealed class LengthBiasConfig
         {
             public string Label;
-            public string Mode;
             public double Weight;
         }
 
-        private static void RankWithLengthBias(
+        private sealed class LengthBiasLocal
+        {
+            public SentenceInputDecoder[] Decoders;
+        }
+
+        private static void RankDecoded(
             SentenceDecodeResult decoded,
             string gold,
-            LengthBiasConfig config,
             out int rank,
             out string top)
         {
@@ -758,37 +773,10 @@ namespace TigerClaw.Core.Tests
                 return;
             }
 
-            var scored = new List<SentenceCandidate>(decoded.Candidates.Length);
+            top = decoded.Candidates[0].Text;
             for (int i = 0; i < decoded.Candidates.Length; i++)
             {
-                SentenceCandidate candidate = decoded.Candidates[i];
-                int length = CountTextElements(candidate.Text);
-                double score = candidate.FinalScore;
-                if (config != null && config.Weight != 0.0 && length > 0)
-                {
-                    if (string.Equals(config.Mode, "add", StringComparison.Ordinal))
-                    {
-                        score += config.Weight * length;
-                    }
-                    else if (string.Equals(config.Mode, "logn", StringComparison.Ordinal))
-                    {
-                        score += config.Weight * Math.Log(length);
-                    }
-                }
-
-                scored.Add(new SentenceCandidate
-                {
-                    Text = candidate.Text ?? string.Empty,
-                    FinalScore = score,
-                    MaxLexiconRank = candidate.MaxLexiconRank
-                });
-            }
-
-            scored.Sort(SentenceCandidate.CompareByLexiconRankThenScore);
-            top = scored[0].Text;
-            for (int i = 0; i < scored.Count; i++)
-            {
-                if (string.Equals(scored[i].Text, gold, StringComparison.Ordinal))
+                if (string.Equals(decoded.Candidates[i].Text, gold, StringComparison.Ordinal))
                 {
                     rank = i + 1;
                     return;
@@ -797,22 +785,23 @@ namespace TigerClaw.Core.Tests
         }
 
         private static void ReportLengthBiasHandcrafted(
-            SentenceInputDecoder decoder,
+            SentenceInputDecoder[] decoders,
             List<LengthBiasConfig> configs)
         {
             var extras = new[]
             {
+                new EvalCaseDto { Text = "那依你之见", Code = "aujtijxriej" },
                 new EvalCaseDto { Text = "坐皮艇", Code = "jjgrpitgu" },
                 new EvalCaseDto { Text = "坐皮艇划回去", Code = "jjgrpitgupprdgk" }
             };
             for (int i = 0; i < extras.Length; i++)
             {
-                SentenceDecodeResult decoded = decoder.Decode(extras[i].Code, 20);
                 for (int c = 0; c < configs.Count; c++)
                 {
+                    SentenceDecodeResult decoded = decoders[c].Decode(extras[i].Code, 20);
                     int rank;
                     string top;
-                    RankWithLengthBias(decoded, extras[i].Text, configs[c], out rank, out top);
+                    RankDecoded(decoded, extras[i].Text, out rank, out top);
                     Console.WriteLine(
                         "handcrafted\t" + configs[c].Label +
                         "\tgold=" + extras[i].Text +
@@ -2594,6 +2583,36 @@ namespace TigerClaw.Core.Tests
             True(state.TrySetConfigValue("整句输入", "是", out _, out string reason),
                 nameof(CreateSentenceEngine) + ": " + reason);
             return new InputMethodEngine(state, CreateSentenceDecoder(lexicon));
+        }
+
+        private static void SentenceDecoderAppliesCharacterRewardInsideBeam()
+        {
+            SentenceLexiconIndex lexicon = SentenceLexiconIndex.Build(
+                new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["ab"] = new List<string> { "甲" },
+                    ["cd"] = new List<string> { "乙" },
+                    ["abcd"] = new List<string> { "丙" },
+                    ["ef"] = new List<string> { "丁" }
+                });
+            var baseline = new SentenceInputDecoder(
+                lexicon,
+                NeutralSentenceLanguageModel.Instance,
+                beamWidth: 1);
+            var rewarded = new SentenceInputDecoder(
+                lexicon,
+                NeutralSentenceLanguageModel.Instance,
+                beamWidth: 1,
+                emittedCharacterReward: 2.0);
+
+            Equal(
+                "丙丁",
+                baseline.Decode("abcdef").Candidates[0].Text,
+                nameof(SentenceDecoderAppliesCharacterRewardInsideBeam) + ".baseline");
+            Equal(
+                "甲乙丁",
+                rewarded.Decode("abcdef").Candidates[0].Text,
+                nameof(SentenceDecoderAppliesCharacterRewardInsideBeam) + ".rewarded");
         }
 
         private static void SentenceDecoderReportsTruncatedConfidenceMass()
