@@ -160,7 +160,7 @@ end
 if #commits_off ~= 0 or context_off.input ~= early_sample then
     fail("default-off early commit changed the composition")
 end
-print("OK  early commit switch defaults to inactive behavior")
+print("OK  disabled early commit leaves the composition unchanged")
 
 local env_on, _, properties_on, commits_on = fake_environment(true)
 for index = 1, #early_sample do

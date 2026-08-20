@@ -17,7 +17,7 @@ python3 tools/export_tiger_sentence_rime.py
 - 字母连打整段编码
 - 空码时数字直接上屏；有编码时 `;` / `'` / 数字写入编码，分别选第 2、第 3、第 N 候选（`0` 为第 10）
 - 空格上屏当前整句；回车上屏原始编码；Esc 清码
-- `提前上屏` 默认关闭，可从方案选单开启。开启后，原始编码超过 4 键时，连续两次达到 0.995 置信度的稳定前缀会提交；始终保留候选最后一个字，已提交前缀继续作为后续解码上下文
+- `提前上屏` 默认开启，可从方案选单关闭。开启后，原始编码超过 4 键时，连续两次达到 0.995 置信度的稳定前缀会提交；始终保留候选最后一个字，已提交前缀继续作为后续解码上下文
 - 单次输入最多接受 128 个原始编码字符，避免异常长输入持续扩大解码格网
 - 上下方向键或 Tab / Shift+Tab 遍历候选
 - 一码字只在整段就是那一码时合法
@@ -34,6 +34,10 @@ python3 tools/convert_sentence_ngram_mobile.py \
   /mnt/c/Archive/tigerclaw_sentence_ml/runtime/sentence-ngram-mobile.bin
 ```
 
+默认的 `--index-stride 64` 面向移动端内存占用。桌面端如果更重视按键延迟，
+可用 `--index-stride 16` 重新生成同名模型；常驻稀疏索引会增加约 6 MiB，
+但首次遇到一个语言模型上下文时最多扫描的记录数降为原来的四分之一。
+
 查找顺序优先 mobile 文件，找不到时仍兼容原来的 TCSKNM01 文件：
 
 1. Rime 用户目录下的 `models/sentence-ngram-mobile.bin`
@@ -42,6 +46,6 @@ python3 tools/convert_sentence_ngram_mobile.py \
 4. 上述位置对应的 `sentence-ngram-v2.bin`
 5. 开发机 `C:\Archive\tigerclaw_sentence_ml\runtime` 下的 mobile、再到原模型
 
-当前是纯 Lua 查表。解码对准确率无损：增量复用格网（追加只重解后缀、退格直接取前缀状态），并缓存精确 KN logp；该缓存限制为 32768 项，防止长时间使用后持续增长。EOS 只在出候选时另算，不写回 beam。出候选时再减去与 Core 相同的孤立生僻字惩罚：字频排名大于 3000、且左右都没有模型里真实出现过的二元组，每个字减 2。字频表由导出脚本写成 `lua/tiger_sentence_ranks.lua`。短码全检索与首选优先规则也与 Core 一致。不要把大模型提交进 Git。
+当前是纯 Lua 查表。解码对准确率无损：增量复用格网（追加只重解后缀、退格直接取前缀状态），缓存精确 KN logp 和真实二元组查询，并缓存分页模型的上下文位置；这些缓存都有固定上限，防止长时间使用后持续增长。码表候选的选重过滤和 UTF-8 拆分也会按词条复用。EOS 只在出候选时另算，不写回 beam。出候选时再减去与 Core 相同的孤立生僻字惩罚：字频排名大于 3000、且左右都没有模型里真实出现过的二元组，每个字减 2。字频表由导出脚本写成 `lua/tiger_sentence_ranks.lua`。短码全检索与首选优先规则也与 Core 一致。不要把大模型提交进 Git。
 
 增量一致性测试默认允许无模型降级，并明确打印实际加载状态；需要验证真实模型时使用支持 `string.unpack` 和 `utf8` 的 Lua 5.3+ 执行 `lua tools/test_tiger_sentence_incremental.lua . --require-model`。LuaJIT 2.1 不具备这两个标准库 API，只适合测试无模型路径。

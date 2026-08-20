@@ -24,6 +24,10 @@ local logp_cache_limit = 32768
 local logp_cache = {}
 local logp_cache_keys = {}
 local logp_cache_next = 1
+local observed_cache_limit = 32768
+local observed_cache = {}
+local observed_cache_keys = {}
+local observed_cache_next = 1
 local decode_cache = {
     raw = nil,
     states = nil,
@@ -182,6 +186,52 @@ local function utf_chars(text)
     return chars
 end
 
+local function candidate_chars(candidate)
+    if not candidate._chars then
+        candidate._chars = utf_chars(candidate.t)
+    end
+    return candidate._chars
+end
+
+local function eligible_candidates(candidates, selected_rank, allow_all_ranks)
+    if selected_rank == 0 and allow_all_ranks then
+        return candidates
+    end
+    local rank = selected_rank > 0 and selected_rank or 1
+    local cache_key = "_rank_" .. tostring(rank)
+    local cached = candidates[cache_key]
+    if cached then
+        return cached
+    end
+    local selected = {}
+    for index = 1, #candidates do
+        if candidates[index].r == rank then
+            selected[#selected + 1] = candidates[index]
+        end
+    end
+    candidates[cache_key] = selected
+    return selected
+end
+
+local function has_observed_bigram(previous, target)
+    local key = previous .. "\0" .. target
+    local cached = observed_cache[key]
+    if cached ~= nil then
+        return cached
+    end
+    local model = ensure_kn()
+    local value = model and model.has_observed_bigram and
+        model.has_observed_bigram(previous, target) or false
+    local old_key = observed_cache_keys[observed_cache_next]
+    if old_key then
+        observed_cache[old_key] = nil
+    end
+    observed_cache[key] = value
+    observed_cache_keys[observed_cache_next] = key
+    observed_cache_next = observed_cache_next % observed_cache_limit + 1
+    return value
+end
+
 local function isolation_penalty(text)
     local model = ensure_kn()
     if not model or not model.has_observed_bigram or not text or text == "" then
@@ -192,8 +242,8 @@ local function isolation_penalty(text)
     for index = 1, #chars do
         local rank = ranks.rank(chars[index])
         if rank > isolation_threshold then
-            local left_hit = index > 1 and model.has_observed_bigram(chars[index - 1], chars[index])
-            local right_hit = index < #chars and model.has_observed_bigram(chars[index], chars[index + 1])
+            local left_hit = index > 1 and has_observed_bigram(chars[index - 1], chars[index])
+            local right_hit = index < #chars and has_observed_bigram(chars[index], chars[index + 1])
             if not left_hit and not right_hit then
                 penalty = penalty + isolation_lambda
             end
@@ -285,7 +335,9 @@ local function new_states(length)
         prev2 = BOS,
         prev1 = BOS,
         max_rank = 1,
-        boundary = nil
+        previous = nil,
+        text_length = 0,
+        raw_length = 0
     }
     return states
 end
@@ -304,47 +356,43 @@ local function expand_range(raw, states, from_pos, length)
                     if candidates then
                         local selected_rank, consumed_end = parse_selector(raw, position + code_length)
                         if not (length > 1 and consumed_end - position < 2) then
+                            local selected_candidates = eligible_candidates(
+                                candidates, selected_rank, allow_all_ranks)
                             for c = 1, #current do
                                 local item = current[c]
-                                for k = 1, #candidates do
-                                    local candidate = candidates[k]
-                                    local rank_ok = selected_rank > 0 and candidate.r == selected_rank
-                                        or selected_rank == 0 and (allow_all_ranks or candidate.r == 1)
-                                    if rank_ok then
-                                        local score = item.score
-                                        local prev2, prev1 = item.prev2, item.prev1
-                                        local chars = utf_chars(candidate.t)
-                                        for ci = 1, #chars do
-                                            score = score + logp(prev2, prev1, chars[ci])
-                                            prev2 = prev1
-                                            prev1 = chars[ci]
-                                        end
-                                        if selected_rank == 0 then
-                                            score = score - rank_penalty * math.log(1.0 + candidate.r - 1)
-                                        end
-                                        local piece = raw:sub(position + 1, consumed_end)
-                                        local segmented = item.segmented
-                                        if segmented == "" then
-                                            segmented = piece
-                                        else
-                                            segmented = segmented .. " " .. piece
-                                        end
-                                        local next_states = states[consumed_end]
-                                        local text = item.text .. candidate.t
-                                        next_states[#next_states + 1] = {
-                                            score = score,
-                                            text = text,
-                                            segmented = segmented,
-                                            prev2 = prev2,
-                                            prev1 = prev1,
-                                            max_rank = math.max(item.max_rank or 1, candidate.r),
-                                            boundary = {
-                                                text_length = #text,
-                                                raw_length = consumed_end,
-                                                previous = item.boundary
-                                            }
-                                        }
+                                for k = 1, #selected_candidates do
+                                    local candidate = selected_candidates[k]
+                                    local score = item.score
+                                    local prev2, prev1 = item.prev2, item.prev1
+                                    local chars = candidate_chars(candidate)
+                                    for ci = 1, #chars do
+                                        score = score + logp(prev2, prev1, chars[ci])
+                                        prev2 = prev1
+                                        prev1 = chars[ci]
                                     end
+                                    if selected_rank == 0 then
+                                        score = score - rank_penalty * math.log(1.0 + candidate.r - 1)
+                                    end
+                                    local piece = raw:sub(position + 1, consumed_end)
+                                    local segmented = item.segmented
+                                    if segmented == "" then
+                                        segmented = piece
+                                    else
+                                        segmented = segmented .. " " .. piece
+                                    end
+                                    local next_states = states[consumed_end]
+                                    local text = item.text .. candidate.t
+                                    next_states[#next_states + 1] = {
+                                        score = score,
+                                        text = text,
+                                        segmented = segmented,
+                                        prev2 = prev2,
+                                        prev1 = prev1,
+                                        max_rank = math.max(item.max_rank or 1, candidate.r),
+                                        previous = item,
+                                        text_length = #text,
+                                        raw_length = consumed_end
+                                    }
                                 end
                             end
                         end
@@ -367,7 +415,7 @@ local function emit(states, length)
             prev2 = item.prev2,
             prev1 = item.prev1,
             max_rank = math.max(1, item.max_rank or 1),
-            boundary = item.boundary
+            path = item
         }
     end
     table.sort(result, function(left, right)
@@ -488,12 +536,12 @@ local function find_raw_length_for_text(text, candidates)
     for i = 1, #candidates do
         local candidate = candidates[i]
         if candidate.text:sub(1, text_length) == text then
-            local boundary = candidate.boundary
-            while boundary do
-                if boundary.text_length == text_length then
-                    return boundary.raw_length
+            local state = candidate.path
+            while state do
+                if state.text_length == text_length then
+                    return state.raw_length
                 end
-                boundary = boundary.previous
+                state = state.previous
             end
         end
     end
@@ -511,22 +559,32 @@ local function confidence_proposal(candidates, threshold)
     local total = 0
     for i = 1, #candidates do total = total + math.exp(candidates[i].score - max_score) end
 
+    local prefix_mass = {}
+    local prefix_length = {}
+    local prefix_order = {}
+    for i = 1, #candidates do
+        local weight = math.exp(candidates[i].score - max_score)
+        local chars = utf_chars(candidates[i].text)
+        local prefix = ""
+        for length = 1, #chars - 1 do
+            prefix = prefix .. chars[length]
+            if prefix_mass[prefix] == nil then
+                prefix_mass[prefix] = 0
+                prefix_length[prefix] = length
+                prefix_order[#prefix_order + 1] = prefix
+            end
+            prefix_mass[prefix] = prefix_mass[prefix] + weight
+        end
+    end
+
     local proposal = ""
     local proposal_length = 0
-    for i = 1, #candidates do
-        local chars = utf_chars(candidates[i].text)
-        for length = 1, #chars - 1 do
-            local prefix = table.concat(chars, "", 1, length)
-            local mass = 0
-            for j = 1, #candidates do
-                if candidates[j].text:sub(1, #prefix) == prefix then
-                    mass = mass + math.exp(candidates[j].score - max_score)
-                end
-            end
-            if mass / total >= threshold and length > proposal_length then
-                proposal = prefix
-                proposal_length = length
-            end
+    for index = 1, #prefix_order do
+        local prefix = prefix_order[index]
+        local length = prefix_length[prefix]
+        if prefix_mass[prefix] / total >= threshold and length > proposal_length then
+            proposal = prefix
+            proposal_length = length
         end
     end
     return proposal

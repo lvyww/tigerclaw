@@ -4,6 +4,7 @@ local EOS = "\3"
 local SHIFT = 2097152
 local MOBILE_HEADER_SIZE = 104
 local MOBILE_CACHE_BYTES = 8 * 1024 * 1024
+local CONTEXT_CACHE_ENTRIES = 16384
 
 local M = {
     BOS = BOS,
@@ -222,6 +223,10 @@ local function load_mobile(path)
     local cache_bytes = 0
     local lru_head = nil
     local lru_tail = nil
+    local context_caches = {
+        b = { values = {}, keys = {}, next = 1 },
+        t = { values = {}, keys = {}, next = 1 }
+    }
 
     local function unlink(entry)
         if entry.previous then
@@ -314,8 +319,43 @@ local function load_mobile(path)
     end
 
     local function lookup_context(kind, index_data, index_count, context_count, section_end, key, target)
+        local context_cache = context_caches[kind]
+        local cached_context = context_cache.values[key]
+        if cached_context then
+            if cached_context.missing then
+                return 1.0, 0.0, false
+            end
+            local data = get_page(
+                kind, index_data, index_count, cached_context.page, section_end)
+            local low, high = 0, cached_context.successor_count
+            while low < high do
+                local middle = low + math.floor((high - low) / 2)
+                local value = string.unpack(
+                    "<I4", data, cached_context.successor_position + middle * 8)
+                if value < target then low = middle + 1 else high = middle end
+            end
+            if low < cached_context.successor_count then
+                local at = cached_context.successor_position + low * 8
+                if string.unpack("<I4", data, at) == target then
+                    return cached_context.lambda, string.unpack("<f", data, at + 4), true
+                end
+            end
+            return cached_context.lambda, 0.0, false
+        end
+
+        local function remember(value)
+            local old_key = context_cache.keys[context_cache.next]
+            if old_key ~= nil then
+                context_cache.values[old_key] = nil
+            end
+            context_cache.values[key] = value
+            context_cache.keys[context_cache.next] = key
+            context_cache.next = context_cache.next % CONTEXT_CACHE_ENTRIES + 1
+        end
+
         local page = find_page(index_data, index_count, key)
         if page < 0 then
+            remember({ missing = true })
             return 1.0, 0.0, false
         end
         local data = get_page(kind, index_data, index_count, page, section_end)
@@ -325,9 +365,15 @@ local function load_mobile(path)
             local context_key, lambda, successor_count
             context_key, lambda, successor_count, position = string.unpack("<I8fI4", data, position)
             if context_key == key then
+                remember({
+                    page = page,
+                    lambda = lambda,
+                    successor_count = successor_count,
+                    successor_position = position
+                })
                 local low, high = 0, successor_count
                 while low < high do
-            local middle = low + math.floor((high - low) / 2)
+                    local middle = low + math.floor((high - low) / 2)
                     local value = string.unpack("<I4", data, position + middle * 8)
                     if value < target then low = middle + 1 else high = middle end
                 end
@@ -340,10 +386,12 @@ local function load_mobile(path)
                 return lambda, 0.0, false
             end
             if context_key > key then
+                remember({ missing = true })
                 return 1.0, 0.0, false
             end
             position = position + successor_count * 8
         end
+        remember({ missing = true })
         return 1.0, 0.0, false
     end
 
