@@ -166,10 +166,19 @@ local env_on, _, properties_on, commits_on = fake_environment(true)
 for index = 1, #early_sample do
     sentence.processor(fake_key(early_sample:sub(index, index)), env_on)
 end
-if #commits_on == 0 then
-    fail("enabled early commit did not commit a stable prefix")
+if model.loaded and #commits_on == 0 then
+    fail("enabled early commit did not commit a stable prefix with the real model")
+elseif not model.loaded and #commits_on ~= 0 then
+    fail("model-free equal scores produced a false high-confidence commit")
 end
-print("OK  enabled early commit commits a stable prefix")
+for i = 1, #commits_on do
+    local count = 0
+    for _ in commits_on[i]:gmatch("[^\128-\191]") do count = count + 1 end
+    if count < 2 then fail("early commit emitted a one-character fragment") end
+end
+print(model.loaded and
+    "OK  enabled early commit commits a stable prefix" or
+    "OK  model-free equal scores do not fake high confidence")
 
 env_on._tiger_sentence_transient = {
     proposal = "旧",
@@ -187,6 +196,21 @@ if properties_on.tiger_sentence_confidence ~= nil then
 end
 print("OK  backspace invalidates early-commit evidence")
 
+local context_on = env_on.engine.context
+context_on.input = "abcde"
+sentence.processor(fake_key("Down"), env_on)
+if not env_on._tiger_sentence_transient.suspended then
+    fail("manual candidate navigation did not suspend early commit")
+end
+print("OK  manual candidate navigation suspends early commit")
+
+context_on.input = ""
+sentence.processor(fake_key("a"), env_on)
+if env_on._tiger_sentence_transient.suspended or context_on.input ~= "a" then
+    fail("new composition did not reset stale manual-navigation state")
+end
+print("OK  new composition clears stale navigation state")
+
 local env_limit, context_limit = fake_environment(false)
 for _ = 1, 129 do
     sentence.processor(fake_key("a"), env_limit)
@@ -195,6 +219,16 @@ if #context_limit.input ~= 128 then
     fail(string.format("raw input limit expected 128, got %d", #context_limit.input))
 end
 print("OK  raw input is capped at 128 characters")
+
+local env_live, context_live, properties_live = fake_environment(false)
+properties_live.tiger_sentence_committed_raw = "committed"
+context_live.input = string.rep("a", 127)
+sentence.processor(fake_key("a"), env_live)
+sentence.processor(fake_key("a"), env_live)
+if #context_live.input ~= 128 then
+    fail("raw limit counted the already committed prefix instead of the live tail")
+end
+print("OK  raw input cap applies to the live tail only")
 
 -- grow, append selector, backspace, retype letter
 sentence.reset_decode_cache()

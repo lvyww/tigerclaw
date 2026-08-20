@@ -215,7 +215,9 @@ namespace TigerClaw.Core
         public string SegmentedCode { get; set; }
         public double BaseScore { get; set; }
         public double FinalScore { get; set; }
+        public double ConfidenceScore { get; set; }
         public int MaxLexiconRank { get; set; }
+        public SentencePathBoundary Boundary { get; set; }
 
         public static int CompareByLexiconRankThenScore(SentenceCandidate left, SentenceCandidate right)
         {
@@ -230,17 +232,28 @@ namespace TigerClaw.Core
         }
     }
 
+    internal sealed class SentencePathBoundary
+    {
+        public SentencePathBoundary Previous { get; set; }
+        public int TextLength { get; set; }
+        public int RawLength { get; set; }
+    }
+
     internal sealed class SentenceDecodeResult
     {
         public static readonly SentenceDecodeResult Empty = new SentenceDecodeResult
         {
             RawCode = string.Empty,
             Candidates = Array.Empty<SentenceCandidate>(),
+            ConfidenceCandidates = Array.Empty<SentenceCandidate>(),
+            ConfidenceTruncated = false,
             ExpandedStates = 0
         };
 
         public string RawCode { get; set; }
         public SentenceCandidate[] Candidates { get; set; }
+        public SentenceCandidate[] ConfidenceCandidates { get; set; }
+        public bool ConfidenceTruncated { get; set; }
         public int ExpandedStates { get; set; }
     }
 
@@ -264,11 +277,13 @@ namespace TigerClaw.Core
         private sealed class BeamState
         {
             public double Score;
+            public double LogMass;
             public string Text;
             public string SegmentedCode;
             public string Previous2;
             public string Previous1;
             public int MaxLexiconRank;
+            public SentencePathBoundary Boundary;
         }
 
         public SentenceInputDecoder(
@@ -440,6 +455,7 @@ namespace TigerClaw.Core
             states[0].Add(new BeamState
             {
                 Score = 0.0,
+                LogMass = 0.0,
                 Text = string.Empty,
                 SegmentedCode = string.Empty,
                 Previous2 = Bos,
@@ -556,13 +572,20 @@ namespace TigerClaw.Core
                             states[consumedEnd].Add(new BeamState
                             {
                                 Score = score,
+                                LogMass = item.LogMass + (score - item.Score),
                                 Text = item.Text + candidate.Text,
                                 SegmentedCode = JoinSegmentedCode(
                                     item.SegmentedCode,
                                     raw.Substring(position, consumedEnd - position)),
                                 Previous2 = previous2,
                                 Previous1 = previous1,
-                                MaxLexiconRank = Math.Max(item.MaxLexiconRank, candidate.Rank)
+                                MaxLexiconRank = Math.Max(item.MaxLexiconRank, candidate.Rank),
+                                Boundary = new SentencePathBoundary
+                                {
+                                    Previous = item.Boundary,
+                                    TextLength = item.Text.Length + candidate.Text.Length,
+                                    RawLength = consumedEnd
+                                }
                             });
                             expandedStates++;
                         }
@@ -619,7 +642,10 @@ namespace TigerClaw.Core
 
         private SentenceDecodeResult Emit(string normalized, List<BeamState>[] states, int candidateLimit, int expandedStates)
         {
-            List<BeamState> completed = DeduplicateAndLimit(states[normalized.Length], _beamWidth);
+            List<BeamState> completed = DeduplicateAndLimit(
+                states[normalized.Length],
+                _beamWidth,
+                out bool confidenceTruncated);
             var result = new List<SentenceCandidate>(completed.Count);
             foreach (BeamState item in completed)
             {
@@ -631,35 +657,54 @@ namespace TigerClaw.Core
                     SegmentedCode = item.SegmentedCode,
                     BaseScore = score,
                     FinalScore = score,
+                    ConfidenceScore = item.LogMass + (score - item.Score),
+                    Boundary = item.Boundary,
                     MaxLexiconRank = Math.Max(1, item.MaxLexiconRank)
                 });
             }
 
             result.Sort(SentenceCandidate.CompareByLexiconRankThenScore);
-            int limit = Math.Max(1, candidateLimit);
-            if (result.Count > limit)
-            {
-                result.RemoveRange(limit, result.Count - limit);
-            }
+            SentenceCandidate[] confidenceCandidates = result.ToArray();
+            int limit = Math.Min(result.Count, Math.Max(1, candidateLimit));
 
             return new SentenceDecodeResult
             {
                 RawCode = normalized,
-                Candidates = result.ToArray(),
+                Candidates = result.Take(limit).ToArray(),
+                ConfidenceCandidates = confidenceCandidates,
+                ConfidenceTruncated = confidenceTruncated,
                 ExpandedStates = expandedStates
             };
         }
 
         private static List<BeamState> DeduplicateAndLimit(List<BeamState> values, int limit)
         {
+            return DeduplicateAndLimit(values, limit, out _);
+        }
+
+        private static List<BeamState> DeduplicateAndLimit(
+            List<BeamState> values,
+            int limit,
+            out bool truncated)
+        {
+            truncated = false;
             if (values == null || values.Count == 0)
             {
                 return new List<BeamState>();
             }
 
             var bestByText = new Dictionary<string, BeamState>(StringComparer.Ordinal);
+            var massByText = new Dictionary<string, double>(StringComparer.Ordinal);
             foreach (BeamState item in values)
             {
+                if (massByText.TryGetValue(item.Text, out double previousMass))
+                {
+                    massByText[item.Text] = LogSumExp(previousMass, item.LogMass);
+                }
+                else
+                {
+                    massByText[item.Text] = item.LogMass;
+                }
                 if (!bestByText.TryGetValue(item.Text, out BeamState previous) ||
                     item.MaxLexiconRank < previous.MaxLexiconRank ||
                     (item.MaxLexiconRank == previous.MaxLexiconRank && item.Score > previous.Score))
@@ -668,14 +713,31 @@ namespace TigerClaw.Core
                 }
             }
 
-            List<BeamState> result = bestByText.Values.ToList();
+            List<BeamState> result = bestByText.Select(pair => new BeamState
+            {
+                Score = pair.Value.Score,
+                LogMass = massByText[pair.Key],
+                Text = pair.Value.Text,
+                SegmentedCode = pair.Value.SegmentedCode,
+                Previous2 = pair.Value.Previous2,
+                Previous1 = pair.Value.Previous1,
+                MaxLexiconRank = pair.Value.MaxLexiconRank,
+                Boundary = pair.Value.Boundary
+            }).ToList();
             result.Sort(CompareBeamStates);
             if (result.Count > limit)
             {
+                truncated = true;
                 result.RemoveRange(limit, result.Count - limit);
             }
 
             return result;
+        }
+
+        private static double LogSumExp(double left, double right)
+        {
+            double max = Math.Max(left, right);
+            return max + Math.Log(Math.Exp(left - max) + Math.Exp(right - max));
         }
 
         private static int CompareBeamStates(BeamState left, BeamState right)

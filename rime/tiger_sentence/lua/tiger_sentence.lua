@@ -51,7 +51,7 @@ local state_keys = {
 
 local function transient_state(context, env)
     if not env then
-        return { proposal = "", stable = 0, evidence_raw = "" }
+        return { proposal = "", stable = 0, evidence_raw = "", suspended = false }
     end
     if not env._tiger_sentence_transient then
         local confidence = context:get_property(state_keys.confidence) or ""
@@ -65,7 +65,8 @@ local function transient_state(context, env)
         env._tiger_sentence_transient = {
             proposal = proposal,
             stable = tonumber(stable) or 0,
-            evidence_raw = evidence_raw
+            evidence_raw = evidence_raw,
+            suspended = false
         }
     end
     return env._tiger_sentence_transient
@@ -78,7 +79,8 @@ local function sentence_state(context, env)
         committed_raw = context:get_property(state_keys.committed_raw) or "",
         proposal = transient.proposal,
         stable = transient.stable,
-        evidence_raw = transient.evidence_raw
+        evidence_raw = transient.evidence_raw,
+        suspended = transient.suspended or false
     }
 end
 
@@ -94,7 +96,8 @@ local function save_transient_state(context, state, env)
         env._tiger_sentence_transient = {
             proposal = state.proposal or "",
             stable = state.stable or 0,
-            evidence_raw = state.evidence_raw or ""
+            evidence_raw = state.evidence_raw or "",
+            suspended = state.suspended or false
         }
     end
     if env and not env._tiger_sentence_legacy_cleared then
@@ -118,7 +121,8 @@ local function reset_sentence_state(context, env)
         committed_raw = "",
         proposal = "",
         stable = 0,
-        evidence_raw = ""
+        evidence_raw = "",
+        suspended = false
     }, env)
 end
 
@@ -311,10 +315,19 @@ local function dedup_limit(states, limit)
         return {}
     end
     local best = {}
+    local mass = {}
     local order = {}
     for i = 1, #states do
         local item = states[i]
         local previous = best[item.text]
+        local item_mass = item.mass_score or item.score
+        if mass[item.text] == nil then
+            mass[item.text] = item_mass
+        else
+            local maximum = math.max(mass[item.text], item_mass)
+            mass[item.text] = maximum + math.log(
+                math.exp(mass[item.text] - maximum) + math.exp(item_mass - maximum))
+        end
         local item_rank = item.max_rank or 1
         if not previous then
             order[#order + 1] = item.text
@@ -328,7 +341,19 @@ local function dedup_limit(states, limit)
     end
     local result = {}
     for i = 1, #order do
-        result[#result + 1] = best[order[i]]
+        local selected = best[order[i]]
+        result[#result + 1] = {
+            score = selected.score,
+            mass_score = mass[order[i]],
+            text = selected.text,
+            segmented = selected.segmented,
+            prev2 = selected.prev2,
+            prev1 = selected.prev1,
+            max_rank = selected.max_rank,
+            previous = selected.previous,
+            text_length = selected.text_length,
+            raw_length = selected.raw_length
+        }
     end
     table.sort(result, function(left, right)
         local left_rank = left.max_rank or 1
@@ -346,8 +371,10 @@ local function dedup_limit(states, limit)
         for i = 1, limit do
             trimmed[i] = result[i]
         end
+        trimmed._truncated = true
         return trimmed
     end
+    result._truncated = false
     return result
 end
 
@@ -358,6 +385,7 @@ local function new_states(length)
     end
     states[0][1] = {
         score = 0,
+        mass_score = 0,
         text = "",
         segmented = "",
         prev2 = BOS,
@@ -412,6 +440,7 @@ local function expand_range(raw, states, from_pos, length)
                                     local text = item.text .. candidate.t
                                     next_states[#next_states + 1] = {
                                         score = score,
+                                        mass_score = (item.mass_score or item.score) + score - item.score,
                                         text = text,
                                         segmented = segmented,
                                         prev2 = prev2,
@@ -438,6 +467,8 @@ local function emit(states, length)
         local item = completed[i]
         result[i] = {
             score = item.score + logp(item.prev2, item.prev1, EOS) - isolation_penalty(item.text),
+            confidence_score = (item.mass_score or item.score) +
+                logp(item.prev2, item.prev1, EOS) - isolation_penalty(item.text),
             text = item.text,
             segmented = item.segmented,
             prev2 = item.prev2,
@@ -455,13 +486,7 @@ local function emit(states, length)
         end
         return left.score > right.score
     end)
-    if #result > candidate_limit then
-        local trimmed = {}
-        for i = 1, candidate_limit do
-            trimmed[i] = result[i]
-        end
-        return trimmed
-    end
+    result.confidence_truncated = completed._truncated or false
     return result
 end
 
@@ -580,18 +605,21 @@ local function confidence_proposal(candidates, threshold)
     if #candidates == 0 then
         return ""
     end
-    local max_score = candidates[1].score
+    local max_score = candidates[1].confidence_score or candidates[1].score
     for i = 2, #candidates do
-        if candidates[i].score > max_score then max_score = candidates[i].score end
+        local score = candidates[i].confidence_score or candidates[i].score
+        if score > max_score then max_score = score end
     end
     local total = 0
-    for i = 1, #candidates do total = total + math.exp(candidates[i].score - max_score) end
+    for i = 1, #candidates do
+        total = total + math.exp((candidates[i].confidence_score or candidates[i].score) - max_score)
+    end
 
     local prefix_mass = {}
     local prefix_length = {}
     local prefix_order = {}
     for i = 1, #candidates do
-        local weight = math.exp(candidates[i].score - max_score)
+        local weight = math.exp((candidates[i].confidence_score or candidates[i].score) - max_score)
         local chars = utf_chars(candidates[i].text)
         local prefix = ""
         for length = 1, #chars - 1 do
@@ -631,6 +659,14 @@ local function try_early_commit(env)
         return
     end
 
+    if state.suspended then
+        state.proposal = ""
+        state.stable = 0
+        state.evidence_raw = ""
+        save_transient_state(context, state, env)
+        return
+    end
+
     -- The first four raw encoding keys are never counted as stable evidence.
     if #live_raw + #state.committed_raw <= 4 then
         state.proposal = ""
@@ -642,6 +678,13 @@ local function try_early_commit(env)
 
     local full_raw = state.committed_raw .. live_raw
     local decoded = decode(full_raw)
+    if decoded.confidence_truncated then
+        state.proposal = ""
+        state.stable = 0
+        state.evidence_raw = ""
+        save_transient_state(context, state, env)
+        return
+    end
     local candidates = {}
     for i = 1, #decoded do
         local candidate = decoded[i]
@@ -683,6 +726,7 @@ local function try_early_commit(env)
     local consumed = find_raw_length_for_text(proposal, candidates)
     if consumed <= #state.committed_raw or consumed > #full_raw then return end
     local commit = proposal:sub(#state.committed_text + 1)
+    if #utf_chars(commit) < 2 or #live_raw < 3 then return end
     state.committed_text = proposal
     state.committed_raw = full_raw:sub(1, consumed)
     state.proposal = proposal
@@ -733,11 +777,13 @@ local function processor(key_event, env)
     local repr = key_event:repr()
     local ch = is_plain_char_key(key_event, repr)
     if ch then
-        if not context:is_composing() and state.committed_raw ~= "" then
+        if not context:is_composing() and
+            (state.committed_raw ~= "" or state.proposal ~= "" or
+             state.evidence_raw ~= "" or state.suspended) then
             reset_sentence_state(context, env)
             state = sentence_state(context, env)
         end
-        if #state.committed_raw + #(context.input or "") >= max_raw_length then
+        if #(context.input or "") >= max_raw_length then
             return 1
         end
         -- Digits are rank suffixes only while composing. Idle Chinese mode
@@ -779,6 +825,15 @@ local function processor(key_event, env)
         save_transient_state(context, state, env)
         return 2
     end
+    if repr == "Up" or repr == "Down" or repr == "Page_Up" or repr == "Page_Down" or
+        repr == "Tab" or repr == "ISO_Left_Tab" then
+        state.proposal = ""
+        state.stable = 0
+        state.evidence_raw = ""
+        state.suspended = true
+        save_transient_state(context, state, env)
+        return 2
+    end
     if repr == "space" then
         if context:has_menu() then
             context:confirm_current_selection()
@@ -795,6 +850,7 @@ local function translator(input, seg, env)
     local committed_raw = context:get_property(state_keys.committed_raw) or ""
     local raw = committed_raw .. input
     local results = decode(raw)
+    local yielded = 0
     for i = 1, #results do
         local item = results[i]
         if committed_text == "" or item.text:sub(1, #committed_text) == committed_text then
@@ -805,6 +861,8 @@ local function translator(input, seg, env)
                 local cand = Candidate("sentence", seg.start, seg._end, text, "")
                 cand.preedit = preedit
                 yield(cand)
+                yielded = yielded + 1
+                if yielded >= candidate_limit then return end
             end
         end
     end
