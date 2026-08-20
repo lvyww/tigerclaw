@@ -1,7 +1,13 @@
 -- Verify incremental lattice + exact logp cache match a full rebuild.
--- Usage: lua tools/test_tiger_sentence_incremental.lua [repo_root]
+-- Usage: lua tools/test_tiger_sentence_incremental.lua [repo_root] [--require-model]
 
 local repo = arg[1] or "."
+local require_model = false
+for i = 2, #arg do
+    if arg[i] == "--require-model" then
+        require_model = true
+    end
+end
 package.path = repo .. "/rime/tiger_sentence/lua/?.lua;" .. package.path
 
 local sentence = require("tiger_sentence")
@@ -46,10 +52,29 @@ local function check_equal(label, incremental, full)
     print(string.format("OK  %-40s  %s", label, tops(full, 2)))
 end
 
-print("loading KN + first full decode...")
+print("initializing decoder + first full decode...")
 local t0 = os.clock()
 local first = sentence.decode_full(long_code)
-print(string.format("KN ready in %.3fs  top=%s", os.clock() - t0, tops(first, 1)))
+local model = sentence.model_status()
+if model.loaded then
+    print(string.format(
+        "model=%s path=%s ready in %.3fs top=%s",
+        model.format,
+        model.path,
+        os.clock() - t0,
+        tops(first, 1)
+    ))
+else
+    print(string.format(
+        "model=none ready in %.3fs error=%s top=%s",
+        os.clock() - t0,
+        model.error or "unknown",
+        tops(first, 1)
+    ))
+    if require_model then
+        fail("a real sentence n-gram model was required but could not be loaded")
+    end
+end
 
 for i = 1, #samples do
     sentence.reset_decode_cache()
@@ -81,6 +106,86 @@ check_equal("one-key u", sentence.decode("u"), sentence.decode_full("u"))
 check_equal("one-key to ue", sentence.decode("ue"), sentence.decode_full("ue"))
 check_equal("ue back to u", sentence.decode("u"), sentence.decode_full("u"))
 check_equal("u to ueot", sentence.decode("ueot"), sentence.decode_full("ueot"))
+
+local boundary_candidates = sentence.decode_full("ueottu")
+local boundary = sentence.find_raw_length_for_text("的是", boundary_candidates)
+if boundary ~= 4 then
+    fail(string.format("wrong raw boundary for 的是: expected 4, got %d", boundary))
+end
+print("OK  early-commit raw boundary 的是 -> ueot")
+
+local proposal = sentence.confidence_proposal({
+    { text = "甲乙丙", score = 0 },
+    { text = "甲乙丁", score = -10 }
+}, 0.995)
+if proposal ~= "甲乙" then
+    fail("early-commit proposal did not retain the final candidate character: " .. proposal)
+end
+print("OK  early-commit proposal retains one character")
+
+local function fake_environment(early_commit)
+    local properties = {}
+    local commits = {}
+    local context = { input = "", early_commit = early_commit }
+    function context:get_property(key) return properties[key] or "" end
+    function context:set_property(key, value) properties[key] = value end
+    function context:get_option(name)
+        return name == "tiger_sentence_early_commit" and self.early_commit
+    end
+    function context:is_composing() return self.input ~= "" end
+    function context:push_input(value) self.input = self.input .. value end
+    function context:clear() self.input = "" end
+    function context:has_menu() return false end
+    function context:confirm_current_selection() end
+    local engine = { context = context }
+    function engine:commit_text(value) commits[#commits + 1] = value end
+    return { engine = engine }, context, properties, commits
+end
+
+local function fake_key(repr)
+    local key = { value = repr }
+    function key:release() return false end
+    function key:repr() return self.value end
+    function key:ctrl() return false end
+    function key:alt() return false end
+    function key:super() return false end
+    return key
+end
+
+local early_sample = "jaefmonyftuderlmljgbmnvs"
+local env_off, context_off, _, commits_off = fake_environment(false)
+for index = 1, #early_sample do
+    sentence.processor(fake_key(early_sample:sub(index, index)), env_off)
+end
+if #commits_off ~= 0 or context_off.input ~= early_sample then
+    fail("default-off early commit changed the composition")
+end
+print("OK  early commit switch defaults to inactive behavior")
+
+local env_on, _, properties_on, commits_on = fake_environment(true)
+for index = 1, #early_sample do
+    sentence.processor(fake_key(early_sample:sub(index, index)), env_on)
+end
+if #commits_on == 0 then
+    fail("enabled early commit did not commit a stable prefix")
+end
+print("OK  enabled early commit commits a stable prefix")
+
+properties_on.tiger_sentence_confidence = "旧\31" .. "1\31abcde"
+sentence.processor(fake_key("BackSpace"), env_on)
+if properties_on.tiger_sentence_confidence ~= "\31" .. "0\31" then
+    fail("backspace did not invalidate early-commit evidence")
+end
+print("OK  backspace invalidates early-commit evidence")
+
+local env_limit, context_limit = fake_environment(false)
+for _ = 1, 129 do
+    sentence.processor(fake_key("a"), env_limit)
+end
+if #context_limit.input ~= 128 then
+    fail(string.format("raw input limit expected 128, got %d", #context_limit.input))
+end
+print("OK  raw input is capped at 128 characters")
 
 -- grow, append selector, backspace, retype letter
 sentence.reset_decode_cache()

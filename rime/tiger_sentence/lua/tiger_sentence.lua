@@ -5,12 +5,14 @@ local ranks = require("tiger_sentence_ranks")
 
 local beam_width = 200
 local candidate_limit = 20
+local max_raw_length = 128
 local rank_penalty = 0.03
 local isolation_threshold = 3000
 local isolation_lambda = 2.0
 local BOS = kn_reader.BOS
 local EOS = kn_reader.EOS
 local kn_model = false
+local kn_load_error = nil
 local max_code_len = 1
 for i = 1, #lexicon.lengths do
     if lexicon.lengths[i] > max_code_len then
@@ -27,6 +29,7 @@ local decode_cache = {
     states = nil,
     result = nil
 }
+local state_separator = "\31"
 
 -- Keep early-commit state in Rime context properties. The Lua binding may
 -- create a different userdata wrapper for the same context on each callback,
@@ -34,24 +37,47 @@ local decode_cache = {
 local state_keys = {
     committed_text = "tiger_sentence_committed_text",
     committed_raw = "tiger_sentence_committed_raw",
+    confidence = "tiger_sentence_confidence",
+    -- Read and clear the old split properties once during migration.
     proposal = "tiger_sentence_proposal",
-    stable = "tiger_sentence_stable"
+    stable = "tiger_sentence_stable",
+    evidence_raw = "tiger_sentence_evidence_raw"
 }
 
 local function sentence_state(context)
+    local confidence = context:get_property(state_keys.confidence) or ""
+    local proposal, stable, evidence_raw = confidence:match(
+        "^(.-)" .. state_separator .. "(%d+)" .. state_separator .. "(.*)$")
+    if proposal == nil then
+        proposal = context:get_property(state_keys.proposal) or ""
+        stable = context:get_property(state_keys.stable) or "0"
+        evidence_raw = context:get_property(state_keys.evidence_raw) or ""
+    end
     return {
         committed_text = context:get_property(state_keys.committed_text) or "",
         committed_raw = context:get_property(state_keys.committed_raw) or "",
-        proposal = context:get_property(state_keys.proposal) or "",
-        stable = tonumber(context:get_property(state_keys.stable)) or 0
+        proposal = proposal,
+        stable = tonumber(stable) or 0,
+        evidence_raw = evidence_raw
     }
 end
 
+local function set_property_if_changed(context, key, value)
+    value = value or ""
+    if (context:get_property(key) or "") ~= value then
+        context:set_property(key, value)
+    end
+end
+
 local function save_sentence_state(context, state)
-    context:set_property(state_keys.committed_text, state.committed_text or "")
-    context:set_property(state_keys.committed_raw, state.committed_raw or "")
-    context:set_property(state_keys.proposal, state.proposal or "")
-    context:set_property(state_keys.stable, tostring(state.stable or 0))
+    set_property_if_changed(context, state_keys.committed_text, state.committed_text)
+    set_property_if_changed(context, state_keys.committed_raw, state.committed_raw)
+    local confidence = (state.proposal or "") .. state_separator ..
+        tostring(state.stable or 0) .. state_separator .. (state.evidence_raw or "")
+    set_property_if_changed(context, state_keys.confidence, confidence)
+    set_property_if_changed(context, state_keys.proposal, "")
+    set_property_if_changed(context, state_keys.stable, "")
+    set_property_if_changed(context, state_keys.evidence_raw, "")
 end
 
 local function reset_sentence_state(context)
@@ -59,7 +85,8 @@ local function reset_sentence_state(context)
         committed_text = "",
         committed_raw = "",
         proposal = "",
-        stable = 0
+        stable = 0,
+        evidence_raw = ""
     })
 end
 
@@ -67,8 +94,29 @@ local function ensure_kn()
     if kn_model ~= false then
         return kn_model
     end
-    kn_model = kn_reader.try_load() or nil
+    kn_model, kn_load_error = kn_reader.try_load()
+    kn_model = kn_model or nil
     return kn_model
+end
+
+local function model_status()
+    local model = ensure_kn()
+    if model then
+        return {
+            loaded = true,
+            path = model.path,
+            format = model.format,
+            bytes = model.bytes,
+            error = nil
+        }
+    end
+    return {
+        loaded = false,
+        path = nil,
+        format = nil,
+        bytes = 0,
+        error = kn_load_error
+    }
 end
 
 local function logp(prev2, prev1, target)
@@ -124,7 +172,13 @@ local function utf_chars(text)
         end
         return chars
     end
-    chars[1] = text
+    local index = 1
+    while index <= #text do
+        local first = text:byte(index)
+        local length = first < 0x80 and 1 or first < 0xE0 and 2 or first < 0xF0 and 3 or 4
+        chars[#chars + 1] = text:sub(index, index + length - 1)
+        index = index + length
+    end
     return chars
 end
 
@@ -224,7 +278,15 @@ local function new_states(length)
     for index = 0, length do
         states[index] = {}
     end
-    states[0][1] = { score = 0, text = "", segmented = "", prev2 = BOS, prev1 = BOS, max_rank = 1 }
+    states[0][1] = {
+        score = 0,
+        text = "",
+        segmented = "",
+        prev2 = BOS,
+        prev1 = BOS,
+        max_rank = 1,
+        boundary = nil
+    }
     return states
 end
 
@@ -268,13 +330,19 @@ local function expand_range(raw, states, from_pos, length)
                                             segmented = segmented .. " " .. piece
                                         end
                                         local next_states = states[consumed_end]
+                                        local text = item.text .. candidate.t
                                         next_states[#next_states + 1] = {
                                             score = score,
-                                            text = item.text .. candidate.t,
+                                            text = text,
                                             segmented = segmented,
                                             prev2 = prev2,
                                             prev1 = prev1,
-                                            max_rank = math.max(item.max_rank or 1, candidate.r)
+                                            max_rank = math.max(item.max_rank or 1, candidate.r),
+                                            boundary = {
+                                                text_length = #text,
+                                                raw_length = consumed_end,
+                                                previous = item.boundary
+                                            }
                                         }
                                     end
                                 end
@@ -298,7 +366,8 @@ local function emit(states, length)
             segmented = item.segmented,
             prev2 = item.prev2,
             prev1 = item.prev1,
-            max_rank = math.max(1, item.max_rank or 1)
+            max_rank = math.max(1, item.max_rank or 1),
+            boundary = item.boundary
         }
     end
     table.sort(result, function(left, right)
@@ -414,25 +483,53 @@ local function trim_segmented_after_raw_prefix(segmented, raw_prefix_length)
     return index <= #segmented and segmented:sub(index) or ""
 end
 
-local function find_raw_length_for_text(text, raw, candidates)
+local function find_raw_length_for_text(text, candidates)
+    local text_length = #text
     for i = 1, #candidates do
         local candidate = candidates[i]
-        if candidate.text:sub(1, #text) == text and candidate.segmented ~= "" then
-            local consumed = 0
-            for piece in candidate.segmented:gmatch("[^ ]+") do
-                consumed = consumed + #piece
-                if consumed <= #raw then
-                    local prefix = decode_full(raw:sub(1, consumed))
-                    for p = 1, #prefix do
-                        if prefix[p].text == text then
-                            return consumed
-                        end
-                    end
+        if candidate.text:sub(1, text_length) == text then
+            local boundary = candidate.boundary
+            while boundary do
+                if boundary.text_length == text_length then
+                    return boundary.raw_length
                 end
+                boundary = boundary.previous
             end
         end
     end
     return 0
+end
+
+local function confidence_proposal(candidates, threshold)
+    if #candidates == 0 then
+        return ""
+    end
+    local max_score = candidates[1].score
+    for i = 2, #candidates do
+        if candidates[i].score > max_score then max_score = candidates[i].score end
+    end
+    local total = 0
+    for i = 1, #candidates do total = total + math.exp(candidates[i].score - max_score) end
+
+    local proposal = ""
+    local proposal_length = 0
+    for i = 1, #candidates do
+        local chars = utf_chars(candidates[i].text)
+        for length = 1, #chars - 1 do
+            local prefix = table.concat(chars, "", 1, length)
+            local mass = 0
+            for j = 1, #candidates do
+                if candidates[j].text:sub(1, #prefix) == prefix then
+                    mass = mass + math.exp(candidates[j].score - max_score)
+                end
+            end
+            if mass / total >= threshold and length > proposal_length then
+                proposal = prefix
+                proposal_length = length
+            end
+        end
+    end
+    return proposal
 end
 
 local function try_early_commit(env)
@@ -440,10 +537,19 @@ local function try_early_commit(env)
     local state = sentence_state(context)
     local live_raw = context.input or ""
 
+    if not context:get_option("tiger_sentence_early_commit") then
+        state.proposal = ""
+        state.stable = 0
+        state.evidence_raw = ""
+        save_sentence_state(context, state)
+        return
+    end
+
     -- The first four raw encoding keys are never counted as stable evidence.
     if #live_raw + #state.committed_raw <= 4 then
         state.proposal = ""
         state.stable = 0
+        state.evidence_raw = ""
         save_sentence_state(context, state)
         return
     end
@@ -461,60 +567,41 @@ local function try_early_commit(env)
     if #candidates == 0 then
         state.proposal = ""
         state.stable = 0
+        state.evidence_raw = ""
         save_sentence_state(context, state)
         return
     end
 
-    local max_score = candidates[1].score
-    for i = 2, #candidates do
-        if candidates[i].score > max_score then max_score = candidates[i].score end
-    end
-    local total = 0
-    for i = 1, #candidates do total = total + math.exp(candidates[i].score - max_score) end
-
-    local proposal = ""
-    for i = 1, #candidates do
-        local chars = utf_chars(candidates[i].text)
-        for length = 1, #chars - 1 do
-            local prefix = table.concat(chars, "", 1, length)
-            local mass = 0
-            for j = 1, #candidates do
-                if candidates[j].text:sub(1, #prefix) == prefix then
-                    mass = mass + math.exp(candidates[j].score - max_score)
-                end
-            end
-            if mass / total >= 0.995 and #utf_chars(prefix) > #utf_chars(proposal) then
-                proposal = prefix
-            end
-        end
-    end
-    local proposal_chars = utf_chars(proposal)
-    if #proposal_chars > 1 then
-        proposal = table.concat(proposal_chars, "", 1, #proposal_chars - 1)
-    end
+    local proposal = confidence_proposal(candidates, 0.995)
     if proposal == "" or #proposal <= #state.committed_text then
         state.proposal = ""
         state.stable = 0
+        state.evidence_raw = ""
         save_sentence_state(context, state)
         return
     end
 
-    if proposal == state.proposal then
+    local extends_evidence = state.evidence_raw ~= "" and
+        #full_raw == #state.evidence_raw + 1 and
+        full_raw:sub(1, #state.evidence_raw) == state.evidence_raw
+    if proposal == state.proposal and extends_evidence then
         state.stable = state.stable + 1
     else
         state.proposal = proposal
         state.stable = 1
     end
+    state.evidence_raw = full_raw
     save_sentence_state(context, state)
     if state.stable < 2 then return end
 
-    local consumed = find_raw_length_for_text(proposal, full_raw, candidates)
+    local consumed = find_raw_length_for_text(proposal, candidates)
     if consumed <= #state.committed_raw or consumed > #full_raw then return end
     local commit = proposal:sub(#state.committed_text + 1)
     state.committed_text = proposal
     state.committed_raw = full_raw:sub(1, consumed)
     state.proposal = proposal
     state.stable = 0
+    state.evidence_raw = ""
     env.engine:commit_text(commit)
     context:clear()
     save_sentence_state(context, state)
@@ -564,6 +651,9 @@ local function processor(key_event, env)
             reset_sentence_state(context)
             state = sentence_state(context)
         end
+        if #state.committed_raw + #(context.input or "") >= max_raw_length then
+            return 1
+        end
         -- Digits are rank suffixes only while composing. Idle Chinese mode
         -- should commit 0-9 like a normal Rime schema (including 全角).
         if ch:match("%d") and not context:is_composing() then
@@ -595,6 +685,13 @@ local function processor(key_event, env)
         context:clear()
         reset_sentence_state(context)
         return 1
+    end
+    if repr == "BackSpace" or repr == "Delete" then
+        state.proposal = ""
+        state.stable = 0
+        state.evidence_raw = ""
+        save_sentence_state(context, state)
+        return 2
     end
     if repr == "space" then
         if context:has_menu() then
@@ -633,6 +730,9 @@ M.decode = decode
 M.decode_full = decode_full
 M.reset_decode_cache = reset_decode_cache
 M.results_equal = results_equal
+M.model_status = model_status
+M.find_raw_length_for_text = find_raw_length_for_text
+M.confidence_proposal = confidence_proposal
 M.processor = processor
 M.translator = translator
 return M

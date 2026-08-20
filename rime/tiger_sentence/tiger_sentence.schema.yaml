@@ -19,6 +19,9 @@ switches:
     states: [ 。，, ．， ]
   - name: full_shape
     states: [ 半角, 全角 ]
+  - name: tiger_sentence_early_commit
+    reset: 0
+    states: [ 提前上屏关, 提前上屏开 ]
 
 engine:
   processors:

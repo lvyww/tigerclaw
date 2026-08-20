@@ -2,7 +2,6 @@
 local BOS = "\2"
 local EOS = "\3"
 local SHIFT = 2097152
-local MASK = 2097151
 local MOBILE_HEADER_SIZE = 104
 local MOBILE_CACHE_BYTES = 8 * 1024 * 1024
 
@@ -58,8 +57,8 @@ local function scalar(token)
 end
 
 local function pack2(first, second)
-    -- Keep compatibility with Lua 5.1/5.2 used by common Rime builds;
-    -- bitwise operators and integer-division syntax are not available there.
+    -- Avoid parser-level bitwise syntax; model scoring still requires the
+    -- string.unpack and utf8 APIs supplied by Lua 5.3+ Rime builds.
     return first * SHIFT + (second % SHIFT)
 end
 
@@ -393,15 +392,20 @@ function M.load(path)
 end
 
 function M.try_load()
+    local failures = {}
     for _, path in ipairs(M.candidate_paths()) do
         if file_exists(path) then
             local ok, model = pcall(M.load, path)
             if ok then
-                return model
+                return model, nil
             end
+            failures[#failures + 1] = path .. ": " .. tostring(model)
         end
     end
-    return nil
+    if #failures > 0 then
+        return nil, table.concat(failures, " | ")
+    end
+    return nil, "no sentence n-gram model found"
 end
 
 return M
