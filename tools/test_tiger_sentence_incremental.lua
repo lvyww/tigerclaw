@@ -60,6 +60,20 @@ local function check_equal(label, incremental, full)
     print(string.format("OK  %-40s  %s", label, tops(full, 2)))
 end
 
+local function check_visible_equal(label, left, right)
+    if #left ~= #right then
+        fail(string.format("VISIBLE MISMATCH %s: %d ~= %d", label, #left, #right))
+    end
+    for i = 1, #left do
+        if left[i].text ~= right[i].text or
+            left[i].segmented ~= right[i].segmented or
+            left[i].score ~= right[i].score or
+            left[i].confidence_score ~= right[i].confidence_score then
+            fail("VISIBLE MISMATCH " .. label)
+        end
+    end
+end
+
 print("initializing decoder + first full decode...")
 local t0 = os.clock()
 local first = sentence.decode_full(long_code)
@@ -129,6 +143,12 @@ for i = 1, #samples do
     local same = sentence.decode(raw)
     same = sentence.decode(raw)
     check_equal("same " .. raw, same, full)
+
+    sentence.reset_decode_cache()
+    local normal = sentence.decode(raw, false)
+    local with_early = sentence.decode(raw, true)
+    check_visible_equal("early metadata " .. raw, normal, with_early)
+    check_equal("early full " .. raw, with_early, sentence.decode_full(raw, true))
 end
 
 sentence.reset_decode_cache()

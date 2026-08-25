@@ -2186,9 +2186,15 @@ namespace TigerClaw.Core
                 return null;
             }
 
-            SentenceCandidate[] candidates = _sentenceDecodeResult.ConfidenceCandidates ??
-                _sentenceDecodeResult.Candidates ?? Array.Empty<SentenceCandidate>();
-            if (candidates.Length == 0 || _sentenceDecodeResult.ConfidenceTruncated)
+            bool usesIncompleteTail = _sentenceDecodeResult.EarlyCommitUsesIncompleteTail;
+            SentenceCandidate[] candidates = usesIncompleteTail
+                ? _sentenceDecodeResult.EarlyCommitCandidates ?? Array.Empty<SentenceCandidate>()
+                : _sentenceDecodeResult.ConfidenceCandidates ??
+                    _sentenceDecodeResult.Candidates ?? Array.Empty<SentenceCandidate>();
+            bool confidenceTruncated = usesIncompleteTail
+                ? _sentenceDecodeResult.EarlyCommitConfidenceTruncated
+                : _sentenceDecodeResult.ConfidenceTruncated;
+            if (candidates.Length == 0 || confidenceTruncated)
             {
                 ResetSentenceAutoCommitEvidence();
                 return null;
@@ -2228,7 +2234,8 @@ namespace TigerClaw.Core
                 }
             }
 
-            if (string.Equals(_sentenceNeuralAcceptedRaw, evidenceRaw, StringComparison.Ordinal))
+            if (!_sentenceDecodeResult.EarlyCommitPrefersIncompleteTail &&
+                string.Equals(_sentenceNeuralAcceptedRaw, evidenceRaw, StringComparison.Ordinal))
             {
                 while (proposal.Length > _sentenceCommittedText.Length &&
                     !_sentenceNeuralTopText.StartsWith(proposal, StringComparison.Ordinal))
@@ -2430,7 +2437,10 @@ namespace TigerClaw.Core
                     _sentenceGeneration,
                     _sentenceRawBuffer.ToString(),
                     _state.LexiconVersion,
-                    _sentenceInputDecoder?.Decode(_sentenceRawBuffer.ToString(), 20) ?? SentenceDecodeResult.Empty);
+                    _sentenceInputDecoder?.Decode(
+                        _sentenceRawBuffer.ToString(),
+                        20,
+                        _state.GetSentenceAutoCommitEnabled()) ?? SentenceDecodeResult.Empty);
                 return;
             }
 
@@ -2456,6 +2466,7 @@ namespace TigerClaw.Core
                 string rawCode;
                 int lexiconVersion;
                 SentenceInputDecoder decoder;
+                bool includeEarlyCommitCandidates;
 
                 lock (_lock)
                 {
@@ -2469,12 +2480,16 @@ namespace TigerClaw.Core
                     rawCode = _sentenceRawBuffer.ToString();
                     lexiconVersion = _state.LexiconVersion;
                     decoder = _sentenceInputDecoder;
+                    includeEarlyCommitCandidates = _state.GetSentenceAutoCommitEnabled();
                 }
 
                 SentenceDecodeResult result;
                 try
                 {
-                    result = decoder?.Decode(rawCode, 20) ?? SentenceDecodeResult.Empty;
+                    result = decoder?.Decode(
+                        rawCode,
+                        20,
+                        includeEarlyCommitCandidates) ?? SentenceDecodeResult.Empty;
                 }
                 catch
                 {
@@ -2557,7 +2572,10 @@ namespace TigerClaw.Core
                 _sentenceGeneration,
                 rawCode,
                 _state.LexiconVersion,
-                _sentenceInputDecoder?.Decode(rawCode, 20) ?? SentenceDecodeResult.Empty);
+                _sentenceInputDecoder?.Decode(
+                    rawCode,
+                    20,
+                    _state.GetSentenceAutoCommitEnabled()) ?? SentenceDecodeResult.Empty);
         }
 
         private void EnsureSentenceDecoderCurrent()
@@ -4208,8 +4226,16 @@ namespace TigerClaw.Core
                     candidate.Text != null &&
                     candidate.Text.StartsWith(_sentenceCommittedText, StringComparison.Ordinal))
                 .ToArray();
+            SentenceCandidate[] earlyCommitCandidates = result.EarlyCommitCandidates ??
+                Array.Empty<SentenceCandidate>();
+            SentenceCandidate[] filteredEarlyCommit = earlyCommitCandidates
+                .Where(candidate => candidate != null &&
+                    candidate.Text != null &&
+                    candidate.Text.StartsWith(_sentenceCommittedText, StringComparison.Ordinal))
+                .ToArray();
             if (filtered.Length == candidates.Length &&
-                filteredConfidence.Length == confidenceCandidates.Length)
+                filteredConfidence.Length == confidenceCandidates.Length &&
+                filteredEarlyCommit.Length == earlyCommitCandidates.Length)
             {
                 return result;
             }
@@ -4220,6 +4246,10 @@ namespace TigerClaw.Core
                 Candidates = filtered,
                 ConfidenceCandidates = filteredConfidence,
                 ConfidenceTruncated = result.ConfidenceTruncated,
+                EarlyCommitCandidates = filteredEarlyCommit,
+                EarlyCommitConfidenceTruncated = result.EarlyCommitConfidenceTruncated,
+                EarlyCommitUsesIncompleteTail = result.EarlyCommitUsesIncompleteTail,
+                EarlyCommitPrefersIncompleteTail = result.EarlyCommitPrefersIncompleteTail,
                 ExpandedStates = result.ExpandedStates
             };
         }

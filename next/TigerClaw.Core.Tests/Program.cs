@@ -134,6 +134,7 @@ namespace TigerClaw.Core.Tests
                 SentenceDecoderAllowsNonPrimaryCodesForRareCharacters();
                 SentenceDecoderIncrementalMatchesFullRebuild();
                 SentenceDecoderReportsTruncatedConfidenceMass();
+                SentenceDecoderAddsIncompleteTailConfidenceWithoutChangingVisibleCandidates();
                 SentenceNgramV2LoadsFromMappedFile();
                 SentenceEngineCommitsDecodedCandidate();
                 SentenceEngineDisplaysPrimarySegmentation();
@@ -149,6 +150,7 @@ namespace TigerClaw.Core.Tests
                 SentenceAutoCommitRetainsExactlyOneCharacter();
                 SentenceAutoCommitUsesThreeGenerationCommonPrefix();
                 SentenceAutoCommitRequiresStableRawBoundary();
+                SentenceAutoCommitSurvivesAlternatingCompleteSegmentation();
                 SentenceAutoCommitReplayPreservesOriginalCommit();
                 KeyReplayCacheReturnsOriginalResultWithCurrentSequence();
                 SentenceEngineDecodesLongWorkOffTheKeyPath();
@@ -2202,6 +2204,15 @@ namespace TigerClaw.Core.Tests
             string name)
         {
             True(left.ConfidenceTruncated == right.ConfidenceTruncated, name + ".confidence_truncated");
+            True(
+                left.EarlyCommitConfidenceTruncated == right.EarlyCommitConfidenceTruncated,
+                name + ".early_confidence_truncated");
+            True(
+                left.EarlyCommitUsesIncompleteTail == right.EarlyCommitUsesIncompleteTail,
+                name + ".early_uses_incomplete_tail");
+            True(
+                left.EarlyCommitPrefersIncompleteTail == right.EarlyCommitPrefersIncompleteTail,
+                name + ".early_prefers_incomplete_tail");
             SentenceCandidate[] leftCandidates = left.Candidates ?? Array.Empty<SentenceCandidate>();
             SentenceCandidate[] rightCandidates = right.Candidates ?? Array.Empty<SentenceCandidate>();
             AssertSentenceCandidateArraysEqual(leftCandidates, rightCandidates, name + ".visible");
@@ -2209,6 +2220,10 @@ namespace TigerClaw.Core.Tests
                 left.ConfidenceCandidates ?? Array.Empty<SentenceCandidate>(),
                 right.ConfidenceCandidates ?? Array.Empty<SentenceCandidate>(),
                 name + ".confidence");
+            AssertSentenceCandidateArraysEqual(
+                left.EarlyCommitCandidates ?? Array.Empty<SentenceCandidate>(),
+                right.EarlyCommitCandidates ?? Array.Empty<SentenceCandidate>(),
+                name + ".early_confidence");
         }
 
         private static void AssertSentenceCandidateArraysEqual(
@@ -2911,6 +2926,33 @@ namespace TigerClaw.Core.Tests
                 nameof(SentenceDecoderReportsTruncatedConfidenceMass));
         }
 
+        private static void SentenceDecoderAddsIncompleteTailConfidenceWithoutChangingVisibleCandidates()
+        {
+            var decoder = new SentenceInputDecoder(
+                SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
+                {
+                    ["ab"] = new List<string> { "甲乙" },
+                    ["abc"] = new List<string> { "丁戊" },
+                    ["cd"] = new List<string> { "丙" }
+                }),
+                new PrefersIncompleteTailSentenceLanguageModel(),
+                beamWidth: 100);
+
+            SentenceDecodeResult result = decoder.Decode("abc", 20, includeEarlyCommitCandidates: true);
+            AssertSentenceResultsEqual(
+                result,
+                decoder.DecodeFull("abc", 20, includeEarlyCommitCandidates: true),
+                nameof(SentenceDecoderAddsIncompleteTailConfidenceWithoutChangingVisibleCandidates) + ".incremental");
+            True(result.Candidates.Length == 1 && result.Candidates[0].Text == "丁戊",
+                nameof(SentenceDecoderAddsIncompleteTailConfidenceWithoutChangingVisibleCandidates) + ".visible");
+            True(result.EarlyCommitUsesIncompleteTail && result.EarlyCommitPrefersIncompleteTail,
+                nameof(SentenceDecoderAddsIncompleteTailConfidenceWithoutChangingVisibleCandidates) + ".flags");
+            True(result.EarlyCommitCandidates.Length >= 2 &&
+                result.EarlyCommitCandidates[0].Text == "甲乙" &&
+                result.EarlyCommitCandidates.Any(candidate => candidate.Text == "丁戊"),
+                nameof(SentenceDecoderAddsIncompleteTailConfidenceWithoutChangingVisibleCandidates) + ".confidence_pool");
+        }
+
         private static InputMethodEngine CreateAutoCommitSentenceEngine()
         {
             var state = new CoreRuntimeState();
@@ -3008,6 +3050,35 @@ namespace TigerClaw.Core.Tests
             TypeLetters(engine, "abcdef");
             Equal(null, Press(engine, 0x47).TextToOutput,
                 nameof(SentenceAutoCommitRequiresStableRawBoundary));
+        }
+
+        private static void SentenceAutoCommitSurvivesAlternatingCompleteSegmentation()
+        {
+            var state = new CoreRuntimeState();
+            True(state.TrySetConfigValue("整句输入", "是", out _, out string sentenceReason),
+                nameof(SentenceAutoCommitSurvivesAlternatingCompleteSegmentation) + ": " + sentenceReason);
+            True(state.TrySetConfigValue("整句自动提前上屏", "是", out _, out string commitReason),
+                nameof(SentenceAutoCommitSurvivesAlternatingCompleteSegmentation) + ": " + commitReason);
+            var decoder = new SentenceInputDecoder(
+                SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
+                {
+                    ["ab"] = new List<string> { "甲" },
+                    ["cd"] = new List<string> { "乙" },
+                    ["ef"] = new List<string> { "丙" },
+                    ["gh"] = new List<string> { "辛" },
+                    ["abc"] = new List<string> { "丁" },
+                    ["de"] = new List<string> { "戊" },
+                    ["fg"] = new List<string> { "己" }
+                }),
+                new PrefersIncompleteTailSentenceLanguageModel(),
+                beamWidth: 100);
+            var engine = new InputMethodEngine(state, decoder);
+
+            TypeLetters(engine, "abcde");
+            Equal(null, Press(engine, 0x46).TextToOutput,
+                nameof(SentenceAutoCommitSurvivesAlternatingCompleteSegmentation) + ".second_evidence");
+            Equal("甲", Press(engine, 0x47).TextToOutput,
+                nameof(SentenceAutoCommitSurvivesAlternatingCompleteSegmentation) + ".commit");
         }
 
         private static void SentenceAutoCommitReplayPreservesOriginalCommit()
@@ -3319,6 +3390,24 @@ namespace TigerClaw.Core.Tests
             {
                 Thread.Sleep(75);
                 return 0.0;
+            }
+
+            public bool HasObservedBigram(string previous, string target)
+            {
+                return false;
+            }
+        }
+
+        private sealed class PrefersIncompleteTailSentenceLanguageModel : ISentenceLanguageModel
+        {
+            public double LogProbability(string previous2, string previous1, string target)
+            {
+                return string.Equals(target, "甲", StringComparison.Ordinal) ||
+                       string.Equals(target, "乙", StringComparison.Ordinal) ||
+                       string.Equals(target, "丙", StringComparison.Ordinal) ||
+                       string.Equals(target, "辛", StringComparison.Ordinal)
+                    ? 0.0
+                    : -10.0;
             }
 
             public bool HasObservedBigram(string previous, string target)
