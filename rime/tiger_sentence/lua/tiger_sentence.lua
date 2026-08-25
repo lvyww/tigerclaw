@@ -55,7 +55,7 @@ local state_keys = {
 
 local function transient_state(context, env)
     if not env then
-        return { proposal = "", stable = 0, evidence_raw = "", suspended = false }
+        return { proposal = "", stable = 0, evidence_raw = "", history = {}, suspended = false }
     end
     if not env._tiger_sentence_transient then
         local confidence = context:get_property(state_keys.confidence) or ""
@@ -70,6 +70,7 @@ local function transient_state(context, env)
             proposal = proposal,
             stable = tonumber(stable) or 0,
             evidence_raw = evidence_raw,
+            history = {},
             suspended = false
         }
     end
@@ -84,6 +85,7 @@ local function sentence_state(context, env)
         proposal = transient.proposal,
         stable = transient.stable,
         evidence_raw = transient.evidence_raw,
+        history = transient.history or {},
         suspended = transient.suspended or false
     }
 end
@@ -101,6 +103,7 @@ local function save_transient_state(context, state, env)
             proposal = state.proposal or "",
             stable = state.stable or 0,
             evidence_raw = state.evidence_raw or "",
+            history = state.history or {},
             suspended = state.suspended or false
         }
     end
@@ -126,6 +129,7 @@ local function reset_sentence_state(context, env)
         proposal = "",
         stable = 0,
         evidence_raw = "",
+        history = {},
         suspended = false
     }, env)
 end
@@ -724,6 +728,64 @@ local function find_raw_length_for_text(text, candidates)
     return 0
 end
 
+local function raw_lengths_for_proposal(proposal, candidates)
+    local lengths = {}
+    local prefix_by_length = {}
+    local prefix = ""
+    local chars = utf_chars(proposal)
+    for i = 1, #chars do
+        prefix = prefix .. chars[i]
+        prefix_by_length[#prefix] = prefix
+    end
+    local found = 0
+    for i = 1, #candidates do
+        local candidate = candidates[i]
+        local state = candidate.path
+        while state do
+            local wanted = prefix_by_length[state.text_length]
+            if wanted and lengths[wanted] == nil and
+                candidate.text:sub(1, state.text_length) == wanted then
+                lengths[wanted] = state.raw_length
+                found = found + 1
+            end
+            state = state.previous
+        end
+        if found == #chars then break end
+    end
+    return lengths
+end
+
+local function common_history_prefix(history)
+    if #history == 0 then return "" end
+    local common = utf_chars(history[1].proposal or "")
+    for index = 2, #history do
+        local chars = utf_chars(history[index].proposal or "")
+        local count = math.min(#common, #chars)
+        local matched = 0
+        while matched < count and common[matched + 1] == chars[matched + 1] do
+            matched = matched + 1
+        end
+        while #common > matched do common[#common] = nil end
+        if #common == 0 then return "" end
+    end
+    return table.concat(common)
+end
+
+local function stable_history_raw_length(history, text)
+    if text == "" or #history < 3 then return 0 end
+    local stable = 0
+    for i = 1, #history do
+        local raw_length = (history[i].raw_lengths or {})[text] or 0
+        if raw_length <= 0 then return 0 end
+        if stable == 0 then
+            stable = raw_length
+        elseif stable ~= raw_length then
+            return 0
+        end
+    end
+    return stable
+end
+
 local function confidence_proposal(candidates, threshold)
     if #candidates == 0 then
         return ""
@@ -778,6 +840,7 @@ local function try_early_commit(env)
         state.proposal = ""
         state.stable = 0
         state.evidence_raw = ""
+        state.history = {}
         save_transient_state(context, state, env)
         return
     end
@@ -786,6 +849,7 @@ local function try_early_commit(env)
         state.proposal = ""
         state.stable = 0
         state.evidence_raw = ""
+        state.history = {}
         save_transient_state(context, state, env)
         return
     end
@@ -795,6 +859,7 @@ local function try_early_commit(env)
         state.proposal = ""
         state.stable = 0
         state.evidence_raw = ""
+        state.history = {}
         save_transient_state(context, state, env)
         return
     end
@@ -805,6 +870,7 @@ local function try_early_commit(env)
         state.proposal = ""
         state.stable = 0
         state.evidence_raw = ""
+        state.history = {}
         save_transient_state(context, state, env)
         return
     end
@@ -820,6 +886,7 @@ local function try_early_commit(env)
         state.proposal = ""
         state.stable = 0
         state.evidence_raw = ""
+        state.history = {}
         save_transient_state(context, state, env)
         return
     end
@@ -838,32 +905,49 @@ local function try_early_commit(env)
         state.proposal = ""
         state.stable = 0
         state.evidence_raw = ""
+        state.history = {}
         save_transient_state(context, state, env)
         return
     end
 
-    local extends_evidence = state.evidence_raw ~= "" and
-        #full_raw == #state.evidence_raw + 1 and
-        full_raw:sub(1, #state.evidence_raw) == state.evidence_raw
-    if proposal == state.proposal and extends_evidence then
-        state.stable = state.stable + 1
-    else
-        state.proposal = proposal
-        state.stable = 1
+    local history = state.history or {}
+    local previous_raw = #history > 0 and history[#history].raw or ""
+    local extends_evidence = previous_raw ~= "" and
+        #full_raw == #previous_raw + 1 and
+        full_raw:sub(1, #previous_raw) == previous_raw
+    if not extends_evidence then
+        history = {}
     end
+    history[#history + 1] = {
+        proposal = proposal,
+        raw = full_raw,
+        raw_lengths = raw_lengths_for_proposal(proposal, candidates)
+    }
+    while #history > 3 do table.remove(history, 1) end
+    state.history = history
+    state.proposal = proposal
+    state.stable = #history
     state.evidence_raw = full_raw
     save_transient_state(context, state, env)
-    if state.stable < 2 then return end
+    if #history < 3 then return end
 
-    local consumed = find_raw_length_for_text(proposal, candidates)
+    local stable_proposal = common_history_prefix(history)
+    local consumed = stable_history_raw_length(history, stable_proposal)
+    while #stable_proposal > #state.committed_text and consumed == 0 do
+        local chars = utf_chars(stable_proposal)
+        chars[#chars] = nil
+        stable_proposal = table.concat(chars)
+        consumed = stable_history_raw_length(history, stable_proposal)
+    end
     if consumed <= #state.committed_raw or consumed > #full_raw then return end
-    local commit = proposal:sub(#state.committed_text + 1)
-    if #utf_chars(commit) < 2 or #live_raw < 3 then return end
-    state.committed_text = proposal
+    local commit = stable_proposal:sub(#state.committed_text + 1)
+    if #utf_chars(commit) < 1 or #live_raw < 3 then return end
+    state.committed_text = stable_proposal
     state.committed_raw = full_raw:sub(1, consumed)
-    state.proposal = proposal
+    state.proposal = stable_proposal
     state.stable = 0
     state.evidence_raw = ""
+    state.history = {}
     env.engine:commit_text(commit)
     context:clear()
     save_sentence_state(context, state, env)
@@ -954,6 +1038,7 @@ local function processor(key_event, env)
         state.proposal = ""
         state.stable = 0
         state.evidence_raw = ""
+        state.history = {}
         save_transient_state(context, state, env)
         return 2
     end
@@ -962,6 +1047,7 @@ local function processor(key_event, env)
         state.proposal = ""
         state.stable = 0
         state.evidence_raw = ""
+        state.history = {}
         state.suspended = true
         save_transient_state(context, state, env)
         return 2

@@ -147,6 +147,8 @@ namespace TigerClaw.Core.Tests
                 SentenceAutoCommitRequiresConsecutiveAppendEvidence();
                 SentenceAutoCommitSuspendsAfterManualNavigation();
                 SentenceAutoCommitRetainsExactlyOneCharacter();
+                SentenceAutoCommitUsesThreeGenerationCommonPrefix();
+                SentenceAutoCommitRequiresStableRawBoundary();
                 SentenceAutoCommitReplayPreservesOriginalCommit();
                 KeyReplayCacheReturnsOriginalResultWithCurrentSequence();
                 SentenceEngineDecodesLongWorkOffTheKeyPath();
@@ -2918,11 +2920,10 @@ namespace TigerClaw.Core.Tests
                 nameof(CreateAutoCommitSentenceEngine) + ": " + commitReason);
             return new InputMethodEngine(state, CreateSentenceDecoder(new Dictionary<string, List<string>>
             {
-                ["ab"] = new List<string> { "甲乙" },
                 ["abc"] = new List<string> { "甲乙" },
-                ["cde"] = new List<string> { "丙" },
-                ["cdef"] = new List<string> { "丙" },
-                ["def"] = new List<string> { "丁" }
+                ["de"] = new List<string> { "丙" },
+                ["def"] = new List<string> { "丁" },
+                ["defg"] = new List<string> { "戊" }
             }));
         }
 
@@ -2950,7 +2951,10 @@ namespace TigerClaw.Core.Tests
         {
             InputMethodEngine engine = CreateAutoCommitSentenceEngine();
             TypeLetters(engine, "abcde");
-            KeyEngineResult result = Press(engine, 0x46);
+            KeyEngineResult secondEvidence = Press(engine, 0x46);
+            Equal(null, secondEvidence.TextToOutput,
+                nameof(SentenceAutoCommitRetainsExactlyOneCharacter) + ".second_evidence");
+            KeyEngineResult result = Press(engine, 0x47);
             Equal("甲乙", result.TextToOutput,
                 nameof(SentenceAutoCommitRetainsExactlyOneCharacter));
             EngineUiSnapshot snapshot = engine.GetUiSnapshot(5);
@@ -2959,11 +2963,60 @@ namespace TigerClaw.Core.Tests
                 nameof(SentenceAutoCommitRetainsExactlyOneCharacter));
         }
 
+        private static void SentenceAutoCommitUsesThreeGenerationCommonPrefix()
+        {
+            var state = new CoreRuntimeState();
+            True(state.TrySetConfigValue("整句输入", "是", out _, out string sentenceReason),
+                nameof(SentenceAutoCommitUsesThreeGenerationCommonPrefix) + ": " + sentenceReason);
+            True(state.TrySetConfigValue("整句自动提前上屏", "是", out _, out string commitReason),
+                nameof(SentenceAutoCommitUsesThreeGenerationCommonPrefix) + ": " + commitReason);
+            var engine = new InputMethodEngine(state, CreateSentenceDecoder(new Dictionary<string, List<string>>
+            {
+                ["abc"] = new List<string> { "甲" },
+                ["de"] = new List<string> { "丙" },
+                ["def"] = new List<string> { "丁" },
+                ["defg"] = new List<string> { "乙戊" }
+            }));
+
+            TypeLetters(engine, "abcde");
+            Equal(null, Press(engine, 0x46).TextToOutput,
+                nameof(SentenceAutoCommitUsesThreeGenerationCommonPrefix) + ".second_evidence");
+            KeyEngineResult committed = Press(engine, 0x47);
+            Equal("甲", committed.TextToOutput,
+                nameof(SentenceAutoCommitUsesThreeGenerationCommonPrefix) + ".single_character");
+            EngineUiSnapshot snapshot = engine.GetUiSnapshot(5);
+            True(snapshot.Candidates.Length > 0 && snapshot.Candidates[0] == "乙戊",
+                nameof(SentenceAutoCommitUsesThreeGenerationCommonPrefix) + ".unstable_suffix_retained");
+        }
+
+        private static void SentenceAutoCommitRequiresStableRawBoundary()
+        {
+            var state = new CoreRuntimeState();
+            True(state.TrySetConfigValue("整句输入", "是", out _, out string sentenceReason),
+                nameof(SentenceAutoCommitRequiresStableRawBoundary) + ": " + sentenceReason);
+            True(state.TrySetConfigValue("整句自动提前上屏", "是", out _, out string commitReason),
+                nameof(SentenceAutoCommitRequiresStableRawBoundary) + ": " + commitReason);
+            var engine = new InputMethodEngine(state, CreateSentenceDecoder(new Dictionary<string, List<string>>
+            {
+                ["ab"] = new List<string> { "甲乙" },
+                ["abc"] = new List<string> { "甲乙" },
+                ["cde"] = new List<string> { "丙" },
+                ["def"] = new List<string> { "丁" },
+                ["defg"] = new List<string> { "戊" }
+            }));
+
+            TypeLetters(engine, "abcdef");
+            Equal(null, Press(engine, 0x47).TextToOutput,
+                nameof(SentenceAutoCommitRequiresStableRawBoundary));
+        }
+
         private static void SentenceAutoCommitReplayPreservesOriginalCommit()
         {
             InputMethodEngine engine = CreateAutoCommitSentenceEngine();
             TypeLetters(engine, "abcde");
-            KeyEngineResult committed = Press(engine, 0x46);
+            Equal(null, Press(engine, 0x46).TextToOutput,
+                nameof(SentenceAutoCommitReplayPreservesOriginalCommit) + ".second_evidence");
+            KeyEngineResult committed = Press(engine, 0x47);
             Equal("甲乙", committed.TextToOutput,
                 nameof(SentenceAutoCommitReplayPreservesOriginalCommit) + ".initial");
 
@@ -3113,11 +3166,10 @@ namespace TigerClaw.Core.Tests
             var decoder = new SentenceInputDecoder(
                 SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
                 {
-                    ["ab"] = new List<string> { "甲乙" },
                     ["abc"] = new List<string> { "甲乙" },
-                    ["cde"] = new List<string> { "丙" },
-                    ["cdef"] = new List<string> { "丙" },
-                    ["def"] = new List<string> { "丁" }
+                    ["de"] = new List<string> { "丙" },
+                    ["def"] = new List<string> { "丁" },
+                    ["defg"] = new List<string> { "戊" }
                 }),
                 new SlowSentenceLanguageModel(),
                 beamWidth: 100);
@@ -3150,8 +3202,21 @@ namespace TigerClaw.Core.Tests
                 KeyEngineResult seventh = Press(engine, 0x47);
                 stopwatch.Stop();
                 True(stopwatch.ElapsedMilliseconds < 60,
+                    nameof(SentenceAutoCommitStaysOffTheKeyPath) + ".seventh_latency");
+                Equal(null, seventh.TextToOutput,
+                    nameof(SentenceAutoCommitStaysOffTheKeyPath) + ".second_evidence");
+                True(completed.WaitOne(5000), nameof(SentenceAutoCommitStaysOffTheKeyPath) + ".seven_ready");
+                while (engine.IsSentenceDecodePending)
+                {
+                    Thread.Sleep(5);
+                }
+
+                stopwatch.Restart();
+                KeyEngineResult eighth = Press(engine, 0x48);
+                stopwatch.Stop();
+                True(stopwatch.ElapsedMilliseconds < 60,
                     nameof(SentenceAutoCommitStaysOffTheKeyPath) + ".commit_latency");
-                Equal("甲乙", seventh.TextToOutput,
+                Equal("甲乙", eighth.TextToOutput,
                     nameof(SentenceAutoCommitStaysOffTheKeyPath) + ".commit");
             }
         }

@@ -65,6 +65,13 @@ namespace TigerClaw.Core
         private const int VK_Z = 0x5A;
         private const double SentenceEmittedCharacterReward = 2.0;
 
+        private sealed class SentenceAutoCommitEvidence
+        {
+            public string RawCode { get; set; }
+            public string Proposal { get; set; }
+            public Dictionary<string, int> RawLengths { get; set; }
+        }
+
         private readonly object _lock = new object();
         private readonly StringBuilder _inputBuffer = new StringBuilder(64);
         private readonly StringBuilder _mixedRawBuffer = new StringBuilder(128);
@@ -85,9 +92,8 @@ namespace TigerClaw.Core
         private int _sentenceSelectedIndex;
         private string _sentenceCommittedText = string.Empty;
         private int _sentenceCommittedRawLength;
-        private string _sentenceAutoCommitProposal = string.Empty;
-        private int _sentenceAutoCommitStable;
-        private string _sentenceAutoCommitEvidenceRaw = string.Empty;
+        private readonly List<SentenceAutoCommitEvidence> _sentenceAutoCommitEvidence =
+            new List<SentenceAutoCommitEvidence>(3);
         private int _sentenceLastAutoCommitRawLength;
         private bool _sentenceAutoCommitSuspended;
         private string _sentenceNeuralAcceptedRaw = string.Empty;
@@ -1291,8 +1297,6 @@ namespace TigerClaw.Core
                     // The host cannot retract committed text. Keep it excluded
                     // from the remaining composition and stop proposing more.
                     _sentenceCommittedRawLength = _sentenceRawBuffer.Length;
-                    _sentenceAutoCommitProposal = _sentenceCommittedText;
-                    _sentenceAutoCommitStable = 0;
                 }
 
                 if (_sentenceRawBuffer.Length == 0)
@@ -2123,9 +2127,6 @@ namespace TigerClaw.Core
             ClearCompositionInput();
             _sentenceCommittedText = string.Empty;
             _sentenceCommittedRawLength = 0;
-            _sentenceAutoCommitProposal = string.Empty;
-            _sentenceAutoCommitStable = 0;
-            _sentenceAutoCommitEvidenceRaw = string.Empty;
             _sentenceLastAutoCommitRawLength = 0;
             _sentenceAutoCommitSuspended = false;
             _sentenceNeuralAcceptedRaw = string.Empty;
@@ -2254,32 +2255,46 @@ namespace TigerClaw.Core
                 return null;
             }
 
-            bool extendsEvidence = _sentenceAutoCommitEvidenceRaw.Length > 0 &&
-                evidenceRaw.Length == _sentenceAutoCommitEvidenceRaw.Length + 1 &&
-                evidenceRaw.StartsWith(_sentenceAutoCommitEvidenceRaw, StringComparison.Ordinal);
-            if (string.Equals(proposal, _sentenceAutoCommitProposal, StringComparison.Ordinal) && extendsEvidence)
+            bool extendsEvidence = _sentenceAutoCommitEvidence.Count > 0 &&
+                evidenceRaw.Length == _sentenceAutoCommitEvidence[_sentenceAutoCommitEvidence.Count - 1].RawCode.Length + 1 &&
+                evidenceRaw.StartsWith(
+                    _sentenceAutoCommitEvidence[_sentenceAutoCommitEvidence.Count - 1].RawCode,
+                    StringComparison.Ordinal);
+            if (!extendsEvidence)
             {
-                _sentenceAutoCommitStable++;
+                _sentenceAutoCommitEvidence.Clear();
             }
-            else
+            _sentenceAutoCommitEvidence.Add(new SentenceAutoCommitEvidence
             {
-                _sentenceAutoCommitProposal = proposal;
-                _sentenceAutoCommitStable = 1;
+                RawCode = evidenceRaw,
+                Proposal = proposal,
+                RawLengths = BuildSentenceRawLengthsForProposal(proposal, candidates)
+            });
+            if (_sentenceAutoCommitEvidence.Count > 3)
+            {
+                _sentenceAutoCommitEvidence.RemoveAt(0);
             }
-            _sentenceAutoCommitEvidenceRaw = evidenceRaw;
-            if (_sentenceAutoCommitStable < 2) return null;
-            string commit = proposal.Substring(_sentenceCommittedText.Length);
-            int committedRawLength = FindSentenceRawLengthForText(proposal, candidates);
+            if (_sentenceAutoCommitEvidence.Count < 3) return null;
+
+            string stableProposal = LongestCommonTextElementPrefix(
+                _sentenceAutoCommitEvidence.Select(item => item.Proposal));
+            int committedRawLength = FindStableSentenceRawLength(stableProposal);
+            while (stableProposal.Length > _sentenceCommittedText.Length && committedRawLength == 0)
+            {
+                stableProposal = RemoveLastTextElement(stableProposal);
+                committedRawLength = FindStableSentenceRawLength(stableProposal);
+            }
             if (committedRawLength <= _sentenceCommittedRawLength || committedRawLength > evidenceRaw.Length)
             {
                 return null;
             }
-            if (new StringInfo(commit).LengthInTextElements < 2 ||
+            string commit = stableProposal.Substring(_sentenceCommittedText.Length);
+            if (new StringInfo(commit).LengthInTextElements < 1 ||
                 evidenceRaw.Length - _sentenceLastAutoCommitRawLength < 3)
             {
                 return null;
             }
-            _sentenceCommittedText = proposal;
+            _sentenceCommittedText = stableProposal;
             _sentenceCommittedRawLength = committedRawLength;
             _sentenceLastAutoCommitRawLength = committedRawLength;
             ResetSentenceAutoCommitEvidence();
@@ -2292,35 +2307,90 @@ namespace TigerClaw.Core
             return commit;
         }
 
-        private int FindSentenceRawLengthForText(string text, SentenceCandidate[] currentCandidates)
+        private Dictionary<string, int> BuildSentenceRawLengthsForProposal(
+            string proposal,
+            SentenceCandidate[] candidates)
         {
-            if (currentCandidates != null)
+            var rawLengths = new Dictionary<string, int>(StringComparer.Ordinal);
+            var prefixByTextLength = new Dictionary<int, string>();
+            int[] ends = GetTextElementEndOffsets(proposal);
+            for (int index = 0; index < ends.Length; index++)
             {
-                SentenceCandidate matching = currentCandidates.FirstOrDefault(candidate =>
-                    candidate.Text.StartsWith(text, StringComparison.Ordinal) &&
-                    !string.IsNullOrEmpty(candidate.SegmentedCode));
-                if (matching != null)
-                {
-                    SentencePathBoundary boundary = matching.Boundary;
-                    while (boundary != null)
-                    {
-                        if (boundary.TextLength == text.Length)
-                        {
-                            return boundary.RawLength;
-                        }
-                        boundary = boundary.Previous;
-                    }
-                }
+                string prefix = proposal.Substring(0, ends[index]);
+                prefixByTextLength[ends[index]] = prefix;
             }
 
-            return 0;
+            foreach (SentenceCandidate candidate in candidates ?? Array.Empty<SentenceCandidate>())
+            {
+                SentencePathBoundary boundary = candidate.Boundary;
+                while (boundary != null)
+                {
+                    if (prefixByTextLength.TryGetValue(boundary.TextLength, out string prefix) &&
+                        !rawLengths.ContainsKey(prefix) &&
+                        candidate.Text.StartsWith(prefix, StringComparison.Ordinal))
+                    {
+                        rawLengths[prefix] = boundary.RawLength;
+                    }
+                    boundary = boundary.Previous;
+                }
+                if (rawLengths.Count == prefixByTextLength.Count)
+                {
+                    break;
+                }
+            }
+            return rawLengths;
+        }
+
+        private int FindStableSentenceRawLength(string text)
+        {
+            if (string.IsNullOrEmpty(text) || _sentenceAutoCommitEvidence.Count < 3)
+            {
+                return 0;
+            }
+
+            int stableRawLength = 0;
+            foreach (SentenceAutoCommitEvidence evidence in _sentenceAutoCommitEvidence)
+            {
+                if (!evidence.RawLengths.TryGetValue(text, out int rawLength) || rawLength <= 0)
+                {
+                    return 0;
+                }
+                if (stableRawLength == 0)
+                {
+                    stableRawLength = rawLength;
+                }
+                else if (stableRawLength != rawLength)
+                {
+                    return 0;
+                }
+            }
+            return stableRawLength;
         }
 
         private void ResetSentenceAutoCommitEvidence()
         {
-            _sentenceAutoCommitProposal = string.Empty;
-            _sentenceAutoCommitStable = 0;
-            _sentenceAutoCommitEvidenceRaw = string.Empty;
+            _sentenceAutoCommitEvidence.Clear();
+        }
+
+        private static string LongestCommonTextElementPrefix(IEnumerable<string> values)
+        {
+            string[] texts = (values ?? Enumerable.Empty<string>()).ToArray();
+            if (texts.Length == 0 || texts.Any(string.IsNullOrEmpty))
+            {
+                return string.Empty;
+            }
+
+            string shortest = texts.OrderBy(text => new StringInfo(text).LengthInTextElements).First();
+            int[] ends = GetTextElementEndOffsets(shortest);
+            for (int index = ends.Length - 1; index >= 0; index--)
+            {
+                string prefix = shortest.Substring(0, ends[index]);
+                if (texts.All(text => text.StartsWith(prefix, StringComparison.Ordinal)))
+                {
+                    return prefix;
+                }
+            }
+            return string.Empty;
         }
 
         private static int[] GetTextElementEndOffsets(string text)
