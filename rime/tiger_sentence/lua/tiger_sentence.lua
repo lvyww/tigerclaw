@@ -2,6 +2,7 @@
 local lexicon = require("tiger_sentence_lexicon")
 local kn_reader = require("tiger_sentence_kn")
 local ranks = require("tiger_sentence_ranks")
+local supplement = require("tiger_sentence_supplement")
 
 local beam_width = 200
 local candidate_limit = 20
@@ -14,6 +15,7 @@ local BOS = kn_reader.BOS
 local EOS = kn_reader.EOS
 local kn_model = false
 local kn_load_error = nil
+local supplement_matcher = supplement.load_default()
 local max_code_len = 1
 for i = 1, #lexicon.lengths do
     if lexicon.lengths[i] > max_code_len then
@@ -29,6 +31,7 @@ local observed_cache_limit = 32768
 local observed_cache = {}
 local observed_cache_keys = {}
 local observed_cache_next = 1
+local aggregate_during_expansion_threshold = 128
 local decode_cache = {
     raw = nil,
     states = nil,
@@ -311,80 +314,175 @@ local function parse_selector(raw, code_end)
     return 0, code_end
 end
 
-local function dedup_limit(states, limit)
-    if not states or #states == 0 then
-        return {}
+local function state_better(left, right)
+    local left_rank = left.max_rank or 1
+    local right_rank = right.max_rank or 1
+    if left_rank ~= right_rank then
+        return left_rank < right_rank
+    end
+    if left.score == right.score then
+        return left.text < right.text
+    end
+    return left.score > right.score
+end
+
+local function duplicate_better(item, previous)
+    local item_rank = item.max_rank or 1
+    local previous_rank = previous.max_rank or 1
+    return item_rank < previous_rank or
+        (item_rank == previous_rank and item.score > previous.score)
+end
+
+local function logsumexp(left, right)
+    local maximum = math.max(left, right)
+    return maximum + math.log(math.exp(left - maximum) + math.exp(right - maximum))
+end
+
+local function new_bucket()
+    return {}
+end
+
+local function add_aggregated(bucket, item)
+    local best = bucket._best
+    local mass = bucket._mass
+    local previous = best[item.text]
+    local item_mass = item.mass_score or item.score
+    if not previous then
+        best[item.text] = item
+        mass[item.text] = item_mass
+        bucket._order[#bucket._order + 1] = item.text
+    else
+        mass[item.text] = logsumexp(mass[item.text], item_mass)
+        if duplicate_better(item, previous) then
+            best[item.text] = item
+        end
+    end
+    best[item.text].mass_score = mass[item.text]
+end
+
+local function ensure_aggregated(bucket)
+    if bucket._best then
+        return
     end
     local best = {}
     local mass = {}
     local order = {}
-    for i = 1, #states do
-        local item = states[i]
+    for i = 1, #bucket do
+        local item = bucket[i]
         local previous = best[item.text]
         local item_mass = item.mass_score or item.score
         if mass[item.text] == nil then
             mass[item.text] = item_mass
         else
-            local maximum = math.max(mass[item.text], item_mass)
-            mass[item.text] = maximum + math.log(
-                math.exp(mass[item.text] - maximum) + math.exp(item_mass - maximum))
+            mass[item.text] = logsumexp(mass[item.text], item_mass)
         end
-        local item_rank = item.max_rank or 1
         if not previous then
             order[#order + 1] = item.text
             best[item.text] = item
-        else
-            local previous_rank = previous.max_rank or 1
-            if item_rank < previous_rank or (item_rank == previous_rank and item.score > previous.score) then
-                best[item.text] = item
-            end
+        elseif duplicate_better(item, previous) then
+            best[item.text] = item
         end
     end
-    local result = {}
+    for i = #bucket, 1, -1 do
+        bucket[i] = nil
+    end
     for i = 1, #order do
-        local selected = best[order[i]]
-        result[#result + 1] = {
-            score = selected.score,
-            mass_score = mass[order[i]],
-            text = selected.text,
-            segmented = selected.segmented,
-            prev2 = selected.prev2,
-            prev1 = selected.prev1,
-            max_rank = selected.max_rank,
-            previous = selected.previous,
-            text_length = selected.text_length,
-            raw_length = selected.raw_length
-        }
+        best[order[i]].mass_score = mass[order[i]]
     end
-    table.sort(result, function(left, right)
-        local left_rank = left.max_rank or 1
-        local right_rank = right.max_rank or 1
-        if left_rank ~= right_rank then
-            return left_rank < right_rank
+    bucket._best = best
+    bucket._mass = mass
+    bucket._order = order
+end
+
+local function add_state(bucket, item)
+    if bucket._best then
+        add_aggregated(bucket, item)
+        return
+    end
+    bucket[#bucket + 1] = item
+    if #bucket >= aggregate_during_expansion_threshold then
+        ensure_aggregated(bucket)
+    end
+end
+
+local function sift_worst_up(heap, index)
+    while index > 1 do
+        local parent = math.floor(index / 2)
+        if not state_better(heap[parent], heap[index]) then
+            return
         end
-        if left.score == right.score then
-            return left.text < right.text
+        heap[parent], heap[index] = heap[index], heap[parent]
+        index = parent
+    end
+end
+
+local function sift_worst_down(heap, index)
+    while true do
+        local left = index * 2
+        if left > #heap then
+            return
         end
-        return left.score > right.score
-    end)
+        local right = left + 1
+        local worse = left
+        if right <= #heap and state_better(heap[left], heap[right]) then
+            worse = right
+        end
+        if not state_better(heap[index], heap[worse]) then
+            return
+        end
+        heap[index], heap[worse] = heap[worse], heap[index]
+        index = worse
+    end
+end
+
+local function select_exact_top(values, limit)
+    local heap = {}
+    for i = 1, #values do
+        local item = values[i]
+        if #heap < limit then
+            heap[#heap + 1] = item
+            sift_worst_up(heap, #heap)
+        elseif state_better(item, heap[1]) then
+            heap[1] = item
+            sift_worst_down(heap, 1)
+        end
+    end
+    table.sort(heap, state_better)
+    return heap
+end
+
+local function dedup_limit(bucket, limit)
+    if not bucket then
+        return new_bucket()
+    end
+    ensure_aggregated(bucket)
+    local result = {}
+    for i = 1, #bucket._order do
+        local selected = bucket._best[bucket._order[i]]
+        if selected then
+            result[#result + 1] = selected
+        end
+    end
+    local truncated = #result > limit
     if #result > limit then
-        local trimmed = {}
-        for i = 1, limit do
-            trimmed[i] = result[i]
-        end
-        trimmed._truncated = true
-        return trimmed
+        result = select_exact_top(result, limit)
+    else
+        table.sort(result, state_better)
     end
-    result._truncated = false
-    return result
+    local limited = new_bucket()
+    for i = 1, #result do
+        limited[i] = result[i]
+    end
+    limited._truncated = truncated
+    return limited
 end
 
 local function new_states(length)
     local states = {}
     for index = 0, length do
-        states[index] = {}
+        states[index] = new_bucket()
     end
-    states[0][1] = {
+    add_state(states[0], {
         score = 0,
         mass_score = 0,
         text = "",
@@ -392,14 +490,17 @@ local function new_states(length)
         prev2 = BOS,
         prev1 = BOS,
         max_rank = 1,
+        supplement_state = 1,
+        supplement_score = 0.0,
         previous = nil,
         text_length = 0,
         raw_length = 0
-    }
+    })
     return states
 end
 
-local function expand_range(raw, states, from_pos, length)
+local function expand_range(raw, states, from_pos, length, minimum_consumed_end)
+    minimum_consumed_end = minimum_consumed_end or -1
     local allow_all_ranks = length <= 4
     for position = from_pos, length - 1 do
         local current = dedup_limit(states[position], beam_width)
@@ -412,7 +513,8 @@ local function expand_range(raw, states, from_pos, length)
                     local candidates = lexicon.codes[code]
                     if candidates then
                         local selected_rank, consumed_end = parse_selector(raw, position + code_length)
-                        if not (length > 1 and consumed_end - position < 2) then
+                        if consumed_end > minimum_consumed_end and
+                            not (length > 1 and consumed_end - position < 2) then
                             local selected_candidates = eligible_candidates(
                                 candidates, selected_rank, allow_all_ranks)
                             for c = 1, #current do
@@ -421,10 +523,17 @@ local function expand_range(raw, states, from_pos, length)
                                     local candidate = selected_candidates[k]
                                     local score = item.score
                                     local prev2, prev1 = item.prev2, item.prev1
+                                    local supplement_state = item.supplement_state or 1
+                                    local supplement_added = 0.0
                                     local chars = candidate_chars(candidate)
                                     for ci = 1, #chars do
                                         score = score + logp(prev2, prev1, chars[ci])
                                         score = score + emitted_character_reward
+                                        local supplement_reward
+                                        supplement_state, supplement_reward = supplement.advance(
+                                            supplement_matcher, supplement_state, chars[ci])
+                                        score = score + supplement_reward
+                                        supplement_added = supplement_added + supplement_reward
                                         prev2 = prev1
                                         prev1 = chars[ci]
                                     end
@@ -438,20 +547,23 @@ local function expand_range(raw, states, from_pos, length)
                                     else
                                         segmented = segmented .. " " .. piece
                                     end
-                                    local next_states = states[consumed_end]
                                     local text = item.text .. candidate.t
-                                    next_states[#next_states + 1] = {
+                                    add_state(states[consumed_end], {
                                         score = score,
-                                        mass_score = (item.mass_score or item.score) + score - item.score,
+                                        mass_score = (item.mass_score or item.score) +
+                                            score - item.score - supplement_added,
                                         text = text,
                                         segmented = segmented,
                                         prev2 = prev2,
                                         prev1 = prev1,
                                         max_rank = math.max(item.max_rank or 1, candidate.r),
+                                        supplement_state = supplement_state,
+                                        supplement_score = (item.supplement_score or 0.0) +
+                                            supplement_added,
                                         previous = item,
                                         text_length = #text,
                                         raw_length = consumed_end
-                                    }
+                                    })
                                 end
                             end
                         end
@@ -476,6 +588,7 @@ local function emit(states, length)
             prev2 = item.prev2,
             prev1 = item.prev1,
             max_rank = math.max(1, item.max_rank or 1),
+            supplement_score = item.supplement_score or 0.0,
             path = item
         }
     end
@@ -496,10 +609,18 @@ local function results_equal(left, right)
     if #left ~= #right then
         return false
     end
+    if (left.confidence_truncated or false) ~= (right.confidence_truncated or false) then
+        return false
+    end
     for i = 1, #left do
         if left[i].text ~= right[i].text
             or left[i].segmented ~= right[i].segmented
-            or left[i].score ~= right[i].score then
+            or left[i].score ~= right[i].score
+            or (left[i].confidence_score or left[i].score) ~=
+                (right[i].confidence_score or right[i].score)
+            or (left[i].supplement_score or 0.0) ~=
+                (right[i].supplement_score or 0.0)
+            or (left[i].max_rank or 1) ~= (right[i].max_rank or 1) then
             return false
         end
     end
@@ -545,9 +666,9 @@ local function decode(raw_code)
             local from_pos = math.max(0, old_n + 1 - max_consume)
             states = old_states
             for index = old_n + 1, length do
-                states[index] = {}
+                states[index] = new_bucket()
             end
-            expand_range(raw, states, from_pos, length)
+            expand_range(raw, states, from_pos, length, old_n)
         elseif length < old_n and old_raw:sub(1, length) == raw then
             states = old_states
             for index = length + 1, old_n do
@@ -704,6 +825,15 @@ local function try_early_commit(env)
     end
 
     local proposal = confidence_proposal(candidates, 0.995)
+    if (candidates[1].supplement_score or 0.0) > 0.0 then
+        local supplement_top = candidates[1].text
+        while #proposal > #state.committed_text and
+            supplement_top:sub(1, #proposal) ~= proposal do
+            local chars = utf_chars(proposal)
+            chars[#chars] = nil
+            proposal = table.concat(chars)
+        end
+    end
     if proposal == "" or #proposal <= #state.committed_text then
         state.proposal = ""
         state.stable = 0
@@ -876,6 +1006,13 @@ M.decode_full = decode_full
 M.reset_decode_cache = reset_decode_cache
 M.results_equal = results_equal
 M.model_status = model_status
+M.supplement_status = function()
+    return {
+        path = supplement_matcher.path,
+        count = supplement_matcher.count or 0,
+        error = supplement_matcher.error
+    }
+end
 M.find_raw_length_for_text = find_raw_length_for_text
 M.confidence_proposal = confidence_proposal
 M.processor = processor

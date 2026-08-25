@@ -256,10 +256,13 @@ namespace TigerClaw.Core
                 }
 
                 SentenceLexiconIndex lexicon = SentenceLexiconIndex.Build(_state.GetSentenceLexiconSnapshot());
+                SentenceSupplementMatcher supplementMatcher = SentenceSupplementMatcher.Build(
+                    _state.GetSentenceSupplementSnapshot());
                 _sentenceInputDecoder = new SentenceInputDecoder(
                     lexicon,
                     _sentenceLanguageModel,
-                    emittedCharacterReward: SentenceEmittedCharacterReward);
+                    emittedCharacterReward: SentenceEmittedCharacterReward,
+                    supplementMatcher: supplementMatcher);
                 _sentenceDecodedLexiconVersion = _state.LexiconVersion;
             }
         }
@@ -2233,6 +2236,18 @@ namespace TigerClaw.Core
                 }
             }
 
+            SentenceCandidate[] visibleCandidates = _sentenceDecodeResult.Candidates ??
+                Array.Empty<SentenceCandidate>();
+            if (visibleCandidates.Length > 0 && visibleCandidates[0].SupplementScore > 0.0)
+            {
+                string supplementTopText = visibleCandidates[0].Text ?? string.Empty;
+                while (proposal.Length > _sentenceCommittedText.Length &&
+                    !supplementTopText.StartsWith(proposal, StringComparison.Ordinal))
+                {
+                    proposal = RemoveLastTextElement(proposal);
+                }
+            }
+
             if (proposal.Length <= _sentenceCommittedText.Length)
             {
                 ResetSentenceAutoCommitEvidence();
@@ -4016,6 +4031,7 @@ namespace TigerClaw.Core
                         BaseScore = candidate.BaseScore,
                         FinalScore = candidate.FinalScore,
                         ConfidenceScore = candidate.ConfidenceScore,
+                        SupplementScore = candidate.SupplementScore,
                         Boundary = candidate.Boundary,
                         MaxLexiconRank = candidate.MaxLexiconRank
                     })
@@ -4041,6 +4057,7 @@ namespace TigerClaw.Core
                         BaseScore = candidate.BaseScore,
                         FinalScore = candidate.FinalScore,
                         ConfidenceScore = candidate.ConfidenceScore,
+                        SupplementScore = candidate.SupplementScore,
                         Boundary = candidate.Boundary,
                         MaxLexiconRank = candidate.MaxLexiconRank
                     })

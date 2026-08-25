@@ -97,6 +97,7 @@ namespace TigerClaw.Core
 
         private const string DefaultFontName = "#\u971e\u9e5c\u6587\u6977 GB \u5c4f\u5e55\u9605\u8bfb\u7248"; // unicode: #闇為箿鏂囨シ GB 灞忓箷闃呰鐗?
         private const string ConstructCodeFileName = "\u6784\u8bcd.txt"; // unicode: 鏋勮瘝.txt
+        private const string SentenceSupplementFileName = "\u8865\u5145\u8bed\u6599.txt"; // 补充语料.txt
         private const string DisplayCommitSeparator = "\u001E";
         private const string DisplayCommitMarker = "=>";
 
@@ -251,6 +252,8 @@ namespace TigerClaw.Core
 
         private HashSet<string> _autoShortSymbol = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+        private SentenceSupplementEntry[] _sentenceSupplements = Array.Empty<SentenceSupplementEntry>();
+
         // Ctrl+m snapshot cache: lazily holds the most-recently-left code table's loaded lexicon so
         // switching back is instant (no disk reload). Capacity 1; only the Ctrl+m path fills/uses it,
         // and any plain ReloadLexicon clears it. Key = code-table directory name.
@@ -273,6 +276,7 @@ namespace TigerClaw.Core
             public bool ShortSymbolLBracket;
             public bool ShortSymbolZ;
             public HashSet<string> AutoShortSymbol;
+            public SentenceSupplementEntry[] SentenceSupplements;
         }
 
 
@@ -592,6 +596,8 @@ namespace TigerClaw.Core
 
                 Dictionary<string, string> fullCodeMap = BuildFullCodeMap(map);
 
+                SentenceSupplementEntry[] sentenceSupplements = LoadSentenceSupplements(mbDir);
+
                 RebuildMeta(map, out HashSet<string> unique, out HashSet<string> nonTerm);
 
                 RebuildShortSymbolMeta(map,
@@ -621,6 +627,7 @@ namespace TigerClaw.Core
                     ShortSymbolLBracket = shortLBracket,
                     ShortSymbolZ = shortZ,
                     AutoShortSymbol = autoShort,
+                    SentenceSupplements = sentenceSupplements,
                 };
 
         }
@@ -644,6 +651,7 @@ namespace TigerClaw.Core
                 _shortSymbolLBracket = s.ShortSymbolLBracket;
                 _shortSymbolZ = s.ShortSymbolZ;
                 _autoShortSymbol = s.AutoShortSymbol;
+                _sentenceSupplements = s.SentenceSupplements ?? Array.Empty<SentenceSupplementEntry>();
                 LexiconVersion++;
             }
         }
@@ -669,6 +677,7 @@ namespace TigerClaw.Core
                     ShortSymbolLBracket = _shortSymbolLBracket,
                     ShortSymbolZ = _shortSymbolZ,
                     AutoShortSymbol = _autoShortSymbol,
+                    SentenceSupplements = _sentenceSupplements,
                 };
             }
         }
@@ -726,6 +735,14 @@ namespace TigerClaw.Core
                 }
 
                 return snapshot;
+            }
+        }
+
+        public SentenceSupplementEntry[] GetSentenceSupplementSnapshot()
+        {
+            lock (_lock)
+            {
+                return (_sentenceSupplements ?? Array.Empty<SentenceSupplementEntry>()).ToArray();
             }
         }
 
@@ -2533,6 +2550,14 @@ namespace TigerClaw.Core
 
             {
 
+                if (IsSentenceSupplementFile(file))
+
+                {
+
+                    continue;
+
+                }
+
                 if (skipConstructCodeFile &&
 
                     string.Equals(Path.GetFileName(file), ConstructCodeFileName, StringComparison.OrdinalIgnoreCase))
@@ -2557,6 +2582,63 @@ namespace TigerClaw.Core
 
             }
 
+        }
+
+        internal static bool IsSentenceSupplementFile(string path)
+        {
+            return string.Equals(
+                Path.GetFileName(path),
+                SentenceSupplementFileName,
+                StringComparison.OrdinalIgnoreCase);
+        }
+
+        internal static SentenceSupplementEntry[] LoadSentenceSupplements(string mbDir)
+        {
+            if (string.IsNullOrEmpty(mbDir) || !Directory.Exists(mbDir))
+            {
+                return Array.Empty<SentenceSupplementEntry>();
+            }
+
+            string path = Path.Combine(mbDir, SentenceSupplementFileName);
+            if (!File.Exists(path))
+            {
+                return Array.Empty<SentenceSupplementEntry>();
+            }
+
+            Encoding encoding = DetectTextEncoding(path);
+            var entries = new Dictionary<string, SentenceSupplementEntry>(StringComparer.Ordinal);
+            foreach (string raw in File.ReadLines(path, encoding))
+            {
+                string line = StripInlineComment(raw ?? string.Empty).Trim();
+                if (line.Length == 0)
+                {
+                    continue;
+                }
+
+                string[] parts = line.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length < 1 || parts.Length > 2)
+                {
+                    continue;
+                }
+
+                string text = parts[0].Trim();
+                if (text.Length == 0)
+                {
+                    continue;
+                }
+
+                long weight = 1000;
+                if (parts.Length == 2 &&
+                    (!long.TryParse(parts[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out weight) ||
+                     weight <= 0))
+                {
+                    continue;
+                }
+
+                entries[text] = SentenceSupplementEntry.Create(text, weight);
+            }
+
+            return entries.Values.ToArray();
         }
 
 

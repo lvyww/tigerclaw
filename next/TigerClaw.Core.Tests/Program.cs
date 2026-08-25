@@ -24,6 +24,13 @@ namespace TigerClaw.Core.Tests
                 {
                     return RunSentenceSmoke(args[1], args[2], args[3]);
                 }
+                if (args.Length >= 5 && string.Equals(args[0], "--sentence-export-pools", StringComparison.OrdinalIgnoreCase))
+                {
+                    return RunSentencePoolExport(
+                        args[1], args[2], args[3], args[4],
+                        args.Length > 5 ? ParseInt(args[5], 0) : 0,
+                        args.Length > 6 ? ParseDouble(args[6], 2.0) : 2.0);
+                }
                 if (args.Length >= 4 && string.Equals(args[0], "--sentence-stream-eval", StringComparison.OrdinalIgnoreCase))
                 {
                     return RunSentenceStreamEval(
@@ -118,6 +125,11 @@ namespace TigerClaw.Core.Tests
                 SentenceDecoderRequiresExplicitSelectionForEveryCode();
                 SentenceDecoderKeepsFirstChoiceAheadOnShortCodes();
                 SentenceDecoderAppliesCharacterRewardInsideBeam();
+                SentenceSupplementParsesPerSchemaFile();
+                SentenceSupplementMatchesOverlapsAndRepeatedSingleCharacters();
+                SentenceSupplementRewardsInsideBeamWithoutChangingConfidence();
+                SentenceSupplementIncrementalMatchesFullRebuild();
+                SentenceSupplementSurvivesNeuralRerank();
                 SentenceDecoderUsesOnlyTheOptimalCharacterCode();
                 SentenceDecoderAllowsNonPrimaryCodesForRareCharacters();
                 SentenceDecoderIncrementalMatchesFullRebuild();
@@ -382,7 +394,13 @@ namespace TigerClaw.Core.Tests
             SentenceLexiconIndex index = SentenceLexiconIndex.Build(source);
             ISentenceLanguageModel model = SentenceNgramModel.Load(modelPath);
             long loadMilliseconds = watch.ElapsedMilliseconds;
-            var decoder = new SentenceInputDecoder(index, model);
+            SentenceSupplementMatcher supplementMatcher = SentenceSupplementMatcher.Build(
+                CoreRuntimeState.LoadSentenceSupplements(Path.GetDirectoryName(lexiconPath)));
+            var decoder = new SentenceInputDecoder(
+                index,
+                model,
+                emittedCharacterReward: 2.0,
+                supplementMatcher: supplementMatcher);
             watch.Restart();
             SentenceDecodeResult result = decoder.Decode(code, 20);
             watch.Stop();
@@ -395,6 +413,61 @@ namespace TigerClaw.Core.Tests
                 Console.WriteLine((indexValue + 1) + "\t" + candidate.Text + "\t" + candidate.FinalScore.ToString("F4"));
             }
             return result.Candidates.Length > 0 ? 0 : 2;
+        }
+
+        private static int RunSentencePoolExport(
+            string casesPath,
+            string modelPath,
+            string lexiconPath,
+            string outputPath,
+            int maximumCases,
+            double emittedCharacterReward)
+        {
+            List<EvalCaseDto> cases = LoadEvalCases(casesPath);
+            if (maximumCases > 0 && cases.Count > maximumCases)
+            {
+                cases = cases.Take(maximumCases).ToList();
+            }
+
+            SentenceLexiconIndex index = SentenceLexiconIndex.Build(
+                LoadSentenceLexiconSource(lexiconPath));
+            using (SentenceNgramModel model = SentenceNgramModel.Load(modelPath))
+            {
+                var decoder = new SentenceInputDecoder(
+                    index,
+                    model,
+                    emittedCharacterReward: emittedCharacterReward);
+                var rows = new List<string>(cases.Count);
+                for (int caseIndex = 0; caseIndex < cases.Count; caseIndex++)
+                {
+                    EvalCaseDto item = cases[caseIndex];
+                    SentenceDecodeResult decoded = decoder.Decode(item.Code, 5);
+                    string candidates = string.Join(
+                        ",",
+                        decoded.Candidates.Select(candidate =>
+                            "{\"text\":" + JsonString(candidate.Text) +
+                            ",\"base_score\":" + candidate.BaseScore.ToString(
+                                "G17",
+                                CultureInfo.InvariantCulture) + "}"));
+                    rows.Add(
+                        "{\"text\":" + JsonString(item.Text) +
+                        ",\"code\":" + JsonString(item.Code) +
+                        ",\"source\":" + JsonString(item.Source) +
+                        ",\"candidates\":[" + candidates + "]}");
+                    if ((caseIndex + 1) % 200 == 0)
+                    {
+                        Console.Error.WriteLine(
+                            "pool-export " + (caseIndex + 1) + "/" + cases.Count);
+                    }
+                }
+
+                File.WriteAllText(
+                    outputPath,
+                    "[" + string.Join(",", rows.ToArray()) + "]",
+                    new UTF8Encoding(false));
+            }
+
+            return 0;
         }
 
         private static int RunSentenceStreamEval(
@@ -2126,8 +2199,21 @@ namespace TigerClaw.Core.Tests
             SentenceDecodeResult right,
             string name)
         {
+            True(left.ConfidenceTruncated == right.ConfidenceTruncated, name + ".confidence_truncated");
             SentenceCandidate[] leftCandidates = left.Candidates ?? Array.Empty<SentenceCandidate>();
             SentenceCandidate[] rightCandidates = right.Candidates ?? Array.Empty<SentenceCandidate>();
+            AssertSentenceCandidateArraysEqual(leftCandidates, rightCandidates, name + ".visible");
+            AssertSentenceCandidateArraysEqual(
+                left.ConfidenceCandidates ?? Array.Empty<SentenceCandidate>(),
+                right.ConfidenceCandidates ?? Array.Empty<SentenceCandidate>(),
+                name + ".confidence");
+        }
+
+        private static void AssertSentenceCandidateArraysEqual(
+            SentenceCandidate[] leftCandidates,
+            SentenceCandidate[] rightCandidates,
+            string name)
+        {
             True(leftCandidates.Length == rightCandidates.Length, name + ".count");
             for (int index = 0; index < leftCandidates.Length; index++)
             {
@@ -2138,7 +2224,19 @@ namespace TigerClaw.Core.Tests
                     name + ".seg." + index);
                 True(
                     leftCandidates[index].FinalScore == rightCandidates[index].FinalScore,
-                    name + ".score." + index);
+                    name + ".final_score." + index);
+                True(
+                    leftCandidates[index].BaseScore == rightCandidates[index].BaseScore,
+                    name + ".base_score." + index);
+                True(
+                    leftCandidates[index].ConfidenceScore == rightCandidates[index].ConfidenceScore,
+                    name + ".confidence_score." + index);
+                True(
+                    leftCandidates[index].SupplementScore == rightCandidates[index].SupplementScore,
+                    name + ".supplement_score." + index);
+                True(
+                    leftCandidates[index].MaxLexiconRank == rightCandidates[index].MaxLexiconRank,
+                    name + ".max_rank." + index);
             }
         }
 
@@ -2171,6 +2269,22 @@ namespace TigerClaw.Core.Tests
                 }
 
                 return Math.Abs(hash % 997) + 1;
+            }
+        }
+
+        private sealed class SupplementPreferenceLanguageModel : ISentenceLanguageModel
+        {
+            public double LogProbability(string previous2, string previous1, string target)
+            {
+                return string.Equals(target, "茧", StringComparison.Ordinal) ||
+                       string.Equals(target, "师", StringComparison.Ordinal)
+                    ? -1.7
+                    : 0.0;
+            }
+
+            public bool HasObservedBigram(string previous, string target)
+            {
+                return false;
             }
         }
 
@@ -2613,6 +2727,163 @@ namespace TigerClaw.Core.Tests
                 "甲乙丁",
                 rewarded.Decode("abcdef").Candidates[0].Text,
                 nameof(SentenceDecoderAppliesCharacterRewardInsideBeam) + ".rewarded");
+        }
+
+        private static void SentenceSupplementParsesPerSchemaFile()
+        {
+            string directory = Path.Combine(
+                Path.GetTempPath(),
+                "tigerclaw-supplement-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+            try
+            {
+                string path = Path.Combine(directory, "补充语料.txt");
+                File.WriteAllText(
+                    path,
+                    "# comment\r\n茧师\t2000\r\n流行词\r\n单字   500\r\n坏权重 nope\r\n零 0\r\n茧师 3000\r\n",
+                    new UnicodeEncoding(false, true));
+
+                SentenceSupplementEntry[] entries = CoreRuntimeState.LoadSentenceSupplements(directory);
+                True(entries.Length == 3, nameof(SentenceSupplementParsesPerSchemaFile) + ".count");
+                SentenceSupplementEntry cocoon = entries.Single(entry => entry.Text == "茧师");
+                True(cocoon.Weight == 3000, nameof(SentenceSupplementParsesPerSchemaFile) + ".last_wins");
+                True(entries.Single(entry => entry.Text == "流行词").Weight == 1000,
+                    nameof(SentenceSupplementParsesPerSchemaFile) + ".default_weight");
+                True(entries.Single(entry => entry.Text == "单字").Weight == 500,
+                    nameof(SentenceSupplementParsesPerSchemaFile) + ".spaces");
+                True(CoreRuntimeState.IsSentenceSupplementFile(path),
+                    nameof(SentenceSupplementParsesPerSchemaFile) + ".skip_exact");
+                True(CoreRuntimeState.IsSentenceSupplementFile(Path.Combine(directory, "补充语料.TXT")),
+                    nameof(SentenceSupplementParsesPerSchemaFile) + ".skip_case");
+                True(!CoreRuntimeState.IsSentenceSupplementFile(Path.Combine(directory, "普通码表.txt")),
+                    nameof(SentenceSupplementParsesPerSchemaFile) + ".keep_lexicon");
+
+                File.WriteAllText(path, "无签名 1000\n", new UTF8Encoding(false));
+                entries = CoreRuntimeState.LoadSentenceSupplements(directory);
+                Equal("无签名", entries.Single().Text,
+                    nameof(SentenceSupplementParsesPerSchemaFile) + ".utf8_no_bom");
+
+                File.WriteAllText(path, "大端 1000\n", new UnicodeEncoding(true, true));
+                entries = CoreRuntimeState.LoadSentenceSupplements(directory);
+                Equal("大端", entries.Single().Text,
+                    nameof(SentenceSupplementParsesPerSchemaFile) + ".utf16_be");
+            }
+            finally
+            {
+                Directory.Delete(directory, true);
+            }
+        }
+
+        private static void SentenceSupplementMatchesOverlapsAndRepeatedSingleCharacters()
+        {
+            SentenceSupplementMatcher matcher = SentenceSupplementMatcher.Build(new[]
+            {
+                SentenceSupplementEntry.Create("师", 1000),
+                SentenceSupplementEntry.Create("茧师", 2000)
+            });
+
+            int state = matcher.Advance(0, "茧", out double first);
+            state = matcher.Advance(state, "师", out double overlap);
+            state = matcher.Advance(state, "师", out double repeatedSingle);
+            True(first == 0.0,
+                nameof(SentenceSupplementMatchesOverlapsAndRepeatedSingleCharacters) + ".prefix");
+            True(overlap > 10.3 && overlap < 10.4,
+                nameof(SentenceSupplementMatchesOverlapsAndRepeatedSingleCharacters) + ".max_overlap");
+            True(repeatedSingle == 9.0,
+                nameof(SentenceSupplementMatchesOverlapsAndRepeatedSingleCharacters) + ".single_repeat");
+        }
+
+        private static void SentenceSupplementRewardsInsideBeamWithoutChangingConfidence()
+        {
+            SentenceInputDecoder baseline = CreateSupplementDecoder(SentenceSupplementMatcher.Empty);
+            SentenceInputDecoder rewarded = CreateSupplementDecoder(SentenceSupplementMatcher.Build(new[]
+            {
+                SentenceSupplementEntry.Create("茧师", 1000)
+            }));
+
+            SentenceDecodeResult before = baseline.Decode("abcdef", 20);
+            SentenceDecodeResult after = rewarded.Decode("abcdef", 20);
+            Equal("齿烧", before.Candidates[0].Text,
+                nameof(SentenceSupplementRewardsInsideBeamWithoutChangingConfidence) + ".baseline");
+            Equal("茧师", after.Candidates[0].Text,
+                nameof(SentenceSupplementRewardsInsideBeamWithoutChangingConfidence) + ".rewarded");
+
+            SentenceCandidate beforeTarget = before.Candidates.Single(candidate => candidate.Text == "茧师");
+            SentenceCandidate afterTarget = after.Candidates.Single(candidate => candidate.Text == "茧师");
+            True(Math.Abs(afterTarget.SupplementScore - 9.0) < 1e-9,
+                nameof(SentenceSupplementRewardsInsideBeamWithoutChangingConfidence) + ".reward");
+            True(Math.Abs(afterTarget.ConfidenceScore - beforeTarget.ConfidenceScore) < 1e-12,
+                nameof(SentenceSupplementRewardsInsideBeamWithoutChangingConfidence) + ".confidence");
+            True(Math.Abs((afterTarget.BaseScore - beforeTarget.BaseScore) - 9.0) < 1e-9,
+                nameof(SentenceSupplementRewardsInsideBeamWithoutChangingConfidence) + ".base_score");
+        }
+
+        private static void SentenceSupplementIncrementalMatchesFullRebuild()
+        {
+            SentenceSupplementMatcher matcher = SentenceSupplementMatcher.Build(new[]
+            {
+                SentenceSupplementEntry.Create("茧师", 1000),
+                SentenceSupplementEntry.Create("师", 500)
+            });
+            SentenceInputDecoder decoder = CreateSupplementDecoder(matcher);
+            decoder.Decode("abcde", 20);
+            AssertSentenceResultsEqual(
+                decoder.Decode("abcdef", 20),
+                decoder.DecodeFull("abcdef", 20),
+                nameof(SentenceSupplementIncrementalMatchesFullRebuild) + ".append");
+            decoder.Decode("abcd", 20);
+            AssertSentenceResultsEqual(
+                decoder.Decode("abcdef", 20),
+                decoder.DecodeFull("abcdef", 20),
+                nameof(SentenceSupplementIncrementalMatchesFullRebuild) + ".backspace_append");
+        }
+
+        private static void SentenceSupplementSurvivesNeuralRerank()
+        {
+            var state = new CoreRuntimeState();
+            True(state.TrySetConfigValue("整句输入", "是", out _, out string reason),
+                nameof(SentenceSupplementSurvivesNeuralRerank) + ": " + reason);
+            SentenceSupplementMatcher matcher = SentenceSupplementMatcher.Build(new[]
+            {
+                SentenceSupplementEntry.Create("茧师", 1000)
+            });
+            var engine = new InputMethodEngine(state, CreateSupplementDecoder(matcher));
+            var reranker = new RecordingSentenceRerankService();
+            engine.SetSentenceRerankService(reranker);
+            TypeLetters(engine, "abcdef");
+
+            True(reranker.LastRequest != null && reranker.LastRequest.Candidates.Length == 2,
+                nameof(SentenceSupplementSurvivesNeuralRerank) + ".request");
+            var scores = new double[reranker.LastRequest.Candidates.Length];
+            for (int index = 0; index < scores.Length; index++)
+            {
+                scores[index] = reranker.LastRequest.Candidates[index] == "茧师"
+                    ? -37.90426359899996
+                    : -35.9985714209704;
+            }
+            True(engine.ApplySentenceNeuralScores(
+                    reranker.LastRequest.Generation,
+                    "abcdef",
+                    scores),
+                nameof(SentenceSupplementSurvivesNeuralRerank) + ".accepted");
+            Equal("茧师", engine.GetUiSnapshot(5).Candidates[0],
+                nameof(SentenceSupplementSurvivesNeuralRerank) + ".top");
+        }
+
+        private static SentenceInputDecoder CreateSupplementDecoder(SentenceSupplementMatcher matcher)
+        {
+            return new SentenceInputDecoder(
+                SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
+                {
+                    ["ab"] = new List<string> { "齿" },
+                    ["cdef"] = new List<string> { "烧" },
+                    ["abc"] = new List<string> { "茧" },
+                    ["def"] = new List<string> { "师" }
+                }),
+                new SupplementPreferenceLanguageModel(),
+                beamWidth: 100,
+                isolationPenalty: SentenceIsolationPenalty.None,
+                supplementMatcher: matcher);
         }
 
         private static void SentenceDecoderReportsTruncatedConfidenceMass()

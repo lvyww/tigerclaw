@@ -305,12 +305,39 @@ def default_output() -> Path:
     return Path(__file__).resolve().parents[1] / "rime" / "tiger_sentence"
 
 
+def default_supplement() -> Path:
+    return (
+        Path(__file__).resolve().parents[1]
+        / "release_arm64"
+        / "码表"
+        / "虎整句"
+        / "补充语料.txt"
+    )
+
+
+def write_supplement(source: Path, output: Path) -> None:
+    purpose_comment = (
+        "# 本文件用于提升虎整句中模型未收录的新词、流行词和个人常用词；"
+        "格式为“词条 [权重]”，省略权重时默认为 1000。"
+    )
+    lines: List[str] = []
+    if source.is_file():
+        for raw_line in source.read_text(encoding="utf-8-sig").splitlines():
+            line = raw_line.rstrip()
+            if line:
+                lines.append(line)
+    if purpose_comment not in lines:
+        lines.insert(0, purpose_comment)
+    output.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", type=Path, default=default_source())
     parser.add_argument("--output", type=Path, default=default_output())
     parser.add_argument("--common-chars", type=Path, default=default_common_chars())
     parser.add_argument("--char-ranks", type=Path, default=default_char_ranks())
+    parser.add_argument("--supplement", type=Path, default=default_supplement())
     args = parser.parse_args()
     if not args.source.is_file():
         raise SystemExit("source lexicon not found: %s" % args.source)
@@ -322,6 +349,7 @@ def main() -> int:
     (args.output / "lua").mkdir(parents=True, exist_ok=True)
     write_lua_lexicon(args.output / "lua" / "tiger_sentence_lexicon.lua", filtered)
     write_rime_dict(args.output / "tiger_sentence.dict.yaml", filtered)
+    write_supplement(args.supplement, args.output / "tiger_sentence.supplement.txt")
     char_ranks = load_character_ranks(args.char_ranks)
     write_lua_ranks(args.output / "lua" / "tiger_sentence_ranks.lua", char_ranks)
     if char_ranks.get("的") != 1:

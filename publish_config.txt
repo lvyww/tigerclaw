@@ -1,6 +1,6 @@
 # Publish configuration for publish.bat
 # UTC format: yyyy-MM-ddTHH:mm:ssZ
-trial_expire_utc=2027-01-03T16:00:00Z
+trial_expire_utc=2027-01-07T16:00:00Z
 # 0: off (recommended for release performance), 1: on
 text_log_enabled=0
 # 0: skip core hash verification, 1: enforce core hash verification

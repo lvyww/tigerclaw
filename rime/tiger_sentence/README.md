@@ -10,7 +10,11 @@ python3 tools/export_tiger_sentence_rime.py
 
 ## 部署到小狼毫
 
-把本目录的 `tiger_sentence.schema.yaml`、`tiger_sentence.dict.yaml`、`rime.lua` 拷到 `%APPDATA%\Rime`，把 `lua\` 拷到 `%APPDATA%\Rime\lua`，再在 `default.custom.yaml` 里加入 `tiger_sentence`，然后「重新部署」。默认把编码显示在候选窗口；用户自行开启 `inline_preedit` / `preedit_type: composition` 时，Lua 仍通过 `Candidate.preedit` 维护当前候选的分段编码和提前上屏后的实时尾码。
+把本目录的 `tiger_sentence.schema.yaml`、`tiger_sentence.dict.yaml`、`tiger_sentence.supplement.txt`、`rime.lua` 拷到 `%APPDATA%\Rime`，把 `lua\` 拷到 `%APPDATA%\Rime\lua`，再在 `default.custom.yaml` 里加入 `tiger_sentence`，然后「重新部署」。默认把编码显示在候选窗口；用户自行开启 `inline_preedit` / `preedit_type: composition` 时，Lua 仍通过 `Candidate.preedit` 维护当前候选的分段编码和提前上屏后的实时尾码。
+
+## 补充语料
+
+用户目录根部的 `tiger_sentence.supplement.txt` 用于提升模型尚未覆盖的新词、流行词和个人词语。文件使用 UTF-8 编码，每行格式为 `词条 [权重]`，词条与可选正整数权重之间用空格或制表符分隔；省略权重时默认为 1000，空行和 `#` 注释会被忽略，重复词条以最后一行为准。用户明确写入的词条视为强偏好，奖励公式与 Windows Core 一致：`clamp(9.0 + 2.0 * ln(weight / 1000), 0, 16)`。奖励参与 Beam 排序但不计入置信度，文件不存在时保持原排序和快速路径。修改后重新部署以重新加载 Lua 模块。
 
 ## 按键
 
@@ -48,6 +52,6 @@ python3 tools/convert_sentence_ngram_mobile.py \
 4. 上述位置对应的 `sentence-ngram-v2.bin`
 5. 开发机 `C:\Archive\tigerclaw_sentence_ml\runtime` 下的 mobile、再到原模型
 
-当前是纯 Lua 查表。解码对准确率无损：增量复用格网（追加只重解后缀、退格直接取前缀状态），缓存精确 KN logp 和真实二元组查询，并缓存分页模型的上下文位置；这些缓存都有固定上限，防止长时间使用后持续增长。码表候选的选重过滤和 UTF-8 拆分也会按词条复用。EOS 只在出候选时另算，不写回 beam。Beam 扩展时每输出一个 Unicode 字符增加 2.0 分，与 Core 使用相同的编码条件长度先验，抵消同码候选中纯语言模型对短文本的偏好。出候选时再减去与 Core 相同的孤立生僻字惩罚：字频排名大于 3000、且左右都没有模型里真实出现过的二元组，每个字减 2。字频表由导出脚本写成 `lua/tiger_sentence_ranks.lua`。短码全检索与首选优先规则也与 Core 一致。不要把大模型提交进 Git。
+当前是纯 Lua 查表。解码对准确率无损：增量复用格网，追加时只生成跨过旧输入末端的新边，避免旧路径被重复计入置信度；退格直接取前缀状态。高歧义位置在扩展期间自适应合并相同文本，使用确定性的精确 Top-K 选择而不排序随后会丢弃的状态，处理完再冻结成紧凑数组，避免字典常驻整段 composition。缓存精确 KN logp 和真实二元组查询，并缓存分页模型的上下文位置；这些缓存都有固定上限，防止长时间使用后持续增长。码表候选的选重过滤和 UTF-8 拆分也会按词条复用。EOS 只在出候选时另算，不写回 beam。Beam 扩展时每输出一个 Unicode 字符增加 2.0 分，与 Core 使用相同的编码条件长度先验，抵消同码候选中纯语言模型对短文本的偏好。出候选时再减去与 Core 相同的孤立生僻字惩罚：字频排名大于 3000、且左右都没有模型里真实出现过的二元组，每个字减 2。字频表由导出脚本写成 `lua/tiger_sentence_ranks.lua`。短码全检索与首选优先规则也与 Core 一致。不要把大模型提交进 Git。
 
 增量一致性测试默认允许无模型降级，并明确打印实际加载状态；需要验证真实模型时使用支持 `string.unpack` 和 `utf8` 的 Lua 5.3+ 执行 `lua tools/test_tiger_sentence_incremental.lua . --require-model`。LuaJIT 2.1 不具备这两个标准库 API，只适合测试无模型路径。

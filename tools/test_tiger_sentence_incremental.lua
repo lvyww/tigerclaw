@@ -10,6 +10,14 @@ for i = 2, #arg do
 end
 package.path = repo .. "/rime/tiger_sentence/lua/?.lua;" .. package.path
 
+-- Mirror a real frontend so the decoder also exercises the default
+-- per-schema supplemental corpus during incremental/full parity checks.
+rime_api = {
+    get_user_data_dir = function()
+        return repo .. "/rime/tiger_sentence"
+    end
+}
+
 local sentence = require("tiger_sentence")
 
 local samples = {
@@ -75,6 +83,37 @@ else
         fail("a real sentence n-gram model was required but could not be loaded")
     end
 end
+
+local supplement_status = sentence.supplement_status()
+if supplement_status.count < 1 then
+    fail(string.format(
+        "supplement count expected at least 1, got %d (%s)",
+        supplement_status.count or -1,
+        supplement_status.error or "no error"))
+end
+local supplement_candidates = sentence.decode_full("lccpf")
+local supplement_target = nil
+for i = 1, #supplement_candidates do
+    if supplement_candidates[i].text == "茧师" then
+        supplement_target = supplement_candidates[i]
+        break
+    end
+end
+if not supplement_target then
+    fail("supplement target 茧师 was not decoded from lccpf")
+end
+local expected_supplement = 9.0 + 2.0 * math.log(3.0)
+if math.abs((supplement_target.supplement_score or 0.0) - expected_supplement) > 1e-9 then
+    fail(string.format(
+        "supplement reward expected %.9f, got %.9f",
+        expected_supplement,
+        supplement_target.supplement_score or 0.0))
+end
+if math.abs(
+    supplement_target.score - supplement_target.confidence_score - expected_supplement) > 1e-9 then
+    fail("supplement reward leaked into confidence mass")
+end
+print("OK  supplemental corpus loaded, ranked, and excluded from confidence mass")
 
 for i = 1, #samples do
     sentence.reset_decode_cache()
