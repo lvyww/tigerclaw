@@ -252,6 +252,11 @@ Still-useful external documents:
 - `reference/README.md`: explains reference-only source trees.
 - `rust/TigerClaw.Core.Rust/HANDOFF.md`: Rust Core-specific architecture,
   parity gaps, build commands and replacement smoke-test procedure.
+- `docs/FCITX5_ANDROID_PORTING_PLAN.md`: implementation and acceptance plan
+  for the standalone native Fcitx5 Android sentence-input plugin.
+- `docs/FCITX5_ANDROID_BASELINE.md`: frozen commits and model hashes for that port.
+- `docs/sentence_golden_v1.md`: JSONL golden-snapshot format used to lock
+  C# decoder behavior before the C++ core is written.
 
 Archived or historical documents live under `docs/archive/` when present. Do not treat them as current implementation guidance.
 

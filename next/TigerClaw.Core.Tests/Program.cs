@@ -14,12 +14,17 @@ using TigerClaw.Core;
 
 namespace TigerClaw.Core.Tests
 {
-    internal static class Program
+    internal static partial class Program
     {
         private static int Main(string[] args)
         {
             try
             {
+                if (args.Length >= 1 &&
+                    string.Equals(args[0], "--sentence-golden-export", StringComparison.OrdinalIgnoreCase))
+                {
+                    return RunSentenceGoldenExport(args.Length > 1 ? args[1] : null);
+                }
                 if (args.Length == 4 && string.Equals(args[0], "--sentence-smoke", StringComparison.OrdinalIgnoreCase))
                 {
                     return RunSentenceSmoke(args[1], args[2], args[3]);
@@ -160,6 +165,8 @@ namespace TigerClaw.Core.Tests
                 SentenceEngineHoldsPreviousCandidatesWhileDecodeIsPending();
                 SentenceEngineKeepsPreviousSegmentationWhileDecodeIsPending();
                 SentenceAutoEnableUsesSchemaNameWithoutChangingSwitch();
+                SentenceGoldenExportIsDeterministic();
+                SentenceGoldenCasesIncrementalMatchesFull();
                 Console.WriteLine("TigerClaw.Core.Tests: all tests passed.");
                 return 0;
             }
