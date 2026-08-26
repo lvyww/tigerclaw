@@ -1,6 +1,6 @@
 # 虎爪整句 Fcitx5 Android 移植计划
 
-状态：阶段 0–3 实施中  
+状态：阶段 4–7 代码已落地，待真机验收与正式签名发布  
 编写日期：2026-08-27  
 TigerClaw 源仓库：`/mnt/c/users/yc/desktop/bime_codex_src_20260513`  
 Fcitx5 Android 目标仓库：`/home/yc/fx5/fcitx5-android`
