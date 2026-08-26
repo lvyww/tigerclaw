@@ -559,6 +559,67 @@ namespace TigerClaw.Core.Tests
             return value.ToString("G17", CultureInfo.InvariantCulture);
         }
 
+        private static int RunSentenceKnProbe(string modelPath, string outputPath)
+        {
+            using (SentenceNgramModel model = SentenceNgramModel.Load(modelPath))
+            {
+                string[] tokens = { "\x02", "的", "是", "我", "那", "a", "\x03" };
+                var lines = new List<string>();
+                for (int i = 0; i < tokens.Length; i++)
+                {
+                    for (int j = 0; j < tokens.Length; j++)
+                    {
+                        for (int k = 0; k < tokens.Length; k++)
+                        {
+                            lines.Add(FormatKnProbeLine(model, tokens[i], tokens[j], tokens[k], true));
+                        }
+                    }
+                }
+
+                lines.Add(FormatKnProbeLine(model, "\x02", "\x02", "的", false));
+                Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outputPath)));
+                File.WriteAllBytes(outputPath, Encoding.UTF8.GetBytes(string.Join("\n", lines.ToArray()) + "\n"));
+                Console.WriteLine("wrote " + lines.Count + " kn probes to " + outputPath);
+            }
+
+            return 0;
+        }
+
+        private static string FormatKnProbeLine(
+            SentenceNgramModel model,
+            string prev2,
+            string prev1,
+            string target,
+            bool includeUnigram)
+        {
+            double logp = model.LogProbability(prev2, prev1, target, includeUnigram);
+            bool observed = model.HasObservedBigram(prev1, target);
+            return "{" +
+                "\"prev2\":" + ProbeToken(prev2) + "," +
+                "\"prev1\":" + ProbeToken(prev1) + "," +
+                "\"target\":" + ProbeToken(target) + "," +
+                "\"include_unigram\":" + (includeUnigram ? "true" : "false") + "," +
+                "\"logp\":" + FormatScore(logp) + "," +
+                "\"prob\":" + FormatScore(Math.Exp(logp)) + "," +
+                "\"observed_bigram\":" + (observed ? "true" : "false") +
+                "}";
+        }
+
+        private static string ProbeToken(string value)
+        {
+            if (value == "\x02")
+            {
+                return "\"\\u0002\"";
+            }
+
+            if (value == "\x03")
+            {
+                return "\"\\u0003\"";
+            }
+
+            return JsonString(value);
+        }
+
         private sealed class GoldenCase
         {
             public string Id;

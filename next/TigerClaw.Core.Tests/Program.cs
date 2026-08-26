@@ -25,6 +25,11 @@ namespace TigerClaw.Core.Tests
                 {
                     return RunSentenceGoldenExport(args.Length > 1 ? args[1] : null);
                 }
+                if (args.Length >= 3 &&
+                    string.Equals(args[0], "--sentence-kn-probe", StringComparison.OrdinalIgnoreCase))
+                {
+                    return RunSentenceKnProbe(args[1], args[2]);
+                }
                 if (args.Length == 4 && string.Equals(args[0], "--sentence-smoke", StringComparison.OrdinalIgnoreCase))
                 {
                     return RunSentenceSmoke(args[1], args[2], args[3]);
