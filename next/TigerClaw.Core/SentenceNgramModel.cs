@@ -4,7 +4,6 @@ using System.Diagnostics;
 using System.IO;
 using System.IO.MemoryMappedFiles;
 using System.Text;
-using System.Threading;
 
 namespace TigerClaw.Core
 {
@@ -460,8 +459,8 @@ namespace TigerClaw.Core
 
             internal bool TryGetValue(ulong key, out T value)
             {
-                Entry entry = Volatile.Read(ref _entries[GetIndex(key)]);
-                if (entry != null && entry.Key == key)
+                Entry entry = _entries[GetIndex(key)];
+                if (entry.Occupied && entry.Key == key)
                 {
                     value = entry.Value;
                     return true;
@@ -473,7 +472,15 @@ namespace TigerClaw.Core
 
             internal void Set(ulong key, T value)
             {
-                Volatile.Write(ref _entries[GetIndex(key)], new Entry(key, value));
+                // SentenceInputDecoder serializes worker and synchronous access
+                // with its decode lock. Keeping entries inline therefore avoids
+                // a heap object on every cache miss without adding cache locks.
+                _entries[GetIndex(key)] = new Entry
+                {
+                    Key = key,
+                    Value = value,
+                    Occupied = true
+                };
             }
 
             private int GetIndex(ulong key)
@@ -489,16 +496,11 @@ namespace TigerClaw.Core
                 }
             }
 
-            private sealed class Entry
+            private struct Entry
             {
-                internal readonly ulong Key;
-                internal readonly T Value;
-
-                internal Entry(ulong key, T value)
-                {
-                    Key = key;
-                    Value = value;
-                }
+                internal ulong Key;
+                internal T Value;
+                internal bool Occupied;
             }
         }
 

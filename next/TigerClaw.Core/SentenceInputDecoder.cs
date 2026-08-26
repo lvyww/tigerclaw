@@ -35,6 +35,7 @@ namespace TigerClaw.Core
     {
         public string Text { get; set; }
         public int Rank { get; set; }
+        public double LogRank { get; set; }
         public string[] TextElements { get; set; }
     }
 
@@ -153,6 +154,7 @@ namespace TigerClaw.Core
                         {
                             Text = text,
                             Rank = index + 1,
+                            LogRank = Math.Log(index + 1.0),
                             TextElements = SplitTextElements(text)
                         });
                     }
@@ -335,7 +337,6 @@ namespace TigerClaw.Core
             public double Score;
             public double LogMass;
             public string Text;
-            public string SegmentedCode;
             public string Previous2;
             public string Previous1;
             public int SupplementState;
@@ -356,12 +357,19 @@ namespace TigerClaw.Core
             private List<BeamState> _pending = new List<BeamState>();
             private Dictionary<string, BeamState> _bestByText;
             private bool _wasTruncated;
+            private bool _isFrozen;
 
             public void Add(BeamState item)
             {
                 if (item == null)
                 {
                     return;
+                }
+
+                if (_isFrozen)
+                {
+                    _isFrozen = false;
+                    EnsureAggregated();
                 }
 
                 if (_bestByText == null)
@@ -381,6 +389,12 @@ namespace TigerClaw.Core
 
             public List<BeamState> Limit(int limit, out bool truncated)
             {
+                if (_isFrozen)
+                {
+                    truncated = _wasTruncated;
+                    return _pending;
+                }
+
                 EnsureAggregated();
                 int boundedLimit = Math.Max(1, limit);
                 var values = _bestByText.Values.ToList();
@@ -402,6 +416,7 @@ namespace TigerClaw.Core
                 // incremental rebuild will aggregate it again only if needed.
                 _pending = values;
                 _bestByText = null;
+                _isFrozen = true;
                 return values;
             }
 
@@ -672,7 +687,6 @@ namespace TigerClaw.Core
                 Score = 0.0,
                 LogMass = 0.0,
                 Text = string.Empty,
-                SegmentedCode = string.Empty,
                 Previous2 = Bos,
                 Previous1 = Bos,
                 MaxLexiconRank = 1
@@ -763,8 +777,6 @@ namespace TigerClaw.Core
                         continue;
                     }
 
-                    string segmentedPiece = raw.Substring(position, consumedEnd - position);
-
                     foreach (BeamState item in current)
                     {
                         foreach (SentenceLexiconCandidate candidate in candidates)
@@ -803,7 +815,7 @@ namespace TigerClaw.Core
 
                             if (selectedRank == 0)
                             {
-                                score -= _rankPenalty * Math.Log(1.0 + candidate.Rank - 1);
+                                score -= _rankPenalty * candidate.LogRank;
                             }
 
                             states[consumedEnd].Add(new BeamState
@@ -811,9 +823,6 @@ namespace TigerClaw.Core
                                 Score = score,
                                 LogMass = item.LogMass + (score - item.Score - supplementAdded),
                                 Text = item.Text + candidate.Text,
-                                SegmentedCode = JoinSegmentedCode(
-                                    item.SegmentedCode,
-                                    segmentedPiece),
                                 Previous2 = previous2,
                                 Previous1 = previous1,
                                 SupplementState = supplementState,
@@ -907,10 +916,18 @@ namespace TigerClaw.Core
                     requiredTextPrefix);
             }
 
+            SentenceCandidate[] visible = SelectExactTopCandidates(
+                result,
+                Math.Max(1, candidateLimit));
+            foreach (SentenceCandidate candidate in visible)
+            {
+                candidate.SegmentedCode = BuildSegmentedCode(normalized, candidate.Boundary);
+            }
+
             return new SentenceDecodeResult
             {
                 RawCode = normalized,
-                Candidates = SelectExactTopCandidates(result, Math.Max(1, candidateLimit)),
+                Candidates = visible,
                 EarlyCommitEvidence = earlyCommitEvidence,
                 ExpandedStates = expandedStates
             };
@@ -924,7 +941,6 @@ namespace TigerClaw.Core
             return new SentenceCandidate
             {
                 Text = item.Text,
-                SegmentedCode = item.SegmentedCode,
                 BaseScore = score,
                 FinalScore = score,
                 ConfidenceScore = item.LogMass + endingAdjustment,
@@ -1301,19 +1317,30 @@ namespace TigerClaw.Core
             return compared != 0 ? compared : string.CompareOrdinal(left.Text, right.Text);
         }
 
-        private static string JoinSegmentedCode(string prefix, string piece)
+        private static string BuildSegmentedCode(string raw, SentencePathBoundary boundary)
         {
-            if (string.IsNullOrEmpty(prefix))
+            if (string.IsNullOrEmpty(raw) || boundary == null)
             {
-                return piece ?? string.Empty;
+                return string.Empty;
             }
 
-            if (string.IsNullOrEmpty(piece))
+            var ends = new List<int>();
+            while (boundary != null)
             {
-                return prefix;
+                ends.Add(boundary.RawLength);
+                boundary = boundary.Previous;
             }
+            ends.Reverse();
 
-            return prefix + " " + piece;
+            var pieces = new string[ends.Count];
+            int start = 0;
+            for (int index = 0; index < ends.Count; index++)
+            {
+                int end = ends[index];
+                pieces[index] = raw.Substring(start, end - start);
+                start = end;
+            }
+            return string.Join(" ", pieces);
         }
 
         private static string NormalizeRawCode(string rawCode)

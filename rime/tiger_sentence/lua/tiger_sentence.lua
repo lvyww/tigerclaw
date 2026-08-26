@@ -16,6 +16,7 @@ local EOS = kn_reader.EOS
 local kn_model = false
 local kn_load_error = nil
 local supplement_matcher = supplement.load_default()
+local has_supplements = (supplement_matcher.count or 0) > 0
 local max_code_len = 1
 for i = 1, #lexicon.lengths do
     if lexicon.lengths[i] > max_code_len then
@@ -407,6 +408,10 @@ local function ensure_aggregated(bucket)
 end
 
 local function add_state(bucket, item)
+    if bucket._frozen then
+        bucket._frozen = nil
+        ensure_aggregated(bucket)
+    end
     if bucket._best then
         add_aggregated(bucket, item)
         return
@@ -467,6 +472,9 @@ local function dedup_limit(bucket, limit)
     if not bucket then
         return new_bucket()
     end
+    if bucket._frozen then
+        return bucket
+    end
     ensure_aggregated(bucket)
     local result = {}
     for i = 1, #bucket._order do
@@ -487,6 +495,7 @@ local function dedup_limit(bucket, limit)
         limited[i] = result[i]
     end
     limited._truncated = truncated
+    limited._frozen = true
     return limited
 end
 
@@ -499,7 +508,6 @@ local function new_states(length)
         score = 0,
         mass_score = 0,
         text = "",
-        segmented = "",
         prev2 = BOS,
         prev1 = BOS,
         max_rank = 1,
@@ -542,23 +550,21 @@ local function expand_range(raw, states, from_pos, length, minimum_consumed_end)
                                     for ci = 1, #chars do
                                         score = score + logp(prev2, prev1, chars[ci])
                                         score = score + emitted_character_reward
-                                        local supplement_reward
-                                        supplement_state, supplement_reward = supplement.advance(
-                                            supplement_matcher, supplement_state, chars[ci])
-                                        score = score + supplement_reward
-                                        supplement_added = supplement_added + supplement_reward
+                                        if has_supplements then
+                                            local supplement_reward
+                                            supplement_state, supplement_reward = supplement.advance(
+                                                supplement_matcher, supplement_state, chars[ci])
+                                            score = score + supplement_reward
+                                            supplement_added = supplement_added + supplement_reward
+                                        end
                                         prev2 = prev1
                                         prev1 = chars[ci]
                                     end
                                     if selected_rank == 0 then
-                                        score = score - rank_penalty * math.log(1.0 + candidate.r - 1)
-                                    end
-                                    local piece = raw:sub(position + 1, consumed_end)
-                                    local segmented = item.segmented
-                                    if segmented == "" then
-                                        segmented = piece
-                                    else
-                                        segmented = segmented .. " " .. piece
+                                        if candidate._log_rank == nil then
+                                            candidate._log_rank = math.log(candidate.r)
+                                        end
+                                        score = score - rank_penalty * candidate._log_rank
                                     end
                                     local text = item.text .. candidate.t
                                     add_state(states[consumed_end], {
@@ -566,7 +572,6 @@ local function expand_range(raw, states, from_pos, length, minimum_consumed_end)
                                         mass_score = (item.mass_score or item.score) +
                                             score - item.score - supplement_added,
                                         text = text,
-                                        segmented = segmented,
                                         prev2 = prev2,
                                         prev1 = prev1,
                                         max_rank = math.max(item.max_rank or 1, candidate.r),
@@ -590,6 +595,25 @@ end
 local confidence_proposal
 local raw_lengths_for_proposal
 
+local function segmented_from_path(raw, path)
+    if not raw or raw == "" or not path then
+        return ""
+    end
+    local ends = {}
+    while path and (path.raw_length or 0) > 0 do
+        ends[#ends + 1] = path.raw_length
+        path = path.previous
+    end
+    local pieces = {}
+    local start = 1
+    for index = #ends, 1, -1 do
+        local finish = ends[index]
+        pieces[#pieces + 1] = raw:sub(start, finish)
+        start = finish + 1
+    end
+    return table.concat(pieces, " ")
+end
+
 local function evaluate_state(item)
     local ending_adjustment = logp(item.prev2, item.prev1, EOS) -
         isolation_penalty(item.text)
@@ -597,7 +621,6 @@ local function evaluate_state(item)
         score = item.score + ending_adjustment,
         confidence_score = (item.mass_score or item.score) + ending_adjustment,
         text = item.text,
-        segmented = item.segmented,
         prev2 = item.prev2,
         prev1 = item.prev1,
         max_rank = math.max(1, item.max_rank or 1),
@@ -692,6 +715,9 @@ local function emit(raw, states, length, include_early_commit, required_text_pre
         all_candidates[i] = evaluate_state(completed[i])
     end
     local result = select_exact_top(all_candidates, candidate_limit)
+    for i = 1, #result do
+        result[i].segmented = segmented_from_path(raw, result[i].path)
+    end
     result.early_commit_evidence = {
         proposal = "",
         raw_lengths = {},
