@@ -42,7 +42,8 @@ local decode_cache = {
     raw = nil,
     states = nil,
     result = nil,
-    includes_early_commit = false
+    includes_early_commit = false,
+    required_text_prefix = ""
 }
 local state_separator = "\31"
 
@@ -586,32 +587,43 @@ local function expand_range(raw, states, from_pos, length, minimum_consumed_end)
     end
 end
 
-local function add_early_commit_states(values, mass_by_text, best_by_text)
+local confidence_proposal
+local raw_lengths_for_proposal
+
+local function evaluate_state(item)
+    local ending_adjustment = logp(item.prev2, item.prev1, EOS) -
+        isolation_penalty(item.text)
+    return {
+        score = item.score + ending_adjustment,
+        confidence_score = (item.mass_score or item.score) + ending_adjustment,
+        text = item.text,
+        segmented = item.segmented,
+        prev2 = item.prev2,
+        prev1 = item.prev1,
+        max_rank = math.max(1, item.max_rank or 1),
+        supplement_score = item.supplement_score or 0.0,
+        path = item
+    }
+end
+
+local function add_early_commit_states(
+    values, required_text_prefix, mass_by_text, best_by_text)
     for i = 1, #values do
         local item = values[i]
-        if item.text and item.text ~= "" then
-            local ending_adjustment = logp(item.prev2, item.prev1, EOS) -
-                isolation_penalty(item.text)
-            local confidence_score = (item.mass_score or item.score) + ending_adjustment
+        local candidate = item.confidence_score and item or evaluate_state(item)
+        if candidate.text and candidate.text ~= "" and
+            (required_text_prefix == "" or
+             candidate.text:sub(1, #required_text_prefix) == required_text_prefix) then
+            local confidence_score = candidate.confidence_score
             local previous_mass = mass_by_text[item.text]
             if previous_mass == nil then
-                mass_by_text[item.text] = confidence_score
+                mass_by_text[candidate.text] = confidence_score
             else
-                mass_by_text[item.text] = logsumexp(previous_mass, confidence_score)
+                mass_by_text[candidate.text] = logsumexp(previous_mass, confidence_score)
             end
-            local previous = best_by_text[item.text]
+            local previous = best_by_text[candidate.text]
             if not previous or confidence_score > previous.confidence_score then
-                best_by_text[item.text] = {
-                    score = item.score + ending_adjustment,
-                    confidence_score = confidence_score,
-                    text = item.text,
-                    segmented = item.segmented,
-                    prev2 = item.prev2,
-                    prev1 = item.prev1,
-                    max_rank = math.max(1, item.max_rank or 1),
-                    supplement_score = item.supplement_score or 0.0,
-                    path = item
-                }
+                best_by_text[candidate.text] = candidate
             end
         end
     end
@@ -625,12 +637,14 @@ local function incomplete_code_tail(tail)
     return #tail < 2 or lexicon.codes[tail] == nil
 end
 
-local function build_early_commit_candidates(raw, states, completed)
+local function build_early_commit_evidence(
+    raw, states, completed, completed_truncated, required_text_prefix)
     local mass_by_text = {}
     local best_by_text = {}
-    local truncated = completed._truncated or false
+    local truncated = completed_truncated or false
     local uses_incomplete_tail = false
-    add_early_commit_states(completed, mass_by_text, best_by_text)
+    add_early_commit_states(
+        completed, required_text_prefix, mass_by_text, best_by_text)
 
     local maximum_tail_length = math.min(max_code_len - 1, #raw - 1)
     for tail_length = 1, maximum_tail_length do
@@ -642,13 +656,10 @@ local function build_early_commit_candidates(raw, states, completed)
             if #partial > 0 then
                 uses_incomplete_tail = true
                 truncated = truncated or (partial._truncated or false)
-                add_early_commit_states(partial, mass_by_text, best_by_text)
+                add_early_commit_states(
+                    partial, required_text_prefix, mass_by_text, best_by_text)
             end
         end
-    end
-
-    if not uses_incomplete_tail then
-        return {}, false, false, false
     end
 
     local candidates = {}
@@ -656,67 +667,43 @@ local function build_early_commit_candidates(raw, states, completed)
         candidate.confidence_score = mass_by_text[text]
         candidates[#candidates + 1] = candidate
     end
-    table.sort(candidates, function(left, right)
-        if left.confidence_score == right.confidence_score then
-            return left.text < right.text
-        end
-        return left.confidence_score > right.confidence_score
-    end)
-    return candidates, truncated, true
+    if uses_incomplete_tail then
+        table.sort(candidates, function(left, right)
+            if left.confidence_score == right.confidence_score then
+                return left.text < right.text
+            end
+            return left.confidence_score > right.confidence_score
+        end)
+    else
+        table.sort(candidates, state_better)
+    end
+    local proposal = confidence_proposal(candidates, 0.995)
+    return {
+        proposal = proposal,
+        raw_lengths = raw_lengths_for_proposal(proposal, candidates),
+        confidence_truncated = truncated
+    }
 end
 
-local function emit(raw, states, length, include_early_commit)
+local function emit(raw, states, length, include_early_commit, required_text_prefix)
     local completed = dedup_limit(states[length], beam_width)
-    local result = {}
+    local all_candidates = {}
     for i = 1, #completed do
-        local item = completed[i]
-        result[i] = {
-            score = item.score + logp(item.prev2, item.prev1, EOS) - isolation_penalty(item.text),
-            confidence_score = (item.mass_score or item.score) +
-                logp(item.prev2, item.prev1, EOS) - isolation_penalty(item.text),
-            text = item.text,
-            segmented = item.segmented,
-            prev2 = item.prev2,
-            prev1 = item.prev1,
-            max_rank = math.max(1, item.max_rank or 1),
-            supplement_score = item.supplement_score or 0.0,
-            path = item
-        }
+        all_candidates[i] = evaluate_state(completed[i])
     end
-    table.sort(result, function(left, right)
-        if left.max_rank ~= right.max_rank then
-            return left.max_rank < right.max_rank
-        end
-        if left.score == right.score then
-            return left.text < right.text
-        end
-        return left.score > right.score
-    end)
-    result.confidence_truncated = completed._truncated or false
-    result.early_commit_candidates = {}
-    result.early_commit_confidence_truncated = false
-    result.early_commit_uses_incomplete_tail = false
-    result.early_commit_prefers_incomplete_tail = false
+    local result = select_exact_top(all_candidates, candidate_limit)
+    result.early_commit_evidence = {
+        proposal = "",
+        raw_lengths = {},
+        confidence_truncated = false
+    }
     if include_early_commit then
-        local early, early_truncated, uses_incomplete =
-            build_early_commit_candidates(raw, states, completed)
-        result.early_commit_candidates = early
-        result.early_commit_confidence_truncated = early_truncated
-        result.early_commit_uses_incomplete_tail = uses_incomplete
-        if uses_incomplete and #early > 0 then
-            if #result == 0 then
-                result.early_commit_prefers_incomplete_tail = true
-            else
-                local full_top = result[1]
-                for i = 2, #result do
-                    if (result[i].confidence_score or result[i].score) >
-                        (full_top.confidence_score or full_top.score) then
-                        full_top = result[i]
-                    end
-                end
-                result.early_commit_prefers_incomplete_tail = early[1].text ~= full_top.text
-            end
-        end
+        result.early_commit_evidence = build_early_commit_evidence(
+            raw,
+            states,
+            all_candidates,
+            completed._truncated or false,
+            required_text_prefix or "")
     end
     return result
 end
@@ -725,15 +712,11 @@ local function results_equal(left, right)
     if #left ~= #right then
         return false
     end
-    if (left.confidence_truncated or false) ~= (right.confidence_truncated or false) then
-        return false
-    end
-    if (left.early_commit_confidence_truncated or false) ~=
-        (right.early_commit_confidence_truncated or false) or
-        (left.early_commit_uses_incomplete_tail or false) ~=
-        (right.early_commit_uses_incomplete_tail or false) or
-        (left.early_commit_prefers_incomplete_tail or false) ~=
-        (right.early_commit_prefers_incomplete_tail or false) then
+    local left_evidence = left.early_commit_evidence or {}
+    local right_evidence = right.early_commit_evidence or {}
+    if (left_evidence.proposal or "") ~= (right_evidence.proposal or "") or
+        (left_evidence.confidence_truncated or false) ~=
+        (right_evidence.confidence_truncated or false) then
         return false
     end
     for i = 1, #left do
@@ -748,24 +731,20 @@ local function results_equal(left, right)
             return false
         end
     end
-    local left_early = left.early_commit_candidates or {}
-    local right_early = right.early_commit_candidates or {}
-    if #left_early ~= #right_early then return false end
-    for i = 1, #left_early do
-        if left_early[i].text ~= right_early[i].text or
-            left_early[i].segmented ~= right_early[i].segmented or
-            left_early[i].score ~= right_early[i].score or
-            left_early[i].confidence_score ~= right_early[i].confidence_score or
-            (left_early[i].supplement_score or 0.0) ~=
-                (right_early[i].supplement_score or 0.0) or
-            (left_early[i].max_rank or 1) ~= (right_early[i].max_rank or 1) then
+    local left_raw_lengths = left_evidence.raw_lengths or {}
+    local right_raw_lengths = right_evidence.raw_lengths or {}
+    for text, raw_length in pairs(left_raw_lengths) do
+        if right_raw_lengths[text] ~= raw_length then
             return false
         end
+    end
+    for text, raw_length in pairs(right_raw_lengths) do
+        if left_raw_lengths[text] ~= raw_length then return false end
     end
     return true
 end
 
-local function decode_full(raw_code, include_early_commit)
+local function decode_full(raw_code, include_early_commit, required_text_prefix)
     local raw = normalize(raw_code)
     if raw == "" or not has_letter(raw) then
         return {}
@@ -773,20 +752,29 @@ local function decode_full(raw_code, include_early_commit)
     local length = #raw
     local states = new_states(length)
     expand_range(raw, states, 0, length)
-    return emit(raw, states, length, include_early_commit or false)
+    return emit(
+        raw,
+        states,
+        length,
+        include_early_commit or false,
+        required_text_prefix or "")
 end
 
-local function decode(raw_code, include_early_commit)
+local function decode(raw_code, include_early_commit, required_text_prefix)
     local raw = normalize(raw_code)
+    required_text_prefix = required_text_prefix or ""
     if raw == "" or not has_letter(raw) then
         decode_cache.raw = raw
         decode_cache.states = nil
         decode_cache.result = {}
         decode_cache.includes_early_commit = include_early_commit or false
+        decode_cache.required_text_prefix = required_text_prefix
         return decode_cache.result
     end
     if decode_cache.raw == raw and decode_cache.result and
-        (not include_early_commit or decode_cache.includes_early_commit) then
+        (not include_early_commit or
+         (decode_cache.includes_early_commit and
+          decode_cache.required_text_prefix == required_text_prefix)) then
         return decode_cache.result
     end
 
@@ -822,11 +810,17 @@ local function decode(raw_code, include_early_commit)
         expand_range(raw, states, 0, length)
     end
 
-    local result = emit(raw, states, length, include_early_commit or false)
+    local result = emit(
+        raw,
+        states,
+        length,
+        include_early_commit or false,
+        required_text_prefix)
     decode_cache.raw = raw
     decode_cache.states = states
     decode_cache.result = result
     decode_cache.includes_early_commit = include_early_commit or false
+    decode_cache.required_text_prefix = required_text_prefix
     return result
 end
 
@@ -865,7 +859,7 @@ local function find_raw_length_for_text(text, candidates)
     return 0
 end
 
-local function raw_lengths_for_proposal(proposal, candidates)
+raw_lengths_for_proposal = function(proposal, candidates)
     local lengths = {}
     local prefix_by_length = {}
     local prefix = ""
@@ -923,7 +917,7 @@ local function stable_history_raw_length(history, text)
     return stable
 end
 
-local function confidence_proposal(candidates, threshold)
+confidence_proposal = function(candidates, threshold)
     if #candidates == 0 then
         return ""
     end
@@ -1002,14 +996,9 @@ local function try_early_commit(env)
     end
 
     local full_raw = state.committed_raw .. live_raw
-    local decoded = decode(full_raw, true)
-    local confidence_source = decoded
-    local confidence_truncated = decoded.confidence_truncated
-    if decoded.early_commit_uses_incomplete_tail then
-        confidence_source = decoded.early_commit_candidates or {}
-        confidence_truncated = decoded.early_commit_confidence_truncated or false
-    end
-    if confidence_truncated then
+    local decoded = decode(full_raw, true, state.committed_text)
+    local early_commit_evidence = decoded.early_commit_evidence or {}
+    if early_commit_evidence.confidence_truncated then
         state.proposal = ""
         state.stable = 0
         state.evidence_raw = ""
@@ -1017,15 +1006,8 @@ local function try_early_commit(env)
         save_transient_state(context, state, env)
         return
     end
-    local candidates = {}
-    for i = 1, #confidence_source do
-        local candidate = confidence_source[i]
-        if state.committed_text == "" or
-            candidate.text:sub(1, #state.committed_text) == state.committed_text then
-            candidates[#candidates + 1] = candidate
-        end
-    end
-    if #candidates == 0 then
+    local proposal = early_commit_evidence.proposal or ""
+    if proposal == "" then
         state.proposal = ""
         state.stable = 0
         state.evidence_raw = ""
@@ -1034,7 +1016,6 @@ local function try_early_commit(env)
         return
     end
 
-    local proposal = confidence_proposal(candidates, 0.995)
     local visible_top = nil
     for i = 1, #decoded do
         if state.committed_text == "" or
@@ -1072,7 +1053,7 @@ local function try_early_commit(env)
     history[#history + 1] = {
         proposal = proposal,
         raw = full_raw,
-        raw_lengths = raw_lengths_for_proposal(proposal, candidates)
+        raw_lengths = early_commit_evidence.raw_lengths or {}
     }
     while #history > 3 do table.remove(history, 1) end
     state.history = history
@@ -1111,6 +1092,7 @@ local function reset_decode_cache()
     decode_cache.states = nil
     decode_cache.result = nil
     decode_cache.includes_early_commit = false
+    decode_cache.required_text_prefix = ""
 end
 
 local function is_plain_char_key(key_event, repr)

@@ -173,6 +173,17 @@ if boundary ~= 4 then
 end
 print("OK  early-commit raw boundary 的是 -> ueot")
 
+sentence.reset_decode_cache()
+local conditioned = sentence.decode("ueot", true, "的")
+check_equal(
+    "conditioned early evidence",
+    conditioned,
+    sentence.decode_full("ueot", true, "的"))
+if (conditioned.early_commit_evidence or {}).proposal ~= "的" then
+    fail("conditioned early-commit evidence did not retain 的")
+end
+print("OK  early-commit evidence is conditioned on committed text")
+
 local proposal = sentence.confidence_proposal({
     { text = "甲乙丙", score = 0 },
     { text = "甲乙丁", score = -10 }

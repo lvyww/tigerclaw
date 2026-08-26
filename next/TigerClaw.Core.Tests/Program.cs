@@ -135,6 +135,8 @@ namespace TigerClaw.Core.Tests
                 SentenceDecoderIncrementalMatchesFullRebuild();
                 SentenceDecoderReportsTruncatedConfidenceMass();
                 SentenceDecoderAddsIncompleteTailConfidenceWithoutChangingVisibleCandidates();
+                SentenceDecoderConditionsEvidenceOnCommittedPrefix();
+                SentenceDecoderSelectsExactVisibleTopK();
                 SentenceNgramV2LoadsFromMappedFile();
                 SentenceEngineCommitsDecodedCandidate();
                 SentenceEngineDisplaysPrimarySegmentation();
@@ -2203,27 +2205,32 @@ namespace TigerClaw.Core.Tests
             SentenceDecodeResult right,
             string name)
         {
-            True(left.ConfidenceTruncated == right.ConfidenceTruncated, name + ".confidence_truncated");
-            True(
-                left.EarlyCommitConfidenceTruncated == right.EarlyCommitConfidenceTruncated,
-                name + ".early_confidence_truncated");
-            True(
-                left.EarlyCommitUsesIncompleteTail == right.EarlyCommitUsesIncompleteTail,
-                name + ".early_uses_incomplete_tail");
-            True(
-                left.EarlyCommitPrefersIncompleteTail == right.EarlyCommitPrefersIncompleteTail,
-                name + ".early_prefers_incomplete_tail");
             SentenceCandidate[] leftCandidates = left.Candidates ?? Array.Empty<SentenceCandidate>();
             SentenceCandidate[] rightCandidates = right.Candidates ?? Array.Empty<SentenceCandidate>();
             AssertSentenceCandidateArraysEqual(leftCandidates, rightCandidates, name + ".visible");
-            AssertSentenceCandidateArraysEqual(
-                left.ConfidenceCandidates ?? Array.Empty<SentenceCandidate>(),
-                right.ConfidenceCandidates ?? Array.Empty<SentenceCandidate>(),
-                name + ".confidence");
-            AssertSentenceCandidateArraysEqual(
-                left.EarlyCommitCandidates ?? Array.Empty<SentenceCandidate>(),
-                right.EarlyCommitCandidates ?? Array.Empty<SentenceCandidate>(),
-                name + ".early_confidence");
+            SentenceEarlyCommitEvidence leftEvidence =
+                left.EarlyCommitEvidence ?? SentenceEarlyCommitEvidence.Empty;
+            SentenceEarlyCommitEvidence rightEvidence =
+                right.EarlyCommitEvidence ?? SentenceEarlyCommitEvidence.Empty;
+            Equal(rightEvidence.Proposal, leftEvidence.Proposal, name + ".early.proposal");
+            True(
+                leftEvidence.ConfidenceTruncated == rightEvidence.ConfidenceTruncated,
+                name + ".early.confidence_truncated");
+            True(
+                leftEvidence.IgnoreNeuralConstraint == rightEvidence.IgnoreNeuralConstraint,
+                name + ".early.ignore_neural");
+            Dictionary<string, int> leftRawLengths = leftEvidence.RawLengths ??
+                new Dictionary<string, int>(StringComparer.Ordinal);
+            Dictionary<string, int> rightRawLengths = rightEvidence.RawLengths ??
+                new Dictionary<string, int>(StringComparer.Ordinal);
+            True(leftRawLengths.Count == rightRawLengths.Count, name + ".early.raw_count");
+            foreach (KeyValuePair<string, int> item in leftRawLengths)
+            {
+                True(
+                    rightRawLengths.TryGetValue(item.Key, out int rightRawLength) &&
+                    item.Value == rightRawLength,
+                    name + ".early.raw." + item.Key);
+            }
         }
 
         private static void AssertSentenceCandidateArraysEqual(
@@ -2921,13 +2928,14 @@ namespace TigerClaw.Core.Tests
                 SentenceLexiconIndex.Build(lexicon),
                 NeutralSentenceLanguageModel.Instance,
                 beamWidth: 1);
-            SentenceDecodeResult result = decoder.Decode(raw, 20);
-            True(result.ConfidenceTruncated,
+            SentenceDecodeResult result = decoder.Decode(raw, 20, includeEarlyCommitEvidence: true);
+            True(result.EarlyCommitEvidence.ConfidenceTruncated,
                 nameof(SentenceDecoderReportsTruncatedConfidenceMass));
         }
 
         private static void SentenceDecoderAddsIncompleteTailConfidenceWithoutChangingVisibleCandidates()
         {
+            var languageModel = new PrefersIncompleteTailSentenceLanguageModel();
             var decoder = new SentenceInputDecoder(
                 SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
                 {
@@ -2935,22 +2943,81 @@ namespace TigerClaw.Core.Tests
                     ["abc"] = new List<string> { "丁戊" },
                     ["cd"] = new List<string> { "丙" }
                 }),
-                new PrefersIncompleteTailSentenceLanguageModel(),
+                languageModel,
                 beamWidth: 100);
 
-            SentenceDecodeResult result = decoder.Decode("abc", 20, includeEarlyCommitCandidates: true);
+            SentenceDecodeResult result = decoder.Decode("abc", 20, includeEarlyCommitEvidence: true);
             AssertSentenceResultsEqual(
                 result,
-                decoder.DecodeFull("abc", 20, includeEarlyCommitCandidates: true),
+                decoder.DecodeFull("abc", 20, includeEarlyCommitEvidence: true),
                 nameof(SentenceDecoderAddsIncompleteTailConfidenceWithoutChangingVisibleCandidates) + ".incremental");
             True(result.Candidates.Length == 1 && result.Candidates[0].Text == "丁戊",
                 nameof(SentenceDecoderAddsIncompleteTailConfidenceWithoutChangingVisibleCandidates) + ".visible");
-            True(result.EarlyCommitUsesIncompleteTail && result.EarlyCommitPrefersIncompleteTail,
-                nameof(SentenceDecoderAddsIncompleteTailConfidenceWithoutChangingVisibleCandidates) + ".flags");
-            True(result.EarlyCommitCandidates.Length >= 2 &&
-                result.EarlyCommitCandidates[0].Text == "甲乙" &&
-                result.EarlyCommitCandidates.Any(candidate => candidate.Text == "丁戊"),
-                nameof(SentenceDecoderAddsIncompleteTailConfidenceWithoutChangingVisibleCandidates) + ".confidence_pool");
+            True(result.EarlyCommitEvidence.IgnoreNeuralConstraint,
+                nameof(SentenceDecoderAddsIncompleteTailConfidenceWithoutChangingVisibleCandidates) + ".neural");
+            Equal("甲", result.EarlyCommitEvidence.Proposal,
+                nameof(SentenceDecoderAddsIncompleteTailConfidenceWithoutChangingVisibleCandidates) + ".proposal");
+            True(languageModel.EosCalls == 4,
+                nameof(SentenceDecoderAddsIncompleteTailConfidenceWithoutChangingVisibleCandidates) + ".ending_once");
+        }
+
+        private static void SentenceDecoderConditionsEvidenceOnCommittedPrefix()
+        {
+            var decoder = new SentenceInputDecoder(
+                SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
+                {
+                    ["ab"] = new List<string> { "甲乙", "丁戊" }
+                }),
+                NeutralSentenceLanguageModel.Instance,
+                beamWidth: 100);
+
+            SentenceDecodeResult unconditioned = decoder.Decode(
+                "ab",
+                20,
+                includeEarlyCommitEvidence: true);
+            Equal(string.Empty, unconditioned.EarlyCommitEvidence.Proposal,
+                nameof(SentenceDecoderConditionsEvidenceOnCommittedPrefix) + ".unconditioned");
+
+            SentenceDecodeResult conditioned = decoder.Decode(
+                "ab",
+                20,
+                includeEarlyCommitEvidence: true,
+                requiredTextPrefix: "甲");
+            AssertSentenceResultsEqual(
+                conditioned,
+                decoder.DecodeFull(
+                    "ab",
+                    20,
+                    includeEarlyCommitEvidence: true,
+                    requiredTextPrefix: "甲"),
+                nameof(SentenceDecoderConditionsEvidenceOnCommittedPrefix) + ".incremental");
+            Equal("甲", conditioned.EarlyCommitEvidence.Proposal,
+                nameof(SentenceDecoderConditionsEvidenceOnCommittedPrefix) + ".conditioned");
+        }
+
+        private static void SentenceDecoderSelectsExactVisibleTopK()
+        {
+            var candidates = new List<string>();
+            for (int index = 0; index < 30; index++)
+            {
+                candidates.Add(char.ConvertFromUtf32(0x4E00 + index));
+            }
+            var decoder = new SentenceInputDecoder(
+                SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
+                {
+                    ["ab"] = candidates
+                }),
+                NeutralSentenceLanguageModel.Instance,
+                beamWidth: 100);
+
+            SentenceDecodeResult result = decoder.Decode("ab", 20);
+            True(result.Candidates.Length == 20,
+                nameof(SentenceDecoderSelectsExactVisibleTopK) + ".count");
+            for (int index = 0; index < result.Candidates.Length; index++)
+            {
+                Equal(candidates[index], result.Candidates[index].Text,
+                    nameof(SentenceDecoderSelectsExactVisibleTopK) + ".rank." + index);
+            }
         }
 
         private static InputMethodEngine CreateAutoCommitSentenceEngine()
@@ -3400,8 +3467,14 @@ namespace TigerClaw.Core.Tests
 
         private sealed class PrefersIncompleteTailSentenceLanguageModel : ISentenceLanguageModel
         {
+            public int EosCalls { get; private set; }
+
             public double LogProbability(string previous2, string previous1, string target)
             {
+                if (string.Equals(target, "\x03", StringComparison.Ordinal))
+                {
+                    EosCalls++;
+                }
                 return string.Equals(target, "甲", StringComparison.Ordinal) ||
                        string.Equals(target, "乙", StringComparison.Ordinal) ||
                        string.Equals(target, "丙", StringComparison.Ordinal) ||

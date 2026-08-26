@@ -282,24 +282,30 @@ namespace TigerClaw.Core
         {
             RawCode = string.Empty,
             Candidates = Array.Empty<SentenceCandidate>(),
-            ConfidenceCandidates = Array.Empty<SentenceCandidate>(),
-            ConfidenceTruncated = false,
-            EarlyCommitCandidates = Array.Empty<SentenceCandidate>(),
-            EarlyCommitConfidenceTruncated = false,
-            EarlyCommitUsesIncompleteTail = false,
-            EarlyCommitPrefersIncompleteTail = false,
+            EarlyCommitEvidence = SentenceEarlyCommitEvidence.Empty,
             ExpandedStates = 0
         };
 
         public string RawCode { get; set; }
         public SentenceCandidate[] Candidates { get; set; }
-        public SentenceCandidate[] ConfidenceCandidates { get; set; }
-        public bool ConfidenceTruncated { get; set; }
-        public SentenceCandidate[] EarlyCommitCandidates { get; set; }
-        public bool EarlyCommitConfidenceTruncated { get; set; }
-        public bool EarlyCommitUsesIncompleteTail { get; set; }
-        public bool EarlyCommitPrefersIncompleteTail { get; set; }
+        public SentenceEarlyCommitEvidence EarlyCommitEvidence { get; set; }
         public int ExpandedStates { get; set; }
+    }
+
+    internal sealed class SentenceEarlyCommitEvidence
+    {
+        public static readonly SentenceEarlyCommitEvidence Empty = new SentenceEarlyCommitEvidence
+        {
+            Proposal = string.Empty,
+            RawLengths = new Dictionary<string, int>(StringComparer.Ordinal),
+            ConfidenceTruncated = false,
+            IgnoreNeuralConstraint = false
+        };
+
+        public string Proposal { get; set; }
+        public Dictionary<string, int> RawLengths { get; set; }
+        public bool ConfidenceTruncated { get; set; }
+        public bool IgnoreNeuralConstraint { get; set; }
     }
 
     internal sealed class SentenceInputDecoder
@@ -321,7 +327,8 @@ namespace TigerClaw.Core
         private BeamBucket[] _cachedStates;
         private SentenceDecodeResult _cachedResult;
         private int _cachedLimit;
-        private bool _cachedIncludesEarlyCommitCandidates;
+        private bool _cachedIncludesEarlyCommitEvidence;
+        private string _cachedRequiredTextPrefix = string.Empty;
 
         private sealed class BeamState
         {
@@ -335,6 +342,12 @@ namespace TigerClaw.Core
             public double SupplementScore;
             public int MaxLexiconRank;
             public SentencePathBoundary Boundary;
+        }
+
+        private sealed class EarlyCommitCandidate
+        {
+            public SentenceCandidate Candidate;
+            public double ConfidenceScore;
         }
 
         private sealed class BeamBucket
@@ -376,7 +389,7 @@ namespace TigerClaw.Core
                 _wasTruncated = truncated;
                 if (truncatedNow)
                 {
-                    values = SelectExactTop(values, boundedLimit);
+                    values = SelectExactTop(values, boundedLimit, CompareBeamStates);
                 }
                 else
                 {
@@ -464,18 +477,24 @@ namespace TigerClaw.Core
         public SentenceDecodeResult Decode(
             string rawCode,
             int candidateLimit = 20,
-            bool includeEarlyCommitCandidates = false)
+            bool includeEarlyCommitEvidence = false,
+            string requiredTextPrefix = null)
         {
             lock (_decodeLock)
             {
-                return DecodeIncrementalLocked(rawCode, candidateLimit, includeEarlyCommitCandidates);
+                return DecodeIncrementalLocked(
+                    rawCode,
+                    candidateLimit,
+                    includeEarlyCommitEvidence,
+                    requiredTextPrefix);
             }
         }
 
         internal SentenceDecodeResult DecodeFull(
             string rawCode,
             int candidateLimit = 20,
-            bool includeEarlyCommitCandidates = false)
+            bool includeEarlyCommitEvidence = false,
+            string requiredTextPrefix = null)
         {
             string normalized = NormalizeRawCode(rawCode);
             if (normalized.Length == 0 || !normalized.Any(char.IsLetter))
@@ -490,7 +509,8 @@ namespace TigerClaw.Core
                 states,
                 candidateLimit,
                 expanded,
-                includeEarlyCommitCandidates);
+                includeEarlyCommitEvidence,
+                requiredTextPrefix);
         }
 
         internal void ResetDecodeCache()
@@ -504,23 +524,30 @@ namespace TigerClaw.Core
         private SentenceDecodeResult DecodeIncrementalLocked(
             string rawCode,
             int candidateLimit,
-            bool includeEarlyCommitCandidates)
+            bool includeEarlyCommitEvidence,
+            string requiredTextPrefix)
         {
             string normalized = NormalizeRawCode(rawCode);
+            string normalizedRequiredPrefix = requiredTextPrefix ?? string.Empty;
             if (normalized.Length == 0 || !normalized.Any(char.IsLetter))
             {
                 ClearCache();
                 _cachedRaw = normalized ?? string.Empty;
                 _cachedResult = SentenceDecodeResult.Empty;
                 _cachedLimit = candidateLimit;
-                _cachedIncludesEarlyCommitCandidates = includeEarlyCommitCandidates;
+                _cachedIncludesEarlyCommitEvidence = includeEarlyCommitEvidence;
+                _cachedRequiredTextPrefix = normalizedRequiredPrefix;
                 return _cachedResult;
             }
 
             if (_cachedRaw == normalized &&
                 _cachedResult != null &&
                 _cachedLimit == candidateLimit &&
-                _cachedIncludesEarlyCommitCandidates == includeEarlyCommitCandidates)
+                _cachedIncludesEarlyCommitEvidence == includeEarlyCommitEvidence &&
+                string.Equals(
+                    _cachedRequiredTextPrefix,
+                    normalizedRequiredPrefix,
+                    StringComparison.Ordinal))
             {
                 return _cachedResult;
             }
@@ -532,10 +559,12 @@ namespace TigerClaw.Core
                     _cachedStates,
                     candidateLimit,
                     0,
-                    includeEarlyCommitCandidates);
+                    includeEarlyCommitEvidence,
+                    normalizedRequiredPrefix);
                 _cachedResult = trimmed;
                 _cachedLimit = candidateLimit;
-                _cachedIncludesEarlyCommitCandidates = includeEarlyCommitCandidates;
+                _cachedIncludesEarlyCommitEvidence = includeEarlyCommitEvidence;
+                _cachedRequiredTextPrefix = normalizedRequiredPrefix;
                 return trimmed;
             }
 
@@ -591,12 +620,14 @@ namespace TigerClaw.Core
                 states,
                 candidateLimit,
                 expanded,
-                includeEarlyCommitCandidates);
+                includeEarlyCommitEvidence,
+                normalizedRequiredPrefix);
             _cachedRaw = normalized;
             _cachedStates = states;
             _cachedResult = result;
             _cachedLimit = candidateLimit;
-            _cachedIncludesEarlyCommitCandidates = includeEarlyCommitCandidates;
+            _cachedIncludesEarlyCommitEvidence = includeEarlyCommitEvidence;
+            _cachedRequiredTextPrefix = normalizedRequiredPrefix;
             return result;
         }
 
@@ -606,7 +637,8 @@ namespace TigerClaw.Core
             _cachedStates = null;
             _cachedResult = null;
             _cachedLimit = 0;
-            _cachedIncludesEarlyCommitCandidates = false;
+            _cachedIncludesEarlyCommitEvidence = false;
+            _cachedRequiredTextPrefix = string.Empty;
         }
 
         private double TransitionScore(string previous2, string previous1, string target)
@@ -852,7 +884,8 @@ namespace TigerClaw.Core
             BeamBucket[] states,
             int candidateLimit,
             int expandedStates,
-            bool includeEarlyCommitCandidates)
+            bool includeEarlyCommitEvidence,
+            string requiredTextPrefix)
         {
             List<BeamState> completed = states[normalized.Length].Limit(
                 _beamWidth,
@@ -860,76 +893,58 @@ namespace TigerClaw.Core
             var result = new List<SentenceCandidate>(completed.Count);
             foreach (BeamState item in completed)
             {
-                double score = item.Score + TransitionScore(item.Previous2, item.Previous1, Eos);
-                score -= _isolationPenalty.Apply(item.Text, _languageModel);
-                result.Add(new SentenceCandidate
-                {
-                    Text = item.Text,
-                    SegmentedCode = item.SegmentedCode,
-                    BaseScore = score,
-                    FinalScore = score,
-                    ConfidenceScore = item.LogMass + (score - item.Score),
-                    SupplementScore = item.SupplementScore,
-                    Boundary = item.Boundary,
-                    MaxLexiconRank = Math.Max(1, item.MaxLexiconRank)
-                });
+                result.Add(EvaluateState(item));
             }
 
-            result.Sort(SentenceCandidate.CompareByLexiconRankThenScore);
-            SentenceCandidate[] confidenceCandidates = result.ToArray();
-            int limit = Math.Min(result.Count, Math.Max(1, candidateLimit));
-            SentenceCandidate[] earlyCommitCandidates = Array.Empty<SentenceCandidate>();
-            bool earlyCommitConfidenceTruncated = false;
-            bool earlyCommitUsesIncompleteTail = false;
-            if (includeEarlyCommitCandidates)
+            SentenceEarlyCommitEvidence earlyCommitEvidence = SentenceEarlyCommitEvidence.Empty;
+            if (includeEarlyCommitEvidence)
             {
-                earlyCommitCandidates = BuildEarlyCommitCandidates(
+                earlyCommitEvidence = BuildEarlyCommitEvidence(
                     normalized,
                     states,
-                    completed,
+                    result,
                     confidenceTruncated,
-                    out earlyCommitConfidenceTruncated,
-                    out earlyCommitUsesIncompleteTail);
+                    requiredTextPrefix);
             }
-            string fullConfidenceTop = confidenceCandidates
-                .OrderByDescending(candidate => candidate.ConfidenceScore)
-                .ThenBy(candidate => candidate.Text, StringComparer.Ordinal)
-                .Select(candidate => candidate.Text)
-                .FirstOrDefault();
-            bool earlyCommitPrefersIncompleteTail = earlyCommitUsesIncompleteTail &&
-                earlyCommitCandidates.Length > 0 &&
-                !string.Equals(
-                    earlyCommitCandidates[0].Text,
-                    fullConfidenceTop,
-                    StringComparison.Ordinal);
 
             return new SentenceDecodeResult
             {
                 RawCode = normalized,
-                Candidates = result.Take(limit).ToArray(),
-                ConfidenceCandidates = confidenceCandidates,
-                ConfidenceTruncated = confidenceTruncated,
-                EarlyCommitCandidates = earlyCommitCandidates,
-                EarlyCommitConfidenceTruncated = earlyCommitConfidenceTruncated,
-                EarlyCommitUsesIncompleteTail = earlyCommitUsesIncompleteTail,
-                EarlyCommitPrefersIncompleteTail = earlyCommitPrefersIncompleteTail,
+                Candidates = SelectExactTopCandidates(result, Math.Max(1, candidateLimit)),
+                EarlyCommitEvidence = earlyCommitEvidence,
                 ExpandedStates = expandedStates
             };
         }
 
-        private SentenceCandidate[] BuildEarlyCommitCandidates(
+        private SentenceCandidate EvaluateState(BeamState item)
+        {
+            double endingAdjustment = TransitionScore(item.Previous2, item.Previous1, Eos) -
+                _isolationPenalty.Apply(item.Text, _languageModel);
+            double score = item.Score + endingAdjustment;
+            return new SentenceCandidate
+            {
+                Text = item.Text,
+                SegmentedCode = item.SegmentedCode,
+                BaseScore = score,
+                FinalScore = score,
+                ConfidenceScore = item.LogMass + endingAdjustment,
+                SupplementScore = item.SupplementScore,
+                Boundary = item.Boundary,
+                MaxLexiconRank = Math.Max(1, item.MaxLexiconRank)
+            };
+        }
+
+        private SentenceEarlyCommitEvidence BuildEarlyCommitEvidence(
             string normalized,
             BeamBucket[] states,
-            List<BeamState> completed,
+            IEnumerable<SentenceCandidate> completed,
             bool completedTruncated,
-            out bool confidenceTruncated,
-            out bool usesIncompleteTail)
+            string requiredTextPrefix)
         {
-            confidenceTruncated = completedTruncated;
-            usesIncompleteTail = false;
-            var massByText = new Dictionary<string, double>(StringComparer.Ordinal);
-            var bestByText = new Dictionary<string, SentenceCandidate>(StringComparer.Ordinal);
-            AddEarlyCommitStates(completed, massByText, bestByText);
+            bool confidenceTruncated = completedTruncated;
+            bool usesIncompleteTail = false;
+            var candidatesByText = new Dictionary<string, EarlyCommitCandidate>(StringComparer.Ordinal);
+            AddEarlyCommitCandidates(completed, requiredTextPrefix, candidatesByText);
 
             int maximumTailLength = Math.Min(_maxCodeLength - 1, normalized.Length - 1);
             for (int tailLength = 1; tailLength <= maximumTailLength; tailLength++)
@@ -951,22 +966,53 @@ namespace TigerClaw.Core
 
                 usesIncompleteTail = true;
                 confidenceTruncated |= partialTruncated;
-                AddEarlyCommitStates(partial, massByText, bestByText);
+                foreach (BeamState item in partial)
+                {
+                    AddEarlyCommitCandidate(
+                        EvaluateState(item),
+                        requiredTextPrefix,
+                        candidatesByText);
+                }
             }
 
-            if (!usesIncompleteTail)
+            if (candidatesByText.Count == 0)
             {
-                return Array.Empty<SentenceCandidate>();
+                return new SentenceEarlyCommitEvidence
+                {
+                    Proposal = string.Empty,
+                    RawLengths = new Dictionary<string, int>(StringComparer.Ordinal),
+                    ConfidenceTruncated = confidenceTruncated,
+                    IgnoreNeuralConstraint = false
+                };
             }
 
-            foreach (KeyValuePair<string, double> pair in massByText)
+            List<EarlyCommitCandidate> orderedCandidates = candidatesByText.Values.ToList();
+            if (usesIncompleteTail)
             {
-                bestByText[pair.Key].ConfidenceScore = pair.Value;
+                orderedCandidates.Sort(CompareEarlyCommitConfidence);
             }
-            return bestByText.Values
-                .OrderByDescending(candidate => candidate.ConfidenceScore)
-                .ThenBy(candidate => candidate.Text, StringComparer.Ordinal)
-                .ToArray();
+            else
+            {
+                orderedCandidates.Sort((left, right) =>
+                    SentenceCandidate.CompareByLexiconRankThenScore(
+                        left.Candidate,
+                        right.Candidate));
+            }
+            SentenceCandidate fullTop = FindConfidenceTop(
+                completed.Where(candidate => HasRequiredPrefix(candidate.Text, requiredTextPrefix)));
+            string proposal = BuildConfidenceProposal(orderedCandidates, 0.995);
+            return new SentenceEarlyCommitEvidence
+            {
+                Proposal = proposal,
+                RawLengths = BuildRawLengthsForProposal(proposal, orderedCandidates),
+                ConfidenceTruncated = confidenceTruncated,
+                IgnoreNeuralConstraint = usesIncompleteTail &&
+                    orderedCandidates.Count > 0 &&
+                    !string.Equals(
+                        orderedCandidates[0].Candidate.Text,
+                        fullTop?.Text,
+                        StringComparison.Ordinal)
+            };
         }
 
         private bool IsIncompleteCodeTail(string tail)
@@ -980,46 +1026,172 @@ namespace TigerClaw.Core
             return tail.Length < 2 || _lexicon.GetCandidates(tail) == null;
         }
 
-        private void AddEarlyCommitStates(
-            IEnumerable<BeamState> states,
-            IDictionary<string, double> massByText,
-            IDictionary<string, SentenceCandidate> bestByText)
+        private static void AddEarlyCommitCandidates(
+            IEnumerable<SentenceCandidate> candidates,
+            string requiredTextPrefix,
+            IDictionary<string, EarlyCommitCandidate> candidatesByText)
         {
-            foreach (BeamState item in states)
+            foreach (SentenceCandidate candidate in candidates)
             {
-                if (item == null || string.IsNullOrEmpty(item.Text))
-                {
-                    continue;
-                }
+                AddEarlyCommitCandidate(candidate, requiredTextPrefix, candidatesByText);
+            }
+        }
 
-                double endingAdjustment = TransitionScore(item.Previous2, item.Previous1, Eos) -
-                    _isolationPenalty.Apply(item.Text, _languageModel);
-                double confidenceScore = item.LogMass + endingAdjustment;
-                if (massByText.TryGetValue(item.Text, out double previousMass))
-                {
-                    massByText[item.Text] = LogSumExp(previousMass, confidenceScore);
-                }
-                else
-                {
-                    massByText[item.Text] = confidenceScore;
-                }
+        private static void AddEarlyCommitCandidate(
+            SentenceCandidate candidate,
+            string requiredTextPrefix,
+            IDictionary<string, EarlyCommitCandidate> candidatesByText)
+        {
+            if (candidate == null || string.IsNullOrEmpty(candidate.Text) ||
+                !HasRequiredPrefix(candidate.Text, requiredTextPrefix))
+            {
+                return;
+            }
 
-                if (!bestByText.TryGetValue(item.Text, out SentenceCandidate previous) ||
-                    confidenceScore > previous.ConfidenceScore)
+            if (!candidatesByText.TryGetValue(candidate.Text, out EarlyCommitCandidate previous))
+            {
+                candidatesByText[candidate.Text] = new EarlyCommitCandidate
                 {
-                    bestByText[item.Text] = new SentenceCandidate
-                    {
-                        Text = item.Text,
-                        SegmentedCode = item.SegmentedCode,
-                        BaseScore = item.Score + endingAdjustment,
-                        FinalScore = item.Score + endingAdjustment,
-                        ConfidenceScore = confidenceScore,
-                        SupplementScore = item.SupplementScore,
-                        Boundary = item.Boundary,
-                        MaxLexiconRank = Math.Max(1, item.MaxLexiconRank)
-                    };
+                    Candidate = candidate,
+                    ConfidenceScore = candidate.ConfidenceScore
+                };
+                return;
+            }
+
+            double combinedMass = LogSumExp(previous.ConfidenceScore, candidate.ConfidenceScore);
+            if (candidate.ConfidenceScore > previous.Candidate.ConfidenceScore)
+            {
+                previous.Candidate = candidate;
+            }
+            previous.ConfidenceScore = combinedMass;
+        }
+
+        private static bool HasRequiredPrefix(string text, string requiredTextPrefix)
+        {
+            return string.IsNullOrEmpty(requiredTextPrefix) ||
+                (!string.IsNullOrEmpty(text) &&
+                 text.StartsWith(requiredTextPrefix, StringComparison.Ordinal));
+        }
+
+        private static int CompareEarlyCommitConfidence(
+            EarlyCommitCandidate left,
+            EarlyCommitCandidate right)
+        {
+            int confidence = right.ConfidenceScore.CompareTo(left.ConfidenceScore);
+            return confidence != 0
+                ? confidence
+                : string.CompareOrdinal(left.Candidate.Text, right.Candidate.Text);
+        }
+
+        private static SentenceCandidate FindConfidenceTop(
+            IEnumerable<SentenceCandidate> candidates)
+        {
+            SentenceCandidate best = null;
+            foreach (SentenceCandidate candidate in candidates)
+            {
+                if (best == null ||
+                    candidate.ConfidenceScore > best.ConfidenceScore ||
+                    (candidate.ConfidenceScore == best.ConfidenceScore &&
+                     string.CompareOrdinal(candidate.Text, best.Text) < 0))
+                {
+                    best = candidate;
                 }
             }
+            return best;
+        }
+
+        private static string BuildConfidenceProposal(
+            IEnumerable<EarlyCommitCandidate> candidates,
+            double threshold)
+        {
+            EarlyCommitCandidate[] values = candidates.ToArray();
+            if (values.Length == 0)
+            {
+                return string.Empty;
+            }
+
+            double max = values.Max(candidate => candidate.ConfidenceScore);
+            double total = 0.0;
+            var prefixMass = new Dictionary<string, double>(StringComparer.Ordinal);
+            var prefixTextElements = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (EarlyCommitCandidate candidate in values)
+            {
+                double weight = Math.Exp(candidate.ConfidenceScore - max);
+                total += weight;
+                int[] textEnds = GetTextElementEndOffsets(candidate.Candidate.Text);
+                for (int index = 0; index + 1 < textEnds.Length; index++)
+                {
+                    string prefix = candidate.Candidate.Text.Substring(0, textEnds[index]);
+                    prefixMass.TryGetValue(prefix, out double previousMass);
+                    prefixMass[prefix] = previousMass + weight;
+                    prefixTextElements[prefix] = index + 1;
+                }
+            }
+
+            string proposal = string.Empty;
+            int proposalTextElements = 0;
+            foreach (KeyValuePair<string, double> item in prefixMass)
+            {
+                int textElements = prefixTextElements[item.Key];
+                if (item.Value / total >= threshold && textElements > proposalTextElements)
+                {
+                    proposal = item.Key;
+                    proposalTextElements = textElements;
+                }
+            }
+            return proposal;
+        }
+
+        private static Dictionary<string, int> BuildRawLengthsForProposal(
+            string proposal,
+            IEnumerable<EarlyCommitCandidate> orderedCandidates)
+        {
+            var rawLengths = new Dictionary<string, int>(StringComparer.Ordinal);
+            if (string.IsNullOrEmpty(proposal))
+            {
+                return rawLengths;
+            }
+
+            var prefixByTextLength = new Dictionary<int, string>();
+            foreach (int end in GetTextElementEndOffsets(proposal))
+            {
+                prefixByTextLength[end] = proposal.Substring(0, end);
+            }
+            foreach (EarlyCommitCandidate candidate in orderedCandidates)
+            {
+                SentencePathBoundary boundary = candidate.Candidate.Boundary;
+                while (boundary != null)
+                {
+                    if (prefixByTextLength.TryGetValue(boundary.TextLength, out string prefix) &&
+                        candidate.Candidate.Text.StartsWith(prefix, StringComparison.Ordinal) &&
+                        !rawLengths.ContainsKey(prefix))
+                    {
+                        rawLengths[prefix] = boundary.RawLength;
+                    }
+                    boundary = boundary.Previous;
+                }
+                if (rawLengths.Count == prefixByTextLength.Count)
+                {
+                    break;
+                }
+            }
+            return rawLengths;
+        }
+
+        private static int[] GetTextElementEndOffsets(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+            {
+                return Array.Empty<int>();
+            }
+
+            var ends = new List<int>();
+            TextElementEnumerator enumerator = StringInfo.GetTextElementEnumerator(text);
+            while (enumerator.MoveNext())
+            {
+                ends.Add(enumerator.ElementIndex + enumerator.GetTextElement().Length);
+            }
+            return ends.ToArray();
         }
 
         private static bool IsBetterDuplicate(BeamState item, BeamState previous)
@@ -1028,45 +1200,64 @@ namespace TigerClaw.Core
                    (item.MaxLexiconRank == previous.MaxLexiconRank && item.Score > previous.Score);
         }
 
-        private static List<BeamState> SelectExactTop(List<BeamState> values, int limit)
+        private static SentenceCandidate[] SelectExactTopCandidates(
+            List<SentenceCandidate> values,
+            int limit)
         {
-            var heap = new List<BeamState>(limit);
-            foreach (BeamState item in values)
+            int boundedLimit = Math.Max(1, limit);
+            if (values.Count <= boundedLimit)
+            {
+                values.Sort(SentenceCandidate.CompareByLexiconRankThenScore);
+                return values.ToArray();
+            }
+            return SelectExactTop(
+                values,
+                boundedLimit,
+                SentenceCandidate.CompareByLexiconRankThenScore).ToArray();
+        }
+
+        private static List<T> SelectExactTop<T>(
+            List<T> values,
+            int limit,
+            Comparison<T> comparison)
+        {
+            var heap = new List<T>(limit);
+            foreach (T item in values)
             {
                 if (heap.Count < limit)
                 {
                     heap.Add(item);
-                    SiftWorstUp(heap, heap.Count - 1);
+                    SiftWorstUp(heap, heap.Count - 1, comparison);
                 }
-                else if (CompareBeamStates(item, heap[0]) < 0)
+                else if (comparison(item, heap[0]) < 0)
                 {
                     heap[0] = item;
-                    SiftWorstDown(heap, 0);
+                    SiftWorstDown(heap, 0, comparison);
                 }
             }
 
-            heap.Sort(CompareBeamStates);
+            heap.Sort(comparison);
             return heap;
         }
 
-        private static void SiftWorstUp(List<BeamState> heap, int index)
+        private static void SiftWorstUp<T>(List<T> heap, int index, Comparison<T> comparison)
         {
             while (index > 0)
             {
                 int parent = (index - 1) / 2;
-                if (CompareBeamStates(heap[parent], heap[index]) >= 0)
+                if (comparison(heap[parent], heap[index]) >= 0)
                 {
                     return;
                 }
 
-                BeamState value = heap[parent];
+                T value = heap[parent];
                 heap[parent] = heap[index];
                 heap[index] = value;
                 index = parent;
             }
         }
 
-        private static void SiftWorstDown(List<BeamState> heap, int index)
+        private static void SiftWorstDown<T>(List<T> heap, int index, Comparison<T> comparison)
         {
             while (true)
             {
@@ -1077,15 +1268,15 @@ namespace TigerClaw.Core
                 }
 
                 int right = left + 1;
-                int worse = right < heap.Count && CompareBeamStates(heap[right], heap[left]) > 0
+                int worse = right < heap.Count && comparison(heap[right], heap[left]) > 0
                     ? right
                     : left;
-                if (CompareBeamStates(heap[index], heap[worse]) >= 0)
+                if (comparison(heap[index], heap[worse]) >= 0)
                 {
                     return;
                 }
 
-                BeamState value = heap[index];
+                T value = heap[index];
                 heap[index] = heap[worse];
                 heap[worse] = value;
                 index = worse;
