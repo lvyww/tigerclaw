@@ -137,6 +137,24 @@ BimeTSF2、Dialog、Native Hook 与 TigerClaw Core 通过命名管道通信。
 
 对应响应: `response`（关注 `keyboard_open` 字段）
 
+### 9. `get_selection_key_config`（Dialog -> Core，需响应）
+
+用途：读取 1 到 10 选的自定义虚拟键绑定。
+
+响应字段：
+
+- `config_text`：当前规范化配置，每行格式为 `<n选> <虚拟键>...`。
+- `default_text`：默认数字键绑定。
+- `config_path`：Core 使用的 `自定义选重键.txt` 路径。
+
+虚拟键可使用十进制、`0x` 十六进制或 `VK_*` 名称。空绑定行会清除该选位的默认键。
+
+### 10. `set_selection_key_config`（Dialog -> Core，需响应）
+
+用途：校验、保存并立即应用自定义选重键。
+
+请求字段：`config_text`。成功响应返回规范化后的 `config_text`；失败响应返回 `error`，并保留原绑定。
+
 ## 统一响应 `response`（Core -> TSF）
 
 示例:

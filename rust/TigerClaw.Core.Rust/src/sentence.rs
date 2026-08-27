@@ -1,49 +1,51 @@
+use crate::decoder::{decode_full, DecodeResult, DecoderOptions};
 use crate::lexicon::Lexicon;
+use crate::ngram::NgramModel;
+use crate::ranks::CharacterRanks;
+use crate::supplement::SupplementMatcher;
 
-pub fn decode(raw: &str, lexicon: &Lexicon, max_code_length: usize, limit: usize) -> Vec<String> {
-    let mut results = Vec::new();
-    let mut path = Vec::new();
-    visit(raw, 0, lexicon, max_code_length, &mut path, &mut results, limit);
-    let mut unique = Vec::with_capacity(results.len());
-    for result in results.drain(..) {
-        if !unique.contains(&result) {
-            unique.push(result);
-        }
-    }
-    results.extend(unique);
-    results.truncate(limit);
-    results
+pub fn decode(raw: &str, lexicon: &Lexicon, _max_code_length: usize, limit: usize) -> Vec<String> {
+    decode_result(
+        raw,
+        lexicon,
+        None,
+        &CharacterRanks::default(),
+        &SupplementMatcher::empty(),
+        limit,
+        false,
+        "",
+    )
+    .candidates
+    .into_iter()
+    .map(|item| item.text)
+    .collect()
 }
 
-fn visit(
+pub fn decode_result(
     raw: &str,
-    position: usize,
     lexicon: &Lexicon,
-    max_code_length: usize,
-    path: &mut Vec<String>,
-    results: &mut Vec<String>,
+    model: Option<&NgramModel>,
+    ranks: &CharacterRanks,
+    supplements: &SupplementMatcher,
     limit: usize,
-) {
-    if results.len() >= limit {
-        return;
-    }
-    if position == raw.len() {
-        results.push(path.concat());
-        return;
-    }
-    let remaining = &raw[position..];
-    for length in 1..=max_code_length.min(remaining.len()) {
-        let end = position + length;
-        if !raw.is_char_boundary(end) {
-            continue;
-        }
-        let code = &raw[position..end];
-        for candidate in lexicon.candidates(code).into_iter().take(8) {
-            path.push(candidate);
-            visit(raw, end, lexicon, max_code_length, path, results, limit);
-            path.pop();
-        }
-    }
+    include_early: bool,
+    required_prefix: &str,
+) -> DecodeResult {
+    let options = DecoderOptions {
+        beam_width: if model.is_some() { 2000 } else { 100 },
+        ..DecoderOptions::default()
+    };
+    decode_full(
+        raw,
+        lexicon,
+        model,
+        ranks,
+        supplements,
+        limit,
+        options,
+        include_early,
+        required_prefix,
+    )
 }
 
 #[cfg(test)]

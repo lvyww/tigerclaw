@@ -1,8 +1,14 @@
 pub mod config;
+pub mod decoder;
+pub mod early;
 pub mod lexicon;
 pub mod protocol;
+pub mod ranks;
+pub mod selection_keys;
 pub mod sentence;
 pub mod ngram;
 pub mod qwen;
+pub mod supplement;
 pub mod ui_state;
 pub mod state;
+pub mod text;

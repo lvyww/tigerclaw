@@ -55,7 +55,7 @@ Sentence reranking IPC:
 
 Common pipe message types in active code:
 
-- TSF/Native/Dialog -> Core requests: `hello`, `query_state`, `key`, `ctrl_space`, `show_menu`, `show_config`, `show_addci`, `reload_config`, `reload_mb`, `get_config`, `set_config`, `add_ci`, `construct_ci`
+- TSF/Native/Dialog -> Core requests: `hello`, `query_state`, `key`, `ctrl_space`, `show_menu`, `show_config`, `show_addci`, `reload_config`, `reload_mb`, `get_config`, `set_config`, `get_selection_key_config`, `set_selection_key_config`, `add_ci`, `construct_ci`
 - TSF/Native -> Core notifications: `focus`, `caret`, `ime_active`, `composition_canceled`, `hook_native_disabled`
 - Core -> caller response: `response` with fields such as `success`, `handled`, `commit_text`, `input_buffer`, `keyboard_open`, `cancel_composition`
 

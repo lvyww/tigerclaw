@@ -72,3 +72,8 @@ uninstall.log
 # Windows explorer
 Thumbs.db
 Desktop.ini
+
+# Rust / Python build artifacts
+rust/**/target/
+__pycache__/
+*.pyc
