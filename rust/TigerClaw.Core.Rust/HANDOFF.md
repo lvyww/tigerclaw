@@ -75,6 +75,33 @@ TSF/Dialog/Native -> \\.\pipe\BimeIPC -> TigerClaw.Core.Rust.exe
   segmented display, and hides the window on first-key pending. Unit tests
   stay on the synchronous path unless they opt in. Qwen rerank is requested
   off the key path and applied only when the generation still matches.
+  Backspacing at or below `committed_raw_length` (a full composition wipe,
+  including backspacing into an already-committed prefix) now goes through
+  the shared `clear_composition`, matching C#'s `ClearCompositionInput`
+  (which the same VK_BACK branch calls and which always increments
+  `_sentenceGeneration`). The wipe branch previously reset `input_buffer`/
+  candidates by hand without bumping `sentence_generation` or invalidating
+  the queued worker/rerank job, so a decode already in flight for the
+  deleted raw code could still pass `pump_sentence`'s generation guard once
+  it finished and repopulate `sentence_decoded_raw`/candidates from stale
+  data. `clear_composition` now advances a lifetime-wide generation instead
+  of resetting it to zero, and result acceptance also verifies the decoded
+  raw code. See `sentence_backspace_to_empty_ignores_stale_async_decode` and
+  `stale_sentence_result_with_matching_generation_but_wrong_raw_is_rejected`.
+  `clear_composition`'s own decoder reset now uses `try_lock` instead of
+  `lock`: the background worker holds the same `sentence_decoder` mutex for
+  the full duration of a Beam Search call, and `clear_composition` runs on
+  the key-handling path while `handle_client` still holds the outer
+  `CoreState` mutex (see `windows_pipe.rs`'s `handle_client`, which also
+  calls `publish_ui` before releasing that lock) — so a synchronous `lock()`
+  there would stall every other queued key/`query_state` message, and the
+  Overlay candidate window along with it, until the in-flight decode
+  finishes. Reported symptom: after early-commit fires, backspacing could
+  still stall the candidate window and let queued/repeated backspace
+  keystrokes fall through to delete already-committed on-screen text once
+  the stall resolved. Skipping the reset on contention is safe because the
+  next real decode call self-resets the same cache when it sees an empty
+  raw input (`decode_with`'s empty-raw branch).
 - UI-state and Core-heartbeat MMFs with C#-compatible header layout, PascalCase
   JSON fields, initial publication and Windows monotonic timestamps.
 - Windows production entry uses the GUI subsystem, acquires the same
@@ -325,9 +352,45 @@ when the production TSF sends a different message sequence.
     and finiteness, and falls back to n-gram order on any failure. It sends
     full committed-prefix candidate text to Qwen and records matching neural
     results as the early-commit constraint for that generation.
-  - The source is covered indirectly by generation/early-commit decoder tests;
-    run the real Sentence executable and Qwen model on Windows to verify pipe
-    timeout, rerank ordering and late-result suppression.
+  - Fixed two live-testing bugs found in Windows sentence-mode use: (1)
+    `qwen::rerank` unconditionally spawned a fresh `TigerClaw.Sentence.exe`
+    (reloading its GGUF model) on every rerank request instead of reusing an
+    already-running sidecar the way C#'s `TryLaunchSentence` does, which
+    showed up as the OS process-starting cursor on every keystroke; it now
+    checks `state::has_running_child` first. (2) the rerank-apply path
+    resorted the top-5 candidates purely by blended score, dropping the
+    rank-first precedence `compare_decoded`/`compare_beam` otherwise enforce
+    (C#'s `CompareByLexiconRankThenScore`), which let a later-rank
+    alternate-code candidate for a common character (e.g. 自己/题) outrank
+    the code's true first-choice entry (是) whenever the n-gram score already
+    favored it; `rerank_order` now sorts rank-first, score as tiebreak.
+    It also applies C#'s final ordinal-text tiebreak. Sidecar reuse consults
+    both Core-owned child handles and the Sentence single-instance mutex, so
+    an already-running server is not relaunched after a Core handoff. A timed
+    out pipe read is actively cancelled with `CancelIoEx` rather than leaving
+    a detached blocking reader.
+  - A later live-test regression was traced to the production asynchronous
+    early-commit path: it advanced the committed raw/text boundary but kept
+    publishing candidates decoded against the previous prefix. Rust now
+    immediately trims that retained snapshot to the uncommitted suffix,
+    advances the logical generation like C#, and starts the replacement decode
+    with the new prefix. Backspace stops when the live raw tail is exhausted
+    and cannot expose the already committed raw prefix. Regression tests cover
+    both the immediate candidate suffix and the Backspace boundary.
+  - Follow-up testing with `jaefmjxj` found two coupled producer bugs. The
+    decoder's full segmented code was being trimmed once when stored and again
+    when displayed, turning the expected post-commit `fm jxj` into `xj`.
+    Also, with the normal `中英文不限长混合输入=是` setting, Backspace tested
+    that global option before the active sentence mode, rebuilt the sentence
+    raw buffer as ordinary four-key mixed segments, bypassed the committed raw
+    boundary, and left stale sentence candidates published. Rust now stores
+    full segmentation and trims only at display time; Backspace dispatches
+    sentence/pinyin/uppercase modes before ordinary mixed input. Exact tests
+    cover the display string and prevent deletion into the committed `jae`.
+  - The source is covered indirectly by generation/early-commit decoder tests
+    plus the new `rerank_order_*` unit tests; run the real Sentence executable
+    and Qwen model on Windows to verify pipe timeout, rerank ordering and
+    late-result suppression.
 
 - [ ] `RUST-P1-011` Protocol/version and frontend-specific response parity.
   *(implementation landed, Windows/TSF/Native acceptance pending)*
@@ -335,8 +398,11 @@ when the production TSF sends a different message sequence.
     and generic callers, emits `ensure_system_layout_en` only on a Hook Native
     language-state transition, and strips candidate arrays/extra fields for TSF
     stages, Hook Native, or responses near the 4096-byte bridge limit. The
-    handshake and key protocol paths have automated coverage; compact-shape
-    behavior still needs a Windows bridge trace.
+    TSF `query_state` request carries no frontend/stage marker, so it now uses
+    a dedicated minimal response that never contains candidates or selection
+    state and remains below the bridge buffer even for very long candidates.
+    The handshake, key and compact-query paths have automated coverage;
+    compact-shape behavior still needs a Windows bridge trace.
   - Verify the exact installed TSF and Native Hook message sequence, including
     long sentence responses and system-layout switching, before closing this
     item.
@@ -371,7 +437,10 @@ when the production TSF sends a different message sequence.
     active composition and emit `cancel_composition`, while UI-only theme,
     font, delay and selector changes remain live. Config reload keeps the C#
     full-reset behavior, and no-composition changes do not report a cancel.
-    The transactional setter path is covered by the config/protocol tests.
+    Composition cancellation remains pending across Dialog/query responses
+    and is emitted/consumed exactly once by the next physical-key response,
+    matching C#'s `_pendingFrontendCompositionReset`. The transactional setter
+    path is covered by the config/protocol tests.
   - Verify the complete Dialog setting matrix, persistence and cancellation
     edge cases against C# on Windows.
 
@@ -419,11 +488,14 @@ when the production TSF sends a different message sequence.
 
 - [ ] `RUST-P2-003A` Candidate visibility and selected-index parity.
   *(implementation landed, Windows/TSF/Overlay acceptance pending)*
-  - Rust keeps a non-sentence code-only composition visible (subject to fresh
-    caret, pending and hide-candidate rules), while sentence visibility still
-    follows candidate availability. The Overlay MMF publishes selected index
-    `-1` for normal composition and the sentence index only for sentence mode.
-    Fresh-caret and page-size protocol tests cover the producer state.
+  - Rust keeps every non-empty code-only composition visible (subject to fresh
+    caret and hide-candidate rules), including sentence input with no decoded
+    candidates such as an illegal/incomplete `jnt` path. This matches C#'s
+    `IsComposing && inputCode.Length > 0` publication instead of hiding all
+    candidate UI whenever the sentence candidate list is empty. The Overlay
+    MMF publishes selected index `-1` for normal composition and the sentence
+    index only for sentence mode. Fresh-caret and page-size protocol tests
+    cover the producer state.
   - Verify code-only rendering, pending-window timing and selected-index
     presentation through the installed TSF and WPF Overlay.
 

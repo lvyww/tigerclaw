@@ -40,6 +40,20 @@ pub fn register_owned_child(registry: &OwnedChildren, child: Child, executable: 
     });
 }
 
+/// Mirrors C#'s `ProcessLauncher.TryLaunchSentence` idempotent-launch check:
+/// prune exited children, then report whether a live child for `executable`
+/// is already registered. The sentence sidecar is a persistent server that
+/// loops accepting one pipe connection after another, so callers must reuse
+/// it instead of spawning (and loading its Qwen GGUF model) again per call.
+pub fn has_running_child(registry: &OwnedChildren, executable: &str) -> bool {
+    let Ok(mut children) = registry.lock() else { return false; };
+    children.retain_mut(|owned| match owned.child.try_wait() {
+        Ok(Some(_)) => false,
+        Ok(None) | Err(_) => true,
+    });
+    children.iter().any(|owned| owned.executable == executable)
+}
+
 /// Stop only processes for which this core retained a `Child` handle.  The
 /// caller is responsible for any graceful signal (for example Native Hook's
 /// named exit event) and may call this after a short grace period.
@@ -387,6 +401,10 @@ pub struct SentenceRerankJob {
     /// after a partial early commit.
     pub display_texts: Vec<String>,
     pub bases: Vec<f64>,
+    /// Each candidate's `max_lexicon_rank`, carried alongside `bases` so the
+    /// rerank result can still be sorted rank-first-then-score, matching
+    /// C#'s `CompareByLexiconRankThenScore` instead of a pure score sort.
+    pub ranks: Vec<i32>,
     pub exe: String,
     pub model: String,
 }
@@ -402,5 +420,58 @@ fn replay_key(client_session: &str, event_id: &str) -> Option<String> {
         None
     } else {
         Some(format!("{client_session}\n{event_id}"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    #[cfg(not(windows))]
+    fn spawn_long() -> Child {
+        Command::new("sleep").arg("5").spawn().expect("spawn sleep")
+    }
+
+    #[cfg(windows)]
+    fn spawn_long() -> Child {
+        Command::new("ping")
+            .args(["127.0.0.1", "-n", "6"])
+            .spawn()
+            .expect("spawn ping")
+    }
+
+    #[cfg(not(windows))]
+    fn spawn_done() -> Child {
+        Command::new("sleep").arg("0").spawn().expect("spawn sleep")
+    }
+
+    #[cfg(windows)]
+    fn spawn_done() -> Child {
+        Command::new("cmd")
+            .args(["/D", "/C", "exit", "0"])
+            .spawn()
+            .expect("spawn cmd")
+    }
+
+    #[test]
+    fn has_running_child_reflects_liveness_and_prunes_exited_entries() {
+        let registry: OwnedChildren = Arc::new(Mutex::new(Vec::new()));
+        assert!(!has_running_child(&registry, "sleep"));
+
+        register_owned_child(&registry, spawn_long(), "sleep");
+        assert!(has_running_child(&registry, "sleep"));
+        assert!(!has_running_child(&registry, "other"));
+
+        let mut short_lived = spawn_done();
+        let _ = short_lived.wait();
+        register_owned_child(&registry, short_lived, "sleep-done");
+        // The still-running "sleep" child must not be pruned by an unrelated
+        // exited child's registration.
+        assert!(has_running_child(&registry, "sleep"));
+        assert!(!has_running_child(&registry, "sleep-done"));
+
+        assert_eq!(terminate_owned_children(&registry), 1);
+        assert!(!has_running_child(&registry, "sleep"));
     }
 }

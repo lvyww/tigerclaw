@@ -50,7 +50,7 @@ pub fn handle_line(state: &mut CoreState, line: &str) -> Option<String> {
             })
             .to_string(),
         ),
-        "query_state" => Some(state_response(state, seq, false)),
+        "query_state" => Some(query_state_response(state, &message, seq)),
         "reload_config" => Some(reload_config(state, &message, seq)),
         "reload_mb" => Some(reload_lexicon(state, &message, seq)),
         "get_config" => Some(config_response(state, seq)),
@@ -103,11 +103,11 @@ pub fn handle_line(state: &mut CoreState, line: &str) -> Option<String> {
             state.keyboard_open = !state.keyboard_open;
             let commit_text = composition_raw_commit(state);
             clear_composition(state);
-            Some(if commit_text.is_empty() {
+            Some(without_cancel_composition(if commit_text.is_empty() {
                 state_response(state, seq, true)
             } else {
                 commit_response(state, seq, true, commit_text)
-            })
+            }))
         }
         "caret" => {
             state.caret_x = integer(&message, "x");
@@ -210,6 +210,12 @@ pub fn handle_line(state: &mut CoreState, line: &str) -> Option<String> {
             }
             postprocess_key(state, &message, &response);
             let response = shape_key_response(state, &message, &response, before_keyboard);
+            // Configuration requests can invalidate a TSF composition while
+            // being served on a Dialog connection.  Only a real key response
+            // is consumed by the TSF bridge, so keep this edge pending across
+            // every non-key response and clear it only after shaping the next
+            // physical-key response.
+            state.cancel_composition_pending.set(false);
             state.store_key_response(client_session, event_id, &response);
             Some(response)
         }
@@ -471,6 +477,45 @@ fn handle_key(state: &mut CoreState, message: &Value, seq: i64) -> String {
             append_normal_code(state, seq, character)
         }
         0x08 if !state.input_buffer.is_empty() || !state.raw_input.is_empty() => {
+            // Dispatch by the active composition mode before consulting the
+            // global mixed-input option.  The option is normally enabled in
+            // 虎整句 too, but a sentence composition must keep its complete
+            // raw buffer and committed prefix boundary instead of being
+            // rebuilt as fixed-width mixed-input segments.
+            if state.config.sentence_active() {
+                state.early.reset_evidence();
+                if state.early.committed_raw_length > 0
+                    && state.input_buffer.len()
+                        <= state.early.committed_raw_length.saturating_add(1)
+                {
+                    clear_composition(state);
+                    return state_response(state, seq, true);
+                }
+                state.input_buffer.pop();
+                state.raw_input.pop();
+                if state.input_buffer.is_empty() {
+                    clear_composition(state);
+                    return state_response(state, seq, true);
+                }
+                state.sentence_generation = state.sentence_generation.saturating_add(1);
+                if state.sentence_decode_sync {
+                    refresh_sentence(state, false);
+                } else {
+                    request_sentence_worker(state);
+                }
+                state.selected_candidate = 0;
+                return state_response(state, seq, true);
+            }
+            if state.uppercase_mode || state.pinyin_mode {
+                state.input_buffer.pop();
+                state.raw_input.pop();
+                let marker_only = state.pinyin_mode && state.input_buffer.chars().count() <= 1;
+                if state.input_buffer.is_empty() || marker_only {
+                    clear_composition(state);
+                    return state_response(state, seq, true);
+                }
+                return state_response(state, seq, true);
+            }
             if state.config.mixed_input {
                 state.raw_input.pop();
                 if state.raw_input.is_empty() {
@@ -483,32 +528,9 @@ fn handle_key(state: &mut CoreState, message: &Value, seq: i64) -> String {
             }
             state.input_buffer.pop();
             state.raw_input.pop();
-            if state.uppercase_mode || state.pinyin_mode {
-                let marker_only = state.pinyin_mode && state.input_buffer.chars().count() <= 1;
-                if state.input_buffer.is_empty() || marker_only {
-                    clear_composition(state);
-                    return state_response(state, seq, true);
-                }
+            if state.input_buffer.is_empty() {
+                clear_composition(state);
                 return state_response(state, seq, true);
-            }
-            if state.config.sentence_active() {
-                state.early.reset_evidence();
-                if state.input_buffer.len() <= state.early.committed_raw_length {
-                    state.early.reset();
-                    state.input_buffer.clear();
-                    state.raw_input.clear();
-                    state.sentence_candidates.clear();
-                    state.sentence_segmented.clear();
-                    state.sentence_decoded_raw.clear();
-                    state.sentence_last_result = DecodeResult::default();
-                } else {
-                    state.sentence_generation = state.sentence_generation.saturating_add(1);
-                    if state.sentence_decode_sync {
-                        refresh_sentence(state, false);
-                    } else {
-                        request_sentence_worker(state);
-                    }
-                }
             }
             state.selected_candidate = 0;
             state_response(state, seq, true)
@@ -1320,7 +1342,6 @@ fn reload_config(state: &mut CoreState, message: &Value, seq: i64) -> String {
             clear_composition(state);
             state.cancel_composition_pending.set(had_composition);
             simple_response(state, seq, true, json!({
-                "cancel_composition": had_composition,
                 "config_version": state.config_version,
                 "lexicon_version": state.lexicon_version
             }))
@@ -1360,7 +1381,7 @@ fn reload_lexicon(state: &mut CoreState, message: &Value, seq: i64) -> String {
                     let _ = state.config.set("当前码表", name);
                 }
             }
-            state_response(state, seq, true)
+            without_cancel_composition(state_response(state, seq, true))
         }
         Err(error) => json!({"type":"response","seq":seq,"success":false,"handled":false,"error":error.to_string()}).to_string(),
     }
@@ -1491,7 +1512,7 @@ fn set_config(state: &mut CoreState, message: &Value, seq: i64) -> String {
         clear_composition(state);
         state.cancel_composition_pending.set(had_composition);
     }
-    simple_response(state, seq, true, json!({"changed":true,"config_version":state.config_version,"lexicon_version":state.lexicon_version,"cancel_composition":had_composition}))
+    simple_response(state, seq, true, json!({"changed":true,"config_version":state.config_version,"lexicon_version":state.lexicon_version}))
 }
 
 fn config_value_text(value: &Value) -> String {
@@ -1635,7 +1656,11 @@ fn clear_composition(state: &mut CoreState) {
     state.sentence_candidates.clear();
     state.sentence_segmented.clear();
     state.early.reset();
-    state.sentence_generation = 0;
+    // Generation is a lifetime-wide invalidation token.  Resetting it to zero
+    // allows an old completed decode to collide with a new composition after
+    // the counter climbs back to the same value.  C# increments this token in
+    // ClearCompositionInput for every clear, including non-sentence clears.
+    state.sentence_generation = state.sentence_generation.saturating_add(1);
     state.sentence_decoded_raw.clear();
     state.sentence_decoded_lexicon_version = 0;
     state.sentence_last_result = DecodeResult::default();
@@ -1653,7 +1678,16 @@ fn clear_composition(state: &mut CoreState) {
     }
     state.sentence_neural_accepted_raw.clear();
     state.sentence_neural_top_text.clear();
-    if let Ok(mut decoder) = state.sentence_decoder.lock() {
+    // The background sentence worker holds this same lock for the entire
+    // duration of a Beam Search call (not just a quick snapshot), and
+    // clear_composition runs on the key-handling path while the outer
+    // CoreState mutex is held, so blocking here on `lock()` would stall
+    // every other queued key/query_state message until that in-flight
+    // decode finishes. Skip the reset on contention instead: the next
+    // real decode call already self-resets this same cache when it sees
+    // an empty raw input (see decode_with's empty-raw branch), so nothing
+    // is lost, just deferred.
+    if let Ok(mut decoder) = state.sentence_decoder.try_lock() {
         decoder.reset();
     }
     state.selected_candidate = 0;
@@ -1704,6 +1738,15 @@ fn append_sentence_code(state: &mut CoreState, seq: i64, mark: char) -> String {
             &state.input_buffer,
             neural_top.as_deref(),
         );
+        if !extra.is_empty() {
+            // The completed decode still contains candidates relative to the
+            // old committed prefix.  C# filters that snapshot immediately
+            // after a partial commit; otherwise the async path publishes the
+            // already committed text again until the next Beam result arrives
+            // and selection/commit no longer agrees with the visible suffix.
+            state.sentence_generation = state.sentence_generation.saturating_add(1);
+            trim_sentence_result_after_early_commit(state, &extra);
+        }
         request_sentence_worker(state);
         extra
     };
@@ -1883,16 +1926,83 @@ fn refresh_sentence(state: &mut CoreState, count_early: bool) -> String {
         String::new()
     };
     if !extra.is_empty() {
+        // A partial commit changes the required text prefix and therefore
+        // starts a new logical decode/rerank generation, matching C#.
+        state.sentence_generation = state.sentence_generation.saturating_add(1);
         let result = decode_sentence_now(state);
         apply_sentence_result(state, result, state.sentence_generation);
     }
     extra
 }
 
+fn trim_sentence_result_after_early_commit(state: &mut CoreState, committed_delta: &str) {
+    state
+        .sentence_last_result
+        .candidates
+        .retain_mut(|candidate| {
+            let Some(suffix) = candidate.text.strip_prefix(committed_delta) else {
+                return false;
+            };
+            if suffix.is_empty() {
+                return false;
+            }
+            candidate.text = suffix.to_owned();
+            true
+        });
+    state.sentence_candidates = state
+        .sentence_last_result
+        .candidates
+        .iter()
+        .map(|candidate| candidate.text.clone())
+        .collect();
+    state.sentence_segmented = state
+        .sentence_last_result
+        .candidates
+        .iter()
+        .map(|candidate| candidate.segmented_code.clone())
+        .collect();
+    state.selected_candidate = 0;
+}
+
 fn simple_response(state: &CoreState, seq: i64, success: bool, extra: Value) -> String {
     let mut response: Value = serde_json::from_str(&state_response(state, seq, success)).expect("state response JSON");
     response["success"] = success.into(); response["handled"] = success.into();
     if let Value::Object(values) = extra { for (key, value) in values { response[key] = value; } }
+    if let Some(object) = response.as_object_mut() {
+        object.remove("cancel_composition");
+    }
+    response.to_string()
+}
+
+fn without_cancel_composition(response: String) -> String {
+    let Ok(mut value) = serde_json::from_str::<Value>(&response) else {
+        return response;
+    };
+    if let Some(object) = value.as_object_mut() {
+        object.remove("cancel_composition");
+    }
+    value.to_string()
+}
+
+fn query_state_response(state: &CoreState, message: &Value, seq: i64) -> String {
+    let mut response = json!({
+        "type": "response",
+        "seq": seq,
+        "success": true,
+        "handled": false,
+        "input_buffer": overlay_input_and_candidates(state).0,
+        "keyboard_open": state.keyboard_open,
+        "composition_tracking": sentence_tracking(state),
+        "composition_pending": sentence_pending(state),
+        "config_version": state.config_version,
+        "lexicon_version": state.lexicon_version,
+    });
+    if string(message, "frontend").eq_ignore_ascii_case("hook_native") {
+        response["native_hook_alt_backslash_toggle_enabled"] = state.config.native_hook_alt_backslash.into();
+        response["auto_switch_system_layout_enabled"] = state.config.auto_switch_system_layout.into();
+        response["use_clipboard_commit"] = state.config.use_clipboard_commit.into();
+        response["clipboard_commit_whitelist"] = state.config.clipboard_whitelist.clone().into();
+    }
     response.to_string()
 }
 
@@ -2383,9 +2493,7 @@ fn move_normal_page(state: &mut CoreState, delta: i32) {
 
 fn state_response(state: &CoreState, seq: i64, handled: bool) -> String {
     let (display_buffer, candidates) = overlay_input_and_candidates(state);
-    let cancel = state.cancel_composition_pending.replace(false);
-    // The flag is edge-triggered: callers receive it once, then normal responses resume.
-    // This mirrors the C# bridge's deferred composition cancellation contract.
+    let cancel = state.cancel_composition_pending.get();
     json!({
         "type": "response",
         "seq": seq,
@@ -2761,6 +2869,7 @@ fn pump_sentence(state: &mut CoreState) {
     if let Some(done) = finished {
         if done.generation == state.sentence_generation
             && done.lexicon_version == state.lexicon_version
+            && done.result.raw == state.input_buffer
         {
             apply_sentence_result(state, done.result, done.generation);
         }
@@ -2849,12 +2958,15 @@ fn apply_sentence_result(state: &mut CoreState, result: DecodeResult, generation
     state.sentence_decoded_raw = result.raw.clone();
     state.sentence_decoded_lexicon_version = state.lexicon_version;
     state.sentence_generation = state.sentence_generation.max(generation);
-    let raw_prefix = state.early.committed_raw_length;
     state.sentence_candidates = result.candidates.iter().map(|item| item.text.clone()).collect();
     state.sentence_segmented = result
         .candidates
         .iter()
-        .map(|item| trim_segmented(&item.segmented_code, raw_prefix))
+        // Keep the decoder's full segmented raw code, as C# does. Display is
+        // the single authority that removes the already committed raw prefix.
+        // Pre-trimming here and trimming again in sentence_display_code turned
+        // `jae fm jxj` into `xj` after `jae` committed instead of `fm jxj`.
+        .map(|item| item.segmented_code.clone())
         .collect();
     request_sentence_rerank(state, generation);
 }
@@ -2948,6 +3060,32 @@ fn request_sentence_worker(state: &CoreState) {
     });
 }
 
+/// Blend each candidate's neural score into its base n-gram score, then
+/// return the resulting display order. Mirrors C#'s
+/// `ApplySentenceNeuralScores` + `CompareByLexiconRankThenScore`: rank still
+/// takes priority over the blended score, so a later-rank candidate (e.g. an
+/// alternate/legacy code for a common character) cannot leapfrog the code's
+/// first-choice entry just because the raw n-gram or Qwen favors it. A pure
+/// score sort would silently drop that ordering rule for the reranked top-5.
+fn rerank_order(bases: &[f64], ranks: &[i32], scores: &[f64], texts: &[String]) -> Vec<usize> {
+    let mut ranked: Vec<(i32, f64, usize)> = bases
+        .iter()
+        .zip(ranks.iter())
+        .zip(scores.iter())
+        .enumerate()
+        .map(|(index, ((base, rank), score))| (*rank, base + 0.84 * score, index))
+        .collect();
+    ranked.sort_by(|left, right| {
+        left.0.cmp(&right.0).then_with(|| {
+            right
+                .1
+                .partial_cmp(&left.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }).then_with(|| texts[left.2].cmp(&texts[right.2]))
+    });
+    ranked.into_iter().map(|(_, _, index)| index).collect()
+}
+
 fn request_sentence_rerank(state: &mut CoreState, generation: u64) {
     if !state.config.neural_rerank {
         return;
@@ -2977,6 +3115,10 @@ fn request_sentence_rerank(state: &mut CoreState, generation: u64) {
         .iter()
         .map(|item| item.score)
         .collect();
+    let ranks: Vec<i32> = state.sentence_last_result.candidates[..count]
+        .iter()
+        .map(|item| item.max_lexicon_rank)
+        .collect();
     let raw = state.sentence_decoded_raw.clone();
     let job = SentenceRerankJob {
         generation,
@@ -2985,6 +3127,7 @@ fn request_sentence_rerank(state: &mut CoreState, generation: u64) {
         texts,
         display_texts,
         bases,
+        ranks,
         exe,
         model,
     };
@@ -3033,23 +3176,10 @@ fn request_sentence_rerank(state: &mut CoreState, generation: u64) {
             &owned_children,
         );
         if let Some(scores) = scores.filter(|scores| scores.len() == snapshot.texts.len()) {
-            let mut ranked: Vec<(f64, usize)> = snapshot
-                .texts
-                .iter()
-                .zip(snapshot.bases.iter().copied())
-                .enumerate()
-                .zip(scores)
-                .map(|((index, (_, base)), score)| (base + 0.84 * score, index))
-                .collect();
-            ranked.sort_by(|left, right| {
-                right
-                    .0
-                    .partial_cmp(&left.0)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-            let texts = ranked
+            let order = rerank_order(&snapshot.bases, &snapshot.ranks, &scores, &snapshot.texts);
+            let texts = order
                 .into_iter()
-                .map(|(_, index)| snapshot.display_texts[index].clone())
+                .map(|index| snapshot.display_texts[index].clone())
                 .collect();
             if let Ok(mut slot) = completed.lock() {
                 *slot = Some(CompletedRerank {
@@ -3178,6 +3308,45 @@ fn string<'a>(message: &'a Value, name: &str) -> &'a str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rerank_order_keeps_first_choice_rank_ahead_of_a_higher_scoring_later_rank() {
+        // Reproduces the observed bug: a rank-1 candidate ("是") with a much
+        // lower base/neural score than a rank-2 alternate-code candidate
+        // ("自己"/"题") must still sort first, matching
+        // SentenceCandidate.CompareByLexiconRankThenScore in C#.
+        let bases = [-13.7841, -5.3842];
+        let ranks = [1, 2];
+        let scores = [0.0, 0.0];
+        let texts = vec!["是".to_owned(), "题".to_owned()];
+        let order = rerank_order(&bases, &ranks, &scores, &texts);
+        assert_eq!(order, vec![0, 1]);
+
+        // Even a strong neural boost for the rank-2 candidate must not let
+        // it leapfrog rank-1.
+        let scores = [0.0, 20.0];
+        let order = rerank_order(&bases, &ranks, &scores, &texts);
+        assert_eq!(order, vec![0, 1]);
+    }
+
+    #[test]
+    fn rerank_order_breaks_same_rank_ties_by_blended_score() {
+        let bases = [-10.0, -9.0];
+        let ranks = [1, 1];
+        let scores = [0.0, 0.5];
+        let texts = vec!["甲".to_owned(), "乙".to_owned()];
+        let order = rerank_order(&bases, &ranks, &scores, &texts);
+        assert_eq!(order, vec![1, 0]);
+    }
+
+    #[test]
+    fn rerank_order_breaks_exact_ties_by_ordinal_text() {
+        let bases = [-10.0, -10.0];
+        let ranks = [1, 1];
+        let scores = [0.0, 0.0];
+        let texts = vec!["z".to_owned(), "a".to_owned()];
+        assert_eq!(rerank_order(&bases, &ranks, &scores, &texts), vec![1, 0]);
+    }
 
     #[test]
     fn handshake_is_protocol_compatible() {
@@ -3431,9 +3600,8 @@ mod tests {
             let line = format!(r#"{{"type":"key","seq":{},"action":"down","vk":{}}}"#, seq + 1, vk);
             handle_line(&mut state, &line);
         }
-        let response = handle_line(&mut state, r#"{"type":"query_state","seq":5}"#).unwrap();
-        let value: Value = serde_json::from_str(&response).unwrap();
-        assert_eq!(value["candidates"].as_array().unwrap().len(), 2);
+        let _ = handle_line(&mut state, r#"{"type":"query_state","seq":5}"#).unwrap();
+        assert_eq!(overlay_input_and_candidates(&state).1.len(), 2);
         handle_line(&mut state, r#"{"type":"key","seq":6,"action":"down","vk":9}"#);
         let response = handle_line(&mut state, r#"{"type":"key","seq":7,"action":"down","vk":32}"#).unwrap();
         let value: Value = serde_json::from_str(&response).unwrap();
@@ -3802,6 +3970,74 @@ mod tests {
     }
 
     #[test]
+    fn async_sentence_early_commit_snapshot_is_immediately_trimmed_to_live_suffix() {
+        let mut state = sentence_state(&[
+            ("abc", "甲"),
+            ("de", "丙"),
+            ("def", "丁"),
+            ("defg", "乙戊"),
+        ]);
+        type_letters(&mut state, "abcdefg", 1);
+        assert_eq!(state.sentence_candidates[0], "甲乙戊");
+
+        // This is the state transition performed by the production async
+        // path immediately after EarlyCommitRuntime returns "甲".
+        state.early.committed_text = "甲".to_owned();
+        state.early.committed_raw_length = 3;
+        trim_sentence_result_after_early_commit(&mut state, "甲");
+
+        assert_eq!(state.sentence_candidates[0], "乙戊");
+        assert_eq!(overlay_input_and_candidates(&state).1[0], "乙戊");
+    }
+
+    #[test]
+    fn sentence_display_trims_the_committed_raw_prefix_exactly_once() {
+        let mut state = sentence_state(&[]);
+        state.input_buffer = "jaefmjxj".to_owned();
+        state.raw_input = state.input_buffer.clone();
+        state.early.committed_text = "今".to_owned();
+        state.early.committed_raw_length = 3;
+        state.sentence_decoded_raw = state.input_buffer.clone();
+        state.sentence_decoded_lexicon_version = state.lexicon_version;
+        state.sentence_candidates = vec!["天斜".to_owned(), "丙科".to_owned()];
+        state.sentence_segmented = vec!["jae fm jxj".to_owned(), "jae fmj xj".to_owned()];
+
+        let (display, candidates) = overlay_input_and_candidates(&state);
+
+        assert_eq!(display, "fm jxj");
+        assert_eq!(candidates, vec!["天斜", "丙科"]);
+    }
+
+    #[test]
+    fn sentence_backspace_stops_at_the_early_committed_raw_boundary() {
+        let mut state = sentence_state(&[]);
+        state.config.mixed_input = true;
+        state.sentence_decode_sync = false;
+        state.input_buffer = "jaefmjxj".to_owned();
+        state.raw_input = state.input_buffer.clone();
+        state.early.committed_text = "今".to_owned();
+        state.early.committed_raw_length = 3;
+        state.sentence_decoded_raw = state.input_buffer.clone();
+        state.sentence_decoded_lexicon_version = state.lexicon_version;
+        state.sentence_candidates = vec!["天斜".to_owned(), "丙科".to_owned()];
+        state.sentence_segmented = vec!["jae fm jxj".to_owned(), "jae fmj xj".to_owned()];
+        let generation = state.sentence_generation;
+
+        assert_eq!(type_vk(&mut state, 1, 0x08)["input_buffer"], "fm jx");
+        assert_eq!(state.input_buffer, "jaefmjx");
+        assert_eq!(state.raw_input, "jaefmjx");
+        assert_eq!(state.sentence_generation, generation + 1);
+        assert_eq!(type_vk(&mut state, 2, 0x08)["input_buffer"], "fmj");
+        assert_eq!(type_vk(&mut state, 3, 0x08)["input_buffer"], "fm");
+        assert_eq!(type_vk(&mut state, 4, 0x08)["input_buffer"], "f");
+        let cleared = type_vk(&mut state, 5, 0x08);
+        assert_eq!(cleared["input_buffer"], "");
+        assert!(state.input_buffer.is_empty());
+        assert!(state.raw_input.is_empty());
+        assert_eq!(state.early.committed_raw_length, 0);
+    }
+
+    #[test]
     fn sentence_early_commit_requires_stable_raw_boundary() {
         let mut state = auto_commit_state(&[
             ("ab", "甲乙"),
@@ -3863,9 +4099,10 @@ mod tests {
         for seq in 20..70 {
             std::thread::sleep(std::time::Duration::from_millis(15));
             let line = format!(r#"{{"type":"query_state","seq":{seq}}}"#);
-            let value: Value = serde_json::from_str(&handle_line(&mut state, &line).unwrap()).unwrap();
-            if value["candidates"].as_array().is_some_and(|items| !items.is_empty()) {
-                assert_eq!(value["candidates"][0], "是");
+            let _ = handle_line(&mut state, &line).unwrap();
+            let candidates = overlay_input_and_candidates(&state).1;
+            if !candidates.is_empty() {
+                assert_eq!(candidates[0], "是");
                 ready = true;
                 break;
             }
@@ -3878,13 +4115,158 @@ mod tests {
         for seq in 90..140 {
             std::thread::sleep(std::time::Duration::from_millis(15));
             let line = format!(r#"{{"type":"query_state","seq":{seq}}}"#);
-            let value: Value = serde_json::from_str(&handle_line(&mut state, &line).unwrap()).unwrap();
-            if value["candidates"].as_array().is_some_and(|items| items.is_empty()) {
+            let _ = handle_line(&mut state, &line).unwrap();
+            if overlay_input_and_candidates(&state).1.is_empty() {
                 caught_up = true;
                 break;
             }
         }
         assert!(caught_up, "pending suffix should catch up to an empty list");
+    }
+
+    #[test]
+    fn sentence_backspace_to_empty_ignores_stale_async_decode() {
+        // Reproduces the reported bug: backspacing a sentence composition
+        // fully empty while a real async decode for the just-deleted raw
+        // code is still in flight. Before the fix, the wipe branch left
+        // sentence_generation unchanged, so once that stale decode finished
+        // and wrote into sentence_completed, the next pump_sentence call
+        // would pass the generation guard and repopulate
+        // sentence_decoded_raw/candidates from the deleted raw code even
+        // though input_buffer had already been cleared. C#'s
+        // ClearCompositionInput (called from this exact VK_BACK branch)
+        // always increments _sentenceGeneration for exactly this reason.
+        let mut state = sentence_state(&[("o", "噢"), ("ot", "是"), ("ue", "的")]);
+        state.publish_sentence_assets();
+        state.sentence_decode_sync = false;
+        {
+            let mut decoder = state.sentence_decoder.lock().unwrap();
+            decoder.test_decode_delay = std::time::Duration::from_millis(120);
+        }
+        type_letters(&mut state, "ot", 1);
+        assert!(state.sentence_worker.lock().unwrap().job.is_some());
+        let generation_before_clear = state.sentence_generation;
+
+        // Backspace both characters before the delayed decode completes.
+        type_vk(&mut state, 3, 0x08);
+        type_vk(&mut state, 4, 0x08);
+        assert_eq!(state.input_buffer, "");
+        assert!(
+            state.sentence_generation > generation_before_clear,
+            "clearing a composition must advance, never reset, its invalidation generation"
+        );
+
+        // Let the stale worker finish (it will still write whatever it
+        // decoded into sentence_completed — that write racing the wipe is
+        // expected and harmless), then explicitly pump it.
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        let _ = handle_line(&mut state, r#"{"type":"query_state","seq":99}"#);
+
+        assert_eq!(
+            state.sentence_decoded_raw, "",
+            "a stale decode for the deleted raw code must not repopulate decoded_raw"
+        );
+        assert!(
+            state.sentence_candidates.is_empty(),
+            "a stale decode must not repopulate candidates after the composition was wiped: {:?}",
+            state.sentence_candidates
+        );
+        assert!(state.sentence_segmented.is_empty());
+        assert_eq!(state.input_buffer, "");
+    }
+
+    #[test]
+    fn stale_sentence_result_with_matching_generation_but_wrong_raw_is_rejected() {
+        let mut state = sentence_state(&[("ab", "旧"), ("cd", "新")]);
+        state.input_buffer = "cd".to_owned();
+        state.raw_input = "cd".to_owned();
+        state.sentence_generation = 7;
+        let stale = crate::decoder::decode_full(
+            "ab",
+            &state.lexicon,
+            None,
+            &state.ranks,
+            &state.supplements,
+            20,
+            crate::decoder::DecoderOptions::default(),
+            false,
+            "",
+        );
+        *state.sentence_completed.lock().unwrap() = Some(CompletedSentence {
+            generation: 7,
+            lexicon_version: state.lexicon_version,
+            result: stale,
+        });
+
+        let _ = handle_line(&mut state, r#"{"type":"query_state","seq":91}"#);
+        assert_eq!(state.input_buffer, "cd");
+        assert_ne!(state.sentence_decoded_raw, "ab");
+        assert!(!state.sentence_candidates.iter().any(|item| item == "旧"));
+    }
+
+    #[test]
+    fn config_cancel_is_deferred_to_exactly_one_physical_key_response() {
+        let mut state = CoreState::default();
+        state.lexicon = crate::lexicon::Lexicon::from_entries(&[("ab", "甲")]);
+        type_vk(&mut state, 1, 0x41);
+
+        let changed: Value = serde_json::from_str(
+            &handle_line(
+                &mut state,
+                r#"{"type":"set_config","seq":2,"key":"整句输入","value":"是"}"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(changed.get("cancel_composition").is_none());
+        assert!(state.cancel_composition_pending.get());
+
+        let query: Value = serde_json::from_str(
+            &handle_line(&mut state, r#"{"type":"query_state","seq":3}"#).unwrap(),
+        )
+        .unwrap();
+        assert!(query.get("cancel_composition").is_none());
+        assert!(state.cancel_composition_pending.get());
+
+        let key: Value = serde_json::from_str(
+            &handle_line(
+                &mut state,
+                r#"{"type":"key","seq":4,"action":"down","vk":66,"tsf_stage":"key_down"}"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(key["cancel_composition"], true);
+        assert!(!state.cancel_composition_pending.get());
+
+        let next: Value = serde_json::from_str(
+            &handle_line(
+                &mut state,
+                r#"{"type":"key","seq":5,"action":"up","vk":66,"tsf_stage":"key_up"}"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(next["cancel_composition"], false);
+    }
+
+    #[test]
+    fn query_state_is_compact_even_with_large_candidate_payloads() {
+        let mut state = CoreState::default();
+        state.input_buffer = "ab".to_owned();
+        state.raw_input = "ab".to_owned();
+        state.config.sentence_input = true;
+        state.sentence_decoded_raw = "ab".to_owned();
+        state.sentence_candidates = (0..10)
+            .map(|index| format!("候选{index}{}", "长".repeat(256)))
+            .collect();
+
+        let response = handle_line(&mut state, r#"{"type":"query_state","seq":6}"#).unwrap();
+        let value: Value = serde_json::from_str(&response).unwrap();
+        assert!(value.get("candidates").is_none());
+        assert!(value.get("selected_index").is_none());
+        assert!(value.get("cancel_composition").is_none());
+        assert!(response.len() < 4096);
     }
 
     #[test]

@@ -300,7 +300,7 @@ fn publish_ui(state: &CoreState, publisher: &Arc<Mutex<Publisher>>) {
         IsChinese: state.keyboard_open,
         StatusText: if state.hook_native_disabled { "禁" } else if state.keyboard_open { "中" } else { "EN" },
         CandidateVisible: !awaiting_fresh_caret
-            && (!candidates.is_empty() || !input_code.is_empty() && !state.config.sentence_active())
+            && (!candidates.is_empty() || !input_code.is_empty())
             && !state.config.hide_candidate,
         InputCode: &input_code,
         Candidates: candidates,
