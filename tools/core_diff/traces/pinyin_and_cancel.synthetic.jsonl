@@ -1,6 +1,0 @@
-{"type":"key","seq":1,"client_session":"fixture-3","event_id":"1","action":"down","vk":192,"scan":41,"shift":false,"ctrl":false,"alt":false,"win":false,"capsLock":false,"numLock":true,"repeat":1,"extended":false,"tsf_stage":"test_keydown"}
-{"type":"key","seq":2,"client_session":"fixture-3","event_id":"2","action":"down","vk":78,"scan":49,"shift":false,"ctrl":false,"alt":false,"win":false,"capsLock":false,"numLock":true,"repeat":1,"extended":false,"tsf_stage":"test_keydown"}
-{"type":"key","seq":3,"client_session":"fixture-3","event_id":"3","action":"down","vk":73,"scan":23,"shift":false,"ctrl":false,"alt":false,"win":false,"capsLock":false,"numLock":true,"repeat":1,"extended":false,"tsf_stage":"test_keydown"}
-{"type":"composition_canceled"}
-{"type":"key","seq":4,"client_session":"fixture-3","event_id":"4","action":"down","vk":87,"scan":17,"shift":false,"ctrl":false,"alt":false,"win":false,"capsLock":false,"numLock":true,"repeat":1,"extended":false,"tsf_stage":"test_keydown"}
-{"type":"focus","hwnd":2,"processId":3,"processName":"chrome.exe","className":"Chrome_WidgetWin_1","windowTitle":"<redacted>"}

@@ -1,6 +1,6 @@
 # TigerClaw Next
 
-Current handoff and architecture entry: `../AGENTS.md`.
+Current handoff and document index: `../AGENTS.md`, `../docs/README.md`.
 
 This directory contains the active split-process runtime:
 
@@ -8,6 +8,7 @@ This directory contains the active split-process runtime:
 - `TigerClaw.Overlay`
 - `TigerClaw.Dialog`
 - `TigerClaw.Shared`
+- `TigerClaw.Sentence` and `TigerClaw.Sentence.Native`
 - `TigerClaw.Hook.Native` experimental native hook frontend
 
 Build:
@@ -22,3 +23,6 @@ Debug output:
 next\_run\Debug\net48\
 next\_run\Debug\native\
 ```
+
+Build outputs are disposable, but this checkout's ignored `../release_arm64/`
+is the user's daily runtime and must not be removed by broad clean commands.

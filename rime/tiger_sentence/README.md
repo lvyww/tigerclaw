@@ -1,38 +1,64 @@
-# 虎整句（Rime）
+# 虎整句（Rime 独立实验版）
 
-独立方案，不依赖万象虎。码表从 `release_arm64/码表/虎整句/常用字词.txt` 导出。字频前 1500 的单字只保留最优码；更生僻的单字保留非最优码。
+本方案使用纯 Lua 码表格图和本地 n-gram，不依赖 Windows Core，也不是 Windows
+TSF 发布包的一部分。它仍处于实验阶段，尤其是自动提前上屏在不同 Rime 前端上的
+闪烁、提交顺序和长时间稳定性需要分别验收。
 
-## 重新生成
+## 生成与部署
 
 ```bash
 python3 tools/export_tiger_sentence_rime.py
 ```
 
-## 部署到小狼毫
+导出器从 `release_arm64/码表/虎整句/常用字词.txt` 生成方案数据。该目录是本机
+日常 ARM64 运行环境，禁止用清理命令删除。
 
-把本目录的 `tiger_sentence.schema.yaml`、`tiger_sentence.dict.yaml`、`tiger_sentence.supplement.txt`、`rime.lua` 拷到 `%APPDATA%\Rime`，把 `lua\` 拷到 `%APPDATA%\Rime\lua`，再在 `default.custom.yaml` 里加入 `tiger_sentence`，然后「重新部署」。默认把编码显示在候选窗口；用户自行开启 `inline_preedit` / `preedit_type: composition` 时，Lua 仍通过 `Candidate.preedit` 维护当前候选的分段编码和提前上屏后的实时尾码。
+部署到 Rime 用户目录：
+
+1. 复制 `tiger_sentence.schema.yaml`、`tiger_sentence.dict.yaml`、
+   `tiger_sentence.supplement.txt` 和 `rime.lua`；
+2. 复制 `lua/`；
+3. 在已有 `default.custom.yaml` 中加入 `tiger_sentence`；
+4. 重新部署，使 Lua 和补充语料重新加载。
+
+不要覆盖用户已有的 `rime.lua` 或 `default.custom.yaml`；合并相应条目。默认在候选
+窗口显示编码。用户自行开启 inline preedit 时，Lua 仍通过 `Candidate.preedit`
+维护当前候选的分段编码。
+
+## 输入行为
+
+- 字母连续输入整句编码；空格提交候选，回车提交原始编码，Esc 清空。
+- 有编码时，`;`、`'`、数字分别选择码表第 2、第 3、第 N 项，`0` 为第 10 项。
+- Up/Down 或 Tab/Shift+Tab 遍历可见候选。
+- 一码段只在整段输入只有一码时合法。
+- 整段不超过四码时允许当前码位全部词条，但首选路径排在后选之前；更长输入的
+  裸码只取首选，非首选必须显式选重。
+- 分段空格只用于显示，不进入 raw code。
+
+自动提前上屏默认开启：raw 长度超过四键后，需要三个严格连续的一键追加代达到
+0.995 置信度且公共前缀 raw 边界一致。退格或手动遍历会清除/暂停证据。每次提交
+保留完整不稳定后缀和至少最后一个候选字。Rime Lua 只能用 `commit_text`、`clear`、
+`push_input` 重建 composition，因此不同前端可能出现单帧刷新。
 
 ## 补充语料
 
-用户目录根部的 `tiger_sentence.supplement.txt` 用于提升模型尚未覆盖的新词、流行词和个人词语。文件使用 UTF-8 编码，每行格式为 `词条 [权重]`，词条与可选正整数权重之间用空格或制表符分隔；省略权重时默认为 1000，空行和 `#` 注释会被忽略，重复词条以最后一行为准。用户明确写入的词条视为强偏好，奖励公式与 Windows Core 一致：`clamp(9.0 + 2.0 * ln(weight / 1000), 0, 16)`。奖励参与 Beam 排序但不计入置信度，文件不存在时保持原排序和快速路径。修改后重新部署以重新加载 Lua 模块。
+用户目录根部的 `tiger_sentence.supplement.txt` 使用 UTF-8：
 
-## 按键
+```text
+# 词条 权重
+茧师 1000
+新词
+```
 
-- 字母连打整段编码
-- 空码时数字直接上屏；有编码时 `;` / `'` / 数字写入编码，分别选第 2、第 3、第 N 候选（`0` 为第 10）
-- 空格上屏当前整句；回车上屏原始编码；Esc 清码
-- `提前上屏` 默认开启，可从方案选单关闭。开启后，原始编码超过 4 键时，取三个严格连续一键追加代各自达到 0.995 置信度的最长提案之公共前缀，并要求该前缀在三代中对应相同的原始编码终点；置信度覆盖完整的 200 状态最终 beam、合并同文不同路径的概率质量，并纳入“已完成路径 + 合法但尚未打完的尾码前缀”。尾码假设只参与提前上屏判断，不进入候选窗，也不改变正常排序；如果任一参与计算的 beam 已被裁剪，本轮不会提前提交
-- 每次可提前提交一个或多个稳定新字、距离上次提交至少新增三个编码键，并保留尚未稳定的全部后缀（至少保留候选最后一个字）；退格会清空稳定证据，手动上下翻选或 Tab 遍历候选后会暂停本次 composition 的提前上屏
-- 实时未提交尾码最多接受 128 个原始编码字符；已提前提交、仅用于语言模型上下文的编码不占这个上限
-- Rime Lua 的 partial commit 必须通过 `commit_text`、`clear`、`push_input` 重建 composition；提交粒度与冷却可减少候选窗刷新，但不同前端是否出现单帧闪烁仍需实机验证
-- 上下方向键或 Tab / Shift+Tab 遍历候选
-- 一码字只在整段就是那一码时合法
-- 整段不超过 4 码时检索该码位全部字词，非首选按码表顺序排在首选之后；超过 4 码后裸码只取首选
+权重默认为 1000，重复词条以最后一项为准。奖励与 Windows Core 相同：
+`clamp(9 + 2 * ln(weight / 1000), 0, 16)`。它参与 Beam 排序但不进入提前上屏
+置信度，不会创建码表中不存在的编码。修改后需重新部署。
 
-移动端优先使用仓库外的 `sentence-ngram-mobile.bin`（TCSKNM02）。它保留
-`sentence-ngram-v2.bin` 的全部 n-gram 和原始 float32 概率，只把数据重排为上下文页；
-Lua 常驻 unigram 和约 2.1MB 的稀疏索引，并用上限 8MB 的 LRU 缓存按需读取上下文页，
-不再把 228MB 模型一次性读入内存。生成命令：
+## 模型
+
+移动端优先使用仓库外的 `sentence-ngram-mobile.bin`（TCSKNM02）。它是 V2 模型的
+无损分页重排，常驻稀疏索引约 2.1 MiB，上下文页 LRU 上限 8 MiB，不会一次读入
+完整模型。
 
 ```bash
 python3 tools/convert_sentence_ngram_mobile.py \
@@ -40,18 +66,24 @@ python3 tools/convert_sentence_ngram_mobile.py \
   /mnt/c/Archive/tigerclaw_sentence_ml/runtime/sentence-ngram-mobile.bin
 ```
 
-默认的 `--index-stride 64` 面向移动端内存占用。桌面端如果更重视按键延迟，
-可用 `--index-stride 16` 重新生成同名模型；常驻稀疏索引会增加约 6 MiB，
-但首次遇到一个语言模型上下文时最多扫描的记录数降为原来的四分之一。
+查找顺序：用户目录 `models/`、用户目录根部、共享目录 `models/`，再尝试对应的
+`sentence-ngram-v2.bin`；开发机最后回退到 `C:\Archive\tigerclaw_sentence_ml\runtime`。
+大模型不得提交 Git。
 
-查找顺序优先 mobile 文件，找不到时仍兼容原来的 TCSKNM01 文件：
+## 验证
 
-1. Rime 用户目录下的 `models/sentence-ngram-mobile.bin`
-2. Rime 用户目录下的 `sentence-ngram-mobile.bin`
-3. Rime 共享目录下的 `models/sentence-ngram-mobile.bin`
-4. 上述位置对应的 `sentence-ngram-v2.bin`
-5. 开发机 `C:\Archive\tigerclaw_sentence_ml\runtime` 下的 mobile、再到原模型
+无模型路径：
 
-当前是纯 Lua 查表。解码对准确率无损：增量复用格网，追加时只生成跨过旧输入末端的新边，避免旧路径被重复计入置信度；退格直接取前缀状态。高歧义位置在扩展期间自适应合并相同文本，使用确定性的精确 Top-K 选择 Beam 和窗口中的 20 个候选，不排序随后会丢弃的状态；完整路径的 EOS 与孤立字调整只计算一次，提前上屏仅保留提案、原始编码边界和截断状态摘要。处理完的位置冻结成紧凑数组，后续读取直接复用，不再重复聚合和排序。Beam 状态不再逐层拼接分段编码，只为最终显示的 20 个候选从路径边界重建；候选排名对数按词条缓存，无补充语料时则在字符循环外整体绕过匹配器。缓存精确 KN logp 和真实二元组查询，并缓存分页模型的上下文位置；这些缓存都有固定上限，防止长时间使用后持续增长。码表候选的选重过滤和 UTF-8 拆分也会按词条复用。EOS 只在出候选时另算，不写回 beam。Beam 扩展时每输出一个 Unicode 字符增加 2.0 分，与 Core 使用相同的编码条件长度先验，抵消同码候选中纯语言模型对短文本的偏好。出候选时再减去与 Core 相同的孤立生僻字惩罚：字频排名大于 3000、且左右都没有模型里真实出现过的二元组，每个字减 2。字频表由导出脚本写成 `lua/tiger_sentence_ranks.lua`。短码全检索与首选优先规则也与 Core 一致。不要把大模型提交进 Git。
+```bash
+lua tools/test_tiger_sentence_incremental.lua .
+```
 
-增量一致性测试默认允许无模型降级，并明确打印实际加载状态；需要验证真实模型时使用支持 `string.unpack` 和 `utf8` 的 Lua 5.3+ 执行 `lua tools/test_tiger_sentence_incremental.lua . --require-model`。LuaJIT 2.1 不具备这两个标准库 API，只适合测试无模型路径。
+真实模型路径需要 Lua 5.3+：
+
+```bash
+lua tools/test_tiger_sentence_incremental.lua . --require-model
+```
+
+测试输出必须明确显示实际模型。LuaJIT 2.1 缺少这里使用的标准 `string.unpack` 和
+`utf8` API，只适合无模型测试。候选顺序、增量/全量一致性、补充语料和提前上屏
+证据应与 C# golden 分开核对。
