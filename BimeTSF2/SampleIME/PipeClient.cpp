@@ -34,6 +34,62 @@ static void LogPipeFailure(const char *stage, DWORD errorCode, LONG seq)
     }
 }
 
+// Opt-in physical-message capture for the Core differential suite. The
+// environment variable defaults off, so normal releases never record input.
+// Each TSF host thread gets a separate JSONL file to avoid line interleaving.
+static void CaptureDifferentialMessage(const char *jsonMessage)
+{
+    if (jsonMessage == nullptr || jsonMessage[0] == '\0')
+    {
+        return;
+    }
+
+    WCHAR directory[MAX_PATH] = {};
+    DWORD directoryLength = GetEnvironmentVariableW(
+        L"BIME_TSF_TRACE_DIR", directory, ARRAYSIZE(directory));
+    if (directoryLength == 0 || directoryLength >= ARRAYSIZE(directory))
+    {
+        return;
+    }
+
+    CreateDirectoryW(directory, nullptr);
+    WCHAR path[MAX_PATH] = {};
+    int written = swprintf_s(
+        path,
+        ARRAYSIZE(path),
+        L"%ls\\core-trace-%lu-%lu.jsonl",
+        directory,
+        GetCurrentProcessId(),
+        GetCurrentThreadId());
+    if (written <= 0)
+    {
+        return;
+    }
+
+    HANDLE file = CreateFileW(
+        path,
+        FILE_APPEND_DATA,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
+        nullptr,
+        OPEN_ALWAYS,
+        FILE_ATTRIBUTE_NORMAL,
+        nullptr);
+    if (file == INVALID_HANDLE_VALUE)
+    {
+        return;
+    }
+
+    DWORD ignored = 0;
+    DWORD length = static_cast<DWORD>(strlen(jsonMessage));
+    WriteFile(file, jsonMessage, length, &ignored, nullptr);
+    if (length == 0 || jsonMessage[length - 1] != '\n')
+    {
+        static const char newline = '\n';
+        WriteFile(file, &newline, 1, &ignored, nullptr);
+    }
+    CloseHandle(file);
+}
+
 static void PumpCurrentThreadNonInputMessages()
 {
     MSG msg = {};
@@ -239,6 +295,8 @@ BOOL CPipeClient::SendMessage(const char *jsonMessage)
         return FALSE;
     }
 
+    CaptureDifferentialMessage(jsonMessage);
+
     if (!_isConnected && !Connect())
     {
         LogPipeFailure("SendMessage.Connect", GetLastError(), ExtractSeqFromJson(jsonMessage));
@@ -261,6 +319,8 @@ HRESULT CPipeClient::SendMessageAndWait(const char *jsonMessage, _Out_ BimeRespo
     {
         return E_INVALIDARG;
     }
+
+    CaptureDifferentialMessage(jsonMessage);
 
     pResponse->seq = -1;
     pResponse->success = FALSE;

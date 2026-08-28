@@ -35,6 +35,7 @@ _dotnet_home_tmp/
 _tmp*/
 _run*/
 _run)
+.core_diff/
 *.tmp
 *.temp
 *.bak

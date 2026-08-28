@@ -7,7 +7,7 @@ use std::sync::Mutex;
 use std::path::Path;
 use std::sync::Arc;
 
-use tigerclaw_core_rust::protocol::handle_line;
+use tigerclaw_core_rust::protocol::{differential_snapshot, handle_line, wait_for_differential_idle};
 use tigerclaw_core_rust::state::CoreState;
 use tigerclaw_core_rust::lexicon::Lexicon;
 use tigerclaw_core_rust::config::Config;
@@ -20,6 +20,12 @@ mod windows_pipe;
 
 fn main() -> io::Result<()> {
     let stdio = std::env::args().any(|argument| argument == "--stdio");
+    let differential_stdio = std::env::args().any(|argument| argument == "--diff-stdio");
+    let differential_root = std::env::args()
+        .collect::<Vec<_>>()
+        .windows(2)
+        .find(|pair| pair[0] == "--root")
+        .map(|pair| std::path::PathBuf::from(&pair[1]));
     // `--lexicon` is an explicit test/debug override.  Never discover a
     // hard-coded 虎码 file before reading config.txt: doing so makes a
     // configured schema appear to work while silently loading the wrong
@@ -42,6 +48,16 @@ fn main() -> io::Result<()> {
     let sentence_exe = std::env::args().collect::<Vec<_>>().windows(2).find(|pair| pair[0] == "--sentence-exe").map(|pair| pair[1].clone());
     let qwen_model = std::env::args().collect::<Vec<_>>().windows(2).find(|pair| pair[0] == "--qwen-model").map(|pair| pair[1].clone());
     let root = std::env::current_exe().ok().and_then(|path| path.parent().map(|p| p.to_path_buf()));
+    if differential_stdio {
+        return run_differential_stdio(
+            lexicon_path,
+            config_path,
+            ngram_path,
+            sentence_exe,
+            qwen_model,
+            differential_root,
+        );
+    }
     let config_path = config_path.or_else(|| root.as_ref().map(|p| p.join("config.txt").to_string_lossy().into_owned()));
     let ngram_path = ngram_path.or_else(|| root.as_ref().map(|p| p.join(r"Models\sentence-ngram-v2.bin").to_string_lossy().into_owned()).filter(|p| std::path::Path::new(p).exists()));
     let sentence_exe = sentence_exe.or_else(|| root.as_ref().map(|p| p.join(r"sentence\TigerClaw.Sentence.exe").to_string_lossy().into_owned()).filter(|p| std::path::Path::new(p).exists()));
@@ -68,6 +84,79 @@ fn main() -> io::Result<()> {
         eprintln!("TigerClaw.Core.Rust: use --stdio outside Windows");
         Ok(())
     }
+}
+
+fn run_differential_stdio(
+    lexicon_path: Option<String>,
+    config_path: Option<String>,
+    ngram_path: Option<String>,
+    sentence_exe: Option<String>,
+    qwen_model: Option<String>,
+    root: Option<std::path::PathBuf>,
+) -> io::Result<()> {
+    let stdin = io::stdin();
+    let mut stdout = io::stdout().lock();
+    let root = root.or_else(|| {
+        std::env::current_exe()
+            .ok()
+            .and_then(|path| path.parent().map(|parent| parent.to_path_buf()))
+    });
+    let config_path = config_path.or_else(|| {
+        root.as_ref()
+            .map(|path| path.join("config.txt").to_string_lossy().into_owned())
+    });
+    let ngram_path = ngram_path.or_else(|| {
+        root.as_ref()
+            .map(|path| path.join("Models").join("sentence-ngram-v2.bin"))
+            .filter(|path| path.exists())
+            .map(|path| path.to_string_lossy().into_owned())
+    });
+    let mut state = build_state(
+        lexicon_path,
+        config_path,
+        ngram_path,
+        sentence_exe,
+        qwen_model,
+        root.as_deref(),
+    )?;
+    state.differential_mode = true;
+    for line in stdin.lock().lines() {
+        let line = line?;
+        let control: Option<serde_json::Value> = serde_json::from_str(&line).ok();
+        let is_control = control.as_ref().and_then(|value| value.get("_diff")).is_some();
+        let response = if is_control {
+            if control
+                .as_ref()
+                .and_then(|value| value.get("_diff"))
+                .and_then(|value| value.as_str())
+                == Some("wait_idle")
+                && !wait_for_differential_idle(&mut state, std::time::Duration::from_secs(10))
+            {
+                return Err(io::Error::new(io::ErrorKind::TimedOut, "sentence decode did not become idle"));
+            }
+            None
+        } else {
+            handle_line(&mut state, &line)
+        };
+        let ui_command = std::mem::take(&mut state.differential_ui_command);
+        let response_value = response.and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok());
+        let mut snapshot = differential_snapshot(&mut state);
+        if let Some(pending) = response_value
+            .as_ref()
+            .and_then(|value| value.get("composition_pending"))
+            .and_then(|value| value.as_bool())
+        {
+            snapshot["composition_pending"] = pending.into();
+        }
+        let observation = serde_json::json!({
+            "response": response_value,
+            "snapshot": snapshot,
+            "ui_command": ui_command,
+        });
+        writeln!(stdout, "{observation}")?;
+        stdout.flush()?;
+    }
+    Ok(())
 }
 
 fn build_state(

@@ -1,0 +1,7 @@
+{"type":"key","seq":1,"client_session":"fixture-2","event_id":"1","action":"down","vk":162,"scan":29,"shift":false,"ctrl":true,"alt":false,"win":false,"capsLock":false,"numLock":true,"repeat":1,"extended":false,"tsf_stage":"test_keydown"}
+{"type":"key","seq":2,"client_session":"fixture-2","event_id":"2","action":"down","vk":32,"scan":57,"shift":false,"ctrl":true,"alt":false,"win":false,"capsLock":false,"numLock":true,"repeat":1,"extended":false,"tsf_stage":"test_keydown"}
+{"type":"key","seq":3,"client_session":"fixture-2","event_id":"3","action":"up","vk":32,"scan":57,"shift":false,"ctrl":true,"alt":false,"win":false,"capsLock":false,"numLock":true,"repeat":1,"extended":false,"tsf_stage":"test_keyup"}
+{"type":"key","seq":4,"client_session":"fixture-2","event_id":"4","action":"up","vk":162,"scan":29,"shift":false,"ctrl":false,"alt":false,"win":false,"capsLock":false,"numLock":true,"repeat":1,"extended":false,"tsf_stage":"test_keyup"}
+{"type":"ctrl_space","seq":5}
+{"type":"key","seq":6,"client_session":"fixture-2","event_id":"5","action":"down","vk":65,"scan":30,"shift":false,"ctrl":false,"alt":false,"win":false,"capsLock":false,"numLock":true,"repeat":1,"extended":false,"tsf_stage":"test_keydown"}
+{"type":"key","seq":7,"client_session":"fixture-2","event_id":"6","action":"down","vk":188,"scan":51,"shift":false,"ctrl":false,"alt":false,"win":false,"capsLock":false,"numLock":true,"repeat":1,"extended":false,"tsf_stage":"test_keydown"}

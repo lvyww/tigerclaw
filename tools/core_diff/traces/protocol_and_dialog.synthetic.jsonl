@@ -1,0 +1,9 @@
+{"type":"hello","seq":1,"protocol_version":2}
+{"type":"query_state","seq":2}
+{"type":"show_menu","seq":3}
+{"type":"show_config","seq":4}
+{"type":"show_addci","seq":5}
+{"type":"construct_ci","seq":6,"text":"甲你"}
+{"type":"get_last_ci","seq":7,"history_len":4}
+{"type":"set_config","seq":8,"key":"主题","value":"夜间"}
+{"type":"query_state","seq":9}

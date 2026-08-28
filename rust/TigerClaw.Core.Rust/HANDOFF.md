@@ -190,16 +190,18 @@ when the production TSF sends a different message sequence.
     installed TSF and confirmation that the bridge's actual key metadata does
     not alter the result.
 
-- [ ] `RUST-P0-002` Build a C#-versus-Rust physical-key trace differential
-  harness. *(implementation landed, captured-TSF/C# adapter acceptance
-  pending)*
-  - `tools/compare_core_key_trace.py` replays the same JSONL events to Rust
-    and a C# adapter, compares handled/commit/composition/candidates/selection,
-    keyboard/cancellation fields, rejects malformed traces, and requires
-    scan/repeat/extended/NumLock metadata unless explicitly overridden.
-  - Remaining work is to capture real installed-TSF traces, provide the C#
-    adapter, and run the comparison across representative applications; no
-    synthetic single-call run closes this item.
+- [ ] `RUST-P0-002` C#-versus-Rust physical-key trace differential gate.
+  *(automatic gate landed; representative captured-TSF corpus pending)*
+  - `tools/run_core_diff.bat` builds/tests both implementations and runs the
+    isolated stdio adapters through `tools/compare_core_key_trace.py`. The
+    committed deterministic suite covers protocol/Dialog commands, normal and
+    pinyin input, modifier toggles, punctuation, replay identity and
+    asynchronous sentence pending/settled checkpoints. GitHub Actions runs the
+    same Windows gate and retains first-difference reports/sandboxes on failure.
+  - Setting `BIME_TSF_TRACE_DIR` enables exact opt-in bridge capture;
+    `tools/sanitize_core_trace.py` validates physical metadata and redacts
+    identities before a `*.captured.jsonl` file is committed. Close this item
+    after editor, browser and terminal captures have passed the automatic gate.
 
 - [ ] `RUST-P0-003` Normal-code boundary rollover and empty-code behavior.
   *(implementation landed, Windows/TSF acceptance pending)*
@@ -534,6 +536,32 @@ Do not reopen these as gaps without a failing trace:
 - Rust already generation-checks completed Beam and rerank results and limits
   Qwen input to the first five candidates. The remaining Qwen lifecycle gaps
   are the narrower items in `RUST-P1-010`.
+
+### Known limitation: tail-rank floating-point drift on long sentence input
+
+`tools/benchmark_core_ngram_latency.py` surfaced a case where C# and Rust
+produce different beam candidates at ranks 2-5 for a 48-key/24-character
+sentence input, while rank 1 (the actual commit/display winner) matched. A
+line-by-line audit of `decoder.rs`/`ngram.rs` against
+`SentenceInputDecoder.cs`/`SentenceNgramModel.cs`/`SentenceIsolationPenalty.cs`
+found the KN score formula and operation order, cache sizes, beam width,
+score-accumulation order, isolation-penalty formula, and the character rank
+table itself (Rust's `ranks.rs` embeds the same
+`next/TigerClaw.Core/Data/sentence_char_ranks.txt` via `include_str!`) to be
+byte-identical between the two implementations. The remaining variable is
+that Rust's `f64::ln`/`exp` (system libm) and .NET's `Math.Log`/`Math.Exp`
+(CRT) are not guaranteed bit-identical in their last ULP. Over ~24
+intermediate beam-limit truncations with beam width 2000, a sub-ULP drift
+compounded across many near-tied candidates is enough to flip which
+candidate survives a truncation boundary; a 2-character case ("今天你们")
+has too few accumulated operations to flip any tie and matches exactly on
+both sides, matching this theory. Do not treat a tail-rank (2+) mismatch on
+long sentence input as a parity gap by itself; only a rank-1/commit-text
+mismatch is a real regression. `RUST-P0-002`'s differential gate keeps its
+exact-match requirement across all reported ranks by design (it is meant to
+catch protocol/behavior regressions, not to assert floating-point
+reproducibility) — a failure there still needs triage to tell drift apart
+from an actual bug before it is waived.
 
 ## Build and Publish
 

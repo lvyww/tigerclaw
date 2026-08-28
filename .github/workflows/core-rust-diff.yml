@@ -1,0 +1,46 @@
+name: Rust Core differential
+
+on:
+  pull_request:
+    paths:
+      - "next/TigerClaw.Core/**"
+      - "next/TigerClaw.Core.Tests/**"
+      - "BimeTSF2/SampleIME/PipeClient.cpp"
+      - "rust/TigerClaw.Core.Rust/**"
+      - "tools/core_diff/**"
+      - "tools/compare_core_key_trace.py"
+      - "tools/sanitize_core_trace.py"
+      - "tools/run_core_diff.bat"
+      - ".github/workflows/core-rust-diff.yml"
+  push:
+    paths:
+      - "next/TigerClaw.Core/**"
+      - "next/TigerClaw.Core.Tests/**"
+      - "BimeTSF2/SampleIME/PipeClient.cpp"
+      - "rust/TigerClaw.Core.Rust/**"
+      - "tools/core_diff/**"
+      - "tools/compare_core_key_trace.py"
+      - "tools/sanitize_core_trace.py"
+      - "tools/run_core_diff.bat"
+      - ".github/workflows/core-rust-diff.yml"
+
+jobs:
+  differential:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    env:
+      CORE_DIFF_REPORT: .core_diff/report.json
+      CORE_DIFF_WORK: .core_diff/work
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Run C# versus Rust differential gate
+        shell: cmd
+        run: tools\run_core_diff.bat
+      - name: Upload differential diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-differential-failure
+          path: .core_diff
+          if-no-files-found: ignore

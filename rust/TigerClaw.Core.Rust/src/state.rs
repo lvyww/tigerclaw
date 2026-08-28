@@ -185,6 +185,8 @@ pub struct CoreState {
     pub fresh_caret_deadline: Option<Instant>,
     pub sound_seq: i64,
     pub sound_vk: i32,
+    pub differential_mode: bool,
+    pub differential_ui_command: String,
 }
 
 impl Default for CoreState {
@@ -275,6 +277,8 @@ impl Default for CoreState {
             fresh_caret_deadline: None,
             sound_seq: 0,
             sound_vk: 0,
+            differential_mode: false,
+            differential_ui_command: String::new(),
         }
     }
 }

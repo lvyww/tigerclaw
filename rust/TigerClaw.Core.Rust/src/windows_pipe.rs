@@ -295,6 +295,14 @@ fn publish_ui(state: &CoreState, publisher: &Arc<Mutex<Publisher>>) {
     let awaiting_fresh_caret = state
         .fresh_caret_deadline
         .is_some_and(|deadline| std::time::Instant::now() < deadline);
+    let selected_candidate_index = if state.config.sentence_active()
+        && !candidates.is_empty()
+        && state.selected_candidate < candidates.len()
+    {
+        state.selected_candidate as i32
+    } else {
+        -1
+    };
     let payload = serde_json::to_vec(&OverlayState {
         IsOff: state.hook_native_disabled,
         IsChinese: state.keyboard_open,
@@ -331,7 +339,7 @@ fn publish_ui(state: &CoreState, publisher: &Arc<Mutex<Publisher>>) {
         CandidateExpandDelayMs: state.config.candidate_expand_delay_ms,
         AnnotationExpandDelayMs: state.config.annotation_expand_delay_ms,
         IsNativeHook: state.native_hook_active,
-        SelectedCandidateIndex: if state.config.sentence_active() { state.selected_candidate as i32 } else { -1 },
+        SelectedCandidateIndex: selected_candidate_index,
         CaretHeight: state.caret_height,
     }).unwrap_or_default();
     if let Ok(mut value) = publisher.lock() { value.publish_json(&payload); }

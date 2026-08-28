@@ -317,17 +317,30 @@ namespace TigerClaw.Core
 
         public int LexiconVersion { get; private set; }
 
+        internal string GetRuntimeBaseDirectory() => _baseDir;
+
 
 
         public CoreRuntimeState()
+            : this(null)
+        {
+        }
+
+        internal CoreRuntimeState(string differentialRoot)
 
         {
 
             string exePath = Process.GetCurrentProcess().MainModule?.FileName ?? string.Empty;
 
-            _exeDir = Path.GetDirectoryName(exePath) ?? AppContext.BaseDirectory;
+            string defaultExeDir = Path.GetDirectoryName(exePath) ?? AppContext.BaseDirectory;
 
-            _baseDir = Path.GetFullPath(AppDomain.CurrentDomain.BaseDirectory);
+            _exeDir = string.IsNullOrWhiteSpace(differentialRoot)
+                ? defaultExeDir
+                : Path.GetFullPath(differentialRoot);
+
+            _baseDir = string.IsNullOrWhiteSpace(differentialRoot)
+                ? Path.GetFullPath(AppDomain.CurrentDomain.BaseDirectory)
+                : _exeDir;
 
             _configPath = Path.Combine(_exeDir, "config.txt");
 

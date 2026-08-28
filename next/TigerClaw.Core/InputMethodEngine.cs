@@ -252,7 +252,7 @@ namespace TigerClaw.Core
 
                 if (_sentenceLanguageModel == null)
                 {
-                    _sentenceLanguageModel = SentenceNgramModel.LoadAvailable(AppContext.BaseDirectory);
+                    _sentenceLanguageModel = SentenceNgramModel.LoadAvailable(_state.GetRuntimeBaseDirectory());
                 }
                 if (_sentenceLanguageModel == null)
                 {
@@ -4145,6 +4145,37 @@ namespace TigerClaw.Core
             return fullDisplayCode;
         }
 
+        internal EngineDifferentialSnapshot GetDifferentialSnapshot(int pageSize)
+        {
+            lock (_lock)
+            {
+                EngineUiSnapshot ui = GetUiSnapshot(pageSize);
+                string rawInput;
+                if (_compositionState == CompositionState.CnSentence)
+                {
+                    rawInput = _sentenceRawBuffer.ToString();
+                }
+                else if (_mixedRawBuffer.Length > 0)
+                {
+                    rawInput = _mixedRawBuffer.ToString();
+                }
+                else
+                {
+                    rawInput = _inputBuffer.ToString();
+                }
+
+                return new EngineDifferentialSnapshot
+                {
+                    Ui = ui,
+                    RawInput = rawInput,
+                    SentenceCommittedText = _sentenceCommittedText,
+                    SentenceCommittedRawLength = _sentenceCommittedRawLength,
+                    CandidatePageIndex = _candidatePageIndex,
+                    SentenceGeneration = _sentenceGeneration
+                };
+            }
+        }
+
         private SentenceDecodeResult FilterSentenceDecodeResultForCommittedPrefix(SentenceDecodeResult result)
         {
             if (_sentenceCommittedText.Length == 0 || result == null)
@@ -4249,6 +4280,16 @@ namespace TigerClaw.Core
         public string[] CandidateAnnotations { get; set; }
         public int SelectedCandidateIndex { get; set; }
         public int CompositionState { get; set; }
+    }
+
+    internal sealed class EngineDifferentialSnapshot
+    {
+        public EngineUiSnapshot Ui { get; set; }
+        public string RawInput { get; set; }
+        public string SentenceCommittedText { get; set; }
+        public int SentenceCommittedRawLength { get; set; }
+        public int CandidatePageIndex { get; set; }
+        public long SentenceGeneration { get; set; }
     }
 
     internal sealed class KeyEngineResult

@@ -20,6 +20,11 @@ namespace TigerClaw.Core.Tests
         {
             try
             {
+                if (args.Length == 2 &&
+                    string.Equals(args[0], "--core-diff-stdio", StringComparison.OrdinalIgnoreCase))
+                {
+                    return RunCoreDifferentialAdapter(args[1]);
+                }
                 if (args.Length >= 1 &&
                     string.Equals(args[0], "--sentence-golden-export", StringComparison.OrdinalIgnoreCase))
                 {
@@ -187,6 +192,61 @@ namespace TigerClaw.Core.Tests
 
                 return 1;
             }
+        }
+
+        private static int RunCoreDifferentialAdapter(string root)
+        {
+            Directory.CreateDirectory(root);
+            var state = new CoreRuntimeState(root);
+            state.Initialize();
+            string lastUiCommand = string.Empty;
+            using (var handler = new ProtocolHandler(command => lastUiCommand = command.ToString(), state, null))
+            {
+                string line;
+                while ((line = Console.ReadLine()) != null)
+                {
+                    string response = null;
+                    if (line.IndexOf("\"_diff\"", StringComparison.Ordinal) >= 0 &&
+                        line.IndexOf("wait_idle", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        if (!handler.WaitForDifferentialIdle(10000))
+                        {
+                            Console.Error.WriteLine("C# differential adapter timed out waiting for sentence decode");
+                            return 2;
+                        }
+                    }
+                    else if (line.IndexOf("\"_diff\"", StringComparison.Ordinal) < 0)
+                    {
+                        response = handler.Handle(line);
+                    }
+
+                    bool? pendingAtResponse = null;
+                    if (!string.IsNullOrEmpty(response))
+                    {
+                        if (response.IndexOf("\"composition_pending\":true", StringComparison.Ordinal) >= 0)
+                        {
+                            pendingAtResponse = true;
+                        }
+                        else if (response.IndexOf("\"composition_pending\":false", StringComparison.Ordinal) >= 0)
+                        {
+                            pendingAtResponse = false;
+                        }
+                    }
+                    string snapshot = handler.BuildDifferentialSnapshotJson(pendingAtResponse);
+                    Console.WriteLine("{\"response\":" + (string.IsNullOrEmpty(response) ? "null" : response) +
+                                      ",\"snapshot\":" + snapshot +
+                                      ",\"ui_command\":" + QuoteJson(lastUiCommand) + "}");
+                    Console.Out.Flush();
+                    lastUiCommand = string.Empty;
+                }
+            }
+            return 0;
+        }
+
+        private static string QuoteJson(string value)
+        {
+            string text = value ?? string.Empty;
+            return "\"" + text.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\r", "\\r").Replace("\n", "\\n") + "\"";
         }
 
         private static void KeepsMaxLengthAsActiveCode()

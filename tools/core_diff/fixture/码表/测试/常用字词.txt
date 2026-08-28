@@ -1,0 +1,12 @@
+甲	abcd
+乙	abcd
+丙	abcd
+丁	abcd
+今	jae
+天	fm
+斜	jxj
+你	wxyz
+一	fi
+一般	fi
+一起	fi
+符号	zzzz

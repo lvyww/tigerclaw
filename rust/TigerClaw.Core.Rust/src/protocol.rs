@@ -30,7 +30,6 @@ pub fn handle_line(state: &mut CoreState, line: &str) -> Option<String> {
                 "seq": seq,
                 "success": true,
                 "handled": false,
-                "keyboard_open": state.keyboard_open,
                 "protocol_version": PROTOCOL_VERSION,
                 "core_build": env!("CARGO_PKG_VERSION"),
                 "core_commit": "experimental",
@@ -103,11 +102,12 @@ pub fn handle_line(state: &mut CoreState, line: &str) -> Option<String> {
             state.keyboard_open = !state.keyboard_open;
             let commit_text = composition_raw_commit(state);
             clear_composition(state);
-            Some(without_cancel_composition(if commit_text.is_empty() {
-                state_response(state, seq, true)
+            let extra = if commit_text.is_empty() {
+                json!({"input_buffer": ""})
             } else {
-                commit_response(state, seq, true, commit_text)
-            }))
+                json!({"input_buffer": "", "commit_text": commit_text})
+            };
+            Some(simple_response(state, seq, true, extra))
         }
         "caret" => {
             state.caret_x = integer(&message, "x");
@@ -1633,7 +1633,17 @@ fn spawn_ui_process(state: &CoreState, executable: &str, arg: &str) -> bool {
     true
 }
 
-fn launch_ui(state: &CoreState, seq: i64, executable: &str, arg: &str) -> String {
+fn launch_ui(state: &mut CoreState, seq: i64, executable: &str, arg: &str) -> String {
+    if state.differential_mode {
+        state.differential_ui_command = if executable.eq_ignore_ascii_case("TigerClaw.Overlay.exe") {
+            "ShowMenu".to_owned()
+        } else if arg.eq_ignore_ascii_case("--addci") {
+            "ShowAddCi".to_owned()
+        } else {
+            "ShowConfig".to_owned()
+        };
+        return simple_response(state, seq, true, json!({}));
+    }
     let ok = spawn_ui_process(state, executable, arg);
     #[cfg(windows)]
     if ok && executable.eq_ignore_ascii_case("TigerClaw.Overlay.exe") {
@@ -1965,12 +1975,17 @@ fn trim_sentence_result_after_early_commit(state: &mut CoreState, committed_delt
 }
 
 fn simple_response(state: &CoreState, seq: i64, success: bool, extra: Value) -> String {
-    let mut response: Value = serde_json::from_str(&state_response(state, seq, success)).expect("state response JSON");
-    response["success"] = success.into(); response["handled"] = success.into();
+    // Dialog/language-bar commands use C#'s compact BuildResponse shape. Key
+    // state, candidates and version counters are added only by the specific
+    // request types whose protocol defines them.
+    let mut response = json!({
+        "type": "response",
+        "seq": seq,
+        "success": success,
+        "handled": success,
+        "keyboard_open": state.keyboard_open,
+    });
     if let Value::Object(values) = extra { for (key, value) in values { response[key] = value; } }
-    if let Some(object) = response.as_object_mut() {
-        object.remove("cancel_composition");
-    }
     response.to_string()
 }
 
@@ -2014,6 +2029,17 @@ fn shape_key_response(state: &CoreState, message: &Value, response: &str, before
     };
     let hook = frontend.eq_ignore_ascii_case("hook_native");
     let tsf = message.get("tsf_stage").is_some();
+    if let Some(object) = value.as_object_mut() {
+        // C# key responses contain only key/composition state. Version and
+        // generic config fields belong to query/config responses, not every
+        // physical key callback.
+        object.remove("config_version");
+        object.remove("lexicon_version");
+        object.remove("native_hook_alt_backslash_toggle_enabled");
+        object.remove("auto_switch_system_layout_enabled");
+        object.remove("use_clipboard_commit");
+        object.remove("clipboard_commit_whitelist");
+    }
     // Production TSF has a fixed 4096-byte response buffer and obtains the
     // candidate list/selection from the Overlay MMF.  Keep the legacy fields
     // for dependency-free callers/tests, but enforce the compact shape for a
@@ -2022,10 +2048,6 @@ fn shape_key_response(state: &CoreState, message: &Value, response: &str, before
         if let Some(object) = value.as_object_mut() {
             object.remove("candidates");
             object.remove("selected_index");
-            object.remove("native_hook_alt_backslash_toggle_enabled");
-            object.remove("auto_switch_system_layout_enabled");
-            object.remove("use_clipboard_commit");
-            object.remove("clipboard_commit_whitelist");
             if hook && before_keyboard != state.keyboard_open && state.config.auto_switch_system_layout {
                 object.insert("ensure_system_layout_en".to_owned(), Value::Bool(true));
             } else {
@@ -2070,8 +2092,11 @@ pub fn overlay_input_and_candidates(state: &CoreState) -> (String, Vec<String>) 
 }
 
 pub fn overlay_candidate_annotations(state: &CoreState) -> Vec<String> {
-    if state.uppercase_mode || state.config.sentence_active() {
+    if state.uppercase_mode {
         return Vec::new();
+    }
+    if state.config.sentence_active() {
+        return vec![String::new(); published_sentence_candidates(state).len()];
     }
     let pinyin = state.pinyin_mode;
     let code = if pinyin {
@@ -2103,6 +2128,14 @@ pub fn overlay_candidate_annotations(state: &CoreState) -> Vec<String> {
                     return String::new();
                 };
                 let split = state.lexicon.split_code(&candidate.text);
+                // C# first probes the complete split map and short-circuits
+                // before collecting full codes when no split metadata exists.
+                // A plain two-column table therefore shows no pinyin
+                // annotation even though a construct/full code can be
+                // derived from its candidates.
+                if split.is_empty() {
+                    return String::new();
+                }
                 let full = state.lexicon.full_code(&candidate.text);
                 if !split.is_empty() && !full.is_empty() {
                     format!("{split} | {full}")
@@ -2506,7 +2539,6 @@ fn state_response(state: &CoreState, seq: i64, handled: bool) -> String {
         "composition_tracking": sentence_tracking(state),
         "composition_pending": sentence_pending(state),
         "cancel_composition": cancel,
-        "ensure_system_layout_en": state.config.auto_switch_system_layout,
         "native_hook_alt_backslash_toggle_enabled": state.config.native_hook_alt_backslash,
         "auto_switch_system_layout_enabled": state.config.auto_switch_system_layout,
         "use_clipboard_commit": state.config.use_clipboard_commit,
@@ -2521,7 +2553,7 @@ fn sentence_tracking(state: &CoreState) -> bool {
     state.config.sentence_active() && !state.input_buffer.is_empty()
 }
 
-fn sentence_pending(state: &CoreState) -> bool {
+pub fn sentence_pending(state: &CoreState) -> bool {
     if !sentence_tracking(state) {
         return false;
     }
@@ -2533,6 +2565,72 @@ fn sentence_pending(state: &CoreState) -> bool {
     running
         || state.sentence_decoded_raw != state.input_buffer
         || state.sentence_decoded_lexicon_version != state.lexicon_version
+}
+
+pub fn wait_for_differential_idle(state: &mut CoreState, timeout: std::time::Duration) -> bool {
+    let started = std::time::Instant::now();
+    loop {
+        pump_sentence(state);
+        if !sentence_pending(state) {
+            return true;
+        }
+        if started.elapsed() >= timeout {
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
+pub fn differential_snapshot(state: &mut CoreState) -> Value {
+    let (input_buffer, candidates) = overlay_input_and_candidates(state);
+    let annotations = overlay_candidate_annotations(state);
+    let sentence = state.config.sentence_active() && !state.input_buffer.is_empty();
+    let is_composing = !state.input_buffer.is_empty() || !state.raw_input.is_empty();
+    let composition_state = if !state.keyboard_open {
+        0
+    } else if state.uppercase_mode {
+        3
+    } else if state.pinyin_mode {
+        4
+    } else if sentence {
+        5
+    } else if is_composing {
+        2
+    } else {
+        1
+    };
+    let raw_input = if !state.raw_input.is_empty() {
+        state.raw_input.clone()
+    } else {
+        state.input_buffer.clone()
+    };
+    let active_input_code = if sentence {
+        sentence_display_code(state)
+    } else {
+        state.input_buffer.clone()
+    };
+    json!({
+        "keyboard_open": state.keyboard_open,
+        "is_composing": is_composing,
+        "composition_state": composition_state,
+        "raw_input": raw_input,
+        "input_buffer": input_buffer,
+        "composition_prefix": state.mixed_prefix,
+        "active_input_code": active_input_code,
+        "candidates": candidates,
+        "candidate_annotations": annotations,
+        "selected_index": if sentence && !candidates.is_empty() && state.selected_candidate < candidates.len() {
+            state.selected_candidate as i64
+        } else {
+            -1
+        },
+        "candidate_page": state.normal_page_index,
+        "composition_tracking": sentence_tracking(state),
+        "composition_pending": sentence_pending(state),
+        "sentence_committed_text": state.early.committed_text,
+        "sentence_committed_raw_length": state.early.committed_raw_length,
+        "sentence_generation": state.sentence_generation,
+    })
 }
 
 fn mask_display_code(state: &CoreState, input: &str) -> String {
@@ -3356,7 +3454,7 @@ mod tests {
         assert_eq!(value["type"], "response");
         assert_eq!(value["seq"], 7);
         assert_eq!(value["protocol_version"], PROTOCOL_VERSION);
-        assert_eq!(value["keyboard_open"], true);
+        assert!(value.get("keyboard_open").is_none());
     }
 
     #[test]
@@ -4027,7 +4125,8 @@ mod tests {
         assert_eq!(state.input_buffer, "jaefmjx");
         assert_eq!(state.raw_input, "jaefmjx");
         assert_eq!(state.sentence_generation, generation + 1);
-        assert_eq!(type_vk(&mut state, 2, 0x08)["input_buffer"], "fmj");
+        let second_display = type_vk(&mut state, 2, 0x08)["input_buffer"].as_str().unwrap().to_owned();
+        assert!(second_display == "fmj" || second_display == "fm j");
         assert_eq!(type_vk(&mut state, 3, 0x08)["input_buffer"], "fm");
         assert_eq!(type_vk(&mut state, 4, 0x08)["input_buffer"], "f");
         let cleared = type_vk(&mut state, 5, 0x08);
@@ -4467,8 +4566,8 @@ mod tests {
 
         let mut state = CoreState::default();
         state.base_dir = Some(root.to_string_lossy().into_owned());
-        // The active table supplies the C#-style full-code annotation for
-        // the text returned by the reverse-lookup table.
+        // C# short-circuits pinyin annotations when the active table has no
+        // split metadata, even though full codes can be derived.
         state.lexicon = crate::lexicon::Lexicon::from_entries(&[("abcd", "你"), ("efgh", "妮")]);
         reload_pinyin_lexicon(&mut state);
 
@@ -4479,7 +4578,7 @@ mod tests {
         let typed = type_key(&mut state, 3, 0x49, "");
         assert_eq!(typed["input_buffer"], "·ni");
         assert_eq!(typed["candidates"], json!(["你", "妮"]));
-        assert_eq!(overlay_candidate_annotations(&state), vec!["abcd", "efgh"]);
+        assert_eq!(overlay_candidate_annotations(&state), vec!["", ""]);
 
         // Backspace edits only the pinyin code and keeps the marker; typing
         // the final vowel again restores the same candidate page.

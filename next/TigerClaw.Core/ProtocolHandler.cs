@@ -60,6 +60,63 @@ namespace TigerClaw.Core
             _engine?.Dispose();
         }
 
+        internal bool WaitForDifferentialIdle(int timeoutMs)
+        {
+            Stopwatch watch = Stopwatch.StartNew();
+            while (_engine.IsSentenceDecodePending && watch.ElapsedMilliseconds < timeoutMs)
+            {
+                Thread.Sleep(2);
+            }
+
+            return !_engine.IsSentenceDecodePending;
+        }
+
+        internal string BuildDifferentialSnapshotJson(bool? pendingOverride = null)
+        {
+            EngineDifferentialSnapshot differential = _engine.GetDifferentialSnapshot(_state.GetPageSize());
+            EngineUiSnapshot ui = differential.Ui;
+            string inputBuffer = BuildDisplayComposition(ui.CompositionPrefix, ui.ActiveInputCode);
+            return "{" +
+                   "\"keyboard_open\":" + (ui.IsChinese ? "true" : "false") + "," +
+                   "\"is_composing\":" + (ui.IsComposing ? "true" : "false") + "," +
+                   "\"composition_state\":" + ui.CompositionState + "," +
+                   "\"raw_input\":" + Quote(differential.RawInput) + "," +
+                   "\"input_buffer\":" + Quote(inputBuffer) + "," +
+                   "\"composition_prefix\":" + Quote(ui.CompositionPrefix) + "," +
+                   "\"active_input_code\":" + Quote(ui.ActiveInputCode) + "," +
+                   "\"candidates\":" + QuoteArray(ui.Candidates) + "," +
+                   "\"candidate_annotations\":" + QuoteArray(ui.CandidateAnnotations) + "," +
+                   "\"selected_index\":" + ui.SelectedCandidateIndex + "," +
+                   "\"candidate_page\":" + differential.CandidatePageIndex + "," +
+                   "\"composition_tracking\":" + (_engine.IsSentenceCompositionActive ? "true" : "false") + "," +
+                   "\"composition_pending\":" + ((pendingOverride ?? _engine.IsSentenceDecodePending) ? "true" : "false") + "," +
+                   "\"sentence_committed_text\":" + Quote(differential.SentenceCommittedText) + "," +
+                   "\"sentence_committed_raw_length\":" + differential.SentenceCommittedRawLength + "," +
+                   "\"sentence_generation\":" + differential.SentenceGeneration +
+                   "}";
+        }
+
+        private static string QuoteArray(string[] values)
+        {
+            if (values == null || values.Length == 0)
+            {
+                return "[]";
+            }
+
+            var builder = new StringBuilder();
+            builder.Append('[');
+            for (int index = 0; index < values.Length; index++)
+            {
+                if (index > 0)
+                {
+                    builder.Append(',');
+                }
+                builder.Append(Quote(values[index]));
+            }
+            builder.Append(']');
+            return builder.ToString();
+        }
+
         private void OnSentenceRerankResult(long generation, string rawCode, double[] scores)
         {
             if (_engine.ApplySentenceNeuralScores(generation, rawCode, scores))
@@ -523,7 +580,7 @@ namespace TigerClaw.Core
                    "\"seq\":" + seq + "," +
                    "\"success\":true," +
                    "\"handled\":false," +
-                   "\"protocol_version\":1," +
+                   "\"protocol_version\":2," +
                    "\"core_build\":\"next-dev\"," +
                    "\"core_commit\":\"next\"," +
                    "\"core_branch\":\"next\"," +
