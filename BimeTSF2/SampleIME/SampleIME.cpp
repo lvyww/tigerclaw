@@ -3662,6 +3662,33 @@ void CSampleIME::_SendCaretMessage(LONG x, LONG y, LONG width, LONG height, int 
         _lastHighPriorityCaretTick = now;
     }
 
+    if (source == CARET_SOURCE_LAYOUT && !_forceNextCaret)
+    {
+        const BOOL matchesPendingLayout =
+            _hasPendingCaret &&
+            _pendingCaretSource == CARET_SOURCE_LAYOUT &&
+            _pendingCaretX == x &&
+            _pendingCaretY == y &&
+            _pendingCaretWidth == width &&
+            _pendingCaretHeight == height;
+        if (matchesPendingLayout)
+        {
+            return;
+        }
+
+        const BOOL matchesLastSentCaret =
+            !_hasPendingCaret &&
+            _hasSentCaret &&
+            _lastSentCaretX == x &&
+            _lastSentCaretY == y &&
+            _lastSentCaretWidth == width &&
+            _lastSentCaretHeight == height;
+        if (matchesLastSentCaret)
+        {
+            return;
+        }
+    }
+
     LONG dx = 0;
     LONG dy = 0;
     BOOL jumpByThreshold = FALSE;
