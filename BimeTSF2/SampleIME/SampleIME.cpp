@@ -749,6 +749,7 @@ static const UINT_PTR kFocusQueryStateTimerId = 2;
 // first want to report active=TRUE. Retry on a timer until Core connects (bounded).
 static const UINT_PTR kImeActivePublishRetryTimerId = 3;
 static const UINT_PTR kCompositionRefreshTimerId = 4;
+static const UINT_PTR kCaretPrimeFallbackTimerId = 5;
 static const UINT kImeActivePublishRetryDelayMs = 400;
 static const int kImeActivePublishRetryMax = 15;
 static const UINT kCaretCoalesceWindowMs = 12;
@@ -759,6 +760,7 @@ static const DWORD kPipeHelloTimeoutMs = 80;
 static const DWORD kPipeFocusQueryTimeoutMs = 60;
 static const UINT kCompositionPendingRefreshMs = 20;
 static const UINT kCompositionTrackingRefreshMs = 120;
+static const UINT kCaretPrimeFallbackDelayMs = 40;
 static const DWORD kCompositionRefreshTimeoutMs = 60;
 static const LONG kCaretCoalesceImmediateJumpThreshold = 10;
 static const UINT kCaretEndEditSuppressWindowMs = 24;
@@ -824,6 +826,16 @@ LRESULT CALLBACK CSampleIME_WindowProc(HWND wndHandle, UINT uMsg, WPARAM wParam,
                 pTextService->_HandleCompositionRefresh();
                 return 0;
             }
+            if (wParam == kCaretPrimeFallbackTimerId)
+            {
+                if (pTextService->_msgWndHandle != nullptr)
+                {
+                    KillTimer(pTextService->_msgWndHandle, kCaretPrimeFallbackTimerId);
+                }
+                pTextService->_caretTrackingPrimePending = FALSE;
+                pTextService->_PrimeCaretTrackingFromAnchor();
+                return 0;
+            }
         }
         break;
 
@@ -851,6 +863,7 @@ LRESULT CALLBACK CSampleIME_WindowProc(HWND wndHandle, UINT uMsg, WPARAM wParam,
             KillTimer(wndHandle, kFocusQueryStateTimerId);
             KillTimer(wndHandle, kImeActivePublishRetryTimerId);
             KillTimer(wndHandle, kCompositionRefreshTimerId);
+            KillTimer(wndHandle, kCaretPrimeFallbackTimerId);
             pTextService->_ClearDeferredCaretAnchorReopen();
             pTextService->_caretTrackingPrimePending = FALSE;
             pTextService->_msgWndHandle = nullptr;
@@ -959,6 +972,7 @@ CSampleIME::CSampleIME()
     _pendingCaretHeight = 0;
     _pendingCaretSource = CARET_SOURCE_UNKNOWN;
     _forceNextCaret = TRUE;
+    _caretLayoutPositionLocked = FALSE;
     _caretTrackingPrimePending = FALSE;
     _suppressExternalCompositionCanceledNotify = FALSE;
 
@@ -1879,7 +1893,7 @@ public:
 
     STDMETHODIMP DoEditSession(TfEditCookie ec) override
     {
-        if (_pContextView == nullptr)
+        if (_pContextView == nullptr || _pTextService->_caretLayoutPositionLocked)
         {
             return S_OK;
         }
@@ -2086,10 +2100,16 @@ void CSampleIME::_ScheduleCaretTrackingPrime()
         return;
     }
 
+    // Let the host's first TF_LC_CHANGE provide the authoritative position.
+    // Active GetTextExt is only a compatibility fallback for hosts that never
+    // raise a layout notification after starting the composition.
     _caretTrackingPrimePending = TRUE;
-    if (!PostMessageW(_msgWndHandle, WM_PrimeCaretTrackingFromAnchor, 0, 0))
+    if (SetTimer(_msgWndHandle, kCaretPrimeFallbackTimerId, kCaretPrimeFallbackDelayMs, nullptr) == 0)
     {
-        _caretTrackingPrimePending = FALSE;
+        if (!PostMessageW(_msgWndHandle, WM_PrimeCaretTrackingFromAnchor, 0, 0))
+        {
+            _caretTrackingPrimePending = FALSE;
+        }
     }
 }
 
@@ -2125,6 +2145,7 @@ void CSampleIME::_EndCaretAnchorComposition(_In_opt_ ITfContext *pContext)
     ITfComposition *pComposition = _pCaretAnchorComposition;
     ITfContext *pTargetContext = (pContext != nullptr) ? pContext : _pCaretAnchorContext;
     _lastAnchorInputBuffer.clear();
+    _ResetCaretAcquisitionForComposition();
 
     if (pComposition != nullptr)
     {
@@ -2321,6 +2342,7 @@ void CSampleIME::_OnCaretAnchorCompositionTerminated(_In_opt_ ITfComposition *pC
     _pCaretAnchorComposition->Release();
     _pCaretAnchorComposition = nullptr;
     _lastAnchorInputBuffer.clear();
+    _ResetCaretAcquisitionForComposition();
 
     if (_pCaretAnchorContext != nullptr)
     {
@@ -3008,6 +3030,7 @@ void CSampleIME::_UninitCaretCoalesceWindow()
         KillTimer(_msgWndHandle, kFocusQueryStateTimerId);
         KillTimer(_msgWndHandle, kImeActivePublishRetryTimerId);
         KillTimer(_msgWndHandle, kCompositionRefreshTimerId);
+        KillTimer(_msgWndHandle, kCaretPrimeFallbackTimerId);
         DestroyWindow(_msgWndHandle);
         _msgWndHandle = nullptr;
     }
@@ -3089,18 +3112,40 @@ void CSampleIME::_ResetCaretCoalesceState()
     _lastSentCaretWidth = 0;
     _lastSentCaretHeight = 0;
     _lastLayoutCaretTick = 0;
-    _lastLayoutRequestTick = 0;
     _lastLayoutCaretX = 0;
     _lastLayoutCaretY = 0;
-    _hasPendingCaret = FALSE;
     _pendingCaretX = 0;
     _pendingCaretY = 0;
     _pendingCaretWidth = 0;
     _pendingCaretHeight = 0;
+    _ResetCaretAcquisitionForComposition();
+
+}
+
+void CSampleIME::_ResetCaretAcquisitionForComposition()
+{
+    _caretLayoutPositionLocked = FALSE;
+    _lastLayoutRequestTick = 0;
+    _hasPendingCaret = FALSE;
     _pendingCaretSource = CARET_SOURCE_UNKNOWN;
-
     _forceNextCaret = TRUE;
+    _caretTrackingPrimePending = FALSE;
+    if (_msgWndHandle != nullptr)
+    {
+        KillTimer(_msgWndHandle, kCaretCoalesceTimerId);
+        KillTimer(_msgWndHandle, kCaretPrimeFallbackTimerId);
+    }
+}
 
+void CSampleIME::_LockCaretPositionFromLayout()
+{
+    _caretLayoutPositionLocked = TRUE;
+    _caretTrackingPrimePending = FALSE;
+    if (_msgWndHandle != nullptr)
+    {
+        KillTimer(_msgWndHandle, kCaretPrimeFallbackTimerId);
+    }
+    Global::LogToFileVerbose("CaretTrack: position locked from layout");
 }
 
 void CSampleIME::_FlushPendingCaretMessage(BOOL forceSend)
@@ -3146,6 +3191,7 @@ void CSampleIME::_FlushPendingCaretMessage(BOOL forceSend)
         KillTimer(_msgWndHandle, kCaretCoalesceTimerId);
     }
 
+    const int sentSource = _pendingCaretSource;
     if (_pPipeClient->SendCaretMessage(_pendingCaretX, _pendingCaretY, _pendingCaretWidth, _pendingCaretHeight))
     {
         _hasSentCaret = TRUE;
@@ -3155,6 +3201,10 @@ void CSampleIME::_FlushPendingCaretMessage(BOOL forceSend)
         _lastSentCaretHeight = _pendingCaretHeight;
         _forceNextCaret = FALSE;
         _lastCaretSentTick = GetTickCount64();
+        if (sentSource == CARET_SOURCE_LAYOUT)
+        {
+            _LockCaretPositionFromLayout();
+        }
         Global::LogToFileVerbose("CaretCoalesce: flush x=%ld y=%ld w=%ld h=%ld force=%d src=%d", _pendingCaretX, _pendingCaretY, _pendingCaretWidth, _pendingCaretHeight, forceSend, _pendingCaretSource);
     }
 
@@ -3604,6 +3654,11 @@ void CSampleIME::_HandleDeferredFocusStateQuery()
 
 void CSampleIME::_SendCaretMessage(LONG x, LONG y, LONG width, LONG height, int source)
 {
+    if (_caretLayoutPositionLocked)
+    {
+        return;
+    }
+
     if ((source == CARET_SOURCE_LAYOUT || source == CARET_SOURCE_END_EDIT) &&
         (_pCaretAnchorComposition == nullptr))
     {
@@ -3732,6 +3787,10 @@ void CSampleIME::_SendCaretMessage(LONG x, LONG y, LONG width, LONG height, int 
             _lastSentCaretHeight = height;
             _forceNextCaret = FALSE;
             _lastCaretSentTick = GetTickCount64();
+            if (source == CARET_SOURCE_LAYOUT)
+            {
+                _LockCaretPositionFromLayout();
+            }
             Global::LogToFileVerbose("CaretCoalesce: immediate x=%ld y=%ld w=%ld h=%ld force=%d jump=%d src=%d", x, y, width, height, forceSend ? 1 : 0, jumpByThreshold, source);
         }
         return;

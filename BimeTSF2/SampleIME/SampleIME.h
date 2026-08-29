@@ -159,6 +159,8 @@ private:
     BOOL _InitCaretCoalesceWindow();
     void _UninitCaretCoalesceWindow();
     void _ResetCaretCoalesceState();
+    void _ResetCaretAcquisitionForComposition();
+    void _LockCaretPositionFromLayout();
     void _FlushPendingCaretMessage(BOOL forceSend);
 
     HRESULT _AddComposingAndChar(TfEditCookie ec, _In_ ITfContext *pContext, _In_ CStringRange *pstrAddString);
@@ -338,6 +340,7 @@ private:
     LONG _pendingCaretHeight;
     int _pendingCaretSource;
     BOOL _forceNextCaret;
+    BOOL _caretLayoutPositionLocked;
     BOOL _caretTrackingPrimePending;
     BOOL _suppressExternalCompositionCanceledNotify;
 
