@@ -4190,6 +4190,29 @@ namespace TigerClaw.Core
             }
         }
 
+        internal bool ShouldExpectKeyUp(int vk, int scan, bool extended)
+        {
+            lock (_lock)
+            {
+                int resolvedVk = ResolveSelectionVirtualKey(vk, scan, extended);
+                if (IsShiftKey(resolvedVk) ||
+                    resolvedVk == VK_OEM_7 ||
+                    resolvedVk == VK_CAPITAL)
+                {
+                    return true;
+                }
+
+                if (_state.GetCtrlSpaceToggleEnabled() &&
+                    (IsControlKey(resolvedVk) || resolvedVk == VK_SPACE))
+                {
+                    return true;
+                }
+
+                return _handledModifierSelectionKeys.Contains(resolvedVk) ||
+                       _oneShotActionKey == resolvedVk;
+            }
+        }
+
         private SentenceDecodeResult FilterSentenceDecodeResultForCommittedPrefix(SentenceDecodeResult result)
         {
             if (_sentenceCommittedText.Length == 0 || result == null)

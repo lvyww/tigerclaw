@@ -969,6 +969,7 @@ CSampleIME::CSampleIME()
     _pendingResponseScanCode = 0;
     _pendingResponseExtended = FALSE;
     _pendingResponseHandled = FALSE;
+    _pendingResponseExpectKeyUp = TRUE;
     _pendingResponseHasKeyboardOpen = FALSE;
     _pendingResponseKeyboardOpen = FALSE;
     _pendingResponseCancelComposition = FALSE;
@@ -977,6 +978,7 @@ CSampleIME::CSampleIME()
     _pendingResponseTextToOutput.clear();
     _pendingResponseInputBuffer.clear();
     _deferredReopenInputBuffer.clear();
+    _keyUpForwardBudget = 0;
 
     _refCount = 1;
 }
@@ -1321,6 +1323,7 @@ STDAPI CSampleIME::Deactivate()
     _pendingResponseScanCode = 0;
     _pendingResponseExtended = FALSE;
     _pendingResponseHandled = FALSE;
+    _pendingResponseExpectKeyUp = TRUE;
     _pendingResponseHasKeyboardOpen = FALSE;
     _pendingResponseKeyboardOpen = FALSE;
     _pendingResponseCancelComposition = FALSE;
@@ -1328,6 +1331,7 @@ STDAPI CSampleIME::Deactivate()
     _pendingResponseCompositionPending = FALSE;
     _pendingResponseTextToOutput.clear();
     _pendingResponseInputBuffer.clear();
+    _keyUpForwardBudget = 0;
     _CancelCompositionRefresh();
 
     return S_OK;
