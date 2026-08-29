@@ -1015,6 +1015,7 @@ BOOL CPipeClient::ParseResponse(const char *json, _Out_ BimeResponse *pResponse)
     pResponse->seq = ExtractSeqFromJson(json);
     pResponse->success = parseBool(json, "success");
     pResponse->handled = parseBool(json, "handled");
+    pResponse->expectKeyUp = TRUE;
     pResponse->hasProtocolVersion = FALSE;
     pResponse->protocolVersion = 0;
     pResponse->coreBuild.clear();
@@ -1037,6 +1038,7 @@ BOOL CPipeClient::ParseResponse(const char *json, _Out_ BimeResponse *pResponse)
         pResponse->hasKeyboardOpen = TRUE;
         pResponse->keyboardOpen = keyboardOpen;
     }
+    tryParseBool(json, "expect_keyup", &pResponse->expectKeyUp);
     pResponse->cancelComposition = parseBool(json, "cancel_composition");
     pResponse->compositionTracking = parseBool(json, "composition_tracking");
     pResponse->compositionPending = parseBool(json, "composition_pending");
