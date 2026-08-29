@@ -76,7 +76,7 @@ Core 以 `handled` 决定前端是否吞键，以 `commit_text` 要求前端上�
 ## 统一响应
 
 ```json
-{"type":"response","seq":101,"success":true,"handled":true,"commit_text":"你好","input_buffer":"ni hao","keyboard_open":true,"cancel_composition":false,"expect_keyup":false}
+{"type":"response","seq":101,"success":true,"handled":true,"commit_text":"你好","input_buffer":"ni hao","keyboard_open":true,"cancel_composition":false}
 ```
 
 通用字段：
@@ -90,14 +90,6 @@ Core 以 `handled` 决定前端是否吞键，以 `commit_text` 要求前端上�
 - `cancel_composition`：先取消前端旧 composition，再应用本次状态。
 - `composition_tracking`：当前是否为需异步刷新分段的整句 composition。
 - `composition_pending`：当前 raw 的本地解码是否仍在后台运行。
-- `expect_keyup`：仅按下事件响应携带。`true` 表示 Core 的当前按键状态还需要
-  对应物理键的释放事件；`false` 表示 TSF 可直接放行该 KeyUp 而不访问 Core。
-  前端遇到旧 Core 未返回该字段或按下请求失败时必须按 `true` 处理。
-  Windows TSF 还必须始终转发 Space 和引号键的孤立 KeyUp：系统保留快捷键或宿主
-  可能不提供对应 KeyDown，Core 用这两个释放事件完成 Ctrl+Space 和引号回退。
-  当前 TSF 不做严格 Down/Up 配对：修饰键或一次性动作开启20个 KeyUp 的宽限窗口，
-  窗口内释放事件全部转发并逐次递减；修饰键释放会刷新窗口。Space和引号始终
-  转发但不主动刷新窗口。这样可以容忍宿主丢失、拆分或重排键盘回调。
 - `config_version`、`lexicon_version`：对应快照版本，部分响应携带。
 - `error`：失败原因，部分写操作携带。
 

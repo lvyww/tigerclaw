@@ -562,11 +562,6 @@ namespace TigerClaw.Core
             _pendingFrontendCompositionReset = false;
             bool languageStateChanged = beforeState != null && beforeState.IsChinese != result.IsChinese;
             string extraJsonPairs = BuildHookNativeConfigExtraJson(frontend) + BuildCompositionStatusExtraJson();
-            if (isKeyDown)
-            {
-                bool expectKeyUp = _engine.ShouldExpectKeyUp(vk, scan, extended);
-                extraJsonPairs += ",\"expect_keyup\":" + (expectKeyUp ? "true" : "false");
-            }
             if (IsHookNativeFrontend(frontend) &&
                 languageStateChanged &&
                 _state.GetAutoSwitchSystemLanguageEnabled())

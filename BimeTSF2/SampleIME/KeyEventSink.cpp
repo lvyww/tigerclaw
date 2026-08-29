@@ -16,7 +16,6 @@ static volatile LONG s_capsCompensateWorkerRunning = 0;
 static const ULONGLONG kFailedKeyQueueTtlMs = 5000;
 static const size_t kFailedKeyQueueMaxSize = 128;
 static const DWORD kPipeKeyResponseTimeoutMs = 60;
-static const UINT kKeyUpForwardBudgetMax = 20;
 
 static LONG GetPendingCapsCompensateFlag()
 {
@@ -371,46 +370,6 @@ static BOOL ExtractExtendedFromLParam(LPARAM lParam)
     return ((lParam & 0x01000000) != 0) ? TRUE : FALSE;
 }
 
-static UINT ResolvePhysicalVirtualKey(UINT vkCode, UINT scanCode, BOOL extended)
-{
-    if (vkCode == VK_SHIFT)
-    {
-        if (scanCode == 0x2A)
-        {
-            return VK_LSHIFT;
-        }
-        if (scanCode == 0x36)
-        {
-            return VK_RSHIFT;
-        }
-    }
-    else if (vkCode == VK_CONTROL)
-    {
-        return extended ? VK_RCONTROL : VK_LCONTROL;
-    }
-    else if (vkCode == VK_MENU)
-    {
-        return extended ? VK_RMENU : VK_LMENU;
-    }
-
-    return vkCode;
-}
-
-static BOOL IsKeyUpWindowTrigger(UINT resolvedVk)
-{
-    return resolvedVk == VK_SHIFT || resolvedVk == VK_LSHIFT || resolvedVk == VK_RSHIFT ||
-           resolvedVk == VK_CONTROL || resolvedVk == VK_LCONTROL || resolvedVk == VK_RCONTROL ||
-           resolvedVk == VK_MENU || resolvedVk == VK_LMENU || resolvedVk == VK_RMENU ||
-           resolvedVk == VK_LWIN || resolvedVk == VK_RWIN || resolvedVk == VK_CAPITAL;
-}
-
-static BOOL IsAlwaysForwardKeyUp(UINT resolvedVk)
-{
-    return IsKeyUpWindowTrigger(resolvedVk) ||
-           resolvedVk == VK_SPACE ||
-           resolvedVk == VK_OEM_7;
-}
-
 static BOOL IsPendingKeyEventMatch(WPARAM pendingWParam,
                                    UINT pendingScanCode,
                                    BOOL pendingExtended,
@@ -676,7 +635,6 @@ void CSampleIME::_ClearPendingResponseCache()
     _pendingResponseScanCode = 0;
     _pendingResponseExtended = FALSE;
     _pendingResponseHandled = FALSE;
-    _pendingResponseExpectKeyUp = TRUE;
     _pendingResponseHasKeyboardOpen = FALSE;
     _pendingResponseKeyboardOpen = FALSE;
     _pendingResponseCancelComposition = FALSE;
@@ -694,7 +652,6 @@ void CSampleIME::_StorePendingResponseCache(BOOL isKeyDown, WPARAM wParam, UINT 
     _pendingResponseScanCode = scanCode;
     _pendingResponseExtended = extended;
     _pendingResponseHandled = response.handled;
-    _pendingResponseExpectKeyUp = response.expectKeyUp;
     _pendingResponseHasKeyboardOpen = response.hasKeyboardOpen;
     _pendingResponseKeyboardOpen = response.keyboardOpen;
     _pendingResponseCancelComposition = response.cancelComposition;
@@ -792,7 +749,6 @@ BOOL CSampleIME::_TryConsumePendingResponseCache(BOOL isKeyDown, WPARAM wParam, 
 
     pResponse->success = TRUE;
     pResponse->handled = _pendingResponseHandled;
-    pResponse->expectKeyUp = _pendingResponseExpectKeyUp;
     pResponse->hasKeyboardOpen = _pendingResponseHasKeyboardOpen;
     pResponse->keyboardOpen = _pendingResponseKeyboardOpen;
     pResponse->cancelComposition = _pendingResponseCancelComposition;
@@ -810,48 +766,6 @@ BOOL CSampleIME::_TryConsumePendingResponseCache(BOOL isKeyDown, WPARAM wParam, 
     _ClearPendingResponseCache();
     _ClearPendingKeyEvent();
     return TRUE;
-}
-
-void CSampleIME::_RefreshKeyUpWindowForKeyDown(UINT vkCode, UINT scanCode, BOOL extended, _In_ const BimeResponse &response)
-{
-    UINT resolvedVk = ResolvePhysicalVirtualKey(vkCode, scanCode, extended);
-    if (IsKeyUpWindowTrigger(resolvedVk) ||
-        (response.expectKeyUp && resolvedVk != VK_SPACE && resolvedVk != VK_OEM_7))
-    {
-        _keyUpForwardBudget = kKeyUpForwardBudgetMax;
-    }
-}
-
-void CSampleIME::_RefreshKeyUpWindowForFailedKeyDown(UINT vkCode, UINT scanCode, BOOL extended)
-{
-    UINT resolvedVk = ResolvePhysicalVirtualKey(vkCode, scanCode, extended);
-    if (IsKeyUpWindowTrigger(resolvedVk))
-    {
-        _keyUpForwardBudget = kKeyUpForwardBudgetMax;
-    }
-}
-
-BOOL CSampleIME::_ShouldForwardKeyUp(WPARAM wParam, LPARAM lParam) const
-{
-    UINT resolvedVk = ResolvePhysicalVirtualKey(static_cast<UINT>(wParam),
-                                                ExtractScanCodeFromLParam(lParam),
-                                                ExtractExtendedFromLParam(lParam));
-    return IsAlwaysForwardKeyUp(resolvedVk) || _keyUpForwardBudget > 0;
-}
-
-void CSampleIME::_AdvanceKeyUpWindow(WPARAM wParam, LPARAM lParam)
-{
-    UINT resolvedVk = ResolvePhysicalVirtualKey(static_cast<UINT>(wParam),
-                                                ExtractScanCodeFromLParam(lParam),
-                                                ExtractExtendedFromLParam(lParam));
-    if (IsKeyUpWindowTrigger(resolvedVk))
-    {
-        _keyUpForwardBudget = kKeyUpForwardBudgetMax;
-    }
-    else if (_keyUpForwardBudget > 0)
-    {
-        --_keyUpForwardBudget;
-    }
 }
 
 void CSampleIME::_PruneFailedKeyQueue(ULONGLONG nowTick)
@@ -982,13 +896,6 @@ BOOL CSampleIME::_FlushFailedKeyQueue(_In_opt_ ITfContext *pContext, _In_z_ cons
 
         BOOL committedViaAnchor = FALSE;
         _ApplyResponseAndSyncState(pContext, &response, stageTag, &committedViaAnchor);
-        if (message.isKeyDown)
-        {
-            _RefreshKeyUpWindowForKeyDown(message.vkCode,
-                                          message.scanCode,
-                                          message.extended,
-                                          response);
-        }
         Global::LogToFileVerbose("KeyFailQueue: flushed vk=%u action=%s handled=%d commit_anchor=%d",
                                  message.vkCode,
                                  message.isKeyDown ? "down" : "up",
@@ -1073,7 +980,6 @@ STDAPI CSampleIME::OnTestKeyDown(ITfContext *pContext, WPARAM wParam, LPARAM lPa
         BimeResponse cachedResponse;
         cachedResponse.success = TRUE;
         cachedResponse.handled = _pendingResponseHandled;
-        cachedResponse.expectKeyUp = _pendingResponseExpectKeyUp;
         cachedResponse.hasKeyboardOpen = _pendingResponseHasKeyboardOpen;
         cachedResponse.keyboardOpen = _pendingResponseKeyboardOpen;
         cachedResponse.cancelComposition = _pendingResponseCancelComposition;
@@ -1124,9 +1030,6 @@ STDAPI CSampleIME::OnTestKeyDown(ITfContext *pContext, WPARAM wParam, LPARAM lPa
 
     if (!_EnsurePipeConnected())
     {
-        _RefreshKeyUpWindowForFailedKeyDown(vkCode,
-                                            ExtractScanCodeFromLParam(lParam),
-                                            ExtractExtendedFromLParam(lParam));
         *pIsEaten = TRUE;
         LogKeyDecision("OnTestKeyDown", vkCode, "hold=pipe_disconnected");
         return S_OK;
@@ -1156,7 +1059,6 @@ STDAPI CSampleIME::OnTestKeyDown(ITfContext *pContext, WPARAM wParam, LPARAM lPa
     _StorePendingKeyEvent(TRUE, wParam, scanCode, extended, eventId);
     if (!_FlushFailedKeyQueue(pContext, "OnTestKeyDown.prepend"))
     {
-        _RefreshKeyUpWindowForFailedKeyDown(vkCode, scanCode, extended);
         *pIsEaten = TRUE;
         Global::LogToFile("KeySink OnTestKeyDown vk=%u defer_current=1 reason=flush_failed", vkCode);
         return S_OK;
@@ -1183,14 +1085,12 @@ STDAPI CSampleIME::OnTestKeyDown(ITfContext *pContext, WPARAM wParam, LPARAM lPa
                                               eventId);
     if (FAILED(hr))
     {
-        _RefreshKeyUpWindowForFailedKeyDown(vkCode, scanCode, extended);
         *pIsEaten = TRUE;
         Global::LogToFile("KeySink OnTestKeyDown vk=%u pipe_error hr=0x%08X retry_in_keydown=1", vkCode, static_cast<unsigned>(hr));
         return S_OK;
     }
 
     _StorePendingResponseCache(TRUE, wParam, scanCode, extended, response);
-    _RefreshKeyUpWindowForKeyDown(vkCode, scanCode, extended, response);
 
     BOOL forceEat = ShouldForceEatKey(vkCode, response);
     *pIsEaten = response.handled || forceEat;
@@ -1275,9 +1175,6 @@ STDAPI CSampleIME::OnKeyDown(ITfContext *pContext, WPARAM wParam, LPARAM lParam,
 
     if (!_EnsurePipeConnected())
     {
-        _RefreshKeyUpWindowForFailedKeyDown(vkCode,
-                                            ExtractScanCodeFromLParam(lParam),
-                                            ExtractExtendedFromLParam(lParam));
         UINT queueVkCode = 0;
         UINT queueScanCode = 0;
         BOOL queueShift = FALSE;
@@ -1383,7 +1280,6 @@ STDAPI CSampleIME::OnKeyDown(ITfContext *pContext, WPARAM wParam, LPARAM lParam,
         }
         if (!_FlushFailedKeyQueue(pContext, "OnKeyDown.prepend"))
         {
-            _RefreshKeyUpWindowForFailedKeyDown(vkCode, scanCode, extended);
             _EnqueueFailedKeyMessage(vkCode,
                                      scanCode,
                                      TRUE,
@@ -1425,7 +1321,6 @@ STDAPI CSampleIME::OnKeyDown(ITfContext *pContext, WPARAM wParam, LPARAM lParam,
                                                   eventId);
         if (FAILED(hr))
         {
-            _RefreshKeyUpWindowForFailedKeyDown(vkCode, scanCode, extended);
             _EnqueueFailedKeyMessage(vkCode,
                                      scanCode,
                                      TRUE,
@@ -1447,11 +1342,6 @@ STDAPI CSampleIME::OnKeyDown(ITfContext *pContext, WPARAM wParam, LPARAM lParam,
             return S_OK;
         }
     }
-
-    _RefreshKeyUpWindowForKeyDown(vkCode,
-                                  ExtractScanCodeFromLParam(lParam),
-                                  ExtractExtendedFromLParam(lParam),
-                                  response);
 
     BOOL forceEat = ShouldForceEatKey(vkCode, response);
     *pIsEaten = response.handled || forceEat;
@@ -1519,7 +1409,6 @@ STDAPI CSampleIME::OnTestKeyUp(ITfContext *pContext, WPARAM wParam, LPARAM lPara
         BimeResponse cachedResponse;
         cachedResponse.success = TRUE;
         cachedResponse.handled = _pendingResponseHandled;
-        cachedResponse.expectKeyUp = _pendingResponseExpectKeyUp;
         cachedResponse.hasKeyboardOpen = _pendingResponseHasKeyboardOpen;
         cachedResponse.keyboardOpen = _pendingResponseKeyboardOpen;
         cachedResponse.cancelComposition = _pendingResponseCancelComposition;
@@ -1555,13 +1444,6 @@ STDAPI CSampleIME::OnTestKeyUp(ITfContext *pContext, WPARAM wParam, LPARAM lPara
 
     _ClearPendingResponseCache();
     _ClearPendingKeyEvent();
-
-    if (!_ShouldForwardKeyUp(wParam, lParam))
-    {
-        *pIsEaten = FALSE;
-        LogKeyDecision("OnTestKeyUp", vkCode, "skip=outside_window");
-        return S_OK;
-    }
 
     if (_trialExpired)
     {
@@ -1685,7 +1567,6 @@ STDAPI CSampleIME::OnTestKeyUp(ITfContext *pContext, WPARAM wParam, LPARAM lPara
         _pendingResponseHandled = TRUE;
         *pIsEaten = TRUE;
     }
-    _AdvanceKeyUpWindow(wParam, lParam);
     return S_OK;
 }
 
@@ -1709,25 +1590,8 @@ STDAPI CSampleIME::OnKeyUp(ITfContext *pContext, WPARAM wParam, LPARAM lParam, B
 
     UINT vkCode = static_cast<UINT>(wParam);
 
-    BOOL hasMatchingTestResponse = _pendingResponseValid &&
-                                   !_pendingResponseIsKeyDown &&
-                                   IsPendingKeyEventMatch(_pendingResponseWParam,
-                                                          _pendingResponseScanCode,
-                                                          _pendingResponseExtended,
-                                                          wParam,
-                                                          lParam);
-    if (!_ShouldForwardKeyUp(wParam, lParam) && !hasMatchingTestResponse)
-    {
-        _ClearPendingResponseCache();
-        _ClearPendingKeyEvent();
-        *pIsEaten = FALSE;
-        LogKeyDecision("OnKeyUp", vkCode, "skip=outside_window");
-        return S_OK;
-    }
-
     if (_trialExpired)
     {
-        _AdvanceKeyUpWindow(wParam, lParam);
         *pIsEaten = FALSE;
         LogKeyDecision("OnKeyUp", vkCode, "skip=trial_expired");
         return S_OK;
@@ -1736,7 +1600,6 @@ STDAPI CSampleIME::OnKeyUp(ITfContext *pContext, WPARAM wParam, LPARAM lParam, B
 
     if (_IsStartupGuardActive())
     {
-        _AdvanceKeyUpWindow(wParam, lParam);
         *pIsEaten = FALSE;
         LogKeyDecision("OnKeyUp", vkCode, "skip=startup_guard");
         return S_OK;
@@ -1744,7 +1607,6 @@ STDAPI CSampleIME::OnKeyUp(ITfContext *pContext, WPARAM wParam, LPARAM lParam, B
 
     if (_IsKeyboardDisabled(pContext))
     {
-        _AdvanceKeyUpWindow(wParam, lParam);
         *pIsEaten = FALSE;
         LogKeyDecision("OnKeyUp", vkCode, "skip=keyboard_disabled");
         LogForegroundWindowInfo("OnKeyUp.keyboard_disabled");
@@ -1794,7 +1656,6 @@ STDAPI CSampleIME::OnKeyUp(ITfContext *pContext, WPARAM wParam, LPARAM lParam, B
         }
 
         *pIsEaten = TRUE;
-        _AdvanceKeyUpWindow(wParam, lParam);
         LogKeyDecision("OnKeyUp", vkCode, "queued=pipe_disconnected");
         return S_OK;
     }
@@ -1848,7 +1709,6 @@ STDAPI CSampleIME::OnKeyUp(ITfContext *pContext, WPARAM wParam, LPARAM lParam, B
 
         if (!TryBuildPipeKeyEvent(wParam, lParam, FALSE, &vkCode, &scanCode, &shift, &ctrl, &alt, &win, &capsLock, &numLock, &repeat, &extended, &caretValid, &caretX, &caretY))
         {
-            _AdvanceKeyUpWindow(wParam, lParam);
             *pIsEaten = FALSE;
             LogKeyDecision("OnKeyUp", static_cast<UINT>(wParam), "skip=build_event_failed");
             return S_OK;
@@ -1878,7 +1738,6 @@ STDAPI CSampleIME::OnKeyUp(ITfContext *pContext, WPARAM wParam, LPARAM lParam, B
                                      "flush_failed_before_keyup",
                                      eventId);
             *pIsEaten = TRUE;
-            _AdvanceKeyUpWindow(wParam, lParam);
             Global::LogToFile("KeySink OnKeyUp vk=%u queue_current=1 reason=flush_failed", vkCode);
             return S_OK;
         }
@@ -1920,7 +1779,6 @@ STDAPI CSampleIME::OnKeyUp(ITfContext *pContext, WPARAM wParam, LPARAM lParam, B
                                      "send_failed_keyup",
                                      eventId);
             *pIsEaten = TRUE;
-            _AdvanceKeyUpWindow(wParam, lParam);
             Global::LogToFile("KeySink OnKeyUp vk=%u pipe_error hr=0x%08X queued=1", vkCode, static_cast<unsigned>(hr));
             return S_OK;
         }
@@ -1955,8 +1813,6 @@ STDAPI CSampleIME::OnKeyUp(ITfContext *pContext, WPARAM wParam, LPARAM lParam, B
                                  GetSystemCapsLockOn() ? 1 : 0);
         *pIsEaten = TRUE;
     }
-
-    _AdvanceKeyUpWindow(wParam, lParam);
 
     return S_OK;
 }

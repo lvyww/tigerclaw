@@ -171,9 +171,6 @@ namespace TigerClaw.Core.Tests
                 SentenceAutoCommitSurvivesAlternatingCompleteSegmentation();
                 SentenceAutoCommitReplayPreservesOriginalCommit();
                 KeyReplayCacheReturnsOriginalResultWithCurrentSequence();
-                KeyResponsesDeclareExpectedKeyUp();
-                CtrlSpaceStillTogglesWithExpectedKeyUpResponses();
-                KeyUpExpectationCoversReleaseDependentState();
                 TransportDefersOnlyKeyUiPublication();
                 SentenceEngineDecodesLongWorkOffTheKeyPath();
                 SentenceAutoCommitStaysOffTheKeyPath();
@@ -3376,102 +3373,6 @@ namespace TigerClaw.Core.Tests
             True(replayed.Contains("\"commit_text\":\"一\""), nameof(KeyReplayCacheReturnsOriginalResultWithCurrentSequence) + ".commit");
             True(!cache.TryGet(KeyRequestReplayCache.BuildKey("frontend-a", "18"), 203, out _), nameof(KeyReplayCacheReturnsOriginalResultWithCurrentSequence) + ".different_event");
             True(!cache.TryGet(KeyRequestReplayCache.BuildKey("frontend-b", "17"), 204, out _), nameof(KeyReplayCacheReturnsOriginalResultWithCurrentSequence) + ".different_frontend");
-        }
-
-        private static void KeyResponsesDeclareExpectedKeyUp()
-        {
-            var state = new CoreRuntimeState();
-            using (var handler = new ProtocolHandler(_ => { }, state, null))
-            {
-                string letterResponse = handler.Handle(
-                    "{\"type\":\"key\",\"seq\":1,\"client_session\":\"keyup-test\"," +
-                    "\"event_id\":\"letter\",\"action\":\"down\",\"vk\":65}");
-                True(letterResponse.Contains("\"expect_keyup\":false"),
-                    nameof(KeyResponsesDeclareExpectedKeyUp) + ".letter");
-
-                string shiftResponse = handler.Handle(
-                    "{\"type\":\"key\",\"seq\":2,\"client_session\":\"keyup-test\"," +
-                    "\"event_id\":\"shift\",\"action\":\"down\",\"vk\":16,\"scan\":42}");
-                True(shiftResponse.Contains("\"expect_keyup\":true"),
-                    nameof(KeyResponsesDeclareExpectedKeyUp) + ".shift");
-
-                string replayedShift = handler.Handle(
-                    "{\"type\":\"key\",\"seq\":3,\"client_session\":\"keyup-test\"," +
-                    "\"event_id\":\"shift\",\"action\":\"down\",\"vk\":16,\"scan\":42}");
-                True(replayedShift.Contains("\"seq\":3,") &&
-                     replayedShift.Contains("\"expect_keyup\":true"),
-                    nameof(KeyResponsesDeclareExpectedKeyUp) + ".replay");
-            }
-        }
-
-        private static void KeyUpExpectationCoversReleaseDependentState()
-        {
-            var state = new CoreRuntimeState();
-            var engine = new InputMethodEngine(state);
-
-            Press(engine, 0x41);
-            True(!engine.ShouldExpectKeyUp(0x41, 0, false),
-                nameof(KeyUpExpectationCoversReleaseDependentState) + ".letter");
-            True(engine.ShouldExpectKeyUp(0x10, 0x2A, false),
-                nameof(KeyUpExpectationCoversReleaseDependentState) + ".left_shift");
-            True(engine.ShouldExpectKeyUp(0x10, 0x36, false),
-                nameof(KeyUpExpectationCoversReleaseDependentState) + ".right_shift");
-            True(engine.ShouldExpectKeyUp(0x11, 0, false),
-                nameof(KeyUpExpectationCoversReleaseDependentState) + ".control");
-            True(engine.ShouldExpectKeyUp(0x20, 0, false),
-                nameof(KeyUpExpectationCoversReleaseDependentState) + ".space");
-            True(engine.ShouldExpectKeyUp(0xDE, 0, false),
-                nameof(KeyUpExpectationCoversReleaseDependentState) + ".quote");
-
-            PressWithCtrl(engine, 0xBB);
-            True(engine.ShouldExpectKeyUp(0xBB, 0, false),
-                nameof(KeyUpExpectationCoversReleaseDependentState) + ".one_shot");
-            KeyEngineResult keyUp = engine.ProcessKey(
-                0xBB, 0, "up", false, true, false, false, false, false, 1, false);
-            engine.PostProcessKey(0xBB, "up", keyUp, false, true, false, false, false);
-            True(!engine.ShouldExpectKeyUp(0xBB, 0, false),
-                nameof(KeyUpExpectationCoversReleaseDependentState) + ".one_shot_rearmed");
-        }
-
-        private static void CtrlSpaceStillTogglesWithExpectedKeyUpResponses()
-        {
-            var state = new CoreRuntimeState();
-            using (var handler = new ProtocolHandler(_ => { }, state, null))
-            {
-                string ctrlDown = handler.Handle(
-                    "{\"type\":\"key\",\"seq\":1,\"client_session\":\"ctrl-space-test\"," +
-                    "\"event_id\":\"ctrl-down\",\"action\":\"down\",\"vk\":17,\"scan\":29,\"ctrl\":true}");
-                True(ctrlDown.Contains("\"expect_keyup\":true"),
-                    nameof(CtrlSpaceStillTogglesWithExpectedKeyUpResponses) + ".ctrl_down");
-
-                string orphanSpaceUp = handler.Handle(
-                    "{\"type\":\"key\",\"seq\":2,\"client_session\":\"ctrl-space-test\"," +
-                    "\"event_id\":\"space-up\",\"action\":\"up\",\"vk\":32,\"ctrl\":true}");
-                True(orphanSpaceUp.Contains("\"handled\":true") &&
-                     orphanSpaceUp.Contains("\"keyboard_open\":false"),
-                    nameof(CtrlSpaceStillTogglesWithExpectedKeyUpResponses) + ".orphan_space_up");
-            }
-
-
-            var ctrlFirstState = new CoreRuntimeState();
-            using (var ctrlFirstHandler = new ProtocolHandler(_ => { }, ctrlFirstState, null))
-            {
-                ctrlFirstHandler.Handle(
-                    "{\"type\":\"key\",\"seq\":1,\"client_session\":\"ctrl-first-test\"," +
-                    "\"event_id\":\"ctrl-down\",\"action\":\"down\",\"vk\":17,\"scan\":29,\"ctrl\":true}");
-                string ctrlUp = ctrlFirstHandler.Handle(
-                    "{\"type\":\"key\",\"seq\":2,\"client_session\":\"ctrl-first-test\"," +
-                    "\"event_id\":\"ctrl-up\",\"action\":\"up\",\"vk\":17,\"scan\":29}");
-                True(ctrlUp.Contains("\"keyboard_open\":true"),
-                    nameof(CtrlSpaceStillTogglesWithExpectedKeyUpResponses) + ".ctrl_first_not_yet");
-
-                string delayedSpaceUp = ctrlFirstHandler.Handle(
-                    "{\"type\":\"key\",\"seq\":3,\"client_session\":\"ctrl-first-test\"," +
-                    "\"event_id\":\"space-up\",\"action\":\"up\",\"vk\":32}");
-                True(delayedSpaceUp.Contains("\"handled\":true") &&
-                     delayedSpaceUp.Contains("\"keyboard_open\":false"),
-                    nameof(CtrlSpaceStillTogglesWithExpectedKeyUpResponses) + ".ctrl_first_space_up");
-            }
         }
 
         private static void TransportDefersOnlyKeyUiPublication()
