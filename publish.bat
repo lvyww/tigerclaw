@@ -118,14 +118,17 @@ set "RELEASE_SENTENCE=%RELEASE_DIR%\sentence"
 set "RELEASE_MODELS=%RELEASE_DIR%\Models"
 set "DIST_INSTALL_TEMPLATE=%ROOT%\dist_install.bat"
 set "DIST_UNINSTALL_TEMPLATE=%ROOT%\dist_uninstall.bat"
+set "DIST_SELECTION_KEYS_TEMPLATE=%ROOT%\dist_selection_keys.txt"
 set "CHANGELOG_FILE="
 set "CHANGELOG_NAME="
 set "INSTALL_SCRIPT="
 set "UNINSTALL_SCRIPT="
+set "SELECTION_KEYS_FILE="
 for /f "usebackq delims=" %%I in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "(-join ([char[]](0x66F4,0x65B0,0x65E5,0x5FD7))) + '.txt'"`) do set "CHANGELOG_NAME=%%I"
 if defined CHANGELOG_NAME set "CHANGELOG_FILE=%ROOT%\!CHANGELOG_NAME!"
 for /f "usebackq delims=" %%I in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "[char]0x5B89 + [char]0x88C5 + '.bat'"`) do set "INSTALL_SCRIPT=%%I"
 for /f "usebackq delims=" %%I in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "[char]0x5378 + [char]0x8F7D + '.bat'"`) do set "UNINSTALL_SCRIPT=%%I"
+for /f "usebackq delims=" %%I in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "(-join ([char[]](0x81EA,0x5B9A,0x4E49,0x9009,0x91CD,0x952E))) + '.txt'"`) do set "SELECTION_KEYS_FILE=%%I"
 
 echo Using MSBuild:
 echo   %MSBUILD%
@@ -144,6 +147,18 @@ if not exist "%SHARED_BUILD_INFO%" (
 )
 if not exist "%SENTENCE_NGRAM_MODEL%" (
     echo ERROR: Missing sentence n-gram model: %SENTENCE_NGRAM_MODEL%
+    exit /b 1
+)
+if not exist "%DIST_INSTALL_TEMPLATE%" (
+    echo ERROR: Missing distribution install template: %DIST_INSTALL_TEMPLATE%
+    exit /b 1
+)
+if not exist "%DIST_UNINSTALL_TEMPLATE%" (
+    echo ERROR: Missing distribution uninstall template: %DIST_UNINSTALL_TEMPLATE%
+    exit /b 1
+)
+if not exist "%DIST_SELECTION_KEYS_TEMPLATE%" (
+    echo ERROR: Missing distribution selection-key template: %DIST_SELECTION_KEYS_TEMPLATE%
     exit /b 1
 )
 echo   text_log_enabled=%TEXT_LOG_ENABLED%
@@ -349,8 +364,9 @@ call :CopyFileStrict "%TSF_X64_DLL%" "%RELEASE_TSF_X64%\TigerClaw.dll" || exit /
 call :CopyFileStrict "%TSF_X86_DLL%" "%RELEASE_TSF_X86%\TigerClaw.dll" || exit /b 1
 if defined CHANGELOG_NAME if exist "%CHANGELOG_FILE%" call :CopyFileStrict "%CHANGELOG_FILE%" "%RELEASE_DIR%\!CHANGELOG_NAME!" || exit /b 1
 
-if exist "%DIST_INSTALL_TEMPLATE%" call :CopyFileStrict "%DIST_INSTALL_TEMPLATE%" "%RELEASE_DIR%\!INSTALL_SCRIPT!" || exit /b 1
-if exist "%DIST_UNINSTALL_TEMPLATE%" call :CopyFileStrict "%DIST_UNINSTALL_TEMPLATE%" "%RELEASE_DIR%\!UNINSTALL_SCRIPT!" || exit /b 1
+call :CopyFileStrict "%DIST_INSTALL_TEMPLATE%" "%RELEASE_DIR%\!INSTALL_SCRIPT!" || exit /b 1
+call :CopyFileStrict "%DIST_UNINSTALL_TEMPLATE%" "%RELEASE_DIR%\!UNINSTALL_SCRIPT!" || exit /b 1
+call :CopyFileStrict "%DIST_SELECTION_KEYS_TEMPLATE%" "%RELEASE_DIR%\!SELECTION_KEYS_FILE!" || exit /b 1
 if exist "%RELEASE_DIR%\install.bat" del /q "%RELEASE_DIR%\install.bat" >nul 2>&1
 if exist "%RELEASE_DIR%\uninstall.bat" del /q "%RELEASE_DIR%\uninstall.bat" >nul 2>&1
 
