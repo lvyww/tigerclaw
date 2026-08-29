@@ -148,7 +148,7 @@ public:
 
     STDMETHODIMP DoEditSession(TfEditCookie ec) override
     {
-        if (_pContextView == nullptr || _pTextService->_caretLayoutPositionLocked)
+        if (_pContextView == nullptr)
         {
             return S_OK;
         }
@@ -424,8 +424,6 @@ void CSampleIME::_StartCaretTrackingOnContext(_In_opt_ ITfContext *pContext)
 
 void CSampleIME::_StopCaretTracking()
 {
-    _ResetCaretAcquisitionForComposition();
-
     if (_pCaretTrackingContext != nullptr && (_caretLayoutSinkCookie != TF_INVALID_COOKIE || _caretTextEditSinkCookie != TF_INVALID_COOKIE))
     {
         ITfSource *pSource = nullptr;
@@ -495,11 +493,6 @@ void CSampleIME::_HandleLayoutChange(_In_ ITfContext *pContext, TfLayoutCode lco
     }
 
     if (lcode != TF_LC_CHANGE || pContextView == nullptr)
-    {
-        return;
-    }
-
-    if (_caretLayoutPositionLocked)
     {
         return;
     }
@@ -589,12 +582,6 @@ void CSampleIME::_HandleTextEdit(_In_ ITfContext *pContext, TfEditCookie ecReadO
         }
 
         tfSelection.range->Release();
-    }
-
-    if (_caretLayoutPositionLocked)
-    {
-        pRange->Release();
-        return;
     }
 
     ITfContextView *pContextView = nullptr;
