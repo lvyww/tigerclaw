@@ -184,14 +184,38 @@ if (conditioned.early_commit_evidence or {}).proposal ~= "的" then
 end
 print("OK  early-commit evidence is conditioned on committed text")
 
-local proposal = sentence.confidence_proposal({
+local proposal, proposal_share = sentence.confidence_proposal({
     { text = "甲乙丙", score = 0 },
-    { text = "甲乙丁", score = -10 }
+    { text = "甲丁戊", score = -10 }
 }, 0.995)
 if proposal ~= "甲乙" then
     fail("early-commit proposal did not retain the final candidate character: " .. proposal)
 end
+if proposal_share < 0.995 or proposal_share >= 0.99999 then
+    fail("early-commit proposal returned an unexpected confidence share")
+end
 print("OK  early-commit proposal retains one character")
+
+local strong_proposal, strong_share = sentence.confidence_proposal({
+    { text = "甲乙丙", score = 0 },
+    { text = "甲丁戊", score = -20 }
+}, 0.995)
+if strong_proposal ~= "甲乙" or strong_share < 0.99999 then
+    fail("strong early-commit evidence was not identified")
+end
+if sentence.required_early_commit_history({
+    { strong = true },
+    { strong = true }
+}) ~= 2 then
+    fail("two consecutive strong generations did not select the two-key window")
+end
+if sentence.required_early_commit_history({
+    { strong = true },
+    { strong = false }
+}) ~= 3 then
+    fail("a weak generation did not retain the three-key window")
+end
+print("OK  early-commit observation window adapts between two and three keys")
 
 local function fake_environment(early_commit)
     local properties = {}

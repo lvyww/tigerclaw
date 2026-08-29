@@ -89,10 +89,14 @@ namespace TigerClaw.Core
                     }, state, uiStatePublisher);
                     pipeServer.MessageReceived += async (clientId, json) =>
                     {
-                        string response = protocolHandler.Handle(json);
+                        string response = protocolHandler.HandleTransport(json, out bool publishUiAfterResponse);
                         if (!string.IsNullOrEmpty(response))
                         {
                             await pipeServer.SendResponseToClientAsync(clientId, response).ConfigureAwait(false);
+                        }
+                        if (publishUiAfterResponse)
+                        {
+                            protocolHandler.RequestDeferredUiStatePublish();
                         }
                     };
 

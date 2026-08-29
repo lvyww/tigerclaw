@@ -299,12 +299,14 @@ namespace TigerClaw.Core
         public static readonly SentenceEarlyCommitEvidence Empty = new SentenceEarlyCommitEvidence
         {
             Proposal = string.Empty,
+            ProposalShare = 0.0,
             RawLengths = new Dictionary<string, int>(StringComparer.Ordinal),
             ConfidenceTruncated = false,
             IgnoreNeuralConstraint = false
         };
 
         public string Proposal { get; set; }
+        public double ProposalShare { get; set; }
         public Dictionary<string, int> RawLengths { get; set; }
         public bool ConfidenceTruncated { get; set; }
         public bool IgnoreNeuralConstraint { get; set; }
@@ -905,23 +907,28 @@ namespace TigerClaw.Core
                 result.Add(EvaluateState(item));
             }
 
-            SentenceEarlyCommitEvidence earlyCommitEvidence = SentenceEarlyCommitEvidence.Empty;
-            if (includeEarlyCommitEvidence)
-            {
-                earlyCommitEvidence = BuildEarlyCommitEvidence(
-                    normalized,
-                    states,
-                    result,
-                    confidenceTruncated,
-                    requiredTextPrefix);
-            }
-
             SentenceCandidate[] visible = SelectExactTopCandidates(
                 result,
                 Math.Max(1, candidateLimit));
             foreach (SentenceCandidate candidate in visible)
             {
                 candidate.SegmentedCode = BuildSegmentedCode(normalized, candidate.Boundary);
+            }
+
+            SentenceEarlyCommitEvidence earlyCommitEvidence = SentenceEarlyCommitEvidence.Empty;
+            if (includeEarlyCommitEvidence)
+            {
+                // The full-code path only needs the already-selected visible
+                // candidates; widening to the full beam-limited result only
+                // matters once an incomplete tail is merged in below, so
+                // defer that cost instead of paying it on every keystroke.
+                earlyCommitEvidence = BuildEarlyCommitEvidence(
+                    normalized,
+                    states,
+                    visible,
+                    result,
+                    confidenceTruncated,
+                    requiredTextPrefix);
             }
 
             return new SentenceDecodeResult
@@ -954,6 +961,7 @@ namespace TigerClaw.Core
             string normalized,
             BeamBucket[] states,
             IEnumerable<SentenceCandidate> completed,
+            IEnumerable<SentenceCandidate> fullBeamResult,
             bool completedTruncated,
             string requiredTextPrefix)
         {
@@ -996,6 +1004,7 @@ namespace TigerClaw.Core
                 return new SentenceEarlyCommitEvidence
                 {
                     Proposal = string.Empty,
+                    ProposalShare = 0.0,
                     RawLengths = new Dictionary<string, int>(StringComparer.Ordinal),
                     ConfidenceTruncated = confidenceTruncated,
                     IgnoreNeuralConstraint = false
@@ -1014,20 +1023,30 @@ namespace TigerClaw.Core
                         left.Candidate,
                         right.Candidate));
             }
-            SentenceCandidate fullTop = FindConfidenceTop(
-                completed.Where(candidate => HasRequiredPrefix(candidate.Text, requiredTextPrefix)));
-            string proposal = BuildConfidenceProposal(orderedCandidates, 0.995);
+            string proposal = BuildConfidenceProposal(
+                orderedCandidates,
+                0.995,
+                out double proposalShare);
+            bool ignoreNeuralConstraint = false;
+            if (usesIncompleteTail && orderedCandidates.Count > 0)
+            {
+                // Only the incomplete-tail merge needs the true full-beam
+                // top, since that is the only case this flag can flip.
+                SentenceCandidate fullTop = FindConfidenceTop(
+                    fullBeamResult.Where(
+                        candidate => HasRequiredPrefix(candidate.Text, requiredTextPrefix)));
+                ignoreNeuralConstraint = !string.Equals(
+                    orderedCandidates[0].Candidate.Text,
+                    fullTop?.Text,
+                    StringComparison.Ordinal);
+            }
             return new SentenceEarlyCommitEvidence
             {
                 Proposal = proposal,
+                ProposalShare = proposalShare,
                 RawLengths = BuildRawLengthsForProposal(proposal, orderedCandidates),
                 ConfidenceTruncated = confidenceTruncated,
-                IgnoreNeuralConstraint = usesIncompleteTail &&
-                    orderedCandidates.Count > 0 &&
-                    !string.Equals(
-                        orderedCandidates[0].Candidate.Text,
-                        fullTop?.Text,
-                        StringComparison.Ordinal)
+                IgnoreNeuralConstraint = ignoreNeuralConstraint
             };
         }
 
@@ -1118,11 +1137,13 @@ namespace TigerClaw.Core
 
         private static string BuildConfidenceProposal(
             IEnumerable<EarlyCommitCandidate> candidates,
-            double threshold)
+            double threshold,
+            out double proposalShare)
         {
             EarlyCommitCandidate[] values = candidates.ToArray();
             if (values.Length == 0)
             {
+                proposalShare = 0.0;
                 return string.Empty;
             }
 
@@ -1146,13 +1167,16 @@ namespace TigerClaw.Core
 
             string proposal = string.Empty;
             int proposalTextElements = 0;
+            proposalShare = 0.0;
             foreach (KeyValuePair<string, double> item in prefixMass)
             {
                 int textElements = prefixTextElements[item.Key];
-                if (item.Value / total >= threshold && textElements > proposalTextElements)
+                double share = item.Value / total;
+                if (share >= threshold && textElements > proposalTextElements)
                 {
                     proposal = item.Key;
                     proposalTextElements = textElements;
+                    proposalShare = share;
                 }
             }
             return proposal;

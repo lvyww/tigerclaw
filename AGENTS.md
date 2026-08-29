@@ -94,10 +94,19 @@ UI state:
   skip short-text reranking if this becomes material; do not patch candidate
   identity/order plumbing without a failing trace.
 - Windows early commit is experimental and defaults off. It requires raw length
-  greater than four, three exact consecutive one-key generations, confidence
-  mass at least `0.995`, and the same raw boundary. Backspace, missing evidence
-  and manual navigation invalidate or suspend evidence. Keep the complete
-  unstable suffix and at least its final candidate character.
+  greater than four, exact consecutive one-key generations, confidence mass at
+  least `0.995`, and the same raw boundary. Two generations suffice only when
+  both prefix-quality shares reach `0.99999`; otherwise three are required.
+  Backspace, missing evidence and manual navigation invalidate or suspend
+  evidence. Keep the complete unstable suffix and at least its final candidate
+  character.
+- Early-commit confidence/mass aggregation on the full-code path (both
+  `SentenceInputDecoder.cs` and the Rime Lua port) must run over the already
+  narrowed visible/top-candidate list, not the full beam pool. Widening to the
+  full beam is only correct — and only needed — while merging an
+  incomplete-code-tail state. Re-widening the common path was a real
+  performance regression once (beam pool up to 100x the visible list on every
+  keystroke); keep that distinction when touching this code.
 - TSF key requests carry stable `client_session` + `event_id`; timeout retries
   reuse them and Core returns the cached first response without executing a
   physical key twice.
@@ -176,6 +185,18 @@ The main release is `release/`. Windows on ARM development output is
 `release_arm64/`; its default uses an ARM64X wrapper with ARM64 and x64 TSF
 sidecars. `--diagnostic` enables embedded TSF logging.
 
+`publish_core_arm64.bat` rebuilds only `next/TigerClaw.Core/` and copies
+`TigerClaw.Core.exe`/`TigerClaw.Core.exe.config`/`TigerClaw.Shared.dll` into an
+existing `release_arm64/`, skipping Overlay, Dialog, Sentence, Hook.Native and
+both TSF DLLs for faster Core-only iteration. It does not touch
+`EmbeddedBuildInfo.h` or rebuild the TSF DLL. If the deployed TSF DLL was built
+with `core_hash_verify_enabled=1`, it embeds the old Core.exe's SHA256 and will
+disconnect the pipe against the new binary (`SampleIME.cpp`,
+`VerifyCoreExecutableHashCached`/`_EnsurePipeConnected`). Either set
+`core_hash_verify_enabled=0` in `publish_config.txt` and rebuild the TSF DLL
+once via `publish_arm64.bat`, or accept that a full `publish_arm64.bat` run is
+required whenever the embedded hash must match.
+
 Important local rule: this checkout's `release_arm64/` is the user's daily
 runtime, not disposable build output. Never delete, clean, replace or partially
 rebuild it unless the user explicitly asks. In particular, do not run a broad
@@ -221,7 +242,9 @@ Settings change:
 
 Release change:
 
-1. Update `publish.bat` or `publish_arm64.bat`.
+1. Update `publish.bat` or `publish_arm64.bat`. `publish_core_arm64.bat`
+   covers Core-only iteration; keep it in sync if `TigerClaw.Core.csproj`'s
+   build inputs change.
 2. Preserve CRLF.
 3. Verify required executables, both TSF architectures, models and licenses.
 4. Package `dist_config.txt`, never a developer's live `config.txt`.

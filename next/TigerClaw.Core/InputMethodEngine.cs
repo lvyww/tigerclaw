@@ -64,12 +64,14 @@ namespace TigerClaw.Core
         private const int VK_M = 0x4D;
         private const int VK_Z = 0x5A;
         private const double SentenceEmittedCharacterReward = 2.0;
+        private const double SentenceEarlyCommitStrongShare = 0.99999;
 
         private sealed class SentenceAutoCommitEvidence
         {
             public string RawCode { get; set; }
             public string Proposal { get; set; }
             public Dictionary<string, int> RawLengths { get; set; }
+            public bool Strong { get; set; }
         }
 
         private readonly object _lock = new object();
@@ -2242,21 +2244,32 @@ namespace TigerClaw.Core
                 RawCode = evidenceRaw,
                 Proposal = proposal,
                 RawLengths = earlyCommitEvidence.RawLengths ??
-                    new Dictionary<string, int>(StringComparer.Ordinal)
+                    new Dictionary<string, int>(StringComparer.Ordinal),
+                Strong = earlyCommitEvidence.ProposalShare >= SentenceEarlyCommitStrongShare
             });
             if (_sentenceAutoCommitEvidence.Count > 3)
             {
                 _sentenceAutoCommitEvidence.RemoveAt(0);
             }
-            if (_sentenceAutoCommitEvidence.Count < 3) return null;
+            // Extremely strong evidence may confirm after two generations;
+            // any weaker generation keeps the original three-generation guard.
+            int requiredEvidenceCount = _sentenceAutoCommitEvidence.Count >= 2 &&
+                _sentenceAutoCommitEvidence.All(item => item.Strong)
+                ? 2
+                : 3;
+            if (_sentenceAutoCommitEvidence.Count < requiredEvidenceCount) return null;
 
             string stableProposal = LongestCommonTextElementPrefix(
                 _sentenceAutoCommitEvidence.Select(item => item.Proposal));
-            int committedRawLength = FindStableSentenceRawLength(stableProposal);
+            int committedRawLength = FindStableSentenceRawLength(
+                stableProposal,
+                requiredEvidenceCount);
             while (stableProposal.Length > _sentenceCommittedText.Length && committedRawLength == 0)
             {
                 stableProposal = RemoveLastTextElement(stableProposal);
-                committedRawLength = FindStableSentenceRawLength(stableProposal);
+                committedRawLength = FindStableSentenceRawLength(
+                    stableProposal,
+                    requiredEvidenceCount);
             }
             if (committedRawLength <= _sentenceCommittedRawLength || committedRawLength > evidenceRaw.Length)
             {
@@ -2281,9 +2294,10 @@ namespace TigerClaw.Core
             return commit;
         }
 
-        private int FindStableSentenceRawLength(string text)
+        private int FindStableSentenceRawLength(string text, int minimumEvidenceCount)
         {
-            if (string.IsNullOrEmpty(text) || _sentenceAutoCommitEvidence.Count < 3)
+            if (string.IsNullOrEmpty(text) ||
+                _sentenceAutoCommitEvidence.Count < minimumEvidenceCount)
             {
                 return 0;
             }

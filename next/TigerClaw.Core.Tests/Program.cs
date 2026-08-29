@@ -165,11 +165,13 @@ namespace TigerClaw.Core.Tests
                 SentenceAutoCommitRequiresConsecutiveAppendEvidence();
                 SentenceAutoCommitSuspendsAfterManualNavigation();
                 SentenceAutoCommitRetainsExactlyOneCharacter();
-                SentenceAutoCommitUsesThreeGenerationCommonPrefix();
+                SentenceAutoCommitUsesTwoStrongGenerationCommonPrefix();
+                SentenceAutoCommitKeepsThreeGenerationWindowForWeakEvidence();
                 SentenceAutoCommitRequiresStableRawBoundary();
                 SentenceAutoCommitSurvivesAlternatingCompleteSegmentation();
                 SentenceAutoCommitReplayPreservesOriginalCommit();
                 KeyReplayCacheReturnsOriginalResultWithCurrentSequence();
+                TransportDefersOnlyKeyUiPublication();
                 SentenceEngineDecodesLongWorkOffTheKeyPath();
                 SentenceAutoCommitStaysOffTheKeyPath();
                 SentenceEngineHoldsPreviousCandidatesWhileDecodeIsPending();
@@ -2286,6 +2288,9 @@ namespace TigerClaw.Core.Tests
                 right.EarlyCommitEvidence ?? SentenceEarlyCommitEvidence.Empty;
             Equal(rightEvidence.Proposal, leftEvidence.Proposal, name + ".early.proposal");
             True(
+                leftEvidence.ProposalShare == rightEvidence.ProposalShare,
+                name + ".early.proposal_share");
+            True(
                 leftEvidence.ConfidenceTruncated == rightEvidence.ConfidenceTruncated,
                 name + ".early.confidence_truncated");
             True(
@@ -3132,10 +3137,7 @@ namespace TigerClaw.Core.Tests
         {
             InputMethodEngine engine = CreateAutoCommitSentenceEngine();
             TypeLetters(engine, "abcde");
-            KeyEngineResult secondEvidence = Press(engine, 0x46);
-            Equal(null, secondEvidence.TextToOutput,
-                nameof(SentenceAutoCommitRetainsExactlyOneCharacter) + ".second_evidence");
-            KeyEngineResult result = Press(engine, 0x47);
+            KeyEngineResult result = Press(engine, 0x46);
             Equal("甲乙", result.TextToOutput,
                 nameof(SentenceAutoCommitRetainsExactlyOneCharacter));
             EngineUiSnapshot snapshot = engine.GetUiSnapshot(5);
@@ -3144,13 +3146,13 @@ namespace TigerClaw.Core.Tests
                 nameof(SentenceAutoCommitRetainsExactlyOneCharacter));
         }
 
-        private static void SentenceAutoCommitUsesThreeGenerationCommonPrefix()
+        private static void SentenceAutoCommitUsesTwoStrongGenerationCommonPrefix()
         {
             var state = new CoreRuntimeState();
             True(state.TrySetConfigValue("整句输入", "是", out _, out string sentenceReason),
-                nameof(SentenceAutoCommitUsesThreeGenerationCommonPrefix) + ": " + sentenceReason);
+                nameof(SentenceAutoCommitUsesTwoStrongGenerationCommonPrefix) + ": " + sentenceReason);
             True(state.TrySetConfigValue("整句自动提前上屏", "是", out _, out string commitReason),
-                nameof(SentenceAutoCommitUsesThreeGenerationCommonPrefix) + ": " + commitReason);
+                nameof(SentenceAutoCommitUsesTwoStrongGenerationCommonPrefix) + ": " + commitReason);
             var engine = new InputMethodEngine(state, CreateSentenceDecoder(new Dictionary<string, List<string>>
             {
                 ["abc"] = new List<string> { "甲" },
@@ -3160,14 +3162,42 @@ namespace TigerClaw.Core.Tests
             }));
 
             TypeLetters(engine, "abcde");
-            Equal(null, Press(engine, 0x46).TextToOutput,
-                nameof(SentenceAutoCommitUsesThreeGenerationCommonPrefix) + ".second_evidence");
-            KeyEngineResult committed = Press(engine, 0x47);
+            KeyEngineResult committed = Press(engine, 0x46);
             Equal("甲", committed.TextToOutput,
-                nameof(SentenceAutoCommitUsesThreeGenerationCommonPrefix) + ".single_character");
+                nameof(SentenceAutoCommitUsesTwoStrongGenerationCommonPrefix) + ".single_character");
             EngineUiSnapshot snapshot = engine.GetUiSnapshot(5);
-            True(snapshot.Candidates.Length > 0 && snapshot.Candidates[0] == "乙戊",
-                nameof(SentenceAutoCommitUsesThreeGenerationCommonPrefix) + ".unstable_suffix_retained");
+            True(snapshot.Candidates.Length > 0 && snapshot.Candidates[0] == "丁",
+                nameof(SentenceAutoCommitUsesTwoStrongGenerationCommonPrefix) + ".unstable_suffix_retained");
+        }
+
+        private static void SentenceAutoCommitKeepsThreeGenerationWindowForWeakEvidence()
+        {
+            SentenceInputDecoder decoder = CreateWeakEvidenceSentenceDecoder();
+            SentenceDecodeResult evidence = decoder.DecodeFull(
+                "abcde",
+                20,
+                includeEarlyCommitEvidence: true);
+            Equal("甲乙", evidence.EarlyCommitEvidence.Proposal,
+                nameof(SentenceAutoCommitKeepsThreeGenerationWindowForWeakEvidence) + ".proposal");
+            True(evidence.EarlyCommitEvidence.ProposalShare >= 0.995 &&
+                evidence.EarlyCommitEvidence.ProposalShare < 0.99999,
+                nameof(SentenceAutoCommitKeepsThreeGenerationWindowForWeakEvidence) +
+                ".share=" + evidence.EarlyCommitEvidence.ProposalShare.ToString(
+                    "G17",
+                    CultureInfo.InvariantCulture));
+
+            var state = new CoreRuntimeState();
+            True(state.TrySetConfigValue("整句输入", "是", out _, out string sentenceReason),
+                nameof(SentenceAutoCommitKeepsThreeGenerationWindowForWeakEvidence) + ": " + sentenceReason);
+            True(state.TrySetConfigValue("整句自动提前上屏", "是", out _, out string commitReason),
+                nameof(SentenceAutoCommitKeepsThreeGenerationWindowForWeakEvidence) + ": " + commitReason);
+            var engine = new InputMethodEngine(state, CreateWeakEvidenceSentenceDecoder());
+
+            TypeLetters(engine, "abcde");
+            Equal(null, Press(engine, 0x46).TextToOutput,
+                nameof(SentenceAutoCommitKeepsThreeGenerationWindowForWeakEvidence) + ".second_evidence");
+            Equal("甲乙", Press(engine, 0x47).TextToOutput,
+                nameof(SentenceAutoCommitKeepsThreeGenerationWindowForWeakEvidence) + ".third_evidence");
         }
 
         private static void SentenceAutoCommitRequiresStableRawBoundary()
@@ -3214,9 +3244,7 @@ namespace TigerClaw.Core.Tests
             var engine = new InputMethodEngine(state, decoder);
 
             TypeLetters(engine, "abcde");
-            Equal(null, Press(engine, 0x46).TextToOutput,
-                nameof(SentenceAutoCommitSurvivesAlternatingCompleteSegmentation) + ".second_evidence");
-            Equal("甲", Press(engine, 0x47).TextToOutput,
+            Equal("甲", Press(engine, 0x46).TextToOutput,
                 nameof(SentenceAutoCommitSurvivesAlternatingCompleteSegmentation) + ".commit");
         }
 
@@ -3224,9 +3252,7 @@ namespace TigerClaw.Core.Tests
         {
             InputMethodEngine engine = CreateAutoCommitSentenceEngine();
             TypeLetters(engine, "abcde");
-            Equal(null, Press(engine, 0x46).TextToOutput,
-                nameof(SentenceAutoCommitReplayPreservesOriginalCommit) + ".second_evidence");
-            KeyEngineResult committed = Press(engine, 0x47);
+            KeyEngineResult committed = Press(engine, 0x46);
             Equal("甲乙", committed.TextToOutput,
                 nameof(SentenceAutoCommitReplayPreservesOriginalCommit) + ".initial");
 
@@ -3318,6 +3344,24 @@ namespace TigerClaw.Core.Tests
                 beamWidth: 100);
         }
 
+        private static SentenceInputDecoder CreateWeakEvidenceSentenceDecoder()
+        {
+            return new SentenceInputDecoder(
+                SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
+                {
+                    ["ab"] = new List<string> { "甲" },
+                    ["abc"] = new List<string> { "甲乙" },
+                    ["de"] = new List<string> { "丙" },
+                    ["cde"] = new List<string> { "丁戊" },
+                    ["def"] = new List<string> { "丙" },
+                    ["cdef"] = new List<string> { "丁戊" },
+                    ["defg"] = new List<string> { "丙" },
+                    ["cdefg"] = new List<string> { "丁戊" }
+                }),
+                new WeakAlternativeSentenceLanguageModel(),
+                beamWidth: 100);
+        }
+
         private static void KeyReplayCacheReturnsOriginalResultWithCurrentSequence()
         {
             var cache = new KeyRequestReplayCache(16);
@@ -3329,6 +3373,24 @@ namespace TigerClaw.Core.Tests
             True(replayed.Contains("\"commit_text\":\"一\""), nameof(KeyReplayCacheReturnsOriginalResultWithCurrentSequence) + ".commit");
             True(!cache.TryGet(KeyRequestReplayCache.BuildKey("frontend-a", "18"), 203, out _), nameof(KeyReplayCacheReturnsOriginalResultWithCurrentSequence) + ".different_event");
             True(!cache.TryGet(KeyRequestReplayCache.BuildKey("frontend-b", "17"), 204, out _), nameof(KeyReplayCacheReturnsOriginalResultWithCurrentSequence) + ".different_frontend");
+        }
+
+        private static void TransportDefersOnlyKeyUiPublication()
+        {
+            var state = new CoreRuntimeState();
+            using (var handler = new ProtocolHandler(_ => { }, state, null))
+            {
+                string response = handler.HandleTransport(
+                    "{\"type\":\"key\",\"seq\":1,\"client_session\":\"test\",\"event_id\":\"1\",\"action\":\"down\",\"vk\":65}",
+                    out bool publishKeyUiAfterResponse);
+                True(!string.IsNullOrEmpty(response), nameof(TransportDefersOnlyKeyUiPublication) + ".response");
+                True(publishKeyUiAfterResponse, nameof(TransportDefersOnlyKeyUiPublication) + ".key");
+
+                handler.HandleTransport(
+                    "{\"type\":\"query_state\",\"seq\":2}",
+                    out bool publishQueryUiAfterResponse);
+                True(!publishQueryUiAfterResponse, nameof(TransportDefersOnlyKeyUiPublication) + ".query");
+            }
         }
 
         private static void SentenceEngineDecodesLongWorkOffTheKeyPath()
@@ -3408,26 +3470,19 @@ namespace TigerClaw.Core.Tests
                     Thread.Sleep(5);
                 }
 
+                completed.Reset();
                 stopwatch.Restart();
                 KeyEngineResult seventh = Press(engine, 0x47);
                 stopwatch.Stop();
                 True(stopwatch.ElapsedMilliseconds < 60,
                     nameof(SentenceAutoCommitStaysOffTheKeyPath) + ".seventh_latency");
-                Equal(null, seventh.TextToOutput,
-                    nameof(SentenceAutoCommitStaysOffTheKeyPath) + ".second_evidence");
+                Equal("甲乙", seventh.TextToOutput,
+                    nameof(SentenceAutoCommitStaysOffTheKeyPath) + ".commit");
                 True(completed.WaitOne(5000), nameof(SentenceAutoCommitStaysOffTheKeyPath) + ".seven_ready");
                 while (engine.IsSentenceDecodePending)
                 {
                     Thread.Sleep(5);
                 }
-
-                stopwatch.Restart();
-                KeyEngineResult eighth = Press(engine, 0x48);
-                stopwatch.Stop();
-                True(stopwatch.ElapsedMilliseconds < 60,
-                    nameof(SentenceAutoCommitStaysOffTheKeyPath) + ".commit_latency");
-                Equal("甲乙", eighth.TextToOutput,
-                    nameof(SentenceAutoCommitStaysOffTheKeyPath) + ".commit");
             }
         }
 
@@ -3553,6 +3608,19 @@ namespace TigerClaw.Core.Tests
                        string.Equals(target, "辛", StringComparison.Ordinal)
                     ? 0.0
                     : -10.0;
+            }
+
+            public bool HasObservedBigram(string previous, string target)
+            {
+                return false;
+            }
+        }
+
+        private sealed class WeakAlternativeSentenceLanguageModel : ISentenceLanguageModel
+        {
+            public double LogProbability(string previous2, string previous1, string target)
+            {
+                return string.Equals(target, "丁", StringComparison.Ordinal) ? -8.0 : 0.0;
             }
 
             public bool HasObservedBigram(string previous, string target)

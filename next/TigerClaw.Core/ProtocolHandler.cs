@@ -26,6 +26,10 @@ namespace TigerClaw.Core
         private readonly KeyRequestReplayCache _keyRequestReplayCache = new KeyRequestReplayCache();
         private readonly object _keyRequestLock = new object();
         private readonly object _publishLock = new object();
+        private readonly AutoResetEvent _deferredUiPublishSignal;
+        private readonly Thread _deferredUiPublishThread;
+        private int _deferredUiPublishRequested;
+        private int _deferredUiPublishStopping;
         private const int FreshCaretAwaitWindowMs = 30;
         private bool _hookNativeDisabled;
         // TSF 是否处于激活态（本 IME 被选中且焦点在可编辑文档）。默认 false → 启动即隐藏状态窗，直到首个 ime_active:true。
@@ -52,10 +56,27 @@ namespace TigerClaw.Core
             _engine.SetSentenceDecodeCompletedCallback(PublishUiState);
             _engine.SetChinese(_state.GetDefaultChinese(), out _);
             PublishUiState();
+            if (_uiStatePublisher != null)
+            {
+                _deferredUiPublishSignal = new AutoResetEvent(false);
+                _deferredUiPublishThread = new Thread(RunDeferredUiPublishLoop)
+                {
+                    IsBackground = true,
+                    Name = "TigerClaw.Core.UiPublish"
+                };
+                _deferredUiPublishThread.Start();
+            }
         }
 
         public void Dispose()
         {
+            if (_deferredUiPublishThread != null &&
+                Interlocked.Exchange(ref _deferredUiPublishStopping, 1) == 0)
+            {
+                _deferredUiPublishSignal.Set();
+                _deferredUiPublishThread.Join();
+                _deferredUiPublishSignal.Dispose();
+            }
             _sentenceRerankClient?.Dispose();
             _engine?.Dispose();
         }
@@ -127,6 +148,17 @@ namespace TigerClaw.Core
 
         public string Handle(string json)
         {
+            return HandleCore(json, false, out _);
+        }
+
+        internal string HandleTransport(string json, out bool publishUiAfterResponse)
+        {
+            return HandleCore(json, true, out publishUiAfterResponse);
+        }
+
+        private string HandleCore(string json, bool deferKeyUiPublish, out bool publishUiAfterResponse)
+        {
+            publishUiAfterResponse = false;
             SimpleJsonObject msg = SimpleJson.Parse(json);
             if (msg == null)
             {
@@ -405,7 +437,18 @@ namespace TigerClaw.Core
                     }
 
                 case "key":
-                    return HandleKeyMessage(msg, seq);
+                    {
+                        string response = HandleKeyMessage(msg, seq);
+                        if (deferKeyUiPublish)
+                        {
+                            publishUiAfterResponse = true;
+                        }
+                        else
+                        {
+                            PublishUiState();
+                        }
+                        return response;
+                    }
 
                 case "caret":
                     MarkFrontendMode(ConvertToString(msg.GetValue("frontend")));
@@ -525,7 +568,7 @@ namespace TigerClaw.Core
             {
                 extraJsonPairs += ",\"ensure_system_layout_en\":true";
             }
-            return BuildResponseWithUiState(
+            return BuildResponse(
                 seq,
                 true,
                 result.Handled,
@@ -534,6 +577,39 @@ namespace TigerClaw.Core
                 keyboardOpen: result.IsChinese,
                 cancelComposition: cancelComposition,
                 extraJsonPairs: extraJsonPairs);
+        }
+
+        internal void RequestDeferredUiStatePublish()
+        {
+            if (_deferredUiPublishSignal == null ||
+                Volatile.Read(ref _deferredUiPublishStopping) != 0)
+            {
+                return;
+            }
+
+            Interlocked.Exchange(ref _deferredUiPublishRequested, 1);
+            _deferredUiPublishSignal.Set();
+        }
+
+        private void RunDeferredUiPublishLoop()
+        {
+            while (true)
+            {
+                _deferredUiPublishSignal.WaitOne();
+                if (Volatile.Read(ref _deferredUiPublishStopping) != 0)
+                {
+                    return;
+                }
+
+                while (Interlocked.Exchange(ref _deferredUiPublishRequested, 0) != 0)
+                {
+                    PublishUiState();
+                    if (Volatile.Read(ref _deferredUiPublishStopping) != 0)
+                    {
+                        return;
+                    }
+                }
+            }
         }
 
         private void HandleCaretMessage(SimpleJsonObject msg)

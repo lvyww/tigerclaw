@@ -11,6 +11,9 @@ local rank_penalty = 0.03
 local emitted_character_reward = 2.0
 local isolation_threshold = 3000
 local isolation_lambda = 2.0
+-- Two consecutive generations may confirm only when dissenting Beam mass is
+-- below 0.001%; every weaker history keeps the original three-key window.
+local early_commit_strong_share = 0.99999
 local BOS = kn_reader.BOS
 local EOS = kn_reader.EOS
 local kn_model = false
@@ -700,9 +703,10 @@ local function build_early_commit_evidence(
     else
         table.sort(candidates, state_better)
     end
-    local proposal = confidence_proposal(candidates, 0.995)
+    local proposal, proposal_share = confidence_proposal(candidates, 0.995)
     return {
         proposal = proposal,
+        proposal_share = proposal_share,
         raw_lengths = raw_lengths_for_proposal(proposal, candidates),
         confidence_truncated = truncated
     }
@@ -724,10 +728,14 @@ local function emit(raw, states, length, include_early_commit, required_text_pre
         confidence_truncated = false
     }
     if include_early_commit then
+        -- The full-code path only needs the already-selected top candidates
+        -- (`result`); widening to the whole beam (`all_candidates`) only
+        -- matters once an incomplete tail is merged in, so defer that cost
+        -- to build_early_commit_evidence instead of paying it every key.
         result.early_commit_evidence = build_early_commit_evidence(
             raw,
             states,
-            all_candidates,
+            result,
             completed._truncated or false,
             required_text_prefix or "")
     end
@@ -741,6 +749,8 @@ local function results_equal(left, right)
     local left_evidence = left.early_commit_evidence or {}
     local right_evidence = right.early_commit_evidence or {}
     if (left_evidence.proposal or "") ~= (right_evidence.proposal or "") or
+        (left_evidence.proposal_share or 0.0) ~=
+        (right_evidence.proposal_share or 0.0) or
         (left_evidence.confidence_truncated or false) ~=
         (right_evidence.confidence_truncated or false) then
         return false
@@ -928,8 +938,16 @@ local function common_history_prefix(history)
     return table.concat(common)
 end
 
-local function stable_history_raw_length(history, text)
-    if text == "" or #history < 3 then return 0 end
+local function required_early_commit_history(history)
+    if #history < 2 then return 3 end
+    for i = 1, #history do
+        if not history[i].strong then return 3 end
+    end
+    return 2
+end
+
+local function stable_history_raw_length(history, text, minimum_count)
+    if text == "" or #history < (minimum_count or 3) then return 0 end
     local stable = 0
     for i = 1, #history do
         local raw_length = (history[i].raw_lengths or {})[text] or 0
@@ -945,7 +963,7 @@ end
 
 confidence_proposal = function(candidates, threshold)
     if #candidates == 0 then
-        return ""
+        return "", 0.0
     end
     local max_score = candidates[1].confidence_score or candidates[1].score
     for i = 2, #candidates do
@@ -977,15 +995,18 @@ confidence_proposal = function(candidates, threshold)
 
     local proposal = ""
     local proposal_length = 0
+    local proposal_share = 0.0
     for index = 1, #prefix_order do
         local prefix = prefix_order[index]
         local length = prefix_length[prefix]
-        if prefix_mass[prefix] / total >= threshold and length > proposal_length then
+        local share = prefix_mass[prefix] / total
+        if share >= threshold and length > proposal_length then
             proposal = prefix
             proposal_length = length
+            proposal_share = share
         end
     end
-    return proposal
+    return proposal, proposal_share
 end
 
 local function try_early_commit(env)
@@ -1079,7 +1100,9 @@ local function try_early_commit(env)
     history[#history + 1] = {
         proposal = proposal,
         raw = full_raw,
-        raw_lengths = early_commit_evidence.raw_lengths or {}
+        raw_lengths = early_commit_evidence.raw_lengths or {},
+        strong = (early_commit_evidence.proposal_share or 0.0) >=
+            early_commit_strong_share
     }
     while #history > 3 do table.remove(history, 1) end
     state.history = history
@@ -1087,15 +1110,18 @@ local function try_early_commit(env)
     state.stable = #history
     state.evidence_raw = full_raw
     save_transient_state(context, state, env)
-    if #history < 3 then return end
+    local required_history = required_early_commit_history(history)
+    if #history < required_history then return end
 
     local stable_proposal = common_history_prefix(history)
-    local consumed = stable_history_raw_length(history, stable_proposal)
+    local consumed = stable_history_raw_length(
+        history, stable_proposal, required_history)
     while #stable_proposal > #state.committed_text and consumed == 0 do
         local chars = utf_chars(stable_proposal)
         chars[#chars] = nil
         stable_proposal = table.concat(chars)
-        consumed = stable_history_raw_length(history, stable_proposal)
+        consumed = stable_history_raw_length(
+            history, stable_proposal, required_history)
     end
     if consumed <= #state.committed_raw or consumed > #full_raw then return end
     local commit = stable_proposal:sub(#state.committed_text + 1)
@@ -1261,6 +1287,7 @@ M.supplement_status = function()
 end
 M.find_raw_length_for_text = find_raw_length_for_text
 M.confidence_proposal = confidence_proposal
+M.required_early_commit_history = required_early_commit_history
 M.processor = processor
 M.translator = translator
 return M
