@@ -209,12 +209,15 @@ namespace TigerClaw.Core
         private static string ChooseShorter(string current, string candidate)
         {
             if (string.IsNullOrEmpty(current) ||
-                candidate.Length < current.Length ||
-                (candidate.Length == current.Length && string.CompareOrdinal(candidate, current) < 0))
+                candidate.Length < current.Length)
             {
                 return candidate;
             }
 
+            // `source` is built in code-table priority order. For equal-length
+            // codes, retain the first code from that order instead of choosing
+            // lexicographically; otherwise an alternate code such as `ladc`
+            // can incorrectly displace the higher-priority `ldac` for 燕.
             return current;
         }
 
@@ -536,6 +539,110 @@ namespace TigerClaw.Core
             {
                 ClearCache();
             }
+        }
+
+        internal bool HasCompleteCandidate(string rawCode, string requiredTextPrefix = null)
+        {
+            string normalized = NormalizeRawCode(rawCode);
+            if (normalized.Length == 0 || !normalized.Any(char.IsLetter))
+            {
+                return false;
+            }
+
+            string required = requiredTextPrefix ?? string.Empty;
+            var states = new HashSet<int>[normalized.Length + 1];
+            for (int index = 0; index < states.Length; index++)
+            {
+                states[index] = new HashSet<int>();
+            }
+            states[0].Add(0);
+
+            bool allowAllRanks = normalized.Length <= 4;
+            for (int position = 0; position < normalized.Length; position++)
+            {
+                if (states[position].Count == 0)
+                {
+                    continue;
+                }
+
+                foreach (int codeLength in _lexicon.CodeLengths)
+                {
+                    int codeEnd = position + codeLength;
+                    if (codeEnd > normalized.Length ||
+                        (position > 0 && IsShortSymbolCode(normalized[position])))
+                    {
+                        continue;
+                    }
+
+                    SentenceLexiconCandidate[] candidates =
+                        _lexicon.GetCandidates(normalized.Substring(position, codeLength));
+                    if (candidates == null || candidates.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    int consumedEnd = ReadCodeSuffix(normalized, codeEnd, out int selectedRank);
+                    if (normalized.Length > 1 && consumedEnd - position < 2)
+                    {
+                        continue;
+                    }
+
+                    foreach (int matchedPrefixLength in states[position])
+                    {
+                        foreach (SentenceLexiconCandidate candidate in candidates)
+                        {
+                            bool rankMatches = selectedRank > 0
+                                ? candidate.Rank == selectedRank
+                                : allowAllRanks || candidate.Rank == 1;
+                            if (!rankMatches || !TryAdvanceRequiredPrefix(
+                                required,
+                                matchedPrefixLength,
+                                candidate.Text,
+                                out int nextMatchedPrefixLength))
+                            {
+                                continue;
+                            }
+
+                            states[consumedEnd].Add(nextMatchedPrefixLength);
+                        }
+                    }
+                }
+            }
+
+            return states[normalized.Length].Contains(required.Length);
+        }
+
+        internal bool IsProperCodePrefix(string code)
+        {
+            return _lexicon.IsProperCodePrefix(NormalizeRawCode(code));
+        }
+
+        private static bool TryAdvanceRequiredPrefix(
+            string required,
+            int matchedLength,
+            string text,
+            out int nextMatchedLength)
+        {
+            nextMatchedLength = matchedLength;
+            if (matchedLength >= required.Length)
+            {
+                return true;
+            }
+
+            string candidateText = text ?? string.Empty;
+            int compareLength = Math.Min(candidateText.Length, required.Length - matchedLength);
+            if (compareLength == 0 || string.CompareOrdinal(
+                required,
+                matchedLength,
+                candidateText,
+                0,
+                compareLength) != 0)
+            {
+                return false;
+            }
+
+            nextMatchedLength = Math.Min(required.Length, matchedLength + candidateText.Length);
+            return true;
         }
 
         private SentenceDecodeResult DecodeIncrementalLocked(
@@ -1156,7 +1263,7 @@ namespace TigerClaw.Core
                 double weight = Math.Exp(candidate.ConfidenceScore - max);
                 total += weight;
                 int[] textEnds = GetTextElementEndOffsets(candidate.Candidate.Text);
-                for (int index = 0; index + 1 < textEnds.Length; index++)
+                for (int index = 0; index < textEnds.Length; index++)
                 {
                     string prefix = candidate.Candidate.Text.Substring(0, textEnds[index]);
                     prefixMass.TryGetValue(prefix, out double previousMass);

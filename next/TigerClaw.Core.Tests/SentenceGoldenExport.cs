@@ -296,6 +296,7 @@ namespace TigerClaw.Core.Tests
             {
                 throw new InvalidOperationException("golden." + item.Id + ": " + reason);
             }
+            state.TrySetConfigValue("整句空码自动顶屏", "否", out _, out _);
 
             var engine = new InputMethodEngine(state, CreateGoldenDecoder(item));
             int step = 0;

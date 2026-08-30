@@ -98,8 +98,16 @@ UI state:
   least `0.995`, and the same raw boundary. Two generations suffice only when
   both prefix-quality shares reach `0.99999`; otherwise three are required.
   Backspace, missing evidence and manual navigation invalidate or suspend
-  evidence. Keep the complete unstable suffix and at least its final candidate
-  character.
+  evidence. Keep the complete unstable suffix and at least one uncommitted raw
+  code character; commits must still land on a stable lexicon boundary.
+- `整句空码自动顶屏` defaults on and is independent of probabilistic early
+  commit. When the current completed generation has exactly one visible
+  candidate and appending an ordinary letter leaves no complete lexicon path,
+  first check whether the selected last lexicon segment is still a proper code
+  prefix. Defer while it can grow; if the actual extension goes dead, commit the
+  saved candidate's uncommitted suffix, reset the old sentence, and retain every
+  appended letter as the next composition. Its key-path check must stay a
+  lightweight lexicon-path test rather than a synchronous n-gram/Beam decode.
 - Early-commit confidence/mass aggregation on the full-code path (both
   `SentenceInputDecoder.cs` and the Rime Lua port) must run over the already
   narrowed visible/top-candidate list, not the full beam pool. Widening to the

@@ -146,11 +146,13 @@ namespace TigerClaw.Core.Tests
                 SentenceSupplementIncrementalMatchesFullRebuild();
                 SentenceSupplementSurvivesNeuralRerank();
                 SentenceDecoderUsesOnlyTheOptimalCharacterCode();
+                SentenceDecoderUsesSourcePriorityForEqualLengthCodes();
                 SentenceDecoderAllowsNonPrimaryCodesForRareCharacters();
                 SentenceDecoderIncrementalMatchesFullRebuild();
                 SentenceDecoderReportsTruncatedConfidenceMass();
                 SentenceDecoderAddsIncompleteTailConfidenceWithoutChangingVisibleCandidates();
                 SentenceDecoderConditionsEvidenceOnCommittedPrefix();
+                SentenceDecoderEarlyCommitCanProposeFullDecodedPrefixWithRawTail();
                 SentenceDecoderSelectsExactVisibleTopK();
                 SentenceNgramV2LoadsFromMappedFile();
                 SentenceEngineCommitsDecodedCandidate();
@@ -160,11 +162,16 @@ namespace TigerClaw.Core.Tests
                 SentenceEngineUsesTabToTraverseCandidates();
                 SentenceEnginePassesCtrlNumberShortcut();
                 SentenceEngineCommitsSmartQuoteAfterCandidate();
+                SentenceEmptyCodeAutoCommitDefaultsOnAndRetainsNewKey();
+                SentenceEmptyCodeAutoCommitHonorsDisabledAndCandidateGuards();
+                SentenceEmptyCodeAutoCommitDefersCompletableLastSegment();
+                SentenceEmptyCodeAutoCommitWorksWithAsyncDecode();
                 SentenceEngineRejectsStaleNeuralResult();
                 SentenceEngineReranksOnlyTopFive();
                 SentenceAutoCommitRequiresConsecutiveAppendEvidence();
                 SentenceAutoCommitSuspendsAfterManualNavigation();
-                SentenceAutoCommitRetainsExactlyOneCharacter();
+                SentenceAutoCommitRetainsAtLeastOneRawCode();
+                SentenceAutoCommitCanCommitAllDecodedTextBeforeRawTail();
                 SentenceAutoCommitUsesTwoStrongGenerationCommonPrefix();
                 SentenceAutoCommitKeepsThreeGenerationWindowForWeakEvidence();
                 SentenceAutoCommitRequiresStableRawBoundary();
@@ -2563,6 +2570,7 @@ namespace TigerClaw.Core.Tests
             var state = new CoreRuntimeState();
             True(state.TrySetConfigValue("整句输入", "是", out _, out string reason),
                 nameof(SentenceEngineCommitsDecodedCandidate) + ": " + reason);
+            state.TrySetConfigValue("整句空码自动顶屏", "否", out _, out _);
             SentenceInputDecoder decoder = CreateSentenceDecoder(new Dictionary<string, List<string>>
             {
                 ["ot"] = new List<string> { "是" },
@@ -2606,6 +2614,7 @@ namespace TigerClaw.Core.Tests
             var state = new CoreRuntimeState();
             True(state.TrySetConfigValue("整句输入", "是", out _, out string sentenceReason),
                 nameof(SentenceEngineUsesTabToTraverseCandidates) + ": " + sentenceReason);
+            state.TrySetConfigValue("整句空码自动顶屏", "否", out _, out _);
             var engine = new InputMethodEngine(state, CreateSentenceDecoder(new Dictionary<string, List<string>>
             {
                 ["ab"] = new List<string> { "甲" },
@@ -2800,6 +2809,7 @@ namespace TigerClaw.Core.Tests
             var state = new CoreRuntimeState();
             True(state.TrySetConfigValue("整句输入", "是", out _, out string reason),
                 nameof(CreateSentenceEngine) + ": " + reason);
+            state.TrySetConfigValue("整句空码自动顶屏", "否", out _, out _);
             return new InputMethodEngine(state, CreateSentenceDecoder(lexicon));
         }
 
@@ -2947,6 +2957,8 @@ namespace TigerClaw.Core.Tests
             var state = new CoreRuntimeState();
             True(state.TrySetConfigValue("整句输入", "是", out _, out string reason),
                 nameof(SentenceSupplementSurvivesNeuralRerank) + ": " + reason);
+            True(state.TrySetConfigValue("整句空码自动顶屏", "否", out _, out string emptyCommitReason),
+                nameof(SentenceSupplementSurvivesNeuralRerank) + ": " + emptyCommitReason);
             SentenceSupplementMatcher matcher = SentenceSupplementMatcher.Build(new[]
             {
                 SentenceSupplementEntry.Create("茧师", 1000)
@@ -3035,7 +3047,7 @@ namespace TigerClaw.Core.Tests
                 nameof(SentenceDecoderAddsIncompleteTailConfidenceWithoutChangingVisibleCandidates) + ".visible");
             True(result.EarlyCommitEvidence.IgnoreNeuralConstraint,
                 nameof(SentenceDecoderAddsIncompleteTailConfidenceWithoutChangingVisibleCandidates) + ".neural");
-            Equal("甲", result.EarlyCommitEvidence.Proposal,
+            Equal("甲乙", result.EarlyCommitEvidence.Proposal,
                 nameof(SentenceDecoderAddsIncompleteTailConfidenceWithoutChangingVisibleCandidates) + ".proposal");
             True(languageModel.EosCalls == 4,
                 nameof(SentenceDecoderAddsIncompleteTailConfidenceWithoutChangingVisibleCandidates) + ".ending_once");
@@ -3071,8 +3083,28 @@ namespace TigerClaw.Core.Tests
                     includeEarlyCommitEvidence: true,
                     requiredTextPrefix: "甲"),
                 nameof(SentenceDecoderConditionsEvidenceOnCommittedPrefix) + ".incremental");
-            Equal("甲", conditioned.EarlyCommitEvidence.Proposal,
+            Equal("甲乙", conditioned.EarlyCommitEvidence.Proposal,
                 nameof(SentenceDecoderConditionsEvidenceOnCommittedPrefix) + ".conditioned");
+        }
+
+        private static void SentenceDecoderEarlyCommitCanProposeFullDecodedPrefixWithRawTail()
+        {
+            SentenceInputDecoder decoder = CreateSentenceDecoder(new Dictionary<string, List<string>>
+            {
+                ["ab"] = new List<string> { "甲" },
+                ["cd"] = new List<string> { "乙" },
+                ["xy"] = new List<string> { "丙" }
+            });
+
+            SentenceDecodeResult result = decoder.Decode(
+                "abcdx",
+                20,
+                includeEarlyCommitEvidence: true);
+            Equal("甲乙", result.EarlyCommitEvidence.Proposal,
+                nameof(SentenceDecoderEarlyCommitCanProposeFullDecodedPrefixWithRawTail) + ".proposal");
+            True(result.EarlyCommitEvidence.RawLengths.TryGetValue("甲乙", out int rawLength) &&
+                rawLength == 4,
+                nameof(SentenceDecoderEarlyCommitCanProposeFullDecodedPrefixWithRawTail) + ".raw_boundary");
         }
 
         private static void SentenceDecoderSelectsExactVisibleTopK()
@@ -3107,6 +3139,7 @@ namespace TigerClaw.Core.Tests
                 nameof(CreateAutoCommitSentenceEngine) + ": " + sentenceReason);
             True(state.TrySetConfigValue("整句自动提前上屏", "是", out _, out string commitReason),
                 nameof(CreateAutoCommitSentenceEngine) + ": " + commitReason);
+            state.TrySetConfigValue("整句空码自动顶屏", "否", out _, out _);
             return new InputMethodEngine(state, CreateSentenceDecoder(new Dictionary<string, List<string>>
             {
                 ["abc"] = new List<string> { "甲乙" },
@@ -3136,17 +3169,38 @@ namespace TigerClaw.Core.Tests
                 nameof(SentenceAutoCommitSuspendsAfterManualNavigation));
         }
 
-        private static void SentenceAutoCommitRetainsExactlyOneCharacter()
+        private static void SentenceAutoCommitRetainsAtLeastOneRawCode()
         {
             InputMethodEngine engine = CreateAutoCommitSentenceEngine();
             TypeLetters(engine, "abcde");
             KeyEngineResult result = Press(engine, 0x46);
             Equal("甲乙", result.TextToOutput,
-                nameof(SentenceAutoCommitRetainsExactlyOneCharacter));
+                nameof(SentenceAutoCommitRetainsAtLeastOneRawCode));
             EngineUiSnapshot snapshot = engine.GetUiSnapshot(5);
-            True(snapshot.Candidates.Length > 0, nameof(SentenceAutoCommitRetainsExactlyOneCharacter));
-            True(new StringInfo(snapshot.Candidates[0]).LengthInTextElements == 1,
-                nameof(SentenceAutoCommitRetainsExactlyOneCharacter));
+            True(snapshot.ActiveInputCode.Replace(" ", string.Empty).Length >= 1,
+                nameof(SentenceAutoCommitRetainsAtLeastOneRawCode));
+        }
+
+        private static void SentenceAutoCommitCanCommitAllDecodedTextBeforeRawTail()
+        {
+            var state = new CoreRuntimeState();
+            state.TrySetConfigValue("整句输入", "是", out _, out _);
+            state.TrySetConfigValue("整句自动提前上屏", "是", out _, out _);
+            state.TrySetConfigValue("整句空码自动顶屏", "否", out _, out _);
+            var engine = new InputMethodEngine(state, CreateSentenceDecoder(
+                new Dictionary<string, List<string>>
+                {
+                    ["ab"] = new List<string> { "甲" },
+                    ["cde"] = new List<string> { "乙" },
+                    ["xy"] = new List<string> { "丙" }
+                }));
+
+            TypeLetters(engine, "abcde");
+            KeyEngineResult result = Press(engine, 0x58);
+            Equal("甲乙", result.TextToOutput,
+                nameof(SentenceAutoCommitCanCommitAllDecodedTextBeforeRawTail) + ".commit");
+            Equal("x", engine.GetUiSnapshot(5).ActiveInputCode,
+                nameof(SentenceAutoCommitCanCommitAllDecodedTextBeforeRawTail) + ".one_raw_retained");
         }
 
         private static void SentenceAutoCommitUsesTwoStrongGenerationCommonPrefix()
@@ -3156,6 +3210,7 @@ namespace TigerClaw.Core.Tests
                 nameof(SentenceAutoCommitUsesTwoStrongGenerationCommonPrefix) + ": " + sentenceReason);
             True(state.TrySetConfigValue("整句自动提前上屏", "是", out _, out string commitReason),
                 nameof(SentenceAutoCommitUsesTwoStrongGenerationCommonPrefix) + ": " + commitReason);
+            state.TrySetConfigValue("整句空码自动顶屏", "否", out _, out _);
             var engine = new InputMethodEngine(state, CreateSentenceDecoder(new Dictionary<string, List<string>>
             {
                 ["abc"] = new List<string> { "甲" },
@@ -3180,7 +3235,7 @@ namespace TigerClaw.Core.Tests
                 "abcde",
                 20,
                 includeEarlyCommitEvidence: true);
-            Equal("甲乙", evidence.EarlyCommitEvidence.Proposal,
+            Equal("甲乙丙", evidence.EarlyCommitEvidence.Proposal,
                 nameof(SentenceAutoCommitKeepsThreeGenerationWindowForWeakEvidence) + ".proposal");
             True(evidence.EarlyCommitEvidence.ProposalShare >= 0.995 &&
                 evidence.EarlyCommitEvidence.ProposalShare < 0.99999,
@@ -3194,6 +3249,7 @@ namespace TigerClaw.Core.Tests
                 nameof(SentenceAutoCommitKeepsThreeGenerationWindowForWeakEvidence) + ": " + sentenceReason);
             True(state.TrySetConfigValue("整句自动提前上屏", "是", out _, out string commitReason),
                 nameof(SentenceAutoCommitKeepsThreeGenerationWindowForWeakEvidence) + ": " + commitReason);
+            state.TrySetConfigValue("整句空码自动顶屏", "否", out _, out _);
             var engine = new InputMethodEngine(state, CreateWeakEvidenceSentenceDecoder());
 
             TypeLetters(engine, "abcde");
@@ -3210,6 +3266,7 @@ namespace TigerClaw.Core.Tests
                 nameof(SentenceAutoCommitRequiresStableRawBoundary) + ": " + sentenceReason);
             True(state.TrySetConfigValue("整句自动提前上屏", "是", out _, out string commitReason),
                 nameof(SentenceAutoCommitRequiresStableRawBoundary) + ": " + commitReason);
+            state.TrySetConfigValue("整句空码自动顶屏", "否", out _, out _);
             var engine = new InputMethodEngine(state, CreateSentenceDecoder(new Dictionary<string, List<string>>
             {
                 ["ab"] = new List<string> { "甲乙" },
@@ -3231,6 +3288,7 @@ namespace TigerClaw.Core.Tests
                 nameof(SentenceAutoCommitSurvivesAlternatingCompleteSegmentation) + ": " + sentenceReason);
             True(state.TrySetConfigValue("整句自动提前上屏", "是", out _, out string commitReason),
                 nameof(SentenceAutoCommitSurvivesAlternatingCompleteSegmentation) + ": " + commitReason);
+            state.TrySetConfigValue("整句空码自动顶屏", "否", out _, out _);
             var decoder = new SentenceInputDecoder(
                 SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
                 {
@@ -3247,7 +3305,7 @@ namespace TigerClaw.Core.Tests
             var engine = new InputMethodEngine(state, decoder);
 
             TypeLetters(engine, "abcde");
-            Equal("甲", Press(engine, 0x46).TextToOutput,
+            Equal("甲乙", Press(engine, 0x46).TextToOutput,
                 nameof(SentenceAutoCommitSurvivesAlternatingCompleteSegmentation) + ".commit");
         }
 
@@ -3376,6 +3434,192 @@ namespace TigerClaw.Core.Tests
             True(replayed.Contains("\"commit_text\":\"一\""), nameof(KeyReplayCacheReturnsOriginalResultWithCurrentSequence) + ".commit");
             True(!cache.TryGet(KeyRequestReplayCache.BuildKey("frontend-a", "18"), 203, out _), nameof(KeyReplayCacheReturnsOriginalResultWithCurrentSequence) + ".different_event");
             True(!cache.TryGet(KeyRequestReplayCache.BuildKey("frontend-b", "17"), 204, out _), nameof(KeyReplayCacheReturnsOriginalResultWithCurrentSequence) + ".different_frontend");
+        }
+
+        private static void SentenceEmptyCodeAutoCommitDefaultsOnAndRetainsNewKey()
+        {
+            var state = new CoreRuntimeState();
+            True(state.GetSentenceEmptyCodeAutoCommitEnabled(),
+                nameof(SentenceEmptyCodeAutoCommitDefaultsOnAndRetainsNewKey) + ".default_on");
+            True(state.TrySetConfigValue("整句输入", "是", out _, out string sentenceReason),
+                nameof(SentenceEmptyCodeAutoCommitDefaultsOnAndRetainsNewKey) + ": " + sentenceReason);
+            var engine = new InputMethodEngine(state, CreateSentenceDecoder(new Dictionary<string, List<string>>
+            {
+                ["ab"] = new List<string> { "甲" },
+                ["c"] = new List<string> { "乙" }
+            }));
+
+            TypeLetters(engine, "ab");
+            KeyEngineResult result = Press(engine, 0x43);
+            Equal("甲", result.TextToOutput,
+                nameof(SentenceEmptyCodeAutoCommitDefaultsOnAndRetainsNewKey) + ".commit");
+            EngineUiSnapshot snapshot = engine.GetUiSnapshot(5);
+            Equal("c", snapshot.ActiveInputCode,
+                nameof(SentenceEmptyCodeAutoCommitDefaultsOnAndRetainsNewKey) + ".retained_code");
+            True(snapshot.Candidates.Length == 1 && snapshot.Candidates[0] == "乙",
+                nameof(SentenceEmptyCodeAutoCommitDefaultsOnAndRetainsNewKey) + ".retained_candidate");
+        }
+
+        private static void SentenceEmptyCodeAutoCommitHonorsDisabledAndCandidateGuards()
+        {
+            var disabledState = new CoreRuntimeState();
+            True(disabledState.TrySetConfigValue("整句输入", "是", out _, out string sentenceReason),
+                nameof(SentenceEmptyCodeAutoCommitHonorsDisabledAndCandidateGuards) + ": " + sentenceReason);
+            True(disabledState.TrySetConfigValue("整句空码自动顶屏", "否", out _, out string disabledReason),
+                nameof(SentenceEmptyCodeAutoCommitHonorsDisabledAndCandidateGuards) + ": " + disabledReason);
+            var disabled = new InputMethodEngine(disabledState, CreateSentenceDecoder(
+                new Dictionary<string, List<string>>
+                {
+                    ["ab"] = new List<string> { "甲" }
+                }));
+            TypeLetters(disabled, "ab");
+            Equal(null, Press(disabled, 0x43).TextToOutput,
+                nameof(SentenceEmptyCodeAutoCommitHonorsDisabledAndCandidateGuards) + ".disabled");
+            Equal("abc", disabled.GetUiSnapshot(5).ActiveInputCode,
+                nameof(SentenceEmptyCodeAutoCommitHonorsDisabledAndCandidateGuards) + ".disabled_code");
+
+            var multipleState = new CoreRuntimeState();
+            multipleState.TrySetConfigValue("整句输入", "是", out _, out _);
+            var multiple = new InputMethodEngine(multipleState, CreateSentenceDecoder(
+                new Dictionary<string, List<string>>
+                {
+                    ["ab"] = new List<string> { "甲", "乙" }
+                }));
+            TypeLetters(multiple, "ab");
+            Equal(null, Press(multiple, 0x43).TextToOutput,
+                nameof(SentenceEmptyCodeAutoCommitHonorsDisabledAndCandidateGuards) + ".not_unique");
+
+            var nonemptyState = new CoreRuntimeState();
+            nonemptyState.TrySetConfigValue("整句输入", "是", out _, out _);
+            var nonempty = new InputMethodEngine(nonemptyState, CreateSentenceDecoder(
+                new Dictionary<string, List<string>>
+                {
+                    ["ab"] = new List<string> { "甲" },
+                    ["abc"] = new List<string> { "丙" }
+                }));
+            TypeLetters(nonempty, "ab");
+            Equal(null, Press(nonempty, 0x43).TextToOutput,
+                nameof(SentenceEmptyCodeAutoCommitHonorsDisabledAndCandidateGuards) + ".new_code_nonempty");
+            True(nonempty.GetUiSnapshot(5).Candidates.Length > 0,
+                nameof(SentenceEmptyCodeAutoCommitHonorsDisabledAndCandidateGuards) + ".candidate_preserved");
+        }
+
+        private static void SentenceEmptyCodeAutoCommitWorksWithAsyncDecode()
+        {
+            var state = new CoreRuntimeState();
+            state.TrySetConfigValue("整句输入", "是", out _, out _);
+            var engine = new InputMethodEngine(
+                state,
+                new SentenceInputDecoder(
+                    SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
+                    {
+                        ["ab"] = new List<string> { "甲" },
+                        ["abcd"] = new List<string> { "乙" }
+                    }),
+                    new SlowSentenceLanguageModel(),
+                    beamWidth: 10),
+                sentenceDecodeSynchronously: false);
+
+            using (var completed = new ManualResetEvent(false))
+            {
+                engine.SetSentenceDecodeCompletedCallback(() => completed.Set());
+                TypeLetters(engine, "ab");
+                True(completed.WaitOne(3000),
+                    nameof(SentenceEmptyCodeAutoCommitWorksWithAsyncDecode) + ".prefix_ready");
+                while (engine.IsSentenceDecodePending)
+                {
+                    Thread.Sleep(5);
+                }
+
+                completed.Reset();
+                var stopwatch = Stopwatch.StartNew();
+                KeyEngineResult result = Press(engine, 0x43);
+                stopwatch.Stop();
+                Equal(null, result.TextToOutput,
+                    nameof(SentenceEmptyCodeAutoCommitWorksWithAsyncDecode) + ".deferred");
+                True(stopwatch.ElapsedMilliseconds < 60,
+                    nameof(SentenceEmptyCodeAutoCommitWorksWithAsyncDecode) + ".key_latency");
+                Equal("abc", engine.GetUiSnapshot(5).ActiveInputCode,
+                    nameof(SentenceEmptyCodeAutoCommitWorksWithAsyncDecode) + ".pending_code");
+
+                Equal("甲", Press(engine, 0x45).TextToOutput,
+                    nameof(SentenceEmptyCodeAutoCommitWorksWithAsyncDecode) + ".dead_commit");
+                Equal("ce", engine.GetUiSnapshot(5).ActiveInputCode,
+                    nameof(SentenceEmptyCodeAutoCommitWorksWithAsyncDecode) + ".retained_code");
+                True(completed.WaitOne(3000),
+                    nameof(SentenceEmptyCodeAutoCommitWorksWithAsyncDecode) + ".suffix_ready");
+            }
+        }
+
+        private static void SentenceEmptyCodeAutoCommitDefersCompletableLastSegment()
+        {
+            var state = new CoreRuntimeState();
+            state.TrySetConfigValue("整句输入", "是", out _, out _);
+            var engine = new InputMethodEngine(state, CreateSentenceDecoder(
+                new Dictionary<string, List<string>>
+                {
+                    ["ab"] = new List<string> { "甲" },
+                    ["abcd"] = new List<string> { "乙" }
+                }));
+
+            TypeLetters(engine, "ab");
+            Equal(null, Press(engine, 0x43).TextToOutput,
+                nameof(SentenceEmptyCodeAutoCommitDefersCompletableLastSegment) + ".deferred");
+            Equal("abc", engine.GetUiSnapshot(5).ActiveInputCode,
+                nameof(SentenceEmptyCodeAutoCommitDefersCompletableLastSegment) + ".deferred_raw");
+            Equal(null, Press(engine, 0x44).TextToOutput,
+                nameof(SentenceEmptyCodeAutoCommitDefersCompletableLastSegment) + ".matched");
+            True(engine.GetUiSnapshot(5).Candidates.Length == 1 &&
+                engine.GetUiSnapshot(5).Candidates[0] == "乙",
+                nameof(SentenceEmptyCodeAutoCommitDefersCompletableLastSegment) + ".matched_candidate");
+
+            var dead = new InputMethodEngine(state, CreateSentenceDecoder(
+                new Dictionary<string, List<string>>
+                {
+                    ["ab"] = new List<string> { "甲" },
+                    ["abcd"] = new List<string> { "乙" }
+                }));
+            TypeLetters(dead, "ab");
+            Equal(null, Press(dead, 0x43).TextToOutput,
+                nameof(SentenceEmptyCodeAutoCommitDefersCompletableLastSegment) + ".dead_deferred");
+            Equal("甲", Press(dead, 0x45).TextToOutput,
+                nameof(SentenceEmptyCodeAutoCommitDefersCompletableLastSegment) + ".dead_commit");
+            Equal("ce", dead.GetUiSnapshot(5).ActiveInputCode,
+                nameof(SentenceEmptyCodeAutoCommitDefersCompletableLastSegment) + ".dead_tail_retained");
+
+            var canceled = new InputMethodEngine(state, CreateSentenceDecoder(
+                new Dictionary<string, List<string>>
+                {
+                    ["ab"] = new List<string> { "甲" },
+                    ["abcd"] = new List<string> { "乙" }
+                }));
+            TypeLetters(canceled, "ab");
+            Press(canceled, 0x43);
+            Press(canceled, 0x20);
+            Equal(null, Press(canceled, 0x45).TextToOutput,
+                nameof(SentenceEmptyCodeAutoCommitDefersCompletableLastSegment) + ".manual_cancel");
+            Equal("abce", canceled.GetUiSnapshot(5).ActiveInputCode,
+                nameof(SentenceEmptyCodeAutoCommitDefersCompletableLastSegment) + ".manual_raw");
+        }
+
+        private static void SentenceDecoderUsesSourcePriorityForEqualLengthCodes()
+        {
+            var source = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["ldac"] = new List<string> { "燕", "㷼" },
+                ["ladc"] = new List<string> { "燕" }
+            };
+            SentenceLexiconIndex index = SentenceLexiconIndex.Build(
+                source,
+                new HashSet<string>(StringComparer.Ordinal) { "燕" });
+
+            True(
+                Array.Exists(index.GetCandidates("ldac"), candidate => candidate.Text == "燕"),
+                nameof(SentenceDecoderUsesSourcePriorityForEqualLengthCodes) + ".preferred");
+            True(
+                index.GetCandidates("ladc") == null ||
+                Array.TrueForAll(index.GetCandidates("ladc"), candidate => candidate.Text != "燕"),
+                nameof(SentenceDecoderUsesSourcePriorityForEqualLengthCodes) + ".alternate_filtered");
         }
 
         private static void KeyResponsesDeclareExpectedKeyUp()
@@ -3534,6 +3778,7 @@ namespace TigerClaw.Core.Tests
                 nameof(SentenceAutoCommitStaysOffTheKeyPath) + ": " + sentenceReason);
             True(state.TrySetConfigValue("整句自动提前上屏", "是", out _, out string commitReason),
                 nameof(SentenceAutoCommitStaysOffTheKeyPath) + ": " + commitReason);
+            state.TrySetConfigValue("整句空码自动顶屏", "否", out _, out _);
             var decoder = new SentenceInputDecoder(
                 SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
                 {
@@ -3590,6 +3835,7 @@ namespace TigerClaw.Core.Tests
             var state = new CoreRuntimeState();
             True(state.TrySetConfigValue("整句输入", "是", out _, out string reason),
                 nameof(SentenceEngineKeepsPreviousSegmentationWhileDecodeIsPending) + ": " + reason);
+            state.TrySetConfigValue("整句空码自动顶屏", "否", out _, out _);
             var decoder = new SentenceInputDecoder(
                 SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
                 {
@@ -3641,6 +3887,7 @@ namespace TigerClaw.Core.Tests
             var state = new CoreRuntimeState();
             True(state.TrySetConfigValue("整句输入", "是", out _, out string reason),
                 nameof(SentenceEngineHoldsPreviousCandidatesWhileDecodeIsPending) + ": " + reason);
+            state.TrySetConfigValue("整句空码自动顶屏", "否", out _, out _);
             var decoder = new SentenceInputDecoder(
                 SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
                 {

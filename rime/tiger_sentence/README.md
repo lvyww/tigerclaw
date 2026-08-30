@@ -10,13 +10,12 @@ TSF 发布包的一部分。它仍处于实验阶段，尤其是自动提前上�
 python3 tools/export_tiger_sentence_rime.py
 ```
 
-导出器从 `release_arm64/码表/虎整句/常用字词.txt` 生成方案数据。该目录是本机
+导出器从 `release_arm64/码表/虎整句/虎整句.txt` 生成方案数据。该目录是本机
 日常 ARM64 运行环境，禁止用清理命令删除。
 
 部署到 Rime 用户目录：
 
-1. 复制 `tiger_sentence.schema.yaml`、`tiger_sentence.dict.yaml`、
-   `tiger_sentence.supplement.txt` 和 `rime.lua`；
+1. 复制 `tiger_sentence.schema.yaml`、`tiger_sentence.supplement.txt` 和 `rime.lua`；
 2. 复制 `lua/`；
 3. 在已有 `default.custom.yaml` 中加入 `tiger_sentence`；
 4. 重新部署，使 Lua 和补充语料重新加载。
@@ -24,6 +23,27 @@ python3 tools/export_tiger_sentence_rime.py
 不要覆盖用户已有的 `rime.lua` 或 `default.custom.yaml`；合并相应条目。默认在候选
 窗口显示编码。用户自行开启 inline preedit 时，Lua 仍通过 `Candidate.preedit`
 维护当前候选的分段编码。
+
+## 码表与自定义编码
+
+本方案没有使用 Rime 的 `table_translator`。实际参与检索的是生成文件
+`lua/tiger_sentence_lexicon.lua` 及其编号分片，由 `lua/tiger_sentence.lua` 直接加载。
+过去随包附带的 `tiger_sentence.dict.yaml` 不在候选生成链路中，修改它不会生效，
+因此已经删除。分片用于避开 LuaJIT 单个函数最多 65,536 个常量的限制。
+
+开发仓库中应修改 `release_arm64/码表/虎整句/虎整句.txt` 后重新运行导出器。只拿到
+Rime 包的用户应修改不会被导出器覆盖的 `lua/tiger_sentence_custom.lua`，然后重新部署。
+自定义项会整体替换同编码的生成候选；空数组可删除该编码。例如：
+
+```lua
+return {
+  ["ldac"] = {"燕", "㷼"},
+  ["zzzz"] = {"自定义词", "第二候选"},
+  ["drop"] = {},
+}
+```
+
+字符串在数组中的顺序就是选重顺序，也可以写成 `{t="燕",r=1}` 形式。
 
 ## 输入行为
 

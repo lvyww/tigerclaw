@@ -48,6 +48,41 @@ local function fail(message)
     os.exit(1)
 end
 
+local base_lexicon = package.loaded["tiger_sentence_lexicon"]
+if not base_lexicon or not base_lexicon.codes.ldac or
+    base_lexicon.codes.ldac[1].t ~= "燕" then
+    fail("generated lexicon did not keep 燕 under preferred code ldac")
+end
+local shipped_custom = package.loaded["tiger_sentence_custom"]
+local previous_custom_preload = package.preload["tiger_sentence_custom"]
+package.loaded["tiger_sentence_lexicon"] = nil
+package.loaded["tiger_sentence_custom"] = nil
+package.preload["tiger_sentence_custom"] = function()
+    return {ldac = {}, zzzz = {"自定义词", {t="第二候选", r=7}}}
+end
+local overlay_lexicon = require("tiger_sentence_lexicon")
+if overlay_lexicon.codes.ldac ~= nil or
+    not overlay_lexicon.codes.zzzz or
+    overlay_lexicon.codes.zzzz[1].t ~= "自定义词" or
+    overlay_lexicon.codes.zzzz[1].r ~= 1 or
+    overlay_lexicon.codes.zzzz[2].t ~= "第二候选" or
+    overlay_lexicon.codes.zzzz[2].r ~= 7 then
+    fail("tiger_sentence_custom.lua override was not applied")
+end
+package.preload["tiger_sentence_custom"] = function()
+    error("module 'tiger_sentence_custom' not found")
+end
+package.loaded["tiger_sentence_lexicon"] = nil
+package.loaded["tiger_sentence_custom"] = nil
+local missing_custom = require("tiger_sentence_lexicon")
+if not missing_custom.codes.ldac or missing_custom.codes.ldac[1].t ~= "燕" then
+    fail("missing tiger_sentence_custom.lua should keep generated lexicon")
+end
+package.preload["tiger_sentence_custom"] = previous_custom_preload
+package.loaded["tiger_sentence_custom"] = shipped_custom
+package.loaded["tiger_sentence_lexicon"] = base_lexicon
+print("OK  sharded lexicon and custom-code overlay loaded")
+
 local function check_equal(label, incremental, full)
     if not sentence.results_equal(incremental, full) then
         fail(string.format(
@@ -220,11 +255,15 @@ print("OK  early-commit observation window adapts between two and three keys")
 local function fake_environment(early_commit)
     local properties = {}
     local commits = {}
-    local context = { input = "", early_commit = early_commit }
+    local context = {
+        input = "",
+        early_commit = early_commit
+    }
     function context:get_property(key) return properties[key] or "" end
     function context:set_property(key, value) properties[key] = value end
     function context:get_option(name)
-        return name == "tiger_sentence_early_commit" and self.early_commit
+        if name == "tiger_sentence_early_commit" then return self.early_commit end
+        return false
     end
     function context:is_composing() return self.input ~= "" end
     function context:push_input(value) self.input = self.input .. value end
