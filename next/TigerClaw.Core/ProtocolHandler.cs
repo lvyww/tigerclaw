@@ -38,6 +38,8 @@ namespace TigerClaw.Core
         private long _soundSeq;
         private int _soundVk;
         private int _soundVolumePercent;
+        private long _candidateAnchorRevision;
+        private bool _candidateAnchorRefreshPending;
         private bool _awaitingFreshCaretForComposition;
         private long _awaitingFreshCaretDeadlineTick;
         private bool _pendingFrontendCompositionReset;
@@ -465,6 +467,7 @@ namespace TigerClaw.Core
                 case "composition_canceled":
                     MarkFrontendMode(ConvertToString(msg.GetValue("frontend")));
                     _engine.OnExternalCompositionCanceled();
+                    _candidateAnchorRefreshPending = false;
                     ClearFreshCaretAwaitState();
                     PublishUiState();
                     return null;
@@ -475,6 +478,7 @@ namespace TigerClaw.Core
                     if (_hookNativeDisabled)
                     {
                         _engine.OnExternalCompositionCanceled();
+                        _candidateAnchorRefreshPending = false;
                         ClearFreshCaretAwaitState();
                     }
                     PublishUiState();
@@ -483,6 +487,10 @@ namespace TigerClaw.Core
                 case "ime_active":
                     _isNativeHookStatus = false;
                     _imeActive = ConvertToBool(msg.GetValue("active"), false);
+                    if (!_imeActive)
+                    {
+                        _candidateAnchorRefreshPending = false;
+                    }
                     PublishUiState();
                     return null;
 
@@ -514,7 +522,7 @@ namespace TigerClaw.Core
         {
             string frontend = ConvertToString(msg.GetValue("frontend"));
             MarkFrontendMode(frontend);
-            EngineUiSnapshot beforeState = _engine.GetUiSnapshot(_state.GetPageSize());
+            _engine.GetKeyState(out bool wasChinese, out bool wasComposing);
             int vk = ConvertToInt(msg.GetValue("vk"), 0);
             int scan = ConvertToInt(GetFirstValue(msg, "scan", "scan_code"), 0);
             string action = ConvertToString(msg.GetValue("action"));
@@ -546,12 +554,20 @@ namespace TigerClaw.Core
                 _state.GetCaret(out _, out _, out int previousWidth, out int previousHeight);
                 int width = ConvertToInt(msg.GetValue("width"), previousWidth);
                 int height = ConvertToInt(msg.GetValue("height"), previousHeight);
-                _state.UpdateCaret(caretX, caretY, width, height);
+                UpdateCaretAndCompleteCandidateAnchorRefresh(caretX, caretY, width, height);
             }
 
             KeyEngineResult result = _engine.ProcessKey(vk, scan, action, shift, ctrl, alt, win, capsLock, numLock, repeat, extended);
             _engine.PostProcessKey(vk, action, result, shift, ctrl, alt, win, capsLock);
-            UpdateFreshCaretAwaitState(beforeState, result, isKeyDown, hasKeyCaret);
+            if (result.IsComposing && !string.IsNullOrEmpty(result.TextToOutput))
+            {
+                _candidateAnchorRefreshPending = true;
+            }
+            else if (!result.IsComposing)
+            {
+                _candidateAnchorRefreshPending = false;
+            }
+            UpdateFreshCaretAwaitState(wasComposing, result, isKeyDown, hasKeyCaret);
             if (result.OpenAddCiWindow)
             {
                 _uiCommandCallback?.Invoke(CoreUiCommand.ShowAddCi);
@@ -560,7 +576,7 @@ namespace TigerClaw.Core
             string inputCode = BuildDisplayComposition(compositionPrefix, activeInputCode);
             bool cancelComposition = result.CancelComposition || _pendingFrontendCompositionReset;
             _pendingFrontendCompositionReset = false;
-            bool languageStateChanged = beforeState != null && beforeState.IsChinese != result.IsChinese;
+            bool languageStateChanged = wasChinese != result.IsChinese;
             string extraJsonPairs = BuildHookNativeConfigExtraJson(frontend) + BuildCompositionStatusExtraJson();
             if (isKeyDown)
             {
@@ -624,7 +640,17 @@ namespace TigerClaw.Core
             int width = ConvertToInt(msg.GetValue("width"), 2);
             int height = ConvertToInt(msg.GetValue("height"), 20);
             ClearFreshCaretAwaitState();
+            UpdateCaretAndCompleteCandidateAnchorRefresh(x, y, width, height);
+        }
+
+        private void UpdateCaretAndCompleteCandidateAnchorRefresh(int x, int y, int width, int height)
+        {
             _state.UpdateCaret(x, y, width, height);
+            if (_candidateAnchorRefreshPending)
+            {
+                _candidateAnchorRefreshPending = false;
+                Interlocked.Increment(ref _candidateAnchorRevision);
+            }
         }
 
         private void HandleFocusMessage(SimpleJsonObject msg)
@@ -650,6 +676,7 @@ namespace TigerClaw.Core
                 _engine.OnFocusChanged();
             }
 
+            _candidateAnchorRefreshPending = false;
             ClearFreshCaretAwaitState();
         }
 
@@ -842,7 +869,8 @@ namespace TigerClaw.Core
                         FontSize = _state.GetFontSize(),
                         SoundSeq = Interlocked.Read(ref _soundSeq),
                         SoundVk = _soundVk,
-                        SoundVolumePercent = _soundVolumePercent
+                        SoundVolumePercent = _soundVolumePercent,
+                        CandidateAnchorRevision = Interlocked.Read(ref _candidateAnchorRevision)
                     };
 
                     _uiStatePublisher.Publish(state);
@@ -881,7 +909,7 @@ namespace TigerClaw.Core
             return false;
         }
 
-        private void UpdateFreshCaretAwaitState(EngineUiSnapshot beforeState, KeyEngineResult result, bool isKeyDown, bool hasKeyCaret)
+        private void UpdateFreshCaretAwaitState(bool wasComposing, KeyEngineResult result, bool isKeyDown, bool hasKeyCaret)
         {
             if (!isKeyDown)
             {
@@ -900,7 +928,7 @@ namespace TigerClaw.Core
                 return;
             }
 
-            if (!beforeState.IsComposing)
+            if (!wasComposing)
             {
                 _awaitingFreshCaretForComposition = true;
                 _awaitingFreshCaretDeadlineTick = GetNowMs() + FreshCaretAwaitWindowMs;

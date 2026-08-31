@@ -15,7 +15,8 @@ for i = 2, #arg do
 end
 
 package.path = repo .. "/rime/tiger_sentence/lua/?.lua;" .. package.path
-local lexicon = require("tiger_sentence_lexicon")
+local sentence_data = require("tiger_sentence_data")
+local lexicon = {codes = sentence_data.codes, lengths = sentence_data.lengths}
 
 local beam_width = 200
 local candidate_limit = 20
@@ -396,12 +397,11 @@ local function load_kn_lua(path)
     local tri_ctx_off = pos
     local unknown = f32(uni_off + 4)
     local SHIFT = 2097152
-    local MASK = 2097151
 
     local function lookup_i32(offset, count, key, fallback)
         local low, high = 0, count
         while low < high do
-            local middle = low + ((high - low) // 2)
+            local middle = low + math.floor((high - low) / 2)
             local value = i32(offset + middle * 8)
             if value < key then
                 low = middle + 1
@@ -422,7 +422,7 @@ local function load_kn_lua(path)
     local function lookup_u64(offset, count, key, fallback)
         local low, high = 0, count
         while low < high do
-            local middle = low + ((high - low) // 2)
+            local middle = low + math.floor((high - low) / 2)
             local value = u64(offset + middle * 12)
             if value < key then
                 low = middle + 1
@@ -451,10 +451,10 @@ local function load_kn_lua(path)
     end
 
     local function pack2(first, second)
-        return first * SHIFT + (second & MASK)
+        return first * SHIFT + (second % SHIFT)
     end
     local function pack3(first, second, third)
-        return pack2(first, second) * SHIFT + (third & MASK)
+        return pack2(first, second) * SHIFT + (third % SHIFT)
     end
 
     local function kn_logp(prev2, prev1, target)
@@ -504,8 +504,9 @@ elseif mode == "kn" then
         kn_or_err.length / 1048576, kn_or_err.uni, kn_or_err.bi, kn_or_err.tri))
 elseif mode == "mobile" then
     local t0 = os.clock()
-    local reader = require("tiger_sentence_kn")
-    local kn = reader.load("/mnt/c/Archive/tigerclaw_sentence_ml/runtime/sentence-ngram-mobile.bin")
+    local sentence = require("tiger_sentence")
+    local kn = sentence.load_ngram_model(
+        "/mnt/c/Archive/tigerclaw_sentence_ml/runtime/sentence-ngram-mobile.bin")
     io.write(string.format(
         "loaded KN mobile %.1f MiB in %.2fs  resident-index=%.2fMiB cache-limit=%.1fMiB\n",
         kn.bytes / 1048576, os.clock() - t0,

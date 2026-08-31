@@ -51,7 +51,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$lexiconDir = -join ([char[]](0x7801,0x8868));" ^
   "$selectionKeys = (-join ([char[]](0x81EA,0x5B9A,0x4E49,0x9009,0x91CD,0x952E))) + '.txt';" ^
   "$sentenceSchema = -join ([char[]](0x864E,0x6574,0x53E5));" ^
-  "$sentenceLexicon = (-join ([char[]](0x5E38,0x7528,0x5B57,0x8BCD))) + '.txt';" ^
+  "$sentenceLexicon = $sentenceSchema + '.txt';" ^
   "$releaseSentenceLexicon = Join-Path (Join-Path (Join-Path $release $lexiconDir) $sentenceSchema) $sentenceLexicon;" ^
   "$armSentenceLexicon = Join-Path (Join-Path (Join-Path $armRelease $lexiconDir) $sentenceSchema) $sentenceLexicon;" ^
   "if(-not (Test-Path -LiteralPath $armSentenceLexicon)){ throw ('Missing sentence lexicon: {0}' -f $armSentenceLexicon) };" ^

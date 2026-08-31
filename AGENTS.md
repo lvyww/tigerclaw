@@ -76,9 +76,10 @@ UI state:
   mode leaves Ctrl+number to the target application.
 - A one-key sentence segment is legal only when the whole input is one key.
   Other segments consume at least two keys. `;`, `'` and digits select explicit
-  lexicon ranks. For whole inputs of at most four keys, all ranks are legal but
-  first-choice paths remain ahead of later ranks. Multi-character lexicon entries
-  are legal edges.
+  lexicon ranks. An implicit non-first rank is legal only when the whole input is
+  consumed by one lexicon edge; segmented paths use first ranks unless selection
+  is explicit. Continuations retained by automatic commit also use first ranks.
+  Multi-character lexicon entries are legal edges.
 - Sentence input is disabled by default. `自动启用整句模式` only activates it for
   a schema whose name contains `整句`; it does not change the `整句输入` switch.
 - Sentence decoding is latest-generation-only and asynchronous. A stale Beam or
@@ -98,8 +99,9 @@ UI state:
   least `0.995`, and the same raw boundary. Two generations suffice only when
   both prefix-quality shares reach `0.99999`; otherwise three are required.
   Backspace, missing evidence and manual navigation invalidate or suspend
-  evidence. Keep the complete unstable suffix and at least one uncommitted raw
-  code character; commits must still land on a stable lexicon boundary.
+  evidence. Keep the complete unstable suffix and at least three uncommitted raw
+  code characters from the completed decode generation; commits must still land
+  on a stable lexicon boundary.
 - `整句空码自动顶屏` defaults on and is independent of probabilistic early
   commit. When the current completed generation has exactly one visible
   candidate and appending an ordinary letter leaves no complete lexicon path,

@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
+using System.Threading;
 
 namespace TigerClaw.Core
 {
@@ -315,10 +317,22 @@ namespace TigerClaw.Core
         public bool IgnoreNeuralConstraint { get; set; }
     }
 
+    internal sealed class SentenceDecodePerformanceSample
+    {
+        public int DecodeCalls { get; set; }
+        public double DecodeTotalMilliseconds { get; set; }
+        public double DecodeMaximumMilliseconds { get; set; }
+        public long IsolationCacheHits { get; set; }
+        public long IsolationCacheMisses { get; set; }
+    }
+
     internal sealed class SentenceInputDecoder
     {
         private const string Bos = "\x02";
         private const string Eos = "\x03";
+        private const int IsolationPenaltyCacheCapacity = 8192;
+        private const double SlowDecodeMilliseconds = 8.0;
+        private const double SlowCompositionMilliseconds = 30.0;
         private readonly SentenceLexiconIndex _lexicon;
         private readonly ISentenceLanguageModel _languageModel;
         private readonly int _beamWidth;
@@ -336,6 +350,17 @@ namespace TigerClaw.Core
         private int _cachedLimit;
         private bool _cachedIncludesEarlyCommitEvidence;
         private string _cachedRequiredTextPrefix = string.Empty;
+        private readonly Dictionary<string, double> _isolationPenaltyCache;
+        private readonly string[] _isolationPenaltyCacheKeys;
+        private int _isolationPenaltyCacheNext;
+        private int _performanceDecodeCalls;
+        private long _performanceDecodeTotalTicks;
+        private long _performanceDecodeMaximumTicks;
+        private long _isolationPenaltyCacheHits;
+        private long _isolationPenaltyCacheMisses;
+        private long _performanceIsolationCacheHits;
+        private long _performanceIsolationCacheMisses;
+        private SentenceDecodePerformanceSample _lastPerformanceSample;
 
         private sealed class BeamState
         {
@@ -478,6 +503,13 @@ namespace TigerClaw.Core
             _beamWidth = Math.Max(1, beamWidth);
             _rankPenalty = Math.Max(0.0, rankPenalty);
             _isolationPenalty = isolationPenalty ?? SentenceIsolationPenalty.CreateDefault();
+            if (_isolationPenalty.Enabled)
+            {
+                _isolationPenaltyCache = new Dictionary<string, double>(
+                    IsolationPenaltyCacheCapacity,
+                    StringComparer.Ordinal);
+                _isolationPenaltyCacheKeys = new string[IsolationPenaltyCacheCapacity];
+            }
             _scoreSentenceBoundaries = scoreSentenceBoundaries;
             _emittedCharacterReward = Math.Max(0.0, emittedCharacterReward);
             _supplementMatcher = supplementMatcher ?? SentenceSupplementMatcher.Empty;
@@ -502,11 +534,19 @@ namespace TigerClaw.Core
         {
             lock (_decodeLock)
             {
-                return DecodeIncrementalLocked(
+                long started = Stopwatch.GetTimestamp();
+                long isolationHitsBefore = _isolationPenaltyCacheHits;
+                long isolationMissesBefore = _isolationPenaltyCacheMisses;
+                SentenceDecodeResult result = DecodeIncrementalLocked(
                     rawCode,
                     candidateLimit,
                     includeEarlyCommitEvidence,
                     requiredTextPrefix);
+                RecordDecodePerformance(
+                    Stopwatch.GetTimestamp() - started,
+                    _isolationPenaltyCacheHits - isolationHitsBefore,
+                    _isolationPenaltyCacheMisses - isolationMissesBefore);
+                return result;
             }
         }
 
@@ -541,6 +581,43 @@ namespace TigerClaw.Core
             }
         }
 
+        internal void CompleteComposition()
+        {
+            // Completion can happen while the asynchronous Beam worker still
+            // owns the decoder. Diagnostics must never put that work back on
+            // the TSF key path, so a busy decoder simply carries its aggregate
+            // into the next completion sample.
+            if (!Monitor.TryEnter(_decodeLock))
+            {
+                return;
+            }
+
+            try
+            {
+                FinishPerformanceSample();
+            }
+            finally
+            {
+                Monitor.Exit(_decodeLock);
+            }
+        }
+
+        internal SentenceDecodePerformanceSample GetCurrentPerformanceSample()
+        {
+            lock (_decodeLock)
+            {
+                return CreatePerformanceSample();
+            }
+        }
+
+        internal SentenceDecodePerformanceSample GetLastPerformanceSample()
+        {
+            lock (_decodeLock)
+            {
+                return CopyPerformanceSample(_lastPerformanceSample);
+            }
+        }
+
         internal bool HasCompleteCandidate(string rawCode, string requiredTextPrefix = null)
         {
             string normalized = NormalizeRawCode(rawCode);
@@ -557,7 +634,6 @@ namespace TigerClaw.Core
             }
             states[0].Add(0);
 
-            bool allowAllRanks = normalized.Length <= 4;
             for (int position = 0; position < normalized.Length; position++)
             {
                 if (states[position].Count == 0)
@@ -582,6 +658,7 @@ namespace TigerClaw.Core
                     }
 
                     int consumedEnd = ReadCodeSuffix(normalized, codeEnd, out int selectedRank);
+                    bool wholeInputEdge = position == 0 && consumedEnd == normalized.Length;
                     if (normalized.Length > 1 && consumedEnd - position < 2)
                     {
                         continue;
@@ -593,7 +670,7 @@ namespace TigerClaw.Core
                         {
                             bool rankMatches = selectedRank > 0
                                 ? candidate.Rank == selectedRank
-                                : allowAllRanks || candidate.Rank == 1;
+                                : wholeInputEdge || candidate.Rank == 1;
                             if (!rankMatches || !TryAdvanceRequiredPrefix(
                                 required,
                                 matchedPrefixLength,
@@ -700,9 +777,10 @@ namespace TigerClaw.Core
             if (oldStates != null && !string.IsNullOrEmpty(oldRaw))
             {
                 int oldLength = oldRaw.Length;
-                // A one-key segment is legal only when the whole input is one key.
-                // Crossing four keys also changes whether bare segments keep every rank.
-                if (oldLength == 1 || length == 1 || (oldLength <= 4) != (length <= 4))
+                // Whole-input one-key edges and implicit non-first ranks may
+                // become segmented after an append. Rebuild the small
+                // four-code prefix so formerly legal states cannot leak.
+                if (oldLength <= 4 || length <= 4)
                 {
                     states = null;
                 }
@@ -842,7 +920,6 @@ namespace TigerClaw.Core
             int minimumConsumedEndExclusive = -1)
         {
             int expandedStates = 0;
-            bool allowAllRanks = raw.Length <= 4;
             for (int position = fromPos; position < length; position++)
             {
                 List<BeamState> current = states[position].Limit(_beamWidth, out _);
@@ -877,6 +954,7 @@ namespace TigerClaw.Core
 
                     int selectedRank;
                     int consumedEnd = ReadCodeSuffix(raw, codeEnd, out selectedRank);
+                    bool wholeInputEdge = position == 0 && consumedEnd == length;
                     if (consumedEnd <= minimumConsumedEndExclusive)
                     {
                         continue;
@@ -892,7 +970,7 @@ namespace TigerClaw.Core
                         {
                             bool rankMatches = selectedRank > 0
                                 ? candidate.Rank == selectedRank
-                                : allowAllRanks || candidate.Rank == 1;
+                                : wholeInputEdge || candidate.Rank == 1;
                             if (!rankMatches)
                             {
                                 continue;
@@ -1050,7 +1128,7 @@ namespace TigerClaw.Core
         private SentenceCandidate EvaluateState(BeamState item)
         {
             double endingAdjustment = TransitionScore(item.Previous2, item.Previous1, Eos) -
-                _isolationPenalty.Apply(item.Text, _languageModel);
+                ApplyIsolationPenalty(item.Text);
             double score = item.Score + endingAdjustment;
             return new SentenceCandidate
             {
@@ -1062,6 +1140,109 @@ namespace TigerClaw.Core
                 Boundary = item.Boundary,
                 MaxLexiconRank = Math.Max(1, item.MaxLexiconRank)
             };
+        }
+
+        private double ApplyIsolationPenalty(string text)
+        {
+            if (!_isolationPenalty.Enabled || string.IsNullOrEmpty(text))
+            {
+                return 0.0;
+            }
+
+            if (_isolationPenaltyCache != null &&
+                _isolationPenaltyCache.TryGetValue(text, out double cached))
+            {
+                _isolationPenaltyCacheHits++;
+                return cached;
+            }
+
+            _isolationPenaltyCacheMisses++;
+            double penalty = _isolationPenalty.Apply(text, _languageModel);
+            string oldKey = _isolationPenaltyCacheKeys[_isolationPenaltyCacheNext];
+            if (oldKey != null)
+            {
+                _isolationPenaltyCache.Remove(oldKey);
+            }
+            _isolationPenaltyCache[text] = penalty;
+            _isolationPenaltyCacheKeys[_isolationPenaltyCacheNext] = text;
+            _isolationPenaltyCacheNext =
+                (_isolationPenaltyCacheNext + 1) % IsolationPenaltyCacheCapacity;
+            return penalty;
+        }
+
+        private void RecordDecodePerformance(long elapsedTicks, long isolationHits, long isolationMisses)
+        {
+            _performanceDecodeCalls++;
+            _performanceDecodeTotalTicks += Math.Max(0L, elapsedTicks);
+            _performanceDecodeMaximumTicks = Math.Max(
+                _performanceDecodeMaximumTicks,
+                Math.Max(0L, elapsedTicks));
+            _performanceIsolationCacheHits += Math.Max(0L, isolationHits);
+            _performanceIsolationCacheMisses += Math.Max(0L, isolationMisses);
+        }
+
+        private void FinishPerformanceSample()
+        {
+            if (_performanceDecodeCalls == 0)
+            {
+                return;
+            }
+
+            SentenceDecodePerformanceSample sample = CreatePerformanceSample();
+            _lastPerformanceSample = sample;
+            if (sample.DecodeMaximumMilliseconds >= SlowDecodeMilliseconds ||
+                sample.DecodeTotalMilliseconds >= SlowCompositionMilliseconds)
+            {
+                Trace.TraceWarning(
+                    "TigerClaw sentence slow composition: calls={0} total={1:F2}ms " +
+                    "max={2:F2}ms isolation={3}/{4}",
+                    sample.DecodeCalls,
+                    sample.DecodeTotalMilliseconds,
+                    sample.DecodeMaximumMilliseconds,
+                    sample.IsolationCacheHits,
+                    sample.IsolationCacheMisses);
+            }
+
+            _performanceDecodeCalls = 0;
+            _performanceDecodeTotalTicks = 0;
+            _performanceDecodeMaximumTicks = 0;
+            _performanceIsolationCacheHits = 0;
+            _performanceIsolationCacheMisses = 0;
+        }
+
+        private SentenceDecodePerformanceSample CreatePerformanceSample()
+        {
+            return new SentenceDecodePerformanceSample
+            {
+                DecodeCalls = _performanceDecodeCalls,
+                DecodeTotalMilliseconds = TicksToMilliseconds(_performanceDecodeTotalTicks),
+                DecodeMaximumMilliseconds = TicksToMilliseconds(_performanceDecodeMaximumTicks),
+                IsolationCacheHits = _performanceIsolationCacheHits,
+                IsolationCacheMisses = _performanceIsolationCacheMisses
+            };
+        }
+
+        private static SentenceDecodePerformanceSample CopyPerformanceSample(
+            SentenceDecodePerformanceSample sample)
+        {
+            if (sample == null)
+            {
+                return null;
+            }
+
+            return new SentenceDecodePerformanceSample
+            {
+                DecodeCalls = sample.DecodeCalls,
+                DecodeTotalMilliseconds = sample.DecodeTotalMilliseconds,
+                DecodeMaximumMilliseconds = sample.DecodeMaximumMilliseconds,
+                IsolationCacheHits = sample.IsolationCacheHits,
+                IsolationCacheMisses = sample.IsolationCacheMisses
+            };
+        }
+
+        private static double TicksToMilliseconds(long ticks)
+        {
+            return ticks * 1000.0 / Stopwatch.Frequency;
         }
 
         private SentenceEarlyCommitEvidence BuildEarlyCommitEvidence(

@@ -1,8 +1,695 @@
 -- TigerClaw-style sentence lattice for Rime, with optional Lua KN scoring.
-local lexicon = require("tiger_sentence_lexicon")
-local kn_reader = require("tiger_sentence_kn")
-local ranks = require("tiger_sentence_ranks")
-local supplement = require("tiger_sentence_supplement")
+local data = require("tiger_sentence_data")
+local lexicon = {codes = data.codes, lengths = data.lengths}
+-- Pure Lua Kneser-Ney V2 reader. TCSKNM02 uses paged I/O and a bounded cache.
+local BOS = "\2"
+local EOS = "\3"
+local SHIFT = 2097152
+local MOBILE_HEADER_SIZE = 104
+local MOBILE_CACHE_BYTES = 8 * 1024 * 1024
+local CONTEXT_CACHE_ENTRIES = 16384
+local ISOLATION_CACHE_ENTRIES = 8192
+local SLOW_DECODE_MS = 8.0
+local SLOW_COMPOSITION_MS = 30.0
+
+local performance = {
+    decode_calls = 0,
+    decode_total_ms = 0.0,
+    decode_max_ms = 0.0,
+    page_misses = 0,
+    page_bytes = 0,
+    early_evidence_builds = 0,
+    isolation_hits = 0,
+    isolation_misses = 0,
+    last = nil
+}
+
+local function record_decode(started)
+    local elapsed = (os.clock() - started) * 1000
+    performance.decode_calls = performance.decode_calls + 1
+    performance.decode_total_ms = performance.decode_total_ms + elapsed
+    performance.decode_max_ms = math.max(performance.decode_max_ms, elapsed)
+end
+
+local function finish_performance_sample()
+    if performance.decode_calls == 0 then return end
+    local sample = {
+        decode_calls = performance.decode_calls,
+        decode_total_ms = performance.decode_total_ms,
+        decode_max_ms = performance.decode_max_ms,
+        page_misses = performance.page_misses,
+        page_bytes = performance.page_bytes,
+        early_evidence_builds = performance.early_evidence_builds,
+        isolation_hits = performance.isolation_hits,
+        isolation_misses = performance.isolation_misses
+    }
+    performance.last = sample
+    if (sample.decode_max_ms >= SLOW_DECODE_MS or
+        sample.decode_total_ms >= SLOW_COMPOSITION_MS) and
+        log and log.warning then
+        pcall(log.warning, string.format(
+            "tiger_sentence slow composition: calls=%d total=%.2fms max=%.2fms " ..
+            "pages=%d bytes=%d early=%d isolation=%d/%d",
+            sample.decode_calls,
+            sample.decode_total_ms,
+            sample.decode_max_ms,
+            sample.page_misses,
+            sample.page_bytes,
+            sample.early_evidence_builds,
+            sample.isolation_hits,
+            sample.isolation_misses))
+    end
+    performance.decode_calls = 0
+    performance.decode_total_ms = 0.0
+    performance.decode_max_ms = 0.0
+    performance.page_misses = 0
+    performance.page_bytes = 0
+    performance.early_evidence_builds = 0
+    performance.isolation_hits = 0
+    performance.isolation_misses = 0
+end
+
+local kn_reader = {
+    BOS = BOS,
+    EOS = EOS
+}
+
+local function file_exists(path)
+    local file = io.open(path, "rb")
+    if not file then
+        return false
+    end
+    file:close()
+    return true
+end
+
+function kn_reader.candidate_paths()
+    local mobile_paths = {}
+    local legacy_paths = {}
+    if rime_api then
+        local user_dir = rime_api.get_user_data_dir and rime_api.get_user_data_dir()
+        local shared_dir = rime_api.get_shared_data_dir and rime_api.get_shared_data_dir()
+        if user_dir and user_dir ~= "" then
+            mobile_paths[#mobile_paths + 1] = user_dir .. "/models/sentence-ngram-mobile.bin"
+            mobile_paths[#mobile_paths + 1] = user_dir .. "/sentence-ngram-mobile.bin"
+            legacy_paths[#legacy_paths + 1] = user_dir .. "/models/sentence-ngram-v2.bin"
+            legacy_paths[#legacy_paths + 1] = user_dir .. "/sentence-ngram-v2.bin"
+        end
+        if shared_dir and shared_dir ~= "" then
+            mobile_paths[#mobile_paths + 1] = shared_dir .. "/models/sentence-ngram-mobile.bin"
+            legacy_paths[#legacy_paths + 1] = shared_dir .. "/models/sentence-ngram-v2.bin"
+        end
+    end
+    mobile_paths[#mobile_paths + 1] = "C:/Archive/tigerclaw_sentence_ml/runtime/sentence-ngram-mobile.bin"
+    mobile_paths[#mobile_paths + 1] = "/mnt/c/Archive/tigerclaw_sentence_ml/runtime/sentence-ngram-mobile.bin"
+    legacy_paths[#legacy_paths + 1] = "C:/Archive/tigerclaw_sentence_ml/runtime/sentence-ngram-v2.bin"
+    legacy_paths[#legacy_paths + 1] = "/mnt/c/Archive/tigerclaw_sentence_ml/runtime/sentence-ngram-v2.bin"
+    for _, path in ipairs(legacy_paths) do
+        mobile_paths[#mobile_paths + 1] = path
+    end
+    return mobile_paths
+end
+
+local function scalar(token)
+    if not token or token == "" then
+        return 0
+    end
+    if token == BOS or token == EOS then
+        return string.byte(token)
+    end
+    return utf8.codepoint(token)
+end
+
+local function pack2(first, second)
+    -- Avoid parser-level bitwise syntax; model scoring still requires the
+    -- string.unpack and utf8 APIs supplied by Lua 5.3+ Rime builds.
+    return first * SHIFT + (second % SHIFT)
+end
+
+local function load_legacy(path)
+    local file = assert(io.open(path, "rb"), "cannot open n-gram: " .. path)
+    local data = file:read("*a")
+    file:close()
+    assert(data and #data > 32, "empty n-gram: " .. path)
+    assert(data:sub(1, 8) == "TCSKNM01", "not a TCSKNM01 model: " .. path)
+
+    local function i32(off)
+        return (string.unpack("<i4", data, off + 1))
+    end
+    local function u64(off)
+        return (string.unpack("<I8", data, off + 1))
+    end
+    local function f32(off)
+        return (string.unpack("<f", data, off + 1))
+    end
+
+    assert(i32(8) == 1, "unsupported n-gram version")
+    local uni_count = i32(12)
+    local pos = 16
+    local uni_off = pos
+    pos = pos + uni_count * 8
+    local bi_count = u64(pos)
+    pos = pos + 8
+    local bi_off = pos
+    pos = pos + bi_count * 12
+    local bi_ctx_count = i32(pos)
+    pos = pos + 4
+    local bi_ctx_off = pos
+    pos = pos + bi_ctx_count * 8
+    local tri_count = u64(pos)
+    pos = pos + 8
+    local tri_off = pos
+    pos = pos + tri_count * 12
+    local tri_ctx_count = u64(pos)
+    pos = pos + 8
+    local tri_ctx_off = pos
+    local unknown = f32(uni_off + 4)
+
+    local function lookup_i32(offset, count, key, fallback)
+        local low, high = 0, count
+        while low < high do
+        local middle = low + math.floor((high - low) / 2)
+            local value = i32(offset + middle * 8)
+            if value < key then
+                low = middle + 1
+            else
+                high = middle
+            end
+        end
+        if low >= count then
+            return fallback
+        end
+        local at = offset + low * 8
+        if i32(at) == key then
+            return f32(at + 4)
+        end
+        return fallback
+    end
+
+    local function lookup_u64(offset, count, key, fallback)
+        local low, high = 0, count
+        while low < high do
+        local middle = low + math.floor((high - low) / 2)
+            local value = u64(offset + middle * 12)
+            if value < key then
+                low = middle + 1
+            else
+                high = middle
+            end
+        end
+        if low >= count then
+            return fallback
+        end
+        local at = offset + low * 12
+        if u64(at) == key then
+            return f32(at + 8)
+        end
+        return fallback
+    end
+
+    local function pack3(first, second, third)
+        return pack2(first, second) * SHIFT + (third % SHIFT)
+    end
+
+    local function logp(prev2, prev1, target)
+        local first = scalar(prev2)
+        local second = scalar(prev1)
+        local third = scalar(target)
+        local unigram = lookup_i32(uni_off, uni_count, third, unknown)
+        local bigram = lookup_u64(bi_off, bi_count, pack2(second, third), 0.0)
+        local bigram_lambda = lookup_i32(bi_ctx_off, bi_ctx_count, second, 1.0)
+        bigram = bigram + bigram_lambda * unigram
+        local trigram = lookup_u64(tri_off, tri_count, pack3(first, second, third), 0.0)
+        local trigram_lambda = lookup_u64(tri_ctx_off, tri_ctx_count, pack2(first, second), 1.0)
+        trigram = trigram + trigram_lambda * bigram
+        if trigram < 1e-300 then
+            trigram = 1e-300
+        end
+        return math.log(trigram)
+    end
+
+    local function has_observed_bigram(prev, target)
+        local left = scalar(prev)
+        local right = scalar(target)
+        local key = pack2(left, right)
+        local low, high = 0, bi_count
+        while low < high do
+        local middle = low + math.floor((high - low) / 2)
+            local value = u64(bi_off + middle * 12)
+            if value < key then
+                low = middle + 1
+            else
+                high = middle
+            end
+        end
+        return low < bi_count and u64(bi_off + low * 12) == key
+    end
+
+    return {
+        path = path,
+        bytes = #data,
+        format = "TCSKNM01",
+        logp = logp,
+        has_observed_bigram = has_observed_bigram
+    }
+end
+
+local function load_mobile(path)
+    local file = assert(io.open(path, "rb"), "cannot open n-gram: " .. path)
+    local header = file:read(MOBILE_HEADER_SIZE)
+    assert(header and #header == MOBILE_HEADER_SIZE, "truncated mobile n-gram: " .. path)
+    assert(header:sub(1, 8) == "TCSKNM02", "not a TCSKNM02 model: " .. path)
+
+    local version, header_size, file_size, index_stride, _, uni_count, _, uni_off,
+        bi_ctx_count, bi_index_count, bi_blocks_off, bi_index_off, tri_ctx_count,
+        tri_index_count, _, tri_blocks_off, tri_index_off =
+        string.unpack("<I4I4I8I4I4I4I4I8I4I4I8I8I8I4I4I8I8", header, 9)
+    assert(version == 1 and header_size == MOBILE_HEADER_SIZE, "unsupported mobile n-gram version")
+    assert(index_stride >= 16 and bi_blocks_off < bi_index_off, "invalid mobile bigram layout")
+    assert(bi_index_off < tri_blocks_off and tri_blocks_off < tri_index_off, "invalid mobile trigram layout")
+    local actual_size = assert(file:seek("end"))
+    assert(actual_size == file_size, "mobile n-gram size mismatch")
+
+    local function read_at(offset, count)
+        assert(file:seek("set", offset), "cannot seek n-gram")
+        local value = file:read(count)
+        assert(value and #value == count, "truncated mobile n-gram")
+        return value
+    end
+
+    local unigrams = read_at(uni_off, uni_count * 8)
+    local bi_index = read_at(bi_index_off, bi_index_count * 16)
+    local tri_index = read_at(tri_index_off, tri_index_count * 16)
+    local unknown = string.unpack("<f", unigrams, 5)
+
+    local cache = {}
+    local cache_bytes = 0
+    local lru_head = nil
+    local lru_tail = nil
+    local context_caches = {
+        b = { values = {}, keys = {}, next = 1 },
+        t = { values = {}, keys = {}, next = 1 }
+    }
+
+    local function unlink(entry)
+        if entry.previous then
+            entry.previous.next = entry.next
+        else
+            lru_head = entry.next
+        end
+        if entry.next then
+            entry.next.previous = entry.previous
+        else
+            lru_tail = entry.previous
+        end
+    end
+
+    local function touch(entry)
+        if lru_head == entry then
+            return
+        end
+        if entry.previous or entry.next or lru_tail == entry then
+            unlink(entry)
+        end
+        entry.previous = nil
+        entry.next = lru_head
+        if lru_head then
+            lru_head.previous = entry
+        else
+            lru_tail = entry
+        end
+        lru_head = entry
+    end
+
+    local function index_key(data, index)
+        return string.unpack("<I8", data, index * 16 + 1)
+    end
+
+    local function find_page(data, count, key)
+        local low, high = 0, count
+        while low < high do
+        local middle = low + math.floor((high - low) / 2)
+            if index_key(data, middle) <= key then
+                low = middle + 1
+            else
+                high = middle
+            end
+        end
+        return low - 1
+    end
+
+    local function get_page(kind, index_data, index_count, page, section_end)
+        local cache_key = kind .. page
+        local entry = cache[cache_key]
+        if entry then
+            touch(entry)
+            return entry.data
+        end
+        local at = page * 16 + 1
+        local offset = string.unpack("<I8", index_data, at + 8)
+        local next_offset = section_end
+        if page + 1 < index_count then
+            next_offset = string.unpack("<I8", index_data, at + 24)
+        end
+        local data = read_at(offset, next_offset - offset)
+        performance.page_misses = performance.page_misses + 1
+        performance.page_bytes = performance.page_bytes + #data
+        entry = { key = cache_key, data = data, bytes = #data }
+        cache[cache_key] = entry
+        cache_bytes = cache_bytes + entry.bytes
+        touch(entry)
+        while cache_bytes > MOBILE_CACHE_BYTES and lru_tail and lru_tail ~= entry do
+            local victim = lru_tail
+            unlink(victim)
+            cache[victim.key] = nil
+            cache_bytes = cache_bytes - victim.bytes
+        end
+        return data
+    end
+
+    local function lookup_unigram(key, fallback)
+        local low, high = 0, uni_count
+        while low < high do
+            local middle = low + math.floor((high - low) / 2)
+            local value = string.unpack("<i4", unigrams, middle * 8 + 1)
+            if value < key then low = middle + 1 else high = middle end
+        end
+        if low < uni_count then
+            local at = low * 8 + 1
+            if string.unpack("<i4", unigrams, at) == key then
+                return string.unpack("<f", unigrams, at + 4)
+            end
+        end
+        return fallback
+    end
+
+    local function lookup_context(kind, index_data, index_count, context_count, section_end, key, target)
+        local context_cache = context_caches[kind]
+        local cached_context = context_cache.values[key]
+        if cached_context then
+            if cached_context.missing then
+                return 1.0, 0.0, false
+            end
+            local data = get_page(
+                kind, index_data, index_count, cached_context.page, section_end)
+            local low, high = 0, cached_context.successor_count
+            while low < high do
+                local middle = low + math.floor((high - low) / 2)
+                local value = string.unpack(
+                    "<I4", data, cached_context.successor_position + middle * 8)
+                if value < target then low = middle + 1 else high = middle end
+            end
+            if low < cached_context.successor_count then
+                local at = cached_context.successor_position + low * 8
+                if string.unpack("<I4", data, at) == target then
+                    return cached_context.lambda, string.unpack("<f", data, at + 4), true
+                end
+            end
+            return cached_context.lambda, 0.0, false
+        end
+
+        local function remember(value)
+            local old_key = context_cache.keys[context_cache.next]
+            if old_key ~= nil then
+                context_cache.values[old_key] = nil
+            end
+            context_cache.values[key] = value
+            context_cache.keys[context_cache.next] = key
+            context_cache.next = context_cache.next % CONTEXT_CACHE_ENTRIES + 1
+        end
+
+        local page = find_page(index_data, index_count, key)
+        if page < 0 then
+            remember({ missing = true })
+            return 1.0, 0.0, false
+        end
+        local data = get_page(kind, index_data, index_count, page, section_end)
+        local position = 1
+        local remaining = math.min(index_stride, context_count - page * index_stride)
+        for _ = 1, remaining do
+            local context_key, lambda, successor_count
+            context_key, lambda, successor_count, position = string.unpack("<I8fI4", data, position)
+            if context_key == key then
+                remember({
+                    page = page,
+                    lambda = lambda,
+                    successor_count = successor_count,
+                    successor_position = position
+                })
+                local low, high = 0, successor_count
+                while low < high do
+                    local middle = low + math.floor((high - low) / 2)
+                    local value = string.unpack("<I4", data, position + middle * 8)
+                    if value < target then low = middle + 1 else high = middle end
+                end
+                if low < successor_count then
+                    local at = position + low * 8
+                    if string.unpack("<I4", data, at) == target then
+                        return lambda, string.unpack("<f", data, at + 4), true
+                    end
+                end
+                return lambda, 0.0, false
+            end
+            if context_key > key then
+                remember({ missing = true })
+                return 1.0, 0.0, false
+            end
+            position = position + successor_count * 8
+        end
+        remember({ missing = true })
+        return 1.0, 0.0, false
+    end
+
+    local function logp(prev2, prev1, target)
+        local first = scalar(prev2)
+        local second = scalar(prev1)
+        local third = scalar(target)
+        local unigram = lookup_unigram(third, unknown)
+        local bigram_lambda, bigram_probability = lookup_context(
+            "b", bi_index, bi_index_count, bi_ctx_count, bi_index_off, second, third)
+        local bigram = bigram_probability + bigram_lambda * unigram
+        local trigram_lambda, trigram_probability = lookup_context(
+            "t", tri_index, tri_index_count, tri_ctx_count, tri_index_off,
+            pack2(first, second), third)
+        local probability = trigram_probability + trigram_lambda * bigram
+        return math.log(math.max(probability, 1e-300))
+    end
+
+    local function has_observed_bigram(prev, target)
+        local _, _, observed = lookup_context(
+            "b", bi_index, bi_index_count, bi_ctx_count, bi_index_off,
+            scalar(prev), scalar(target))
+        return observed
+    end
+
+    return {
+        path = path,
+        bytes = file_size,
+        format = "TCSKNM02",
+        resident_index_bytes = #unigrams + #bi_index + #tri_index,
+        cache_limit_bytes = MOBILE_CACHE_BYTES,
+        logp = logp,
+        has_observed_bigram = has_observed_bigram,
+        close = function() file:close() end
+    }
+end
+
+function kn_reader.load(path)
+    local file = assert(io.open(path, "rb"), "cannot open n-gram: " .. path)
+    local magic = file:read(8)
+    file:close()
+    if magic == "TCSKNM02" then
+        return load_mobile(path)
+    end
+    return load_legacy(path)
+end
+
+function kn_reader.try_load()
+    local failures = {}
+    for _, path in ipairs(kn_reader.candidate_paths()) do
+        if file_exists(path) then
+            local ok, model = pcall(kn_reader.load, path)
+            if ok then
+                return model, nil
+            end
+            failures[#failures + 1] = path .. ": " .. tostring(model)
+        end
+    end
+    if #failures > 0 then
+        return nil, table.concat(failures, " | ")
+    end
+    return nil, "no sentence n-gram model found"
+end
+
+
+-- Per-schema supplemental phrase rewards for TigerClaw sentence decoding.
+local supplement = {}
+
+local file_name = "tiger_sentence.supplement.txt"
+local baseline_reward = 9.0
+local weight_scale = 2.0
+local baseline_weight = 1000.0
+local maximum_reward = 16.0
+
+local function utf_chars(text)
+    local chars = {}
+    local index = 1
+    while index <= #text do
+        local first = text:byte(index)
+        local length = first < 0x80 and 1 or first < 0xE0 and 2 or first < 0xF0 and 3 or 4
+        chars[#chars + 1] = text:sub(index, index + length - 1)
+        index = index + length
+    end
+    return chars
+end
+
+local function reward_for_weight(weight)
+    local bounded = math.max(1, math.min(1000000000, weight))
+    local reward = baseline_reward + weight_scale * math.log(bounded / baseline_weight)
+    return math.max(0.0, math.min(maximum_reward, reward))
+end
+
+local function empty_matcher(path, load_error)
+    return {
+        nodes = { { transitions = {}, failure = 1, reward = 0.0 } },
+        path = path,
+        count = 0,
+        error = load_error
+    }
+end
+
+function supplement.build(entries, path)
+    local nodes = { { transitions = {}, failure = 1, reward = 0.0 } }
+    local count = 0
+    for text, weight in pairs(entries or {}) do
+        local reward = reward_for_weight(weight)
+        if text ~= "" and reward > 0.0 then
+            local state = 1
+            local chars = utf_chars(text)
+            for i = 1, #chars do
+                local next_state = nodes[state].transitions[chars[i]]
+                if not next_state then
+                    next_state = #nodes + 1
+                    nodes[state].transitions[chars[i]] = next_state
+                    nodes[next_state] = { transitions = {}, failure = 1, reward = 0.0 }
+                end
+                state = next_state
+            end
+            nodes[state].reward = math.max(nodes[state].reward, reward)
+            count = count + 1
+        end
+    end
+
+    if count == 0 then
+        return empty_matcher(path, nil)
+    end
+
+    local queue = {}
+    local head = 1
+    for _, child in pairs(nodes[1].transitions) do
+        nodes[child].failure = 1
+        queue[#queue + 1] = child
+    end
+    while head <= #queue do
+        local current = queue[head]
+        head = head + 1
+        for ch, child in pairs(nodes[current].transitions) do
+            local fallback = nodes[current].failure
+            while fallback ~= 1 and not nodes[fallback].transitions[ch] do
+                fallback = nodes[fallback].failure
+            end
+            local failure_target = nodes[fallback].transitions[ch]
+            if failure_target and failure_target ~= child then
+                nodes[child].failure = failure_target
+            else
+                nodes[child].failure = 1
+            end
+            nodes[child].reward = math.max(
+                nodes[child].reward,
+                nodes[nodes[child].failure].reward)
+            queue[#queue + 1] = child
+        end
+    end
+    return { nodes = nodes, path = path, count = count, error = nil }
+end
+
+function supplement.load_file(path)
+    local handle, open_error = io.open(path, "rb")
+    if not handle then
+        return empty_matcher(path, open_error)
+    end
+    local content = handle:read("*a") or ""
+    handle:close()
+    content = content:gsub("^\239\187\191", "")
+
+    local entries = {}
+    for raw_line in (content .. "\n"):gmatch("(.-)\r?\n") do
+        local line = raw_line:match("^%s*(.-)%s*$") or ""
+        if line ~= "" and line:sub(1, 1) ~= "#" then
+            local text, rest = line:match("^(%S+)%s*(.-)$")
+            local weight = 1000
+            if rest and rest ~= "" then
+                if not rest:match("^%d+$") then
+                    text = nil
+                else
+                    weight = tonumber(rest)
+                    if not weight or weight <= 0 then text = nil end
+                end
+            end
+            if text then entries[text] = weight end
+        end
+    end
+    return supplement.build(entries, path)
+end
+
+local function join_path(directory, name)
+    if directory:sub(-1) == "/" or directory:sub(-1) == "\\" then
+        return directory .. name
+    end
+    return directory .. "/" .. name
+end
+
+function supplement.default_path()
+    if not rime_api or type(rime_api.get_user_data_dir) ~= "function" then
+        return nil
+    end
+    local ok, directory = pcall(rime_api.get_user_data_dir)
+    if not ok or type(directory) ~= "string" or directory == "" then
+        return nil
+    end
+    return join_path(directory, file_name)
+end
+
+function supplement.load_default()
+    local path = supplement.default_path()
+    if not path then return empty_matcher(nil, nil) end
+    local matcher = supplement.load_file(path)
+    -- A missing optional file is normal; only report malformed/unreadable files
+    -- after the path has actually resolved in a Rime frontend.
+    return matcher
+end
+
+function supplement.advance(matcher, state, ch)
+    if not matcher or matcher.count == 0 or not ch or ch == "" then
+        return 1, 0.0
+    end
+    local nodes = matcher.nodes
+    local current = type(state) == "number" and nodes[state] and state or 1
+    while current ~= 1 and not nodes[current].transitions[ch] do
+        current = nodes[current].failure
+    end
+    current = nodes[current].transitions[ch] or 1
+    return current, nodes[current].reward
+end
+
+supplement.file_name = file_name
+supplement.reward_for_weight = reward_for_weight
+local ranks = {
+    unknown = data.unknown_character_rank or 20001
+}
+function ranks.rank(ch)
+    return data.character_ranks[ch] or ranks.unknown
+end
 
 local beam_width = 200
 local candidate_limit = 20
@@ -14,6 +701,7 @@ local isolation_lambda = 2.0
 -- Two consecutive generations may confirm only when dissenting Beam mass is
 -- below 0.001%; every weaker history keeps the original three-key window.
 local early_commit_strong_share = 0.99999
+local early_commit_retained_raw_length = 3
 local BOS = kn_reader.BOS
 local EOS = kn_reader.EOS
 local kn_model = false
@@ -41,6 +729,9 @@ local observed_cache_limit = 32768
 local observed_cache = {}
 local observed_cache_keys = {}
 local observed_cache_next = 1
+local isolation_cache = {}
+local isolation_cache_keys = {}
+local isolation_cache_next = 1
 local aggregate_during_expansion_threshold = 128
 local decode_cache = {
     raw = nil,
@@ -67,7 +758,15 @@ local state_keys = {
 
 local function transient_state(context, env)
     if not env then
-        return { proposal = "", stable = 0, evidence_raw = "", history = {}, suspended = false }
+        return {
+            proposal = "",
+            stable = 0,
+            evidence_raw = "",
+            history = {},
+            suspended = false,
+            empty_code_pending = nil,
+            continuation_after_auto_commit = false
+        }
     end
     if not env._tiger_sentence_transient then
         local confidence = context:get_property(state_keys.confidence) or ""
@@ -83,7 +782,9 @@ local function transient_state(context, env)
             stable = tonumber(stable) or 0,
             evidence_raw = evidence_raw,
             history = {},
-            suspended = false
+            suspended = false,
+            empty_code_pending = nil,
+            continuation_after_auto_commit = false
         }
     end
     return env._tiger_sentence_transient
@@ -98,7 +799,9 @@ local function sentence_state(context, env)
         stable = transient.stable,
         evidence_raw = transient.evidence_raw,
         history = transient.history or {},
-        suspended = transient.suspended or false
+        suspended = transient.suspended or false,
+        empty_code_pending = transient.empty_code_pending,
+        continuation_after_auto_commit = transient.continuation_after_auto_commit or false
     }
 end
 
@@ -116,7 +819,9 @@ local function save_transient_state(context, state, env)
             stable = state.stable or 0,
             evidence_raw = state.evidence_raw or "",
             history = state.history or {},
-            suspended = state.suspended or false
+            suspended = state.suspended or false,
+            empty_code_pending = state.empty_code_pending,
+            continuation_after_auto_commit = state.continuation_after_auto_commit or false
         }
     end
     if env and not env._tiger_sentence_legacy_cleared then
@@ -134,7 +839,8 @@ local function save_sentence_state(context, state, env)
     save_transient_state(context, state, env)
 end
 
-local function reset_sentence_state(context, env)
+local function reset_sentence_state(context, env, continuation_after_auto_commit)
+    finish_performance_sample()
     save_sentence_state(context, {
         committed_text = "",
         committed_raw = "",
@@ -142,7 +848,9 @@ local function reset_sentence_state(context, env)
         stable = 0,
         evidence_raw = "",
         history = {},
-        suspended = false
+        suspended = false,
+        empty_code_pending = nil,
+        continuation_after_auto_commit = continuation_after_auto_commit or false
     }, env)
 end
 
@@ -289,6 +997,12 @@ local function isolation_penalty(text)
     if not model or not model.has_observed_bigram or not text or text == "" then
         return 0
     end
+    local cached = isolation_cache[text]
+    if cached ~= nil then
+        performance.isolation_hits = performance.isolation_hits + 1
+        return cached
+    end
+    performance.isolation_misses = performance.isolation_misses + 1
     local chars = utf_chars(text)
     local penalty = 0
     for index = 1, #chars do
@@ -301,6 +1015,11 @@ local function isolation_penalty(text)
             end
         end
     end
+    local old_key = isolation_cache_keys[isolation_cache_next]
+    if old_key then isolation_cache[old_key] = nil end
+    isolation_cache[text] = penalty
+    isolation_cache_keys[isolation_cache_next] = text
+    isolation_cache_next = isolation_cache_next % ISOLATION_CACHE_ENTRIES + 1
     return penalty
 end
 
@@ -328,6 +1047,63 @@ local function parse_selector(raw, code_end)
         return tonumber(token) or 0, digit_end
     end
     return 0, code_end
+end
+
+local function advance_required_prefix(required, matched_length, candidate_text)
+    if matched_length >= #required then
+        return matched_length
+    end
+    candidate_text = candidate_text or ""
+    local compare_length = math.min(#candidate_text, #required - matched_length)
+    if compare_length == 0 or
+        required:sub(matched_length + 1, matched_length + compare_length) ~=
+        candidate_text:sub(1, compare_length) then
+        return nil
+    end
+    return math.min(#required, matched_length + #candidate_text)
+end
+
+local function has_complete_candidate(raw_code, required_text_prefix)
+    local raw = normalize(raw_code)
+    if raw == "" or not has_letter(raw) then
+        return false
+    end
+
+    local required = required_text_prefix or ""
+    local states = {}
+    for index = 0, #raw do states[index] = {} end
+    states[0][0] = true
+    for position = 0, #raw - 1 do
+        if next(states[position]) then
+            for i = 1, #lexicon.lengths do
+                local code_length = lexicon.lengths[i]
+                local code_end = position + code_length
+                if code_end <= #raw then
+                    local candidates = lexicon.codes[raw:sub(position + 1, code_end)]
+                    if candidates then
+                        local selected_rank, consumed_end = parse_selector(raw, code_end)
+                        local whole_input_edge = position == 0 and consumed_end == #raw
+                        if not (#raw > 1 and consumed_end - position < 2) then
+                            local selected = eligible_candidates(
+                                candidates, selected_rank, whole_input_edge)
+                            for matched_length in pairs(states[position]) do
+                                for candidate_index = 1, #selected do
+                                    local next_matched = advance_required_prefix(
+                                        required,
+                                        matched_length,
+                                        selected[candidate_index].t)
+                                    if next_matched then
+                                        states[consumed_end][next_matched] = true
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return states[#raw][#required] or false
 end
 
 local function state_better(left, right)
@@ -525,7 +1301,6 @@ end
 
 local function expand_range(raw, states, from_pos, length, minimum_consumed_end)
     minimum_consumed_end = minimum_consumed_end or -1
-    local allow_all_ranks = length <= 4
     for position = from_pos, length - 1 do
         local current = dedup_limit(states[position], beam_width)
         states[position] = current
@@ -537,10 +1312,11 @@ local function expand_range(raw, states, from_pos, length, minimum_consumed_end)
                     local candidates = lexicon.codes[code]
                     if candidates then
                         local selected_rank, consumed_end = parse_selector(raw, position + code_length)
+                        local whole_input_edge = position == 0 and consumed_end == length
                         if consumed_end > minimum_consumed_end and
                             not (length > 1 and consumed_end - position < 2) then
                             local selected_candidates = eligible_candidates(
-                                candidates, selected_rank, allow_all_ranks)
+                                candidates, selected_rank, whole_input_edge)
                             for c = 1, #current do
                                 local item = current[c]
                                 for k = 1, #selected_candidates do
@@ -665,6 +1441,7 @@ end
 
 local function build_early_commit_evidence(
     raw, states, completed, completed_truncated, required_text_prefix)
+    performance.early_evidence_builds = performance.early_evidence_builds + 1
     local mass_by_text = {}
     local best_by_text = {}
     local truncated = completed_truncated or false
@@ -786,14 +1563,17 @@ local function decode_full(raw_code, include_early_commit, required_text_prefix)
         return {}
     end
     local length = #raw
+    local started = os.clock()
     local states = new_states(length)
     expand_range(raw, states, 0, length)
-    return emit(
+    local result = emit(
         raw,
         states,
         length,
         include_early_commit or false,
         required_text_prefix or "")
+    record_decode(started)
+    return result
 end
 
 local function decode(raw_code, include_early_commit, required_text_prefix)
@@ -815,15 +1595,16 @@ local function decode(raw_code, include_early_commit, required_text_prefix)
     end
 
     local length = #raw
+    local started = os.clock()
     local states = nil
     local old_raw = decode_cache.raw
     local old_states = decode_cache.states
     if old_states and type(old_raw) == "string" and old_raw ~= "" then
         local old_n = #old_raw
-        -- A one-key segment is legal only when the whole input is one key.
-        -- Crossing that boundary, or the four-key all-rank boundary, changes
-        -- which edges exist in the reused prefix.
-        if old_n == 1 or length == 1 or (old_n <= 4) ~= (length <= 4) then
+        -- Whole-input one-key edges and implicit non-first ranks may become
+        -- segmented after an append. Rebuild the small four-code prefix so
+        -- formerly legal states cannot leak into the longer input.
+        if old_n <= 4 or length <= 4 then
             states = nil
         elseif length > old_n and raw:sub(1, old_n) == old_raw then
             local max_consume = max_code_len + trailing_selector_span(raw)
@@ -857,6 +1638,7 @@ local function decode(raw_code, include_early_commit, required_text_prefix)
     decode_cache.result = result
     decode_cache.includes_early_commit = include_early_commit or false
     decode_cache.required_text_prefix = required_text_prefix
+    record_decode(started)
     return result
 end
 
@@ -961,6 +1743,22 @@ local function stable_history_raw_length(history, text, minimum_count)
     return stable
 end
 
+local function constrain_early_commit_boundary(
+    history, stable_proposal, committed_text, full_raw, minimum_count)
+    local consumed = stable_history_raw_length(
+        history, stable_proposal, minimum_count)
+    while #stable_proposal > #committed_text and
+        (consumed == 0 or
+         #full_raw - consumed < early_commit_retained_raw_length) do
+        local chars = utf_chars(stable_proposal)
+        chars[#chars] = nil
+        stable_proposal = table.concat(chars)
+        consumed = stable_history_raw_length(
+            history, stable_proposal, minimum_count)
+    end
+    return stable_proposal, consumed
+end
+
 confidence_proposal = function(candidates, threshold)
     if #candidates == 0 then
         return "", 0.0
@@ -982,7 +1780,7 @@ confidence_proposal = function(candidates, threshold)
         local weight = math.exp((candidates[i].confidence_score or candidates[i].score) - max_score)
         local chars = utf_chars(candidates[i].text)
         local prefix = ""
-        for length = 1, #chars - 1 do
+        for length = 1, #chars do
             prefix = prefix .. chars[length]
             if prefix_mass[prefix] == nil then
                 prefix_mass[prefix] = 0
@@ -1007,6 +1805,100 @@ confidence_proposal = function(candidates, threshold)
         end
     end
     return proposal, proposal_share
+end
+
+local function has_selection_suffix(raw)
+    return raw and raw:find("[;'0-9]") ~= nil
+end
+
+local function implicit_rank_allowed(candidate, raw, continuation_after_auto_commit)
+    return not continuation_after_auto_commit or has_selection_suffix(raw) or
+        (candidate.max_rank or 1) <= 1
+end
+
+local function capture_empty_code_candidate(
+    full_raw, committed_text, continuation_after_auto_commit)
+    local decoded = decode(full_raw, false, committed_text)
+    local captured = nil
+    local count = 0
+    for i = 1, #decoded do
+        local candidate = decoded[i]
+        if implicit_rank_allowed(candidate, full_raw, continuation_after_auto_commit) and
+            candidate.text and candidate.text ~= "" and
+            candidate.text:sub(1, #committed_text) == committed_text and
+            #candidate.text > #committed_text then
+            count = count + 1
+            if count > 1 then return nil end
+            local previous = candidate.path and candidate.path.previous
+            captured = {
+                candidate_text = candidate.text,
+                committed_text = committed_text,
+                base_raw_length = #full_raw,
+                last_segment_start = previous and previous.raw_length or 0
+            }
+        end
+    end
+    return count == 1 and captured or nil
+end
+
+local function reset_decode_cache_values()
+    decode_cache.raw = nil
+    decode_cache.states = nil
+    decode_cache.result = nil
+    decode_cache.includes_early_commit = false
+    decode_cache.required_text_prefix = ""
+end
+
+local function try_empty_code_commit(env, state, full_before, appended_letter)
+    local context = env.engine.context
+    if state.suspended then
+        state.empty_code_pending = nil
+        save_transient_state(context, state, env)
+        return false
+    end
+    local pending = state.empty_code_pending or
+        capture_empty_code_candidate(
+            full_before,
+            state.committed_text,
+            state.continuation_after_auto_commit)
+    local full_raw = full_before .. appended_letter
+    state.empty_code_pending = pending
+
+    if not pending then
+        save_transient_state(context, state, env)
+        return false
+    end
+
+    if has_complete_candidate(full_raw, state.committed_text) then
+        state.empty_code_pending = nil
+        save_transient_state(context, state, env)
+        return false
+    end
+    if not pending or
+        pending.committed_text ~= state.committed_text or
+        pending.base_raw_length < 0 or
+        pending.base_raw_length >= #full_raw or
+        pending.last_segment_start < 0 or
+        pending.last_segment_start >= #full_raw then
+        state.empty_code_pending = nil
+        save_transient_state(context, state, env)
+        return false
+    end
+
+    local extended_last_segment = full_raw:sub(pending.last_segment_start + 1)
+    if proper_code_prefixes[extended_last_segment] then
+        save_transient_state(context, state, env)
+        return false
+    end
+
+    local commit = pending.candidate_text:sub(#pending.committed_text + 1)
+    local retained_raw = full_raw:sub(pending.base_raw_length + 1)
+    env.engine:commit_text(commit)
+    context:clear()
+    reset_sentence_state(context, env, true)
+    reset_decode_cache_values()
+    if retained_raw ~= "" then context:push_input(retained_raw) end
+    return true
 end
 
 local function try_early_commit(env)
@@ -1113,17 +2005,15 @@ local function try_early_commit(env)
     local required_history = required_early_commit_history(history)
     if #history < required_history then return end
 
-    local stable_proposal = common_history_prefix(history)
-    local consumed = stable_history_raw_length(
-        history, stable_proposal, required_history)
-    while #stable_proposal > #state.committed_text and consumed == 0 do
-        local chars = utf_chars(stable_proposal)
-        chars[#chars] = nil
-        stable_proposal = table.concat(chars)
-        consumed = stable_history_raw_length(
-            history, stable_proposal, required_history)
-    end
-    if consumed <= #state.committed_raw or consumed > #full_raw then return end
+    local stable_proposal, consumed = constrain_early_commit_boundary(
+        history,
+        common_history_prefix(history),
+        state.committed_text,
+        full_raw,
+        required_history)
+    if consumed <= #state.committed_raw or
+        consumed > #full_raw or
+        #full_raw - consumed < early_commit_retained_raw_length then return end
     local commit = stable_proposal:sub(#state.committed_text + 1)
     if #utf_chars(commit) < 1 or #live_raw < 3 then return end
     state.committed_text = stable_proposal
@@ -1132,6 +2022,7 @@ local function try_early_commit(env)
     state.stable = 0
     state.evidence_raw = ""
     state.history = {}
+    state.continuation_after_auto_commit = true
     env.engine:commit_text(commit)
     context:clear()
     save_sentence_state(context, state, env)
@@ -1181,7 +2072,8 @@ local function processor(key_event, env)
     if ch then
         if not context:is_composing() and
             (state.committed_raw ~= "" or state.proposal ~= "" or
-             state.evidence_raw ~= "" or state.suspended) then
+             state.evidence_raw ~= "" or state.suspended or
+             state.continuation_after_auto_commit) then
             reset_sentence_state(context, env)
             state = sentence_state(context, env)
         end
@@ -1202,7 +2094,16 @@ local function processor(key_event, env)
             end
             return 1
         end
+        local is_letter = ch:match("^[a-z]$") ~= nil
+        local full_before = state.committed_raw .. (context.input or "")
+        if not is_letter then
+            state.empty_code_pending = nil
+            save_transient_state(context, state, env)
+        end
         context:push_input(ch)
+        if is_letter and try_empty_code_commit(env, state, full_before, ch) then
+            return 1
+        end
         try_early_commit(env)
         return 1
     end
@@ -1225,6 +2126,7 @@ local function processor(key_event, env)
         state.stable = 0
         state.evidence_raw = ""
         state.history = {}
+        state.empty_code_pending = nil
         save_transient_state(context, state, env)
         return 2
     end
@@ -1235,6 +2137,7 @@ local function processor(key_event, env)
         state.evidence_raw = ""
         state.history = {}
         state.suspended = true
+        state.empty_code_pending = nil
         save_transient_state(context, state, env)
         return 2
     end
@@ -1250,14 +2153,18 @@ end
 
 local function translator(input, seg, env)
     local context = env.engine.context
-    local committed_text = context:get_property(state_keys.committed_text) or ""
-    local committed_raw = context:get_property(state_keys.committed_raw) or ""
+    local state = sentence_state(context, env)
+    local committed_text = state.committed_text
+    local committed_raw = state.committed_raw
     local raw = committed_raw .. input
     local results = decode(raw)
     local yielded = 0
     for i = 1, #results do
         local item = results[i]
-        if committed_text == "" or item.text:sub(1, #committed_text) == committed_text then
+        if implicit_rank_allowed(
+                item, raw, state.continuation_after_auto_commit) and
+            (committed_text == "" or
+             item.text:sub(1, #committed_text) == committed_text) then
             local text = committed_text == "" and item.text or item.text:sub(#committed_text + 1)
             local preedit = committed_raw == "" and item.segmented or
                 trim_segmented_after_raw_prefix(item.segmented, #committed_raw)
@@ -1278,6 +2185,7 @@ M.decode_full = decode_full
 M.reset_decode_cache = reset_decode_cache
 M.results_equal = results_equal
 M.model_status = model_status
+M.load_ngram_model = kn_reader.load
 M.supplement_status = function()
     return {
         path = supplement_matcher.path,
@@ -1288,6 +2196,22 @@ end
 M.find_raw_length_for_text = find_raw_length_for_text
 M.confidence_proposal = confidence_proposal
 M.required_early_commit_history = required_early_commit_history
+M.constrain_early_commit_boundary = constrain_early_commit_boundary
+M.performance_status = function()
+    return {
+        current = {
+            decode_calls = performance.decode_calls,
+            decode_total_ms = performance.decode_total_ms,
+            decode_max_ms = performance.decode_max_ms,
+            page_misses = performance.page_misses,
+            page_bytes = performance.page_bytes,
+            early_evidence_builds = performance.early_evidence_builds,
+            isolation_hits = performance.isolation_hits,
+            isolation_misses = performance.isolation_misses
+        },
+        last = performance.last
+    }
+end
 M.processor = processor
 M.translator = translator
 return M

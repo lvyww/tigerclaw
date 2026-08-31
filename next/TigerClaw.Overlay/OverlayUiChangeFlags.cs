@@ -11,6 +11,7 @@ namespace TigerClaw.Overlay
         Style = 4,
         Position = 8,
         Sound = 16,
-        All = Status | Content | Style | Position | Sound
+        CandidateAnchor = 32,
+        All = Status | Content | Style | Position | Sound | CandidateAnchor
     }
 }

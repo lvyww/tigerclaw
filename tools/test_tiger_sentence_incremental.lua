@@ -48,40 +48,31 @@ local function fail(message)
     os.exit(1)
 end
 
-local base_lexicon = package.loaded["tiger_sentence_lexicon"]
-if not base_lexicon or not base_lexicon.codes.ldac or
-    base_lexicon.codes.ldac[1].t ~= "燕" then
-    fail("generated lexicon did not keep 燕 under preferred code ldac")
+local data = package.loaded["tiger_sentence_data"]
+if not data or not data.codes.ldac or data.codes.ldac[1].t ~= "燕" then
+    fail("generated data module did not keep 燕 under preferred code ldac")
 end
-local shipped_custom = package.loaded["tiger_sentence_custom"]
-local previous_custom_preload = package.preload["tiger_sentence_custom"]
-package.loaded["tiger_sentence_lexicon"] = nil
-package.loaded["tiger_sentence_custom"] = nil
-package.preload["tiger_sentence_custom"] = function()
-    return {ldac = {}, zzzz = {"自定义词", {t="第二候选", r=7}}}
+if not data.character_ranks or data.character_ranks["的"] ~= 1 then
+    fail("generated data module did not include character ranks")
 end
-local overlay_lexicon = require("tiger_sentence_lexicon")
-if overlay_lexicon.codes.ldac ~= nil or
-    not overlay_lexicon.codes.zzzz or
-    overlay_lexicon.codes.zzzz[1].t ~= "自定义词" or
-    overlay_lexicon.codes.zzzz[1].r ~= 1 or
-    overlay_lexicon.codes.zzzz[2].t ~= "第二候选" or
-    overlay_lexicon.codes.zzzz[2].r ~= 7 then
-    fail("tiger_sentence_custom.lua override was not applied")
+print("OK  single generated code-data module loaded")
+
+sentence.reset_decode_cache()
+local standalone_rl = sentence.decode("rl")
+local has_duifang = false
+for i = 1, #standalone_rl do
+    if standalone_rl[i].text == "对方" then has_duifang = true end
 end
-package.preload["tiger_sentence_custom"] = function()
-    error("module 'tiger_sentence_custom' not found")
+if not has_duifang then
+    fail("standalone single-edge rl did not expose its non-first candidate")
 end
-package.loaded["tiger_sentence_lexicon"] = nil
-package.loaded["tiger_sentence_custom"] = nil
-local missing_custom = require("tiger_sentence_lexicon")
-if not missing_custom.codes.ldac or missing_custom.codes.ldac[1].t ~= "燕" then
-    fail("missing tiger_sentence_custom.lua should keep generated lexicon")
+local segmented_rl = sentence.decode("rlrl")
+for i = 1, #segmented_rl do
+    if segmented_rl[i].text == "对方对方" then
+        fail("segmented rlrl reused an implicit non-first rank")
+    end
 end
-package.preload["tiger_sentence_custom"] = previous_custom_preload
-package.loaded["tiger_sentence_custom"] = shipped_custom
-package.loaded["tiger_sentence_lexicon"] = base_lexicon
-print("OK  sharded lexicon and custom-code overlay loaded")
+print("OK  implicit non-first ranks are limited to one whole-input edge")
 
 local function check_equal(label, incremental, full)
     if not sentence.results_equal(incremental, full) then
@@ -214,8 +205,8 @@ check_equal(
     "conditioned early evidence",
     conditioned,
     sentence.decode_full("ueot", true, "的"))
-if (conditioned.early_commit_evidence or {}).proposal ~= "的" then
-    fail("conditioned early-commit evidence did not retain 的")
+if (conditioned.early_commit_evidence or {}).proposal ~= "的是" then
+    fail("conditioned early-commit evidence did not retain the committed prefix")
 end
 print("OK  early-commit evidence is conditioned on committed text")
 
@@ -223,19 +214,19 @@ local proposal, proposal_share = sentence.confidence_proposal({
     { text = "甲乙丙", score = 0 },
     { text = "甲丁戊", score = -10 }
 }, 0.995)
-if proposal ~= "甲乙" then
-    fail("early-commit proposal did not retain the final candidate character: " .. proposal)
+if proposal ~= "甲乙丙" then
+    fail("early-commit confidence did not allow the complete candidate: " .. proposal)
 end
 if proposal_share < 0.995 or proposal_share >= 0.99999 then
     fail("early-commit proposal returned an unexpected confidence share")
 end
-print("OK  early-commit proposal retains one character")
+print("OK  early-commit confidence may cover the complete candidate")
 
 local strong_proposal, strong_share = sentence.confidence_proposal({
     { text = "甲乙丙", score = 0 },
     { text = "甲丁戊", score = -20 }
 }, 0.995)
-if strong_proposal ~= "甲乙" or strong_share < 0.99999 then
+if strong_proposal ~= "甲乙丙" or strong_share < 0.99999 then
     fail("strong early-commit evidence was not identified")
 end
 if sentence.required_early_commit_history({
@@ -251,6 +242,17 @@ if sentence.required_early_commit_history({
     fail("a weak generation did not retain the three-key window")
 end
 print("OK  early-commit observation window adapts between two and three keys")
+
+local boundary_history = {
+    { raw_lengths = { ["甲"] = 2, ["甲乙"] = 4 } },
+    { raw_lengths = { ["甲"] = 2, ["甲乙"] = 4 } }
+}
+local bounded_proposal, bounded_raw = sentence.constrain_early_commit_boundary(
+    boundary_history, "甲乙", "", "abcde", 2)
+if bounded_proposal ~= "甲" or bounded_raw ~= 2 then
+    fail("early commit did not retain at least three decoded raw codes")
+end
+print("OK  early commit retains at least three decoded raw codes")
 
 local function fake_environment(early_commit)
     local properties = {}
@@ -284,6 +286,38 @@ local function fake_key(repr)
     function key:super() return false end
     return key
 end
+
+local env_empty, context_empty, _, commits_empty = fake_environment(false)
+sentence.processor(fake_key("v"), env_empty)
+sentence.processor(fake_key("p"), env_empty)
+if #commits_empty ~= 0 or context_empty.input ~= "vp" then
+    fail("empty-code auto commit fired before the unique code became empty")
+end
+sentence.processor(fake_key("a"), env_empty)
+if #commits_empty ~= 1 or commits_empty[1] ~= "刘" or
+    context_empty.input ~= "a" then
+    fail("empty-code auto commit did not commit 刘 and retain the new code")
+end
+print("OK  empty-code auto commit retains the newly typed code")
+if not env_empty._tiger_sentence_transient.continuation_after_auto_commit then
+    fail("empty-code auto commit did not mark the retained composition as continuation")
+end
+
+context_empty.input = "rl"
+local yielded = {}
+local old_candidate, old_yield = Candidate, yield
+Candidate = function(_, _, _, text, _)
+    return { text = text }
+end
+yield = function(candidate)
+    yielded[#yielded + 1] = candidate.text
+end
+sentence.translator("rl", { start = 0, _end = 2 }, env_empty)
+Candidate, yield = old_candidate, old_yield
+if #yielded ~= 1 or yielded[1] ~= "了" then
+    fail("automatic-commit continuation rl exposed an implicit non-first candidate")
+end
+print("OK  automatic-commit continuation uses first ranks only")
 
 local early_sample = "jaefmonyftuderlmljgbmnvs"
 local env_off, context_off, _, commits_off = fake_environment(false)
@@ -375,6 +409,16 @@ local back = sentence.decode("ueot")
 check_equal("backspace selector", back, sentence.decode_full("ueot"))
 local more = sentence.decode("ueottu")
 check_equal("retype after selector", more, sentence.decode_full("ueottu"))
+
+local performance = sentence.performance_status()
+if not performance.current or
+    type(performance.current.decode_calls) ~= "number" or
+    performance.current.decode_calls <= 0 or
+    type(performance.current.decode_total_ms) ~= "number" or
+    performance.current.decode_total_ms < 0 then
+    fail("composition performance counters were not updated")
+end
+print("OK  composition performance counters are available")
 
 -- timing: incremental last-key vs full
 local warmup = long_code:sub(1, #long_code - 1)
