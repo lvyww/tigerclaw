@@ -2229,6 +2229,16 @@ namespace TigerClaw.Core
 
             SentenceCandidate[] candidates = _sentenceDecodeResult.Candidates ??
                 Array.Empty<SentenceCandidate>();
+            if (!_sentenceRawBuffer.ToString().Any(character =>
+                    char.IsDigit(character) || character == ';' || character == '\''))
+            {
+                // Whole-input non-first ranks are visible for explicit
+                // selection, but are not legal implicit sentence segments
+                // after the appended letter makes that edge dead.
+                candidates = candidates
+                    .Where(candidate => candidate != null && candidate.MaxLexiconRank <= 1)
+                    .ToArray();
+            }
             if (candidates.Length != 1 ||
                 string.IsNullOrEmpty(candidates[0]?.Text) ||
                 !candidates[0].Text.StartsWith(_sentenceCommittedText, StringComparison.Ordinal) ||
@@ -2290,8 +2300,22 @@ namespace TigerClaw.Core
             }
 
             string commit = pending.CandidateText.Substring(pending.CommittedText.Length);
-            string retainedRaw = fullRaw.Substring(pending.BaseRawLength);
-            RestartSentenceInput(retainedRaw, continuationAfterAutoCommit: true);
+            // Keep the complete raw sentence and the committed text as decoder
+            // context. Restarting from only the retained suffix loses the
+            // preceding words, which can make early commit stabilize a locally
+            // plausible but globally wrong continuation.
+            _sentenceCommittedText = pending.CandidateText;
+            _sentenceCommittedRawLength = pending.BaseRawLength;
+            _sentenceLastAutoCommitRawLength = pending.BaseRawLength;
+            _sentenceContinuationAfterAutoCommit = true;
+            _sentenceAutoCommitSuspended = false;
+            _sentenceNeuralAcceptedRaw = string.Empty;
+            _sentenceNeuralTopText = string.Empty;
+            ResetSentenceAutoCommitEvidence();
+            ResetSentenceEmptyCodePending();
+            _sentenceDecodeResult = FilterSentenceDecodeResultForCommittedPrefix(
+                _sentenceDecodeResult);
+            RebuildSentenceInput();
             return commit;
         }
 

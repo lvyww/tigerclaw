@@ -27,8 +27,8 @@ engine:
   processors:
     - ascii_composer
     - recognizer
-    - key_binder
     - lua_processor@tiger_sentence_processor
+    - key_binder
     - speller
     - punctuator
     - selector

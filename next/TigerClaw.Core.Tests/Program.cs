@@ -167,6 +167,7 @@ namespace TigerClaw.Core.Tests
                 SentenceEnginePassesCtrlNumberShortcut();
                 SentenceEngineCommitsSmartQuoteAfterCandidate();
                 SentenceEmptyCodeAutoCommitDefaultsOnAndRetainsNewKey();
+                SentenceEmptyCodeAutoCommitPreservesSentenceContext();
                 SentenceEmptyCodeAutoCommitHonorsDisabledAndCandidateGuards();
                 SentenceEmptyCodeAutoCommitDefersCompletableLastSegment();
                 SentenceEmptyCodeAutoCommitWorksWithAsyncDecode();
@@ -509,6 +510,7 @@ namespace TigerClaw.Core.Tests
                 SentenceCandidate candidate = result.Candidates[indexValue];
                 Console.WriteLine((indexValue + 1) + "\t" + candidate.Text + "\t" + candidate.FinalScore.ToString("F4"));
             }
+
             return result.Candidates.Length > 0 ? 0 : 2;
         }
 
@@ -3600,7 +3602,7 @@ namespace TigerClaw.Core.Tests
             var engine = new InputMethodEngine(state, CreateSentenceDecoder(new Dictionary<string, List<string>>
             {
                 ["ab"] = new List<string> { "甲" },
-                ["c"] = new List<string> { "乙" }
+                ["cd"] = new List<string> { "乙" }
             }));
 
             TypeLetters(engine, "ab");
@@ -3610,8 +3612,43 @@ namespace TigerClaw.Core.Tests
             EngineUiSnapshot snapshot = engine.GetUiSnapshot(5);
             Equal("c", snapshot.ActiveInputCode,
                 nameof(SentenceEmptyCodeAutoCommitDefaultsOnAndRetainsNewKey) + ".retained_code");
+            True(snapshot.Candidates.Length == 0,
+                nameof(SentenceEmptyCodeAutoCommitDefaultsOnAndRetainsNewKey) + ".incomplete_tail");
+            Press(engine, 0x44);
+            snapshot = engine.GetUiSnapshot(5);
             True(snapshot.Candidates.Length == 1 && snapshot.Candidates[0] == "乙",
-                nameof(SentenceEmptyCodeAutoCommitDefaultsOnAndRetainsNewKey) + ".retained_candidate");
+                nameof(SentenceEmptyCodeAutoCommitDefaultsOnAndRetainsNewKey) + ".continued_candidate");
+        }
+
+        private static void SentenceEmptyCodeAutoCommitPreservesSentenceContext()
+        {
+            var state = new CoreRuntimeState();
+            state.TrySetConfigValue("整句输入", "是", out _, out _);
+            state.TrySetConfigValue("整句自动提前上屏", "是", out _, out _);
+            var engine = new InputMethodEngine(state, CreateSentenceDecoder(
+                new Dictionary<string, List<string>>
+                {
+                    ["ab"] = new List<string> { "甲" },
+                    ["cd"] = new List<string> { "乙" }
+                }));
+
+            TypeLetters(engine, "ab");
+            Equal("甲", Press(engine, 0x43).TextToOutput,
+                nameof(SentenceEmptyCodeAutoCommitPreservesSentenceContext) + ".commit");
+            EngineDifferentialSnapshot committed = engine.GetDifferentialSnapshot(5);
+            Equal("abc", committed.RawInput,
+                nameof(SentenceEmptyCodeAutoCommitPreservesSentenceContext) + ".full_raw");
+            Equal("甲", committed.SentenceCommittedText,
+                nameof(SentenceEmptyCodeAutoCommitPreservesSentenceContext) + ".committed_text");
+            True(committed.SentenceCommittedRawLength == 2,
+                nameof(SentenceEmptyCodeAutoCommitPreservesSentenceContext) + ".raw_boundary");
+            Equal("c", committed.Ui.ActiveInputCode,
+                nameof(SentenceEmptyCodeAutoCommitPreservesSentenceContext) + ".visible_tail");
+
+            Press(engine, 0x44);
+            EngineUiSnapshot continued = engine.GetUiSnapshot(5);
+            True(continued.Candidates.Length > 0 && continued.Candidates[0] == "乙",
+                nameof(SentenceEmptyCodeAutoCommitPreservesSentenceContext) + ".continued_candidate");
         }
 
         private static void SentenceEmptyCodeAutoCommitHonorsDisabledAndCandidateGuards()
@@ -3640,8 +3677,23 @@ namespace TigerClaw.Core.Tests
                     ["ab"] = new List<string> { "甲", "乙" }
                 }));
             TypeLetters(multiple, "ab");
-            Equal(null, Press(multiple, 0x43).TextToOutput,
-                nameof(SentenceEmptyCodeAutoCommitHonorsDisabledAndCandidateGuards) + ".not_unique");
+            Equal("甲", Press(multiple, 0x43).TextToOutput,
+                nameof(SentenceEmptyCodeAutoCommitHonorsDisabledAndCandidateGuards) +
+                ".implicit_nonfirst_does_not_block");
+
+            var ambiguousState = new CoreRuntimeState();
+            ambiguousState.TrySetConfigValue("整句输入", "是", out _, out _);
+            var ambiguous = new InputMethodEngine(ambiguousState, CreateSentenceDecoder(
+                new Dictionary<string, List<string>>
+                {
+                    ["ab"] = new List<string> { "甲" },
+                    ["cd"] = new List<string> { "乙" },
+                    ["abcd"] = new List<string> { "整" }
+                }));
+            TypeLetters(ambiguous, "abcd");
+            Equal(null, Press(ambiguous, 0x45).TextToOutput,
+                nameof(SentenceEmptyCodeAutoCommitHonorsDisabledAndCandidateGuards) +
+                ".primary_path_ambiguity_blocks");
 
             var nonemptyState = new CoreRuntimeState();
             nonemptyState.TrySetConfigValue("整句输入", "是", out _, out _);

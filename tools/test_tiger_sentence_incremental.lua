@@ -74,6 +74,12 @@ for i = 1, #segmented_rl do
 end
 print("OK  implicit non-first ranks are limited to one whole-input edge")
 
+local captured_rl = sentence.capture_empty_code_candidate("rl", "", false)
+if not captured_rl or captured_rl.candidate_text ~= "了" then
+    fail("implicit non-first rl candidate blocked empty-code primary candidate")
+end
+print("OK  implicit non-first ranks do not block empty-code auto commit")
+
 local function check_equal(label, incremental, full)
     if not sentence.results_equal(incremental, full) then
         fail(string.format(
@@ -270,11 +276,22 @@ local function fake_environment(early_commit)
     function context:is_composing() return self.input ~= "" end
     function context:push_input(value) self.input = self.input .. value end
     function context:clear() self.input = "" end
-    function context:has_menu() return false end
+    local menu = { count = 0 }
+    function menu:candidate_count() return self.count end
+    local segment = { selected_index = 0, menu = menu }
+    local composition = {}
+    function composition:empty() return menu.count == 0 end
+    function composition:back() return segment end
+    context.composition = composition
+    function context:has_menu() return menu.count > 0 end
+    function context:select(index)
+        segment.selected_index = index
+        return true
+    end
     function context:confirm_current_selection() end
     local engine = { context = context }
     function engine:commit_text(value) commits[#commits + 1] = value end
-    return { engine = engine }, context, properties, commits
+    return { engine = engine }, context, properties, commits, menu, segment
 end
 
 local function fake_key(repr)
@@ -287,7 +304,24 @@ local function fake_key(repr)
     return key
 end
 
-local env_empty, context_empty, _, commits_empty = fake_environment(false)
+local env_tab, context_tab, _, _, menu_tab, segment_tab = fake_environment(false)
+context_tab.input = "rl"
+menu_tab.count = 3
+if sentence.processor(fake_key("Tab"), env_tab) ~= 1 or segment_tab.selected_index ~= 1 then
+    fail("Tab did not select the next candidate")
+end
+sentence.processor(fake_key("Tab"), env_tab)
+sentence.processor(fake_key("Tab"), env_tab)
+if segment_tab.selected_index ~= 0 then
+    fail("Tab did not wrap from the last candidate to the first")
+end
+if sentence.processor(fake_key("ISO_Left_Tab"), env_tab) ~= 1 or
+    segment_tab.selected_index ~= 2 then
+    fail("Shift+Tab did not wrap from the first candidate to the last")
+end
+print("OK  Tab and Shift+Tab cycle sentence candidates")
+
+local env_empty, context_empty, properties_empty, commits_empty = fake_environment(false)
 sentence.processor(fake_key("v"), env_empty)
 sentence.processor(fake_key("p"), env_empty)
 if #commits_empty ~= 0 or context_empty.input ~= "vp" then
@@ -302,6 +336,11 @@ print("OK  empty-code auto commit retains the newly typed code")
 if not env_empty._tiger_sentence_transient.continuation_after_auto_commit then
     fail("empty-code auto commit did not mark the retained composition as continuation")
 end
+if properties_empty.tiger_sentence_committed_raw ~= "vp" or
+    properties_empty.tiger_sentence_committed_text ~= "刘" then
+    fail("empty-code auto commit discarded the committed sentence context")
+end
+print("OK  empty-code auto commit preserves committed raw and text context")
 
 context_empty.input = "rl"
 local yielded = {}

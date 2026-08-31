@@ -76,10 +76,9 @@ python3 tools/export_tiger_sentence_rime.py
 避免连续按键时反复扫描和查询相同字串。缓存满后循环替换旧项，不会随使用时间
 无限增长。
 
-Lua 按一次 composition 汇总解码次数、模型缺页、读取字节数、提前上屏证据构建次数
-和孤立惩罚缓存命中。只有单次解码达到 8 ms 或一次 composition 累计达到 30 ms 时，
-才写一条 `tiger_sentence slow composition` 警告；日志不包含用户输入、编码或候选文本。
-调试时也可从模块的 `performance_status()` 查看当前及上一次汇总。
+Lua 按一次 composition 在内存中汇总解码次数、模型缺页、读取字节数、提前上屏
+证据构建次数和孤立惩罚缓存命中，不自动写入日志。调试时可从模块的
+`performance_status()` 查看当前及上一次汇总。
 
 ## 模型
 

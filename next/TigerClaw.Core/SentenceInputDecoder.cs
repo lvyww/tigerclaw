@@ -331,8 +331,6 @@ namespace TigerClaw.Core
         private const string Bos = "\x02";
         private const string Eos = "\x03";
         private const int IsolationPenaltyCacheCapacity = 8192;
-        private const double SlowDecodeMilliseconds = 8.0;
-        private const double SlowCompositionMilliseconds = 30.0;
         private readonly SentenceLexiconIndex _lexicon;
         private readonly ISentenceLanguageModel _languageModel;
         private readonly int _beamWidth;
@@ -1190,18 +1188,6 @@ namespace TigerClaw.Core
 
             SentenceDecodePerformanceSample sample = CreatePerformanceSample();
             _lastPerformanceSample = sample;
-            if (sample.DecodeMaximumMilliseconds >= SlowDecodeMilliseconds ||
-                sample.DecodeTotalMilliseconds >= SlowCompositionMilliseconds)
-            {
-                Trace.TraceWarning(
-                    "TigerClaw sentence slow composition: calls={0} total={1:F2}ms " +
-                    "max={2:F2}ms isolation={3}/{4}",
-                    sample.DecodeCalls,
-                    sample.DecodeTotalMilliseconds,
-                    sample.DecodeMaximumMilliseconds,
-                    sample.IsolationCacheHits,
-                    sample.IsolationCacheMisses);
-            }
 
             _performanceDecodeCalls = 0;
             _performanceDecodeTotalTicks = 0;

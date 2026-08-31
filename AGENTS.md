@@ -102,14 +102,26 @@ UI state:
   evidence. Keep the complete unstable suffix and at least three uncommitted raw
   code characters from the completed decode generation; commits must still land
   on a stable lexicon boundary.
+- Known unresolved early-commit issue: the proposal does not yet verify that
+  competing candidates agree on a closed segmentation boundary. In schema
+  `test整句`, `uriczwxmjou` can therefore commit the transient `可佛...` path
+  instead of waiting for the final `可民间夫妻`: `ur/icz/...` crosses the
+  proposed boundary differently from `ur/ic/zw/...`. Retaining three raw codes
+  and repeated confidence evidence do not prevent this case. A future fix
+  should clamp proposals to a raw/text boundary shared by the visible
+  early-evidence candidates and measure the resulting early-commit rate; do not
+  conflate this with empty-code automatic commit.
 - `整句空码自动顶屏` defaults on and is independent of probabilistic early
-  commit. When the current completed generation has exactly one visible
+  commit. When the current completed generation has exactly one group-eligible
   candidate and appending an ordinary letter leaves no complete lexicon path,
   first check whether the selected last lexicon segment is still a proper code
-  prefix. Defer while it can grow; if the actual extension goes dead, commit the
-  saved candidate's uncommitted suffix, reset the old sentence, and retain every
-  appended letter as the next composition. Its key-path check must stay a
-  lightweight lexicon-path test rather than a synchronous n-gram/Beam decode.
+  prefix. Whole-input non-first ranks shown for manual selection do not create
+  implicit group ambiguity unless a rank selector is present. Defer while the
+  segment can grow; if the actual extension goes dead, commit the saved
+  candidate's uncommitted suffix, preserve the committed sentence context, and
+  retain every appended letter as the next composition. Its key-path check must
+  stay a lightweight lexicon-path test rather than a synchronous n-gram/Beam
+  decode.
 - Early-commit confidence/mass aggregation on the full-code path (both
   `SentenceInputDecoder.cs` and the Rime Lua port) must run over the already
   narrowed visible/top-candidate list, not the full beam pool. Widening to the

@@ -9,8 +9,6 @@ local MOBILE_HEADER_SIZE = 104
 local MOBILE_CACHE_BYTES = 8 * 1024 * 1024
 local CONTEXT_CACHE_ENTRIES = 16384
 local ISOLATION_CACHE_ENTRIES = 8192
-local SLOW_DECODE_MS = 8.0
-local SLOW_COMPOSITION_MS = 30.0
 
 local performance = {
     decode_calls = 0,
@@ -44,21 +42,6 @@ local function finish_performance_sample()
         isolation_misses = performance.isolation_misses
     }
     performance.last = sample
-    if (sample.decode_max_ms >= SLOW_DECODE_MS or
-        sample.decode_total_ms >= SLOW_COMPOSITION_MS) and
-        log and log.warning then
-        pcall(log.warning, string.format(
-            "tiger_sentence slow composition: calls=%d total=%.2fms max=%.2fms " ..
-            "pages=%d bytes=%d early=%d isolation=%d/%d",
-            sample.decode_calls,
-            sample.decode_total_ms,
-            sample.decode_max_ms,
-            sample.page_misses,
-            sample.page_bytes,
-            sample.early_evidence_builds,
-            sample.isolation_hits,
-            sample.isolation_misses))
-    end
     performance.decode_calls = 0
     performance.decode_total_ms = 0.0
     performance.decode_max_ms = 0.0
@@ -1811,9 +1794,12 @@ local function has_selection_suffix(raw)
     return raw and raw:find("[;'0-9]") ~= nil
 end
 
+local function group_rank_allowed(candidate, raw)
+    return has_selection_suffix(raw) or (candidate.max_rank or 1) <= 1
+end
+
 local function implicit_rank_allowed(candidate, raw, continuation_after_auto_commit)
-    return not continuation_after_auto_commit or has_selection_suffix(raw) or
-        (candidate.max_rank or 1) <= 1
+    return not continuation_after_auto_commit or group_rank_allowed(candidate, raw)
 end
 
 local function capture_empty_code_candidate(
@@ -1823,7 +1809,10 @@ local function capture_empty_code_candidate(
     local count = 0
     for i = 1, #decoded do
         local candidate = decoded[i]
-        if implicit_rank_allowed(candidate, full_raw, continuation_after_auto_commit) and
+        -- Whole-input non-first ranks are visible for explicit selection, but
+        -- are not legal implicit segments after the appended key makes the
+        -- edge dead. Do not count them as empty-code ambiguity.
+        if group_rank_allowed(candidate, full_raw) and
             candidate.text and candidate.text ~= "" and
             candidate.text:sub(1, #committed_text) == committed_text and
             #candidate.text > #committed_text then
@@ -1839,6 +1828,20 @@ local function capture_empty_code_candidate(
         end
     end
     return count == 1 and captured or nil
+end
+
+local function cycle_candidate(context, step)
+    if not context:has_menu() then return false end
+    local composition = context.composition
+    if not composition or composition:empty() then return false end
+    local segment = composition:back()
+    local menu = segment and segment.menu
+    if not menu then return false end
+    local count = menu:candidate_count()
+    if not count or count <= 0 then return false end
+    local selected = segment.selected_index or 0
+    context:select((selected + step) % count)
+    return true
 end
 
 local function reset_decode_cache_values()
@@ -1893,9 +1896,22 @@ local function try_empty_code_commit(env, state, full_before, appended_letter)
 
     local commit = pending.candidate_text:sub(#pending.committed_text + 1)
     local retained_raw = full_raw:sub(pending.base_raw_length + 1)
+    -- Preserve the committed prefix as decoder context. Restarting from only
+    -- retained_raw makes the following sentence decode locally and can
+    -- stabilize a plausible continuation that disagrees with the text which
+    -- has already been committed.
+    state.committed_text = pending.candidate_text
+    state.committed_raw = full_raw:sub(1, pending.base_raw_length)
+    state.proposal = ""
+    state.stable = 0
+    state.evidence_raw = ""
+    state.history = {}
+    state.suspended = false
+    state.empty_code_pending = nil
+    state.continuation_after_auto_commit = true
     env.engine:commit_text(commit)
     context:clear()
-    reset_sentence_state(context, env, true)
+    save_sentence_state(context, state, env)
     reset_decode_cache_values()
     if retained_raw ~= "" then context:push_input(retained_raw) end
     return true
@@ -2130,8 +2146,18 @@ local function processor(key_event, env)
         save_transient_state(context, state, env)
         return 2
     end
-    if repr == "Up" or repr == "Down" or repr == "Page_Up" or repr == "Page_Down" or
-        repr == "Tab" or repr == "ISO_Left_Tab" then
+    if repr == "Tab" or repr == "ISO_Left_Tab" or repr == "Shift+Tab" then
+        state.proposal = ""
+        state.stable = 0
+        state.evidence_raw = ""
+        state.history = {}
+        state.suspended = true
+        state.empty_code_pending = nil
+        save_transient_state(context, state, env)
+        if cycle_candidate(context, repr == "Tab" and 1 or -1) then return 1 end
+        return 2
+    end
+    if repr == "Up" or repr == "Down" or repr == "Page_Up" or repr == "Page_Down" then
         state.proposal = ""
         state.stable = 0
         state.evidence_raw = ""
@@ -2197,6 +2223,7 @@ M.find_raw_length_for_text = find_raw_length_for_text
 M.confidence_proposal = confidence_proposal
 M.required_early_commit_history = required_early_commit_history
 M.constrain_early_commit_boundary = constrain_early_commit_boundary
+M.capture_empty_code_candidate = capture_empty_code_candidate
 M.performance_status = function()
     return {
         current = {
