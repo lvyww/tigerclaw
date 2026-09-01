@@ -64,6 +64,9 @@ namespace TigerClaw.Core
         private const int VK_M = 0x4D;
         private const int VK_Z = 0x5A;
         private const double SentenceEmittedCharacterReward = 2.0;
+        private const double SentenceNeuralWeight = 0.84;
+        private const double SentenceShortNeuralWeight = 0.30;
+        private const int SentenceShortNeuralMaximumLength = 2;
         private const double SentenceEarlyCommitMinimumShare = 0.995;
         private const double SentenceEarlyCommitStrongShare = 0.99999;
         private const int SentenceEarlyCommitRetainedRawLength = 3;
@@ -347,9 +350,13 @@ namespace TigerClaw.Core
                     return false;
                 }
 
+                double neuralWeight = GetSentenceNeuralWeight(candidates, rerankCount);
                 for (int index = 0; index < rerankCount; index++)
                 {
-                    candidates[index].FinalScore = candidates[index].BaseScore + 0.84 * scores[index];
+                    candidates[index].FinalScore = CombineSentenceNeuralScore(
+                        candidates[index].BaseScore,
+                        scores[index],
+                        neuralWeight);
                 }
                 Array.Sort(
                     candidates,
@@ -361,6 +368,46 @@ namespace TigerClaw.Core
                 _sentenceSelectedIndex = 0;
                 return true;
             }
+        }
+
+        private static double GetSentenceNeuralWeight(
+            SentenceCandidate[] candidates,
+            int candidateCount)
+        {
+            SentenceCandidate baseTop = null;
+            for (int index = 0; index < candidateCount; index++)
+            {
+                SentenceCandidate candidate = candidates[index];
+                if (baseTop == null ||
+                    candidate.MaxLexiconRank < baseTop.MaxLexiconRank ||
+                    (candidate.MaxLexiconRank == baseTop.MaxLexiconRank &&
+                     (candidate.BaseScore > baseTop.BaseScore ||
+                      (candidate.BaseScore == baseTop.BaseScore &&
+                       string.CompareOrdinal(candidate.Text, baseTop.Text) < 0))))
+                {
+                    baseTop = candidate;
+                }
+            }
+
+            int baseTopLength = baseTop == null || string.IsNullOrEmpty(baseTop.Text)
+                ? 0
+                : new StringInfo(baseTop.Text).LengthInTextElements;
+            return GetSentenceNeuralWeight(baseTopLength);
+        }
+
+        internal static double GetSentenceNeuralWeight(int baseTopLength)
+        {
+            return baseTopLength > 0 && baseTopLength <= SentenceShortNeuralMaximumLength
+                ? SentenceShortNeuralWeight
+                : SentenceNeuralWeight;
+        }
+
+        internal static double CombineSentenceNeuralScore(
+            double baseScore,
+            double neuralScore,
+            double neuralWeight)
+        {
+            return baseScore + neuralWeight * neuralScore;
         }
 
         public bool IsChinese

@@ -192,6 +192,7 @@ namespace TigerClaw.Core.Tests
                 SentenceAutoCommitContinuationUsesFirstRanksOnly();
                 EngineLightweightKeyStateMatchesUiSnapshot();
                 SentenceEngineRejectsStaleNeuralResult();
+                SentenceNeuralWeightPreservesShortNgramWinner();
                 SentenceEngineReranksOnlyTopFive();
                 SentenceAutoCommitRequiresConsecutiveAppendEvidence();
                 SentenceAutoCommitSuspendsAfterManualNavigation();
@@ -3508,6 +3509,27 @@ namespace TigerClaw.Core.Tests
                 string.Equals(originalSecond, "丙", StringComparison.Ordinal) ? "abcd" : "ab cd",
                 reranked.ActiveInputCode,
                 nameof(SentenceEngineRejectsStaleNeuralResult));
+        }
+
+        private static void SentenceNeuralWeightPreservesShortNgramWinner()
+        {
+            double shortWeight = InputMethodEngine.GetSentenceNeuralWeight(2);
+            double expectedScore = InputMethodEngine.CombineSentenceNeuralScore(
+                -10.0606,
+                -51.20660248470333,
+                shortWeight);
+            double competingScore = InputMethodEngine.CombineSentenceNeuralScore(
+                -23.2096,
+                -32.833989807356645,
+                shortWeight);
+
+            True(
+                expectedScore > competingScore,
+                nameof(SentenceNeuralWeightPreservesShortNgramWinner));
+            True(
+                Math.Abs(shortWeight - 0.30) < 1e-9 &&
+                Math.Abs(InputMethodEngine.GetSentenceNeuralWeight(3) - 0.84) < 1e-9,
+                nameof(SentenceNeuralWeightPreservesShortNgramWinner) + ".dynamic_weight");
         }
 
         private static void SentenceEngineReranksOnlyTopFive()
