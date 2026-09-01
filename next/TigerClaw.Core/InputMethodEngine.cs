@@ -69,13 +69,13 @@ namespace TigerClaw.Core
         private const int SentenceEarlyCommitRetainedRawLength = 3;
         private const int SentenceEarlyCommitMaximumNeutralGap = 3;
 
-        // Internal experiment controls keep release behavior fixed while the
-        // end-to-end evaluator compares policy variants.
+        // Internal controls let the end-to-end evaluator compare policy
+        // variants without exposing experimental switches in user config.
         internal int SentenceEarlyCommitRequiredEvidenceCount { get; set; } = 3;
         internal int SentenceEarlyCommitRequiredStrongCount { get; set; } = 2;
         internal int SentenceEarlyCommitMinimumRetainedRawLength { get; set; } =
             SentenceEarlyCommitRetainedRawLength;
-        internal bool SentenceEarlyCommitCountMergedTailEvidence { get; set; }
+        internal bool SentenceEarlyCommitCountMergedTailEvidence { get; set; } = true;
 
         private sealed class SentenceAutoCommitTracker
         {
@@ -2448,9 +2448,9 @@ namespace TigerClaw.Core
             }
 
             var qualifying = new Dictionary<string, SentencePrefixEvidence>(StringComparer.Ordinal);
-            // Any generation that needed dropped incomplete-tail states is
-            // comparison-only. A simultaneously visible complete path does
-            // not make the latest key an independent evidence generation.
+            // Dropped incomplete-tail states still participate in comparison.
+            // The release policy also lets their supported closed boundaries
+            // count as evidence; the evaluator can restore comparison-only mode.
             bool mergedIncompleteTail = earlyCommitEvidence.MergedIncompleteTail;
             bool comparisonOnly = mergedIncompleteTail &&
                 !SentenceEarlyCommitCountMergedTailEvidence;

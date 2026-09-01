@@ -12,8 +12,10 @@ from typing import Dict, Iterable, List
 ARCHIVE_ROOT = Path("/mnt/c/Archive/tigerclaw_sentence_ml/baseline")
 DEFAULT_SHORT = ARCHIVE_ROOT / "tiger-sentence-short-1-6-cases.json"
 DEFAULT_LONG = ARCHIVE_ROOT / "tiger-sentence-validation-2000-cases.json"
+DEFAULT_HELDOUT = ARCHIVE_ROOT / "tiger-sentence-heldout-10000-cases.json"
 DEFAULT_OUTPUT = ARCHIVE_ROOT / "tiger-sentence-early-commit-eval-v1.json"
 PER_BUCKET = 600
+LARGE_BUCKETS = (1400, 1500, 2000, 2500, 2597)
 REGRESSIONS = (
     {
         "text": "新人上午来面试",
@@ -51,12 +53,18 @@ def take(
     low: int,
     high: int | None,
     per_bucket: int,
+    excluded: set[tuple[str, str]] | None = None,
 ) -> List[Dict[str, str]]:
     selected = []
+    seen = set() if excluded is None else set(excluded)
     for item in cases:
         length = len(item["code"])
         if length < low or (high is not None and length > high):
             continue
+        key = (item["text"], item["code"])
+        if key in seen:
+            continue
+        seen.add(key)
         selected.append(item)
         if len(selected) == per_bucket:
             break
@@ -69,8 +77,10 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--short", type=Path, default=DEFAULT_SHORT)
     parser.add_argument("--long", type=Path, default=DEFAULT_LONG)
+    parser.add_argument("--heldout", type=Path, default=DEFAULT_HELDOUT)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--per-bucket", type=int, default=PER_BUCKET)
+    parser.add_argument("--large", action="store_true")
     args = parser.parse_args()
 
     if args.per_bucket <= 0:
@@ -78,14 +88,24 @@ def main() -> int:
 
     short_cases = load_cases(args.short)
     long_cases = load_cases(args.long)
-    combined = (
-        take(short_cases, 5, 8, args.per_bucket)
-        + take(short_cases, 9, 12, args.per_bucket)
-        + take(short_cases, 13, 18, args.per_bucket)
-        + take(long_cases, 19, 30, args.per_bucket)
-        + take(long_cases, 31, None, args.per_bucket)
-        + list(REGRESSIONS)
-    )
+    if args.large:
+        all_cases = short_cases + long_cases + load_cases(args.heldout)
+        regression_keys = {(item["text"], item["code"]) for item in REGRESSIONS}
+        ranges = ((5, 8), (9, 12), (13, 18), (19, 30), (31, None))
+        combined = list(REGRESSIONS)
+        for (low, high), bucket_size in zip(ranges, LARGE_BUCKETS):
+            combined.extend(
+                take(all_cases, low, high, bucket_size, excluded=regression_keys)
+            )
+    else:
+        combined = (
+            take(short_cases, 5, 8, args.per_bucket)
+            + take(short_cases, 9, 12, args.per_bucket)
+            + take(short_cases, 13, 18, args.per_bucket)
+            + take(long_cases, 19, 30, args.per_bucket)
+            + take(long_cases, 31, None, args.per_bucket)
+            + list(REGRESSIONS)
+        )
     unique: List[Dict[str, str]] = []
     seen = set()
     for item in combined:

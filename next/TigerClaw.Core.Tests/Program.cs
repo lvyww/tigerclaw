@@ -198,8 +198,8 @@ namespace TigerClaw.Core.Tests
                 SentenceAutoCommitRetainsAtLeastThreeRawCodes();
                 SentenceAutoCommitHonorsConfiguredMinRetainedRawLength();
                 SentenceEmptyCodeAutoCommitHonorsConfiguredMinRetainedRawLength();
-                SentenceAutoCommitNeutralTailDoesNotCountAsEvidence();
-                SentenceAutoCommitMergedTailDoesNotCountAsEvidence();
+                SentenceAutoCommitNeutralTailCountsMergedEvidence();
+                SentenceAutoCommitMergedTailCountsAsEvidence();
                 SentenceAutoCommitDoesNotCountMergedEvidenceAcrossLowConfidenceGap();
                 SentenceAutoCommitDroppedTailContradictsShorterCompetitor();
                 SentenceAutoCommitStopsBeforeExtendableSegment();
@@ -209,7 +209,7 @@ namespace TigerClaw.Core.Tests
                 SentencePrefixEvidenceWeightsBoundaryDisagreement();
                 SentencePrefixEvidenceKeepsRawBoundariesDistinct();
                 SentencePrefixEvidenceLookupRequiresExactRawBoundary();
-                SentenceAutoCommitRejectsAlternatingCompleteSegmentation();
+                SentenceAutoCommitAcceptsProbabilisticAlternatingSegmentation();
                 SentenceAutoCommitReplayPreservesOriginalCommit();
                 KeyReplayCacheReturnsOriginalResultWithCurrentSequence();
                 KeyResponsesDeclareExpectedKeyUp();
@@ -4087,7 +4087,7 @@ namespace TigerClaw.Core.Tests
                 nameof(SentenceEmptyCodeAutoCommitHonorsConfiguredMinRetainedRawLength) + ".retained");
         }
 
-        private static void SentenceAutoCommitNeutralTailDoesNotCountAsEvidence()
+        private static void SentenceAutoCommitNeutralTailCountsMergedEvidence()
         {
             var state = new CoreRuntimeState();
             state.TrySetConfigValue("整句输入", "是", out _, out _);
@@ -4102,18 +4102,13 @@ namespace TigerClaw.Core.Tests
                 }));
 
             TypeLetters(engine, "abcde");
-            Equal(null, Press(engine, 0x58).TextToOutput,
-                nameof(SentenceAutoCommitNeutralTailDoesNotCountAsEvidence) + ".one_raw");
-            Equal(null, Press(engine, 0x59).TextToOutput,
-                nameof(SentenceAutoCommitNeutralTailDoesNotCountAsEvidence) + ".two_raw");
-            KeyEngineResult result = Press(engine, 0x5A);
-            Equal("甲乙", result.TextToOutput,
-                nameof(SentenceAutoCommitNeutralTailDoesNotCountAsEvidence) + ".commit");
-            Equal("xyz", engine.GetUiSnapshot(5).ActiveInputCode.Replace(" ", string.Empty),
-                nameof(SentenceAutoCommitNeutralTailDoesNotCountAsEvidence) + ".three_raw_retained");
+            Equal("甲", Press(engine, 0x58).TextToOutput,
+                nameof(SentenceAutoCommitNeutralTailCountsMergedEvidence) + ".merged_counts");
+            Equal("cdex", engine.GetUiSnapshot(5).ActiveInputCode.Replace(" ", string.Empty),
+                nameof(SentenceAutoCommitNeutralTailCountsMergedEvidence) + ".three_raw_retained");
         }
 
-        private static void SentenceAutoCommitMergedTailDoesNotCountAsEvidence()
+        private static void SentenceAutoCommitMergedTailCountsAsEvidence()
         {
             var state = new CoreRuntimeState();
             state.TrySetConfigValue("整句输入", "是", out _, out _);
@@ -4129,10 +4124,10 @@ namespace TigerClaw.Core.Tests
                 }));
 
             TypeLetters(engine, "abcde");
-            Equal(null, Press(engine, 0x46).TextToOutput,
-                nameof(SentenceAutoCommitMergedTailDoesNotCountAsEvidence) + ".merged_not_counted");
-            Equal("甲", Press(engine, 0x47).TextToOutput,
-                nameof(SentenceAutoCommitMergedTailDoesNotCountAsEvidence) + ".next_complete_commits");
+            Equal("甲", Press(engine, 0x46).TextToOutput,
+                nameof(SentenceAutoCommitMergedTailCountsAsEvidence) + ".merged_counts");
+            Equal("cdef", engine.GetUiSnapshot(5).ActiveInputCode.Replace(" ", string.Empty),
+                nameof(SentenceAutoCommitMergedTailCountsAsEvidence) + ".retained");
         }
 
         private static void SentenceAutoCommitStopsBeforeExtendableSegment()
@@ -4151,9 +4146,11 @@ namespace TigerClaw.Core.Tests
                     ["xy"] = new List<string> { "闷" }
                 }));
 
-            TypeLetters(engine, "abcdnv");
-            Equal("甲乙", Press(engine, 0x54).TextToOutput,
+            TypeLetters(engine, "abcdn");
+            Equal("甲", Press(engine, 0x56).TextToOutput,
                 nameof(SentenceAutoCommitStopsBeforeExtendableSegment) + ".safe_prefix");
+            Equal(null, Press(engine, 0x54).TextToOutput,
+                nameof(SentenceAutoCommitStopsBeforeExtendableSegment) + ".extendable_tail");
             EngineUiSnapshot snapshot = engine.GetUiSnapshot(5);
             True(snapshot.Candidates.Length > 0 && snapshot.Candidates[0].Contains("郁"),
                 nameof(SentenceAutoCommitStopsBeforeExtendableSegment) + ".candidate");
@@ -4270,7 +4267,7 @@ namespace TigerClaw.Core.Tests
             TypeLetters(engine, "abcdefgh");
             Equal(null, Press(engine, 0x49).TextToOutput,
                 nameof(SentenceAutoCommitDroppedTailContradictsShorterCompetitor) +
-                ".merged_generation_is_comparison_only");
+                ".stronger_competitor_prevents_commit");
             EngineUiSnapshot snapshot = engine.GetUiSnapshot(5);
             True(snapshot.Candidates.Length > 0 && snapshot.Candidates[0].Contains("丙戊") &&
                  !snapshot.Candidates[0].Contains("丙丁"),
@@ -4328,10 +4325,9 @@ namespace TigerClaw.Core.Tests
             var engine = new InputMethodEngine(state, CreateWeakEvidenceSentenceDecoder());
 
             TypeLetters(engine, "abcdef");
-            Equal(null, Press(engine, 0x47).TextToOutput,
-                nameof(SentenceAutoCommitKeepsThreeGenerationWindowForWeakEvidence) + ".second_evidence");
-            Equal("甲乙", Press(engine, 0x48).TextToOutput,
-                nameof(SentenceAutoCommitKeepsThreeGenerationWindowForWeakEvidence) + ".third_evidence");
+            Equal("甲乙", Press(engine, 0x47).TextToOutput,
+                nameof(SentenceAutoCommitKeepsThreeGenerationWindowForWeakEvidence) +
+                ".merged_third_evidence");
         }
 
         private static void SentenceAutoCommitTracksPrefixesIndependently()
@@ -4373,9 +4369,11 @@ namespace TigerClaw.Core.Tests
                 new WeakAlternativeSentenceLanguageModel(),
                 beamWidth: 100));
 
-            TypeLetters(engine, "abcdef");
-            Equal("甲", Press(engine, 0x47).TextToOutput,
+            TypeLetters(engine, "abcde");
+            Equal("甲", Press(engine, 0x46).TextToOutput,
                 nameof(SentenceAutoCommitTracksPrefixesIndependently) + ".short_commits_first");
+            Equal(null, Press(engine, 0x47).TextToOutput,
+                nameof(SentenceAutoCommitTracksPrefixesIndependently) + ".continuation");
             Equal("cdefg", engine.GetUiSnapshot(5).ActiveInputCode.Replace(" ", string.Empty),
                 nameof(SentenceAutoCommitTracksPrefixesIndependently) + ".suffix_retained");
         }
@@ -4455,13 +4453,13 @@ namespace TigerClaw.Core.Tests
                 nameof(SentencePrefixEvidenceWeightsBoundaryDisagreement) + ".negligible");
         }
 
-        private static void SentenceAutoCommitRejectsAlternatingCompleteSegmentation()
+        private static void SentenceAutoCommitAcceptsProbabilisticAlternatingSegmentation()
         {
             var state = new CoreRuntimeState();
             True(state.TrySetConfigValue("整句输入", "是", out _, out string sentenceReason),
-                nameof(SentenceAutoCommitRejectsAlternatingCompleteSegmentation) + ": " + sentenceReason);
+                nameof(SentenceAutoCommitAcceptsProbabilisticAlternatingSegmentation) + ": " + sentenceReason);
             True(state.TrySetConfigValue("整句自动提前上屏", "是", out _, out string commitReason),
-                nameof(SentenceAutoCommitRejectsAlternatingCompleteSegmentation) + ": " + commitReason);
+                nameof(SentenceAutoCommitAcceptsProbabilisticAlternatingSegmentation) + ": " + commitReason);
             state.TrySetConfigValue("整句空码自动顶屏", "否", out _, out _);
             var decoder = new SentenceInputDecoder(
                 SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
@@ -4479,8 +4477,9 @@ namespace TigerClaw.Core.Tests
             var engine = new InputMethodEngine(state, decoder);
 
             TypeLetters(engine, "abcde");
-            Equal(null, Press(engine, 0x46).TextToOutput,
-                nameof(SentenceAutoCommitRejectsAlternatingCompleteSegmentation) + ".commit");
+            Equal("甲", Press(engine, 0x46).TextToOutput,
+                nameof(SentenceAutoCommitAcceptsProbabilisticAlternatingSegmentation) +
+                ".probabilistic_commit");
         }
 
         private static void SentenceAutoCommitReplayPreservesOriginalCommit()

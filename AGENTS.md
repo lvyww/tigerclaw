@@ -109,8 +109,10 @@ UI state:
   complete evidence and manual navigation invalidate or suspend evidence. When
   the current key is an incomplete code tail, merge the already computed
   dropped-tail lattice states into the confidence pool so competing prefixes
-  such as `上午` and `上窦` are compared; that generation updates or contradicts
-  trackers but does not increment evidence. A complete generation whose best
+  such as `上午` and `上窦` are compared; supported closed-boundary prefixes in
+  that merged generation also increment evidence. This deliberately accepts a
+  small probability of a later segmentation flip in exchange for substantially
+  earlier commits. A complete generation whose best
   visible candidate confidence is below `0.995` is also a comparison-only gap
   unless a visible prefix still reaches `0.995` after the merge. Keep a tracker
   only while current merged prefixes still support it; a stronger fork after a
@@ -143,8 +145,8 @@ UI state:
 - Windows early-commit confidence/mass aggregation must run over the already
   narrowed visible/top-candidate list, not the full beam pool. Incomplete-code
   tails may merge the already computed `states[consumedLength]` lattice into the
-  evidence pool for comparison only; they must not count as a new evidence
-  generation and must not re-widen the common complete-code path. Re-widening
+  evidence pool; supported closed-boundary prefixes may count as a new evidence
+  generation, but they must not re-widen the common complete-code path. Re-widening
   the complete path was a real performance regression once (beam pool up to 100x
   the visible list on every keystroke). The Rime Lua and Fcitx5 Android
   ports have not yet received the 2026-09-01 independent-prefix, dropped-tail
