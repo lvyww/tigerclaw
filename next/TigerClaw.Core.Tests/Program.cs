@@ -55,6 +55,21 @@ namespace TigerClaw.Core.Tests
                         args.Length > 6 ? ParseInt(args[6], 2) : 2,
                         args.Length > 7 ? ParseDouble(args[7], 0.0) : 0.0);
                 }
+                if (args.Length >= 4 && string.Equals(args[0], "--sentence-early-commit-eval", StringComparison.OrdinalIgnoreCase))
+                {
+                    return RunSentenceEarlyCommitEval(
+                        args[1], args[2], args[3],
+                        args.Length > 4 ? args[4] : null,
+                        args.Length > 5 ? ParseInt(args[5], 0) : 0);
+                }
+                if (args.Length >= 4 && string.Equals(args[0], "--sentence-early-commit-policy-eval", StringComparison.OrdinalIgnoreCase))
+                {
+                    return RunSentenceEarlyCommitPolicyEval(
+                        args[1], args[2], args[3],
+                        args.Length > 4 ? args[4] : null,
+                        args.Length > 5 ? ParseInt(args[5], 0) : 0,
+                        args.Length > 6 ? args[6] : null);
+                }
                 if (args.Length >= 4 && string.Equals(args[0], "--sentence-eval", StringComparison.OrdinalIgnoreCase))
                 {
                     return RunSentenceEval(
@@ -152,6 +167,7 @@ namespace TigerClaw.Core.Tests
                 SentenceDecoderIncrementalMatchesFullRebuild();
                 SentenceDecoderReportsTruncatedConfidenceMass();
                 SentenceDecoderMergesIncompleteTailIntoPrefixEvidence();
+                SentenceDecoderKeepsDroppedTailRawEndpointsDistinct();
                 SentenceDecoderConditionsEvidenceOnCommittedPrefix();
                 SentenceDecoderMarksIncompleteTailAsNeutralOnly();
                 SentenceDecoderSelectsExactVisibleTopK();
@@ -183,7 +199,8 @@ namespace TigerClaw.Core.Tests
                 SentenceAutoCommitHonorsConfiguredMinRetainedRawLength();
                 SentenceEmptyCodeAutoCommitHonorsConfiguredMinRetainedRawLength();
                 SentenceAutoCommitNeutralTailDoesNotCountAsEvidence();
-                SentenceAutoCommitPreservesEvidenceAcrossLowConfidenceCompleteGap();
+                SentenceAutoCommitMergedTailDoesNotCountAsEvidence();
+                SentenceAutoCommitDoesNotCountMergedEvidenceAcrossLowConfidenceGap();
                 SentenceAutoCommitDroppedTailContradictsShorterCompetitor();
                 SentenceAutoCommitStopsBeforeExtendableSegment();
                 SentenceAutoCommitUsesTwoStrongGenerationCommonPrefix();
@@ -191,6 +208,7 @@ namespace TigerClaw.Core.Tests
                 SentenceAutoCommitTracksPrefixesIndependently();
                 SentencePrefixEvidenceWeightsBoundaryDisagreement();
                 SentencePrefixEvidenceKeepsRawBoundariesDistinct();
+                SentencePrefixEvidenceLookupRequiresExactRawBoundary();
                 SentenceAutoCommitRejectsAlternatingCompleteSegmentation();
                 SentenceAutoCommitReplayPreservesOriginalCommit();
                 KeyReplayCacheReturnsOriginalResultWithCurrentSequence();
@@ -641,6 +659,598 @@ namespace TigerClaw.Core.Tests
             Console.WriteLine(summary);
             if (!string.IsNullOrEmpty(outputPath)) File.WriteAllLines(outputPath, rows, new UTF8Encoding(false));
             return 0;
+        }
+
+        private static int RunSentenceEarlyCommitEval(
+            string casesPath,
+            string modelPath,
+            string lexiconPath,
+            string outputPath,
+            int caseLimit)
+        {
+            List<EvalCaseDto> cases = LoadEvalCases(casesPath);
+            AppendEarlyCommitRegressionCases(cases);
+            if (caseLimit > 0 && cases.Count > caseLimit)
+            {
+                cases = cases.Take(caseLimit).ToList();
+            }
+
+            SentenceLexiconIndex index = SentenceLexiconIndex.Build(
+                LoadSentenceLexiconSource(lexiconPath));
+            using (SentenceNgramModel model = SentenceNgramModel.Load(modelPath))
+            {
+                var baselineCorrect = new Dictionary<string, bool>(StringComparer.Ordinal);
+                foreach (EvalCaseDto item in cases)
+                {
+                    var decoder = new SentenceInputDecoder(
+                        index,
+                        model,
+                        emittedCharacterReward: 2.0);
+                    SentenceCandidate top = decoder.DecodeFull(item.Code, 20)
+                        .Candidates.FirstOrDefault();
+                    baselineCorrect[item.Code] = top != null &&
+                        string.Equals(top.Text, item.Text, StringComparison.Ordinal);
+                }
+
+                var rows = new List<string>
+                {
+                    "mode,text,code,source,baseline_correct,early_events,early_committed_text," +
+                    "safe,final_text,final_exact,first_commit_key,retained_before_final," +
+                    "mean_retained_codes,mean_eligible_retained_codes"
+                };
+                var summaries = new List<string>();
+                EvaluateSentenceEarlyCommitMode(
+                    cases, index, model, baselineCorrect,
+                    emptyCodeEnabled: false,
+                    mode: "probabilistic-only",
+                    rows: rows,
+                    summaries: summaries);
+                EvaluateSentenceEarlyCommitMode(
+                    cases, index, model, baselineCorrect,
+                    emptyCodeEnabled: true,
+                    mode: "probabilistic-plus-empty-code",
+                    rows: rows,
+                    summaries: summaries);
+
+                if (!string.IsNullOrEmpty(outputPath))
+                {
+                    string directory = Path.GetDirectoryName(outputPath);
+                    if (!string.IsNullOrEmpty(directory))
+                    {
+                        Directory.CreateDirectory(directory);
+                    }
+                    File.WriteAllLines(outputPath, rows, new UTF8Encoding(false));
+                    File.WriteAllLines(
+                        Path.ChangeExtension(outputPath, ".summary.txt"),
+                        summaries,
+                        new UTF8Encoding(false));
+                }
+            }
+
+            return 0;
+        }
+
+        private static int RunSentenceEarlyCommitPolicyEval(
+            string casesPath,
+            string modelPath,
+            string lexiconPath,
+            string outputPath,
+            int caseLimit,
+            string selectedMode)
+        {
+            List<EvalCaseDto> cases = LoadEvalCases(casesPath);
+            AppendEarlyCommitRegressionCases(cases);
+            if (caseLimit > 0 && cases.Count > caseLimit)
+            {
+                cases = cases.Take(caseLimit).ToList();
+            }
+
+            SentenceLexiconIndex index = SentenceLexiconIndex.Build(
+                LoadSentenceLexiconSource(lexiconPath));
+            using (SentenceNgramModel model = SentenceNgramModel.Load(modelPath))
+            {
+                var baselineCorrect = new Dictionary<string, bool>(StringComparer.Ordinal);
+                foreach (EvalCaseDto item in cases)
+                {
+                    var decoder = new SentenceInputDecoder(
+                        index,
+                        model,
+                        emittedCharacterReward: 2.0);
+                    SentenceCandidate top = decoder.DecodeFull(item.Code, 20)
+                        .Candidates.FirstOrDefault();
+                    baselineCorrect[item.Code] = top != null &&
+                        string.Equals(top.Text, item.Text, StringComparison.Ordinal);
+                }
+
+                var rows = new List<string>
+                {
+                    "mode,text,code,source,baseline_correct,early_events,early_committed_text," +
+                    "safe,final_text,final_exact,first_commit_key,retained_before_final," +
+                    "mean_retained_codes,mean_eligible_retained_codes"
+                };
+                var summaries = new List<string>();
+                if (ShouldRunSentenceEarlyCommitPolicyMode(selectedMode, "current"))
+                {
+                    EvaluateSentenceEarlyCommitMode(
+                        cases, index, model, baselineCorrect,
+                        emptyCodeEnabled: false,
+                        mode: "current",
+                        rows: rows,
+                        summaries: summaries);
+                }
+                if (ShouldRunSentenceEarlyCommitPolicyMode(selectedMode, "weak-evidence-2"))
+                {
+                    EvaluateSentenceEarlyCommitMode(
+                        cases, index, model, baselineCorrect,
+                        emptyCodeEnabled: false,
+                        mode: "weak-evidence-2",
+                        rows: rows,
+                        summaries: summaries,
+                        configureEngine: engine =>
+                            engine.SentenceEarlyCommitRequiredEvidenceCount = 2);
+                }
+                if (ShouldRunSentenceEarlyCommitPolicyMode(selectedMode, "retain-raw-0"))
+                {
+                    EvaluateSentenceEarlyCommitMode(
+                        cases, index, model, baselineCorrect,
+                        emptyCodeEnabled: false,
+                        mode: "retain-raw-0",
+                        rows: rows,
+                        summaries: summaries,
+                        configureEngine: engine =>
+                            engine.SentenceEarlyCommitMinimumRetainedRawLength = 0);
+                }
+                if (ShouldRunSentenceEarlyCommitPolicyMode(selectedMode, "count-merged-tail"))
+                {
+                    EvaluateSentenceEarlyCommitMode(
+                        cases, index, model, baselineCorrect,
+                        emptyCodeEnabled: false,
+                        mode: "count-merged-tail",
+                        rows: rows,
+                        summaries: summaries,
+                        configureEngine: engine =>
+                            engine.SentenceEarlyCommitCountMergedTailEvidence = true);
+                }
+                if (ShouldRunSentenceEarlyCommitPolicyMode(selectedMode, "count-merged-tail-weak2"))
+                {
+                    EvaluateSentenceEarlyCommitMode(
+                        cases, index, model, baselineCorrect,
+                        emptyCodeEnabled: false,
+                        mode: "count-merged-tail-weak2",
+                        rows: rows,
+                        summaries: summaries,
+                        configureEngine: engine =>
+                        {
+                            engine.SentenceEarlyCommitRequiredEvidenceCount = 2;
+                            engine.SentenceEarlyCommitCountMergedTailEvidence = true;
+                        });
+                }
+                if (ShouldRunSentenceEarlyCommitPolicyMode(selectedMode, "count-merged-tail-retain0"))
+                {
+                    EvaluateSentenceEarlyCommitMode(
+                        cases, index, model, baselineCorrect,
+                        emptyCodeEnabled: false,
+                        mode: "count-merged-tail-retain0",
+                        rows: rows,
+                        summaries: summaries,
+                        configureEngine: engine =>
+                        {
+                            engine.SentenceEarlyCommitMinimumRetainedRawLength = 0;
+                            engine.SentenceEarlyCommitCountMergedTailEvidence = true;
+                        });
+                }
+                if (ShouldRunSentenceEarlyCommitPolicyMode(selectedMode, "combined-relaxed"))
+                {
+                    EvaluateSentenceEarlyCommitMode(
+                        cases, index, model, baselineCorrect,
+                        emptyCodeEnabled: false,
+                        mode: "combined-relaxed",
+                        rows: rows,
+                        summaries: summaries,
+                        configureEngine: engine =>
+                        {
+                            engine.SentenceEarlyCommitRequiredEvidenceCount = 2;
+                            engine.SentenceEarlyCommitMinimumRetainedRawLength = 0;
+                            engine.SentenceEarlyCommitCountMergedTailEvidence = true;
+                        });
+                }
+
+                if (!string.IsNullOrEmpty(outputPath))
+                {
+                    string directory = Path.GetDirectoryName(outputPath);
+                    if (!string.IsNullOrEmpty(directory))
+                    {
+                        Directory.CreateDirectory(directory);
+                    }
+                    File.WriteAllLines(outputPath, rows, new UTF8Encoding(false));
+                    File.WriteAllLines(
+                        Path.ChangeExtension(outputPath, ".summary.txt"),
+                        summaries,
+                        new UTF8Encoding(false));
+                }
+            }
+
+            return 0;
+        }
+
+        private static bool ShouldRunSentenceEarlyCommitPolicyMode(
+            string selectedMode,
+            string mode)
+        {
+            return string.IsNullOrEmpty(selectedMode) ||
+                string.Equals(selectedMode, mode, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static void EvaluateSentenceEarlyCommitMode(
+            List<EvalCaseDto> cases,
+            SentenceLexiconIndex index,
+            ISentenceLanguageModel model,
+            Dictionary<string, bool> baselineCorrect,
+            bool emptyCodeEnabled,
+            string mode,
+            List<string> rows,
+            List<string> summaries,
+            Action<InputMethodEngine> configureEngine = null)
+        {
+            var tally = new SentenceEarlyCommitEvalTally();
+            var bucketTallies = new Dictionary<string, SentenceEarlyCommitEvalTally>(
+                StringComparer.Ordinal)
+            {
+                ["5-8"] = new SentenceEarlyCommitEvalTally(),
+                ["9-12"] = new SentenceEarlyCommitEvalTally(),
+                ["13-18"] = new SentenceEarlyCommitEvalTally(),
+                ["19-30"] = new SentenceEarlyCommitEvalTally(),
+                ["31+"] = new SentenceEarlyCommitEvalTally()
+            };
+            var bucketCounts = bucketTallies.Keys.ToDictionary(
+                key => key,
+                key => 0,
+                StringComparer.Ordinal);
+            string stateRoot = Path.Combine(
+                Path.GetTempPath(),
+                "tigerclaw-early-commit-eval-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(stateRoot);
+            try
+            {
+                var state = new CoreRuntimeState(stateRoot);
+                state.TrySetConfigValue("整句输入", "是", out _, out _);
+                state.TrySetConfigValue("整句神经重排", "否", out _, out _);
+                state.TrySetConfigValue("整句自动提前上屏", "是", out _, out _);
+                state.TrySetConfigValue(
+                    "整句空码自动顶屏",
+                    emptyCodeEnabled ? "是" : "否",
+                    out _, out _);
+                state.TrySetConfigValue("保留最少编码数量", "0", out _, out _);
+
+                foreach (EvalCaseDto item in cases)
+                {
+                    var decoder = new SentenceInputDecoder(
+                        index,
+                        model,
+                        emittedCharacterReward: 2.0);
+                    var engine = new InputMethodEngine(
+                        state,
+                        decoder,
+                        sentenceDecodeSynchronously: true);
+                    configureEngine?.Invoke(engine);
+                    SentenceEarlyCommitCaseResult result = EvaluateSentenceEarlyCommitCase(
+                        engine,
+                        item,
+                        baselineCorrect.TryGetValue(item.Code, out bool correct) && correct);
+                    tally.Add(result, item.Code.Length);
+                    string bucket = SentenceEarlyCommitLengthBucket(item.Code.Length);
+                    bucketTallies[bucket].Add(result, item.Code.Length);
+                    bucketCounts[bucket]++;
+                    rows.Add(FormatSentenceEarlyCommitCsvRow(mode, item, result));
+                }
+            }
+            finally
+            {
+                try
+                {
+                    Directory.Delete(stateRoot, true);
+                }
+                catch
+                {
+                }
+            }
+
+            string overall = tally.Format(mode, cases.Count);
+            summaries.Add(overall);
+            Console.WriteLine(overall);
+            foreach (string bucket in new[] { "5-8", "9-12", "13-18", "19-30", "31+" })
+            {
+                if (bucketCounts[bucket] == 0)
+                {
+                    continue;
+                }
+                string summary = bucketTallies[bucket].Format(
+                    mode + ":length-" + bucket,
+                    bucketCounts[bucket]);
+                summaries.Add(summary);
+                Console.WriteLine(summary);
+            }
+        }
+
+        private static string SentenceEarlyCommitLengthBucket(int codeLength)
+        {
+            if (codeLength <= 8) return "5-8";
+            if (codeLength <= 12) return "9-12";
+            if (codeLength <= 18) return "13-18";
+            if (codeLength <= 30) return "19-30";
+            return "31+";
+        }
+
+        private static SentenceEarlyCommitCaseResult EvaluateSentenceEarlyCommitCase(
+            InputMethodEngine engine,
+            EvalCaseDto item,
+            bool baselineCorrect)
+        {
+            var result = new SentenceEarlyCommitCaseResult
+            {
+                BaselineCorrect = baselineCorrect,
+                Safe = true,
+                FirstCommitKey = 0
+            };
+            var committed = new StringBuilder();
+            for (int index = 0; index < item.Code.Length; index++)
+            {
+                char code = item.Code[index];
+                KeyEngineResult keyResult = Press(engine, VirtualKeyForSentenceCode(code));
+                string output = keyResult?.TextToOutput ?? string.Empty;
+                EngineUiSnapshot snapshot = engine.GetUiSnapshot(20);
+                int retained = CountRawCodeCharacters(snapshot.ActiveInputCode);
+                result.RetentionSamples.Add(retained);
+                if (index + 1 > 4)
+                {
+                    result.EligibleRetentionSamples.Add(retained);
+                }
+
+                if (output.Length == 0)
+                {
+                    continue;
+                }
+
+                result.EarlyEvents++;
+                if (result.FirstCommitKey == 0)
+                {
+                    result.FirstCommitKey = index + 1;
+                }
+                committed.Append(output);
+                result.PostCommitRetained.Add(retained);
+                if (!item.Text.StartsWith(committed.ToString(), StringComparison.Ordinal))
+                {
+                    result.Safe = false;
+                    result.UnsafeEvents++;
+                }
+            }
+
+            EngineUiSnapshot beforeFinal = engine.GetUiSnapshot(20);
+            result.RetainedBeforeFinal = CountRawCodeCharacters(beforeFinal.ActiveInputCode);
+            result.EarlyCommittedText = committed.ToString();
+            KeyEngineResult final = Press(engine, 0x20);
+            committed.Append(final?.TextToOutput ?? string.Empty);
+            result.FinalText = committed.ToString();
+            result.FinalExact = string.Equals(result.FinalText, item.Text, StringComparison.Ordinal);
+            return result;
+        }
+
+        private static int VirtualKeyForSentenceCode(char value)
+        {
+            if (value >= 'a' && value <= 'z')
+            {
+                return char.ToUpperInvariant(value);
+            }
+            if (value >= 'A' && value <= 'Z')
+            {
+                return value;
+            }
+            if (value >= '0' && value <= '9')
+            {
+                return value;
+            }
+            if (value == ';')
+            {
+                return 0xBA;
+            }
+            if (value == '\'')
+            {
+                return 0xDE;
+            }
+            return value;
+        }
+
+        private static int CountRawCodeCharacters(string displayCode)
+        {
+            if (string.IsNullOrEmpty(displayCode))
+            {
+                return 0;
+            }
+
+            int count = 0;
+            foreach (char value in displayCode)
+            {
+                if (!char.IsWhiteSpace(value))
+                {
+                    count++;
+                }
+            }
+            return count;
+        }
+
+        private static string FormatSentenceEarlyCommitCsvRow(
+            string mode,
+            EvalCaseDto item,
+            SentenceEarlyCommitCaseResult result)
+        {
+            double meanRetained = result.RetentionSamples.Count == 0
+                ? 0.0
+                : result.RetentionSamples.Average();
+            double meanEligibleRetained = result.EligibleRetentionSamples.Count == 0
+                ? 0.0
+                : result.EligibleRetentionSamples.Average();
+            return JsonString(mode) + "," +
+                JsonString(item.Text) + "," +
+                JsonString(item.Code) + "," +
+                JsonString(item.Source) + "," +
+                result.BaselineCorrect.ToString().ToLowerInvariant() + "," +
+                result.EarlyEvents + "," +
+                JsonString(result.EarlyCommittedText) + "," +
+                result.Safe.ToString().ToLowerInvariant() + "," +
+                JsonString(result.FinalText) + "," +
+                result.FinalExact.ToString().ToLowerInvariant() + "," +
+                result.FirstCommitKey + "," +
+                result.RetainedBeforeFinal + "," +
+                meanRetained.ToString("F3", CultureInfo.InvariantCulture) + "," +
+                meanEligibleRetained.ToString("F3", CultureInfo.InvariantCulture);
+        }
+
+        private static void AppendEarlyCommitRegressionCases(List<EvalCaseDto> cases)
+        {
+            AddEvalCaseIfMissing(cases, "新人上午来面试", "iejryfenahbmsp");
+            AddEvalCaseIfMissing(cases, "左手匕首", "nuusvbbhoi");
+            AddEvalCaseIfMissing(cases, "有一些人在这里看东西", "nvfisvmjrngvduqryxvx");
+        }
+
+        private sealed class SentenceEarlyCommitCaseResult
+        {
+            public bool BaselineCorrect;
+            public bool Safe;
+            public bool FinalExact;
+            public int EarlyEvents;
+            public int UnsafeEvents;
+            public int FirstCommitKey;
+            public int RetainedBeforeFinal;
+            public string EarlyCommittedText = string.Empty;
+            public string FinalText = string.Empty;
+            public readonly List<int> RetentionSamples = new List<int>();
+            public readonly List<int> EligibleRetentionSamples = new List<int>();
+            public readonly List<int> PostCommitRetained = new List<int>();
+        }
+
+        private sealed class SentenceEarlyCommitEvalTally
+        {
+            private int _baselineCorrect;
+            private int _baselineCorrectFinalExact;
+            private int _baselineCorrectEarlyCases;
+            private int _baselineCorrectSafeEarlyCases;
+            private int _baselineCorrectUnsafeCases;
+            private int _earlyCases;
+            private int _safeEarlyCases;
+            private int _unsafeCases;
+            private int _finalExact;
+            private int _earlyEvents;
+            private int _unsafeEvents;
+            private long _totalCodeLength;
+            private long _retainedBeforeFinal;
+            private readonly List<int> _retentionSamples = new List<int>();
+            private readonly List<int> _eligibleRetentionSamples = new List<int>();
+            private readonly List<int> _postCommitRetained = new List<int>();
+            private readonly List<int> _firstCommitKeys = new List<int>();
+
+            public void Add(SentenceEarlyCommitCaseResult result, int codeLength)
+            {
+                if (result.BaselineCorrect)
+                {
+                    _baselineCorrect++;
+                    if (result.FinalExact)
+                    {
+                        _baselineCorrectFinalExact++;
+                    }
+                    if (result.EarlyEvents > 0)
+                    {
+                        _baselineCorrectEarlyCases++;
+                        if (result.Safe)
+                        {
+                            _baselineCorrectSafeEarlyCases++;
+                        }
+                    }
+                    if (!result.Safe)
+                    {
+                        _baselineCorrectUnsafeCases++;
+                    }
+                }
+                if (result.EarlyEvents > 0)
+                {
+                    _earlyCases++;
+                    if (result.Safe)
+                    {
+                        _safeEarlyCases++;
+                    }
+                    _firstCommitKeys.Add(result.FirstCommitKey);
+                }
+                if (!result.Safe)
+                {
+                    _unsafeCases++;
+                }
+                if (result.FinalExact)
+                {
+                    _finalExact++;
+                }
+                _earlyEvents += result.EarlyEvents;
+                _unsafeEvents += result.UnsafeEvents;
+                _totalCodeLength += codeLength;
+                _retainedBeforeFinal += result.RetainedBeforeFinal;
+                _retentionSamples.AddRange(result.RetentionSamples);
+                _eligibleRetentionSamples.AddRange(result.EligibleRetentionSamples);
+                _postCommitRetained.AddRange(result.PostCommitRetained);
+            }
+
+            public string Format(string mode, int cases)
+            {
+                return "mode=" + mode +
+                    ",cases=" + cases +
+                    ",baseline_top1_rate=" + FormatRatio(_baselineCorrect, cases) +
+                    ",early_case_rate=" + FormatRatio(_earlyCases, cases) +
+                    ",safe_early_case_rate=" + FormatRatio(_safeEarlyCases, _earlyCases) +
+                    ",unsafe_case_rate=" + FormatRatio(_unsafeCases, cases) +
+                    ",baseline_correct_safe_early_case_rate=" +
+                        FormatRatio(_baselineCorrectSafeEarlyCases, _baselineCorrectEarlyCases) +
+                    ",baseline_correct_unsafe_case_rate=" +
+                        FormatRatio(_baselineCorrectUnsafeCases, _baselineCorrect) +
+                    ",unsafe_events=" + _unsafeEvents +
+                    ",early_events=" + _earlyEvents +
+                    ",final_exact_rate=" + FormatRatio(_finalExact, cases) +
+                    ",baseline_correct_final_exact_rate=" +
+                        FormatRatio(_baselineCorrectFinalExact, _baselineCorrect) +
+                    ",mean_retained_codes=" + FormatMean(_retentionSamples) +
+                    ",p50_retained_codes=" + FormatPercentile(_retentionSamples, 0.50) +
+                    ",p90_retained_codes=" + FormatPercentile(_retentionSamples, 0.90) +
+                    ",mean_eligible_retained_codes=" + FormatMean(_eligibleRetentionSamples) +
+                    ",p50_eligible_retained_codes=" +
+                        FormatPercentile(_eligibleRetentionSamples, 0.50) +
+                    ",p90_eligible_retained_codes=" +
+                        FormatPercentile(_eligibleRetentionSamples, 0.90) +
+                    ",mean_post_commit_retained_codes=" + FormatMean(_postCommitRetained) +
+                    ",mean_first_commit_key=" + FormatMean(_firstCommitKeys) +
+                    ",raw_commit_coverage_before_final=" +
+                        (1.0 - Ratio(_retainedBeforeFinal, _totalCodeLength))
+                            .ToString("F4", CultureInfo.InvariantCulture);
+            }
+
+            private static string FormatRatio(long value, long total)
+            {
+                return Ratio(value, total).ToString("F4", CultureInfo.InvariantCulture);
+            }
+
+            private static string FormatMean(List<int> values)
+            {
+                return values.Count == 0
+                    ? "0.000"
+                    : values.Average().ToString("F3", CultureInfo.InvariantCulture);
+            }
+
+            private static string FormatPercentile(List<int> values, double percentile)
+            {
+                if (values.Count == 0)
+                {
+                    return "0";
+                }
+                int[] ordered = values.OrderBy(value => value).ToArray();
+                int index = (int)Math.Ceiling(percentile * ordered.Length) - 1;
+                index = Math.Max(0, Math.Min(ordered.Length - 1, index));
+                return ordered[index].ToString(CultureInfo.InvariantCulture);
+            }
         }
 
         private static string ChooseConfidentPrefix(SentenceDecodeResult decoded, double threshold)
@@ -3211,6 +3821,33 @@ namespace TigerClaw.Core.Tests
                 nameof(SentenceDecoderMergesIncompleteTailIntoPrefixEvidence) + ".visible_prefix");
         }
 
+        private static void SentenceDecoderKeepsDroppedTailRawEndpointsDistinct()
+        {
+            var decoder = new SentenceInputDecoder(
+                SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
+                {
+                    ["ab"] = new List<string> { "甲乙" },
+                    ["abc"] = new List<string> { "甲乙" },
+                    ["cd"] = new List<string> { "丙" }
+                }),
+                NeutralSentenceLanguageModel.Instance,
+                beamWidth: 100);
+
+            SentenceDecodeResult result = decoder.DecodeFull(
+                "abc",
+                20,
+                includeEarlyCommitEvidence: true);
+            SentencePrefixEvidence[] matching = result.EarlyCommitEvidence.Prefixes
+                .Where(prefix => prefix.Text == "甲乙")
+                .ToArray();
+            True(result.EarlyCommitEvidence.MergedIncompleteTail,
+                nameof(SentenceDecoderKeepsDroppedTailRawEndpointsDistinct) + ".merged");
+            True(matching.Any(prefix => prefix.RawLength == 2),
+                nameof(SentenceDecoderKeepsDroppedTailRawEndpointsDistinct) + ".dropped_endpoint");
+            True(matching.Any(prefix => prefix.RawLength == 3),
+                nameof(SentenceDecoderKeepsDroppedTailRawEndpointsDistinct) + ".visible_endpoint");
+        }
+
         private static void SentenceDecoderConditionsEvidenceOnCommittedPrefix()
         {
             var decoder = new SentenceInputDecoder(
@@ -3476,6 +4113,28 @@ namespace TigerClaw.Core.Tests
                 nameof(SentenceAutoCommitNeutralTailDoesNotCountAsEvidence) + ".three_raw_retained");
         }
 
+        private static void SentenceAutoCommitMergedTailDoesNotCountAsEvidence()
+        {
+            var state = new CoreRuntimeState();
+            state.TrySetConfigValue("整句输入", "是", out _, out _);
+            state.TrySetConfigValue("整句自动提前上屏", "是", out _, out _);
+            state.TrySetConfigValue("整句空码自动顶屏", "否", out _, out _);
+            var engine = new InputMethodEngine(state, CreateSentenceDecoder(
+                new Dictionary<string, List<string>>
+                {
+                    ["ab"] = new List<string> { "甲" },
+                    ["cde"] = new List<string> { "乙" },
+                    ["cdef"] = new List<string> { "乙" },
+                    ["fg"] = new List<string> { "丙" }
+                }));
+
+            TypeLetters(engine, "abcde");
+            Equal(null, Press(engine, 0x46).TextToOutput,
+                nameof(SentenceAutoCommitMergedTailDoesNotCountAsEvidence) + ".merged_not_counted");
+            Equal("甲", Press(engine, 0x47).TextToOutput,
+                nameof(SentenceAutoCommitMergedTailDoesNotCountAsEvidence) + ".next_complete_commits");
+        }
+
         private static void SentenceAutoCommitStopsBeforeExtendableSegment()
         {
             var state = new CoreRuntimeState();
@@ -3500,14 +4159,13 @@ namespace TigerClaw.Core.Tests
                 nameof(SentenceAutoCommitStopsBeforeExtendableSegment) + ".candidate");
         }
 
-        private static void SentenceAutoCommitPreservesEvidenceAcrossLowConfidenceCompleteGap()
+        private static void SentenceAutoCommitDoesNotCountMergedEvidenceAcrossLowConfidenceGap()
         {
             var lexicon = SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
             {
                 ["ab"] = new List<string> { "甲" },
-                ["cd"] = new List<string> { "乙" },
-                ["ef"] = new List<string> { "丙辛" },
-                ["efgh"] = new List<string> { "丙辛" },
+                ["cdef"] = new List<string> { "乙" },
+                ["gh"] = new List<string> { "丙" },
                 ["abc"] = new List<string> { "丁" },
                 ["defg"] = new List<string> { "戊" },
                 ["abcd"] = new List<string> { "己" },
@@ -3520,20 +4178,20 @@ namespace TigerClaw.Core.Tests
             SentencePrefixEvidence firstStrong = decoder.DecodeFull(
                     "abcdef", 20, includeEarlyCommitEvidence: true)
                 .EarlyCommitEvidence.Prefixes
-                .Single(prefix => prefix.Text == "甲乙" && prefix.RawLength == 4);
+                .Single(prefix => prefix.Text == "甲" && prefix.RawLength == 2);
             SentenceDecodeResult gap = decoder.DecodeFull(
                 "abcdefg", 20, includeEarlyCommitEvidence: true);
             SentencePrefixEvidence secondStrong = decoder.DecodeFull(
                     "abcdefgh", 20, includeEarlyCommitEvidence: true)
                 .EarlyCommitEvidence.Prefixes
-                .Single(prefix => prefix.Text == "甲乙" && prefix.RawLength == 4);
+                .Single(prefix => prefix.Text == "甲" && prefix.RawLength == 2);
             True(firstStrong.Share >= 0.99999 && firstStrong.BoundaryClosed &&
                  secondStrong.Share >= 0.99999 && secondStrong.BoundaryClosed,
-                nameof(SentenceAutoCommitPreservesEvidenceAcrossLowConfidenceCompleteGap) +
+                nameof(SentenceAutoCommitDoesNotCountMergedEvidenceAcrossLowConfidenceGap) +
                 ".strong_ends");
             True(gap.Candidates.Length >= 2 &&
                  gap.EarlyCommitEvidence.NeutralLowConfidence,
-                nameof(SentenceAutoCommitPreservesEvidenceAcrossLowConfidenceCompleteGap) +
+                nameof(SentenceAutoCommitDoesNotCountMergedEvidenceAcrossLowConfidenceGap) +
                 ".neutral_gap");
 
             var state = new CoreRuntimeState();
@@ -3547,13 +4205,13 @@ namespace TigerClaw.Core.Tests
 
             TypeLetters(engine, "abcdef");
             Equal(null, Press(engine, 0x47).TextToOutput,
-                nameof(SentenceAutoCommitPreservesEvidenceAcrossLowConfidenceCompleteGap) +
+                nameof(SentenceAutoCommitDoesNotCountMergedEvidenceAcrossLowConfidenceGap) +
                 ".gap_does_not_commit");
-            Equal("甲乙", Press(engine, 0x48).TextToOutput,
-                nameof(SentenceAutoCommitPreservesEvidenceAcrossLowConfidenceCompleteGap) +
-                ".strong_sequence_survives");
+            Equal(null, Press(engine, 0x48).TextToOutput,
+                nameof(SentenceAutoCommitDoesNotCountMergedEvidenceAcrossLowConfidenceGap) +
+                ".merged_strong_does_not_commit");
             Equal(null, Press(engine, 0x5A).TextToOutput,
-                nameof(SentenceAutoCommitPreservesEvidenceAcrossLowConfidenceCompleteGap) +
+                nameof(SentenceAutoCommitDoesNotCountMergedEvidenceAcrossLowConfidenceGap) +
                 ".later_key_does_not_commit_yet");
         }
 
@@ -3610,9 +4268,9 @@ namespace TigerClaw.Core.Tests
                 beamWidth: 100));
 
             TypeLetters(engine, "abcdefgh");
-            Equal("甲乙", Press(engine, 0x49).TextToOutput,
+            Equal(null, Press(engine, 0x49).TextToOutput,
                 nameof(SentenceAutoCommitDroppedTailContradictsShorterCompetitor) +
-                ".commits_stable_prefix");
+                ".merged_generation_is_comparison_only");
             EngineUiSnapshot snapshot = engine.GetUiSnapshot(5);
             True(snapshot.Candidates.Length > 0 && snapshot.Candidates[0].Contains("丙戊") &&
                  !snapshot.Candidates[0].Contains("丙丁"),
@@ -3740,6 +4398,26 @@ namespace TigerClaw.Core.Tests
             True(longCode.EarlyCommitEvidence.Prefixes.Any(prefix =>
                     prefix.Text == "甲乙" && prefix.RawLength == 3),
                 nameof(SentencePrefixEvidenceKeepsRawBoundariesDistinct) + ".long");
+        }
+
+        private static void SentencePrefixEvidenceLookupRequiresExactRawBoundary()
+        {
+            var prefixes = new[]
+            {
+                new SentencePrefixEvidence
+                {
+                    Text = "甲乙",
+                    RawLength = 3,
+                    Share = 1.0,
+                    BoundaryShare = 1.0,
+                    BoundaryClosed = true
+                }
+            };
+
+            True(InputMethodEngine.FindSentencePrefixEvidence(prefixes, "甲乙", 2) == null,
+                nameof(SentencePrefixEvidenceLookupRequiresExactRawBoundary) + ".different_boundary");
+            True(InputMethodEngine.FindSentencePrefixEvidence(prefixes, "甲乙", 3) != null,
+                nameof(SentencePrefixEvidenceLookupRequiresExactRawBoundary) + ".exact_boundary");
         }
 
         private static void SentencePrefixEvidenceWeightsBoundaryDisagreement()

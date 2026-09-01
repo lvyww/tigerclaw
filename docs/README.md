@@ -18,6 +18,7 @@
 | `FCITX5_ANDROID_PORTING_PLAN.md` | Fcitx5 Android 当前完成度和剩余验收 |
 | `FCITX5_ANDROID_BASELINE.md` | Android 移植冻结的仓库/模型身份 |
 | `sentence_golden_v1.md` | 跨实现 sentence JSONL 黄金格式 |
+| `SENTENCE_EARLY_COMMIT_EVAL.md` | 整句提前上屏准确度与积极性端到端评测 |
 | `../tools/README_sentence_neural.md` | n-gram 训练和离线模型实验 |
 
 `用户使用说明书.pdf` 是 Markdown 手册的发布版附件；内容变更时应同步重新导出。

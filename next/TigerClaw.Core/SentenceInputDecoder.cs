@@ -1322,7 +1322,7 @@ namespace TigerClaw.Core
             out bool mergedIncompleteTail,
             ref bool confidenceTruncated)
         {
-            var pool = new Dictionary<string, SentenceCandidate>(StringComparer.Ordinal);
+            var pool = new Dictionary<Tuple<string, int>, SentenceCandidate>();
             foreach (SentenceCandidate candidate in visibleCandidates)
             {
                 AddEarlyCommitPoolCandidate(pool, candidate);
@@ -1376,7 +1376,7 @@ namespace TigerClaw.Core
         }
 
         private static void AddEarlyCommitPoolCandidate(
-            Dictionary<string, SentenceCandidate> pool,
+            Dictionary<Tuple<string, int>, SentenceCandidate> pool,
             SentenceCandidate candidate)
         {
             if (candidate == null || string.IsNullOrEmpty(candidate.Text))
@@ -1384,9 +1384,11 @@ namespace TigerClaw.Core
                 return;
             }
 
-            if (!pool.TryGetValue(candidate.Text, out SentenceCandidate previous))
+            int rawEndpoint = candidate.Boundary?.RawLength ?? 0;
+            var key = Tuple.Create(candidate.Text, rawEndpoint);
+            if (!pool.TryGetValue(key, out SentenceCandidate previous))
             {
-                pool[candidate.Text] = CopyEarlyCommitPoolCandidate(candidate);
+                pool[key] = CopyEarlyCommitPoolCandidate(candidate);
                 return;
             }
 
@@ -1394,7 +1396,7 @@ namespace TigerClaw.Core
             if (candidate.ConfidenceScore > previous.ConfidenceScore)
             {
                 previous = CopyEarlyCommitPoolCandidate(candidate);
-                pool[candidate.Text] = previous;
+                pool[key] = previous;
             }
 
             previous.ConfidenceScore = combinedMass;
