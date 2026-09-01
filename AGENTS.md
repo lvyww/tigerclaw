@@ -96,39 +96,49 @@ UI state:
   identity/order plumbing without a failing trace.
 - Windows early commit is experimental and defaults off. It requires raw length
   greater than four, exact consecutive one-key generations, confidence mass at
-  least `0.995`, and the same raw boundary. Two generations suffice only when
-  both prefix-quality shares reach `0.99999`; otherwise three are required.
-  Backspace, missing evidence and manual navigation invalidate or suspend
-  evidence. Keep the complete unstable suffix and at least three uncommitted raw
-  code characters from the completed decode generation; commits must still land
-  on a stable lexicon boundary.
-- Known unresolved early-commit issue: the proposal does not yet verify that
-  competing candidates agree on a closed segmentation boundary. In schema
-  `test整句`, `uriczwxmjou` can therefore commit the transient `可佛...` path
-  instead of waiting for the final `可民间夫妻`: `ur/icz/...` crosses the
-  proposed boundary differently from `ur/ic/zw/...`. Retaining three raw codes
-  and repeated confidence evidence do not prevent this case. A future fix
-  should clamp proposals to a raw/text boundary shared by the visible
-  early-evidence candidates and measure the resulting early-commit rate; do not
-  conflate this with empty-code automatic commit.
+  least `0.995`, and the same raw boundary. Confidence is tracked independently
+  for every `(text prefix, raw boundary)` from the visible candidates. A raw
+  boundary is eligible when the confidence mass of visible candidates that also
+  have a segmentation boundary there reaches `0.99999`; their text need not
+  agree. This weighted check prevents negligible crossing paths from vetoing an
+  otherwise stable prefix. Two consecutive generations suffice when both prefix
+  shares reach `0.99999`; otherwise three evidence generations are required.
+  When several prefixes mature, commit the longest,
+  then the higher-share and earlier-boundary prefix. Backspace, contradictory
+  complete evidence and manual navigation invalidate or suspend evidence. When
+  no prefix qualifies, either an incomplete-code-tail generation or a complete
+  generation whose best candidate confidence is below
+  `0.995` is a neutral gap: it adds no evidence, does not break a strong sequence
+  and may span at most three generations. If a commit matured across a
+  low-confidence complete gap, suspend all further automatic commits for the
+  rest of that composition; this prevents a second transient path from chaining
+  onto the first safe commit. Keep the complete unstable suffix and at least
+  three uncommitted raw code characters from the completed decode generation.
+  `test整句` `uriczwxmjou` must not commit transient
+  `可佛`; Tiger `nuusvbbhoi` must finish as `左手匕首` rather than `左手要好自`;
+  `iejryfenahbmsp` may commit `新人` but must finish as `新人上午来面试`, never
+  `新人上窦...`.
 - `整句空码自动顶屏` defaults on and is independent of probabilistic early
-  commit. When the current completed generation has exactly one group-eligible
-  candidate and appending an ordinary letter leaves no complete lexicon path,
-  first check whether the selected last lexicon segment is still a proper code
-  prefix. Whole-input non-first ranks shown for manual selection do not create
-  implicit group ambiguity unless a rank selector is present. Defer while the
-  segment can grow; if the actual extension goes dead, commit the saved
+  commit. Before the new key, accept either exactly one group-eligible candidate
+  or a group-eligible candidate that is also the visible first candidate and has
+  untruncated confidence share at least `0.99999`. Appending an ordinary letter
+  must then leave no complete lexicon path; first check whether the selected last
+  lexicon segment is still a proper code prefix. Whole-input non-first ranks shown
+  for manual selection do not create implicit group ambiguity unless a rank
+  selector is present. Defer
+  while the segment can grow; if the actual extension goes dead, commit the saved
   candidate's uncommitted suffix, preserve the committed sentence context, and
-  retain every appended letter as the next composition. Its key-path check must
-  stay a lightweight lexicon-path test rather than a synchronous n-gram/Beam
-  decode.
-- Early-commit confidence/mass aggregation on the full-code path (both
-  `SentenceInputDecoder.cs` and the Rime Lua port) must run over the already
-  narrowed visible/top-candidate list, not the full beam pool. Widening to the
-  full beam is only correct — and only needed — while merging an
-  incomplete-code-tail state. Re-widening the common path was a real
-  performance regression once (beam pool up to 100x the visible list on every
-  keystroke); keep that distinction when touching this code.
+  retain every appended letter as the next composition. Collecting confidence
+  evidence while this setting is enabled may inspect the existing visible list,
+  but its key-path check must stay a lightweight lexicon-path test rather than a
+  synchronous n-gram/Beam decode.
+- Windows early-commit confidence/mass aggregation must run over the already
+  narrowed visible/top-candidate list, not the full beam pool. An incomplete-code
+  tail is detected with a lightweight lattice-path check and is never merged into
+  confidence mass. Re-widening was a real performance regression once (beam pool
+  up to 100x the visible list on every keystroke). The Rime Lua and Fcitx5 Android
+  ports have not yet received the 2026-09-01 independent-prefix, neutral-tail and
+  closed-boundary rules; synchronize them only after Windows behavior is accepted.
 - TSF key requests carry stable `client_session` + `event_id`; timeout retries
   reuse them and Core returns the cached first response without executing a
   physical key twice.
