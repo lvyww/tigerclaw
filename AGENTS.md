@@ -97,7 +97,8 @@ UI state:
 - Windows early commit is experimental and defaults off. It requires raw length
   greater than four, exact consecutive one-key generations, confidence mass at
   least `0.995`, and the same raw boundary. Confidence is tracked independently
-  for every `(text prefix, raw boundary)` from the visible candidates. A raw
+  for every `(text prefix, raw boundary)` from the visible candidates, plus
+  dropped incomplete-tail lattice states when present. A raw
   boundary is eligible when the confidence mass of visible candidates that also
   have a segmentation boundary there reaches `0.99999`; their text need not
   agree. This weighted check prevents negligible crossing paths from vetoing an
@@ -106,14 +107,21 @@ UI state:
   When several prefixes mature, commit the longest,
   then the higher-share and earlier-boundary prefix. Backspace, contradictory
   complete evidence and manual navigation invalidate or suspend evidence. When
-  no prefix qualifies, either an incomplete-code-tail generation or a complete
-  generation whose best candidate confidence is below
-  `0.995` is a neutral gap: it adds no evidence, does not break a strong sequence
-  and may span at most three generations. If a commit matured across a
-  low-confidence complete gap, suspend all further automatic commits for the
-  rest of that composition; this prevents a second transient path from chaining
-  onto the first safe commit. Keep the complete unstable suffix and at least
+  the current key is an incomplete code tail, merge the already computed
+  dropped-tail lattice states into the confidence pool so competing prefixes
+  such as `上午` and `上窦` are compared; that generation updates or contradicts
+  trackers but does not increment evidence. A complete generation whose best
+  visible candidate confidence is below `0.995` is also a comparison-only gap
+  unless a visible prefix still reaches `0.995` after the merge. Keep a tracker
+  only while current merged prefixes still support it; a stronger fork after a
+  shared stem drops it. These gaps add no evidence, do not break a supported
+  sequence and may span at most three generations. Keep the complete unstable
+  suffix and at least
   three uncommitted raw code characters from the completed decode generation.
+  `保留最少编码数量` defaults to `0` (no extra limit). A value greater than zero
+  raises the leftover-raw-code floor for both probabilistic early commit and
+  empty-code automatic commit to that count; probabilistic commit still never
+  goes below three.
   `test整句` `uriczwxmjou` must not commit transient
   `可佛`; Tiger `nuusvbbhoi` must finish as `左手匕首` rather than `左手要好自`;
   `iejryfenahbmsp` may commit `新人` but must finish as `新人上午来面试`, never
@@ -133,12 +141,15 @@ UI state:
   but its key-path check must stay a lightweight lexicon-path test rather than a
   synchronous n-gram/Beam decode.
 - Windows early-commit confidence/mass aggregation must run over the already
-  narrowed visible/top-candidate list, not the full beam pool. An incomplete-code
-  tail is detected with a lightweight lattice-path check and is never merged into
-  confidence mass. Re-widening was a real performance regression once (beam pool
-  up to 100x the visible list on every keystroke). The Rime Lua and Fcitx5 Android
-  ports have not yet received the 2026-09-01 independent-prefix, neutral-tail and
-  closed-boundary rules; synchronize them only after Windows behavior is accepted.
+  narrowed visible/top-candidate list, not the full beam pool. Incomplete-code
+  tails may merge the already computed `states[consumedLength]` lattice into the
+  evidence pool for comparison only; they must not count as a new evidence
+  generation and must not re-widen the common complete-code path. Re-widening
+  the complete path was a real performance regression once (beam pool up to 100x
+  the visible list on every keystroke). The Rime Lua and Fcitx5 Android
+  ports have not yet received the 2026-09-01 independent-prefix, dropped-tail
+  comparison and closed-boundary rules; synchronize them only after Windows
+  behavior is accepted.
 - TSF key requests carry stable `client_session` + `event_id`; timeout retries
   reuse them and Core returns the cached first response without executing a
   physical key twice.

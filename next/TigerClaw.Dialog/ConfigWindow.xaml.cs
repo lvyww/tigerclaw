@@ -1172,6 +1172,8 @@ namespace TigerClaw.Dialog
                     return "整句模式下高置信度且连续稳定的前缀自动提前上屏；默认关闭。";
                 case "整句空码自动顶屏":
                     return "唯一候选或置信度至少 0.99999 的强首选后，输入变为空码且无法继续补全当前码段时，上屏原候选并保留新增编码；默认开启。";
+                case "保留最少编码数量":
+                    return "自动上屏后至少留在编码里的码数。0 表示不额外限制；大于 0 时，概率提前上屏和空码顶屏都必须留下这么多未上屏编码。";
                 case "TAB清屏":
                     return "Tab 键在对应场景下是否直接清屏。整句有候选时，Tab / Shift+Tab 仍遍历整句候选，不会清屏。";
                 case "竖排候选":
@@ -1266,6 +1268,7 @@ namespace TigerClaw.Dialog
                 case "整句神经重排":
                 case "整句自动提前上屏":
                 case "整句空码自动顶屏":
+                case "保留最少编码数量":
                     return SectionSentence;
 
                 case KeySelectionKeys:

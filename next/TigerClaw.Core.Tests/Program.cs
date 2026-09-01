@@ -151,7 +151,7 @@ namespace TigerClaw.Core.Tests
                 SentenceDecoderAllowsNonPrimaryCodesForRareCharacters();
                 SentenceDecoderIncrementalMatchesFullRebuild();
                 SentenceDecoderReportsTruncatedConfidenceMass();
-                SentenceDecoderDoesNotCountIncompleteTailAsConfidence();
+                SentenceDecoderMergesIncompleteTailIntoPrefixEvidence();
                 SentenceDecoderConditionsEvidenceOnCommittedPrefix();
                 SentenceDecoderMarksIncompleteTailAsNeutralOnly();
                 SentenceDecoderSelectsExactVisibleTopK();
@@ -166,6 +166,7 @@ namespace TigerClaw.Core.Tests
                 SentenceEngineUsesTabToTraverseCandidates();
                 SentenceEnginePassesCtrlNumberShortcut();
                 SentenceEngineCommitsSmartQuoteAfterCandidate();
+                SentenceMinRetainedRawLengthDefaultsToZeroAndClamps();
                 SentenceEmptyCodeAutoCommitDefaultsOnAndRetainsNewKey();
                 SentenceEmptyCodeAutoCommitPreservesSentenceContext();
                 SentenceEmptyCodeAutoCommitHonorsDisabledAndCandidateGuards();
@@ -179,8 +180,11 @@ namespace TigerClaw.Core.Tests
                 SentenceAutoCommitRequiresConsecutiveAppendEvidence();
                 SentenceAutoCommitSuspendsAfterManualNavigation();
                 SentenceAutoCommitRetainsAtLeastThreeRawCodes();
+                SentenceAutoCommitHonorsConfiguredMinRetainedRawLength();
+                SentenceEmptyCodeAutoCommitHonorsConfiguredMinRetainedRawLength();
                 SentenceAutoCommitNeutralTailDoesNotCountAsEvidence();
                 SentenceAutoCommitPreservesEvidenceAcrossLowConfidenceCompleteGap();
+                SentenceAutoCommitDroppedTailContradictsShorterCompetitor();
                 SentenceAutoCommitStopsBeforeExtendableSegment();
                 SentenceAutoCommitUsesTwoStrongGenerationCommonPrefix();
                 SentenceAutoCommitKeepsThreeGenerationWindowForWeakEvidence();
@@ -2297,6 +2301,19 @@ namespace TigerClaw.Core.Tests
                 nameof(SentenceDecoderIncrementalMatchesFullRebuild) + ".retype_after_selector");
         }
 
+        private static string DumpSentencePrefixes(SentenceDecodeResult result)
+        {
+            SentenceCandidate[] candidates = result.Candidates ?? Array.Empty<SentenceCandidate>();
+            SentencePrefixEvidence[] prefixes = result.EarlyCommitEvidence == null
+                ? Array.Empty<SentencePrefixEvidence>()
+                : result.EarlyCommitEvidence.Prefixes ?? Array.Empty<SentencePrefixEvidence>();
+            return "visible=" + string.Join("/", candidates.Select(item => item.Text)) +
+                " prefixes=" + string.Join("/", prefixes.Select(prefix =>
+                    prefix.Text + "@" + prefix.RawLength.ToString(CultureInfo.InvariantCulture) +
+                    ":" + prefix.Share.ToString("0.000", CultureInfo.InvariantCulture) +
+                    (prefix.BoundaryClosed ? "c" : "o")));
+        }
+
         private static void AssertSentenceResultsEqual(
             SentenceDecodeResult left,
             SentenceDecodeResult right,
@@ -2319,6 +2336,9 @@ namespace TigerClaw.Core.Tests
             True(
                 leftEvidence.NeutralIncompleteTail == rightEvidence.NeutralIncompleteTail,
                 name + ".early.neutral_tail");
+            True(
+                leftEvidence.MergedIncompleteTail == rightEvidence.MergedIncompleteTail,
+                name + ".early.merged_tail");
             True(
                 leftEvidence.NeutralLowConfidence == rightEvidence.NeutralLowConfidence,
                 name + ".early.neutral_low_confidence");
@@ -3159,7 +3179,7 @@ namespace TigerClaw.Core.Tests
                 nameof(SentenceDecoderReportsTruncatedConfidenceMass));
         }
 
-        private static void SentenceDecoderDoesNotCountIncompleteTailAsConfidence()
+        private static void SentenceDecoderMergesIncompleteTailIntoPrefixEvidence()
         {
             var languageModel = new PrefersIncompleteTailSentenceLanguageModel();
             var decoder = new SentenceInputDecoder(
@@ -3176,15 +3196,19 @@ namespace TigerClaw.Core.Tests
             AssertSentenceResultsEqual(
                 result,
                 decoder.DecodeFull("abc", 20, includeEarlyCommitEvidence: true),
-                nameof(SentenceDecoderDoesNotCountIncompleteTailAsConfidence) + ".incremental");
+                nameof(SentenceDecoderMergesIncompleteTailIntoPrefixEvidence) + ".incremental");
             True(result.Candidates.Length == 1 && result.Candidates[0].Text == "丁戊",
-                nameof(SentenceDecoderDoesNotCountIncompleteTailAsConfidence) + ".visible");
+                nameof(SentenceDecoderMergesIncompleteTailIntoPrefixEvidence) + ".visible");
             True(!result.EarlyCommitEvidence.IgnoreNeuralConstraint,
-                nameof(SentenceDecoderDoesNotCountIncompleteTailAsConfidence) + ".neural");
-            Equal("丁戊", result.EarlyCommitEvidence.Proposal,
-                nameof(SentenceDecoderDoesNotCountIncompleteTailAsConfidence) + ".proposal");
-            True(!result.EarlyCommitEvidence.Prefixes.Any(prefix => prefix.Text == "甲乙"),
-                nameof(SentenceDecoderDoesNotCountIncompleteTailAsConfidence) + ".excluded");
+                nameof(SentenceDecoderMergesIncompleteTailIntoPrefixEvidence) + ".neural");
+            True(!result.EarlyCommitEvidence.NeutralIncompleteTail,
+                nameof(SentenceDecoderMergesIncompleteTailIntoPrefixEvidence) + ".complete");
+            True(result.EarlyCommitEvidence.MergedIncompleteTail,
+                nameof(SentenceDecoderMergesIncompleteTailIntoPrefixEvidence) + ".merged");
+            True(result.EarlyCommitEvidence.Prefixes.Any(prefix => prefix.Text == "甲乙"),
+                nameof(SentenceDecoderMergesIncompleteTailIntoPrefixEvidence) + ".dropped_tail");
+            True(result.EarlyCommitEvidence.Prefixes.Any(prefix => prefix.Text == "丁戊"),
+                nameof(SentenceDecoderMergesIncompleteTailIntoPrefixEvidence) + ".visible_prefix");
         }
 
         private static void SentenceDecoderConditionsEvidenceOnCommittedPrefix()
@@ -3249,12 +3273,14 @@ namespace TigerClaw.Core.Tests
                 "abcdx",
                 20,
                 includeEarlyCommitEvidence: true);
-            Equal(string.Empty, result.EarlyCommitEvidence.Proposal,
-                nameof(SentenceDecoderMarksIncompleteTailAsNeutralOnly) + ".proposal");
-            True(result.EarlyCommitEvidence.Prefixes.Length == 0,
-                nameof(SentenceDecoderMarksIncompleteTailAsNeutralOnly) + ".prefixes");
+            True(result.Candidates.Length == 0,
+                nameof(SentenceDecoderMarksIncompleteTailAsNeutralOnly) + ".visible");
             True(result.EarlyCommitEvidence.NeutralIncompleteTail,
                 nameof(SentenceDecoderMarksIncompleteTailAsNeutralOnly) + ".neutral");
+            True(result.EarlyCommitEvidence.MergedIncompleteTail,
+                nameof(SentenceDecoderMarksIncompleteTailAsNeutralOnly) + ".merged");
+            True(result.EarlyCommitEvidence.Prefixes.Any(prefix => prefix.Text == "甲乙"),
+                nameof(SentenceDecoderMarksIncompleteTailAsNeutralOnly) + ".dropped_tail");
         }
 
         private static void SentenceDecoderAllowsImplicitNonFirstOnlyForWholeInputEdge()
@@ -3348,6 +3374,80 @@ namespace TigerClaw.Core.Tests
             EngineUiSnapshot snapshot = engine.GetUiSnapshot(5);
             True(snapshot.ActiveInputCode.Replace(" ", string.Empty).Length >= 3,
                 nameof(SentenceAutoCommitRetainsAtLeastThreeRawCodes));
+        }
+
+        private static void SentenceMinRetainedRawLengthDefaultsToZeroAndClamps()
+        {
+            var state = new CoreRuntimeState();
+            True(state.GetSentenceMinRetainedRawLength() == 0,
+                nameof(SentenceMinRetainedRawLengthDefaultsToZeroAndClamps) + ".default");
+            True(state.TrySetConfigValue("保留最少编码数量", "5", out _, out _),
+                nameof(SentenceMinRetainedRawLengthDefaultsToZeroAndClamps) + ".set");
+            True(state.GetSentenceMinRetainedRawLength() == 5,
+                nameof(SentenceMinRetainedRawLengthDefaultsToZeroAndClamps) + ".five");
+            state.TrySetConfigValue("保留最少编码数量", "-2", out _, out _);
+            True(state.GetSentenceMinRetainedRawLength() == 0,
+                nameof(SentenceMinRetainedRawLengthDefaultsToZeroAndClamps) + ".negative");
+            state.TrySetConfigValue("保留最少编码数量", "99", out _, out _);
+            True(state.GetSentenceMinRetainedRawLength() == 32,
+                nameof(SentenceMinRetainedRawLengthDefaultsToZeroAndClamps) + ".clamp");
+            state.TrySetConfigValue("保留最少编码数量", "abc", out _, out _);
+            True(state.GetSentenceMinRetainedRawLength() == 0,
+                nameof(SentenceMinRetainedRawLengthDefaultsToZeroAndClamps) + ".invalid");
+        }
+
+        private static void SentenceAutoCommitHonorsConfiguredMinRetainedRawLength()
+        {
+            var state = new CoreRuntimeState();
+            state.TrySetConfigValue("整句输入", "是", out _, out _);
+            state.TrySetConfigValue("整句自动提前上屏", "是", out _, out _);
+            state.TrySetConfigValue("整句空码自动顶屏", "否", out _, out _);
+            True(state.TrySetConfigValue("保留最少编码数量", "5", out _, out _),
+                nameof(SentenceAutoCommitHonorsConfiguredMinRetainedRawLength) + ".set");
+            var engine = new InputMethodEngine(state, CreateSentenceDecoder(
+                new Dictionary<string, List<string>>
+                {
+                    ["abc"] = new List<string> { "甲乙" },
+                    ["de"] = new List<string> { "丙" },
+                    ["def"] = new List<string> { "丁" },
+                    ["defg"] = new List<string> { "戊" },
+                    ["hi"] = new List<string> { "己" }
+                }));
+
+            TypeLetters(engine, "abcde");
+            Equal(null, Press(engine, 0x46).TextToOutput,
+                nameof(SentenceAutoCommitHonorsConfiguredMinRetainedRawLength) + ".three_not_enough");
+            Equal(null, Press(engine, 0x47).TextToOutput,
+                nameof(SentenceAutoCommitHonorsConfiguredMinRetainedRawLength) + ".four_not_enough");
+            Equal("甲乙", Press(engine, 0x48).TextToOutput,
+                nameof(SentenceAutoCommitHonorsConfiguredMinRetainedRawLength) + ".five_commits");
+            True(engine.GetUiSnapshot(5).ActiveInputCode.Replace(" ", string.Empty).Length >= 5,
+                nameof(SentenceAutoCommitHonorsConfiguredMinRetainedRawLength) + ".retained");
+        }
+
+        private static void SentenceEmptyCodeAutoCommitHonorsConfiguredMinRetainedRawLength()
+        {
+            var state = new CoreRuntimeState();
+            state.TrySetConfigValue("整句输入", "是", out _, out _);
+            True(state.TrySetConfigValue("保留最少编码数量", "4", out _, out _),
+                nameof(SentenceEmptyCodeAutoCommitHonorsConfiguredMinRetainedRawLength) + ".set");
+            var engine = new InputMethodEngine(state, CreateSentenceDecoder(
+                new Dictionary<string, List<string>>
+                {
+                    ["ab"] = new List<string> { "甲" }
+                }));
+
+            TypeLetters(engine, "ab");
+            Equal(null, Press(engine, 0x43).TextToOutput,
+                nameof(SentenceEmptyCodeAutoCommitHonorsConfiguredMinRetainedRawLength) + ".one");
+            Equal(null, Press(engine, 0x44).TextToOutput,
+                nameof(SentenceEmptyCodeAutoCommitHonorsConfiguredMinRetainedRawLength) + ".two");
+            Equal(null, Press(engine, 0x45).TextToOutput,
+                nameof(SentenceEmptyCodeAutoCommitHonorsConfiguredMinRetainedRawLength) + ".three");
+            Equal("甲", Press(engine, 0x46).TextToOutput,
+                nameof(SentenceEmptyCodeAutoCommitHonorsConfiguredMinRetainedRawLength) + ".four");
+            Equal("cdef", engine.GetUiSnapshot(5).ActiveInputCode.Replace(" ", string.Empty),
+                nameof(SentenceEmptyCodeAutoCommitHonorsConfiguredMinRetainedRawLength) + ".retained");
         }
 
         private static void SentenceAutoCommitNeutralTailDoesNotCountAsEvidence()
@@ -3454,7 +3554,70 @@ namespace TigerClaw.Core.Tests
                 ".strong_sequence_survives");
             Equal(null, Press(engine, 0x5A).TextToOutput,
                 nameof(SentenceAutoCommitPreservesEvidenceAcrossLowConfidenceCompleteGap) +
-                ".later_auto_commit_suspended");
+                ".later_key_does_not_commit_yet");
+        }
+
+        private static void SentenceAutoCommitDroppedTailContradictsShorterCompetitor()
+        {
+            var lexicon = new Dictionary<string, List<string>>
+            {
+                ["ab"] = new List<string> { "甲" },
+                ["cd"] = new List<string> { "乙" },
+                ["efgh"] = new List<string> { "丙丁" },
+                ["efghi"] = new List<string> { "丙戊" },
+                ["ix"] = new List<string> { "庚" },
+                ["xyz"] = new List<string> { "己" }
+            };
+            var decoder = new SentenceInputDecoder(
+                SentenceLexiconIndex.Build(lexicon),
+                new PrefersAfternoonOverCaveSentenceLanguageModel(),
+                beamWidth: 100);
+            SentenceDecodeResult shorter = decoder.DecodeFull(
+                "abcdefgh", 20, includeEarlyCommitEvidence: true);
+            SentenceDecodeResult longer = decoder.DecodeFull(
+                "abcdefghi", 20, includeEarlyCommitEvidence: true);
+            string shorterDump = DumpSentencePrefixes(shorter);
+            string longerDump = DumpSentencePrefixes(longer);
+            SentencePrefixEvidence cave = (shorter.EarlyCommitEvidence.Prefixes ??
+                Array.Empty<SentencePrefixEvidence>())
+                .FirstOrDefault(prefix => prefix.Text == "甲乙丙丁" && prefix.RawLength == 8);
+            SentencePrefixEvidence afternoon = (longer.EarlyCommitEvidence.Prefixes ??
+                Array.Empty<SentencePrefixEvidence>())
+                .FirstOrDefault(prefix => prefix.Text == "甲乙丙戊" && prefix.RawLength == 9);
+            True(cave != null, nameof(SentenceAutoCommitDroppedTailContradictsShorterCompetitor) +
+                ".cave_missing " + shorterDump);
+            True(afternoon != null, nameof(SentenceAutoCommitDroppedTailContradictsShorterCompetitor) +
+                ".afternoon_missing " + longerDump);
+            True(cave.Share >= 0.995 && cave.BoundaryClosed,
+                nameof(SentenceAutoCommitDroppedTailContradictsShorterCompetitor) + ".cave " +
+                shorterDump);
+            True(afternoon.Share >= 0.995 && afternoon.BoundaryClosed &&
+                 longer.EarlyCommitEvidence.MergedIncompleteTail,
+                nameof(SentenceAutoCommitDroppedTailContradictsShorterCompetitor) + ".afternoon " +
+                longerDump);
+            True(!longer.EarlyCommitEvidence.Prefixes.Any(prefix =>
+                    prefix.Text == "甲乙丙丁" && prefix.Share >= 0.995),
+                nameof(SentenceAutoCommitDroppedTailContradictsShorterCompetitor) +
+                ".cave_diluted " + longerDump);
+
+            var state = new CoreRuntimeState();
+            state.TrySetConfigValue("整句输入", "是", out _, out _);
+            state.TrySetConfigValue("整句自动提前上屏", "是", out _, out _);
+            state.TrySetConfigValue("整句空码自动顶屏", "否", out _, out _);
+            var engine = new InputMethodEngine(state, new SentenceInputDecoder(
+                SentenceLexiconIndex.Build(lexicon),
+                new PrefersAfternoonOverCaveSentenceLanguageModel(),
+                beamWidth: 100));
+
+            TypeLetters(engine, "abcdefgh");
+            Equal("甲乙", Press(engine, 0x49).TextToOutput,
+                nameof(SentenceAutoCommitDroppedTailContradictsShorterCompetitor) +
+                ".commits_stable_prefix");
+            EngineUiSnapshot snapshot = engine.GetUiSnapshot(5);
+            True(snapshot.Candidates.Length > 0 && snapshot.Candidates[0].Contains("丙戊") &&
+                 !snapshot.Candidates[0].Contains("丙丁"),
+                nameof(SentenceAutoCommitDroppedTailContradictsShorterCompetitor) +
+                ".afternoon_visible");
         }
 
         private static void SentenceAutoCommitUsesTwoStrongGenerationCommonPrefix()
@@ -4390,6 +4553,19 @@ namespace TigerClaw.Core.Tests
             {
                 Thread.Sleep(75);
                 return 0.0;
+            }
+
+            public bool HasObservedBigram(string previous, string target)
+            {
+                return false;
+            }
+        }
+
+        private sealed class PrefersAfternoonOverCaveSentenceLanguageModel : ISentenceLanguageModel
+        {
+            public double LogProbability(string previous2, string previous1, string target)
+            {
+                return string.Equals(target, "丁", StringComparison.Ordinal) ? -100.0 : 0.0;
             }
 
             public bool HasObservedBigram(string previous, string target)

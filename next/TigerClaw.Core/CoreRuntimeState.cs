@@ -50,6 +50,7 @@ namespace TigerClaw.Core
         private const string KeySentenceNeuralRerank = "\u6574\u53e5\u795e\u7ecf\u91cd\u6392"; // 整句神经重排
         private const string KeySentenceAutoCommit = "\u6574\u53e5\u81ea\u52a8\u63d0\u524d\u4e0a\u5c4f"; // 整句自动提前上屏
         private const string KeySentenceEmptyCodeAutoCommit = "\u6574\u53e5\u7a7a\u7801\u81ea\u52a8\u9876\u5c4f"; // 整句空码自动顶屏
+        private const string KeySentenceMinRetainedRawLength = "\u4fdd\u7559\u6700\u5c11\u7f16\u7801\u6570\u91cf"; // 保留最少编码数量
         private const string KeyCnUseEnPunc = "\u4e2d\u6587\u72b6\u6001\u4e0b\u4f7f\u7528\u82f1\u6587\u6807\u70b9"; // unicode: 涓枃鐘舵€佷笅浣跨敤鑻辨枃鏍囩偣
 
         private const string KeyVerticalCandidates = "\u7ad6\u6392\u5019\u9009"; // unicode: 绔栨帓鍊欓€?
@@ -199,6 +200,8 @@ namespace TigerClaw.Core
             new KeyValuePair<string, string>(KeySentenceAutoCommit, No),
 
             new KeyValuePair<string, string>(KeySentenceEmptyCodeAutoCommit, Yes),
+
+            new KeyValuePair<string, string>(KeySentenceMinRetainedRawLength, "0"),
 
             new KeyValuePair<string, string>(KeyMaxAuto, Yes),
 
@@ -1344,6 +1347,30 @@ namespace TigerClaw.Core
         public bool GetSentenceAutoCommitEnabled() => GetBool(KeySentenceAutoCommit, false);
 
         public bool GetSentenceEmptyCodeAutoCommitEnabled() => GetBool(KeySentenceEmptyCodeAutoCommit, true);
+
+        public int GetSentenceMinRetainedRawLength()
+        {
+            lock (_lock)
+            {
+                if (_config.TryGetValue(KeySentenceMinRetainedRawLength, out string raw) &&
+                    int.TryParse(raw, out int n))
+                {
+                    if (n < 0)
+                    {
+                        return 0;
+                    }
+
+                    if (n > 32)
+                    {
+                        return 32;
+                    }
+
+                    return n;
+                }
+            }
+
+            return 0;
+        }
 
         public bool GetShiftToggleEnabled() => GetBool(KeyShiftToggle, true);
 

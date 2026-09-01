@@ -56,7 +56,7 @@ python3 tools/export_tiger_sentence_rime.py
 只能用 `commit_text`、`clear`、`push_input` 重建 composition，因此不同前端可能出现
 单帧刷新。候选窗坐标和上下翻转由 Rime 前端管理，不属于 Lua 方案能力范围。
 
-注意：Windows Core 于 2026-09-01 改为独立前缀累计、中性不完整尾码/低置信度完整代
+注意：Windows Core 于 2026-09-01 改为独立前缀累计、去掉不完整尾码后的切分并池比较
 和加权候选边界封闭检查；本 Rime 实验包尚未同步这组规则，验证完成前不要宣称行为完全一致。
 
 ## 补充语料

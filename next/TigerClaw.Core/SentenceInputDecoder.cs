@@ -305,6 +305,7 @@ namespace TigerClaw.Core
         {
             Prefixes = Array.Empty<SentencePrefixEvidence>(),
             NeutralIncompleteTail = false,
+            MergedIncompleteTail = false,
             NeutralLowConfidence = false,
             ConfidenceTruncated = false,
             Proposal = string.Empty,
@@ -315,6 +316,7 @@ namespace TigerClaw.Core
 
         public SentencePrefixEvidence[] Prefixes { get; set; }
         public bool NeutralIncompleteTail { get; set; }
+        public bool MergedIncompleteTail { get; set; }
         public bool NeutralLowConfidence { get; set; }
         public bool ConfidenceTruncated { get; set; }
         // Compatibility projection for differential/golden tooling. Runtime
@@ -1133,9 +1135,9 @@ namespace TigerClaw.Core
             SentenceEarlyCommitEvidence earlyCommitEvidence = SentenceEarlyCommitEvidence.Empty;
             if (includeEarlyCommitEvidence)
             {
-                // Confidence is intentionally computed from the already-selected
-                // visible candidates. An incomplete tail is only a neutral gap;
-                // it must not widen or add mass to the candidate set.
+                // The complete-code path stays on the already-selected visible
+                // list. Dropped incomplete-tail states are merged only into the
+                // evidence pool so competing prefixes can be compared.
                 earlyCommitEvidence = BuildEarlyCommitEvidence(
                     normalized,
                     states,
@@ -1268,10 +1270,19 @@ namespace TigerClaw.Core
             bool completedTruncated,
             string requiredTextPrefix)
         {
-            SentenceCandidate[] candidates = completed
+            SentenceCandidate[] visibleCandidates = completed
                 .Where(candidate => HasRequiredPrefix(candidate?.Text, requiredTextPrefix))
                 .ToArray();
-            SentencePrefixEvidence[] prefixes = BuildPrefixEvidence(candidates);
+            bool confidenceTruncated = completedTruncated;
+            bool mergedIncompleteTail;
+            SentenceCandidate[] pool = CollectEarlyCommitPool(
+                normalized,
+                states,
+                visibleCandidates,
+                requiredTextPrefix,
+                out mergedIncompleteTail,
+                ref confidenceTruncated);
+            SentencePrefixEvidence[] prefixes = BuildPrefixEvidence(pool);
             SentencePrefixEvidence longest = prefixes
                 .Where(prefix =>
                     prefix.BoundaryClosed && prefix.Share >= EarlyCommitMinimumShare)
@@ -1283,10 +1294,10 @@ namespace TigerClaw.Core
             return new SentenceEarlyCommitEvidence
             {
                 Prefixes = prefixes,
-                NeutralIncompleteTail = candidates.Length == 0 &&
-                    HasIncompleteCodeTailState(normalized, states, requiredTextPrefix),
-                NeutralLowConfidence = HasLowConfidenceCompletedGeneration(candidates),
-                ConfidenceTruncated = completedTruncated,
+                NeutralIncompleteTail = visibleCandidates.Length == 0 && mergedIncompleteTail,
+                MergedIncompleteTail = mergedIncompleteTail,
+                NeutralLowConfidence = HasLowConfidenceCompletedGeneration(visibleCandidates),
+                ConfidenceTruncated = confidenceTruncated,
                 Proposal = longest?.Text ?? string.Empty,
                 ProposalShare = longest?.Share ?? 0.0,
                 RawLengths = prefixes
@@ -1300,6 +1311,102 @@ namespace TigerClaw.Core
                             .First().RawLength,
                         StringComparer.Ordinal),
                 IgnoreNeuralConstraint = false
+            };
+        }
+
+        private SentenceCandidate[] CollectEarlyCommitPool(
+            string normalized,
+            BeamBucket[] states,
+            SentenceCandidate[] visibleCandidates,
+            string requiredTextPrefix,
+            out bool mergedIncompleteTail,
+            ref bool confidenceTruncated)
+        {
+            var pool = new Dictionary<string, SentenceCandidate>(StringComparer.Ordinal);
+            foreach (SentenceCandidate candidate in visibleCandidates)
+            {
+                AddEarlyCommitPoolCandidate(pool, candidate);
+            }
+
+            mergedIncompleteTail = false;
+            int maximumTailLength = Math.Min(_maxCodeLength - 1, normalized.Length - 1);
+            for (int tailLength = 1; tailLength <= maximumTailLength; tailLength++)
+            {
+                int consumedLength = normalized.Length - tailLength;
+                string tail = normalized.Substring(consumedLength);
+                if (!IsIncompleteCodeTail(tail))
+                {
+                    continue;
+                }
+
+                List<BeamState> partial = states[consumedLength].Limit(
+                    _beamWidth,
+                    out bool partialTruncated);
+                if (partial.Count == 0)
+                {
+                    continue;
+                }
+
+                bool added = false;
+                foreach (BeamState item in partial)
+                {
+                    SentenceCandidate candidate = EvaluateState(item);
+                    if (!HasRequiredPrefix(candidate.Text, requiredTextPrefix))
+                    {
+                        continue;
+                    }
+
+                    AddEarlyCommitPoolCandidate(pool, candidate);
+                    added = true;
+                }
+
+                if (added)
+                {
+                    mergedIncompleteTail = true;
+                    confidenceTruncated |= partialTruncated;
+                }
+            }
+
+            if (pool.Count == 0)
+            {
+                return Array.Empty<SentenceCandidate>();
+            }
+
+            return pool.Values.ToArray();
+        }
+
+        private static void AddEarlyCommitPoolCandidate(
+            Dictionary<string, SentenceCandidate> pool,
+            SentenceCandidate candidate)
+        {
+            if (candidate == null || string.IsNullOrEmpty(candidate.Text))
+            {
+                return;
+            }
+
+            if (!pool.TryGetValue(candidate.Text, out SentenceCandidate previous))
+            {
+                pool[candidate.Text] = CopyEarlyCommitPoolCandidate(candidate);
+                return;
+            }
+
+            double combinedMass = LogSumExp(previous.ConfidenceScore, candidate.ConfidenceScore);
+            if (candidate.ConfidenceScore > previous.ConfidenceScore)
+            {
+                previous = CopyEarlyCommitPoolCandidate(candidate);
+                pool[candidate.Text] = previous;
+            }
+
+            previous.ConfidenceScore = combinedMass;
+        }
+
+        private static SentenceCandidate CopyEarlyCommitPoolCandidate(SentenceCandidate candidate)
+        {
+            return new SentenceCandidate
+            {
+                Text = candidate.Text,
+                ConfidenceScore = candidate.ConfidenceScore,
+                Boundary = candidate.Boundary
             };
         }
 
@@ -1318,29 +1425,6 @@ namespace TigerClaw.Core
                 total += Math.Exp(candidate.ConfidenceScore - maximum);
             }
             return total > 0.0 && 1.0 / total < EarlyCommitMinimumShare;
-        }
-
-        private bool HasIncompleteCodeTailState(
-            string normalized,
-            BeamBucket[] states,
-            string requiredTextPrefix)
-        {
-            int maximumTailLength = Math.Min(_maxCodeLength - 1, normalized.Length - 1);
-            for (int tailLength = 1; tailLength <= maximumTailLength; tailLength++)
-            {
-                int consumedLength = normalized.Length - tailLength;
-                string tail = normalized.Substring(consumedLength);
-                if (!IsIncompleteCodeTail(tail))
-                {
-                    continue;
-                }
-
-                if (states[consumedLength].HasItemWithTextPrefix(requiredTextPrefix))
-                {
-                    return true;
-                }
-            }
-            return false;
         }
 
         private static SentencePrefixEvidence[] BuildPrefixEvidence(
