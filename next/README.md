@@ -8,7 +8,7 @@ This directory contains the active split-process runtime:
 - `TigerClaw.Overlay`
 - `TigerClaw.Dialog`
 - `TigerClaw.Shared`
-- `TigerClaw.Sentence` and `TigerClaw.Sentence.Native`
+- `TigerClaw.Sentence.Native` (C++ Sentence host and llama.cpp scorer)
 - `TigerClaw.Hook.Native` experimental native hook frontend
 
 Build:

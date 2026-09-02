@@ -1,8 +1,9 @@
 # TigerClaw.Sentence IPC
 
-`TigerClaw.Sentence.exe` is an optional Qwen reranking sidecar. Core remains the
-owner of composition state, lexicon lookup, lattice generation, n-gram scoring,
-candidate selection, and commit behavior.
+`TigerClaw.Sentence.exe` is an optional native C++ Qwen reranking sidecar. Core
+remains the owner of composition state, lexicon lookup, lattice generation,
+n-gram scoring, candidate selection, and commit behavior. The sidecar statically
+links its llama.cpp scorer and has no managed-runtime or companion-DLL dependency.
 
 ## Transport
 

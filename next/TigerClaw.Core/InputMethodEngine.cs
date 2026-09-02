@@ -7,7 +7,6 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
-using Forms = System.Windows.Forms;
 
 namespace TigerClaw.Core
 {
@@ -1903,13 +1902,9 @@ namespace TigerClaw.Core
         {
             try
             {
-                Forms.MessageBox.Show(
+                NativeMessageBox.ShowDesktopInformation(
                     "\u65F6\u95F4\u5DEE\u4E0D\u591A\u54AF\uFF01", // unicode: 时间差不多咯！
-                    "\u8BA1\u65F6\u5668", // unicode: 计时器
-                    Forms.MessageBoxButtons.OK,
-                    Forms.MessageBoxIcon.Information,
-                    Forms.MessageBoxDefaultButton.Button1,
-                    Forms.MessageBoxOptions.DefaultDesktopOnly);
+                    "\u8BA1\u65F6\u5668"); // unicode: 计时器
             }
             catch
             {

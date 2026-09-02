@@ -33,11 +33,15 @@ Active components:
   activation events, forwards them to Core, and applies Core responses.
 - `next/TigerClaw.Core/`: configuration, lexicons, input state, candidates,
   sentence decoding, IPC and process lifecycle.
+- `next/TigerClaw.Core.NativeAot/`: experimental parallel .NET 10 Native AOT
+  host that compiles the maintained Core sources without replacing the net48
+  project.
 - `next/TigerClaw.Overlay/`: WPF status/candidate UI and typing sounds.
 - `next/TigerClaw.Dialog/`: settings, add-word and selection-key UI.
 - `next/TigerClaw.Shared/`: shared constants, build identity, MMF and guards.
-- `next/TigerClaw.Sentence/` and `.Native/`: optional Qwen reranking sidecar and
-  llama.cpp wrapper. Failure always falls back to n-gram order.
+- `next/TigerClaw.Sentence.Native/`: optional native C++ Qwen reranking sidecar,
+  including the named-pipe host and statically linked llama.cpp scorer. Failure
+  always falls back to n-gram order.
 - `next/TigerClaw.Hook.Native/`: experimental native-hook frontend. Do not make
   it the default workflow unless explicitly requested.
 
@@ -57,7 +61,8 @@ Sentence reranking:
 
 - Pipe: `\\.\pipe\TigerClaw.Sentence.v1`
 - Contract: `Protocol/sentence_messages.md`
-- Client/server: `SentenceRerankClient.cs` / `TigerClaw.Sentence/Program.cs`
+- Client/server: `SentenceRerankClient.cs` /
+  `TigerClaw.Sentence.Native/SentenceHost.cpp`
 
 UI state:
 
@@ -241,6 +246,12 @@ disconnect the pipe against the new binary (`SampleIME.cpp`,
 `core_hash_verify_enabled=0` in `publish_config.txt` and rebuild the TSF DLL
 once via `publish_arm64.bat`, or accept that a full `publish_arm64.bat` run is
 required whenever the embedded hash must match.
+
+`publish_aot_core_arm64.bat` publishes the parallel Core as a self-contained
+ARM64 Native AOT executable and directly replaces only
+`release_arm64/TigerClaw.Core.exe`. It leaves runtime data and the other release
+components untouched and has the same TSF embedded-hash caveat as the framework
+Core-only script.
 
 Important local rule: this checkout's `release_arm64/` is the user's daily
 runtime, not disposable build output. Never delete, clean, replace or partially

@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <PublishAot>true</PublishAot>
+    <SelfContained>true</SelfContained>
+    <IsAotCompatible>true</IsAotCompatible>
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <LangVersion>latest</LangVersion>
+    <Nullable>disable</Nullable>
+    <AssemblyName>TigerClaw.Core</AssemblyName>
+    <RootNamespace>TigerClaw.Core</RootNamespace>
+    <ApplicationManifest>..\app.manifest</ApplicationManifest>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <IlcOptimizationPreference>Speed</IlcOptimizationPreference>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="..\TigerClaw.Core\*.cs" />
+    <Compile Include="..\TigerClaw.Shared\*.cs" />
+    <EmbeddedResource Include="..\TigerClaw.Core\Data\sentence_common_chars_1500.txt">
+      <LogicalName>TigerClaw.Core.Data.sentence_common_chars_1500.txt</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\TigerClaw.Core\Data\sentence_char_ranks.txt">
+      <LogicalName>TigerClaw.Core.Data.sentence_char_ranks.txt</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
+</Project>

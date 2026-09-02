@@ -4698,7 +4698,25 @@ namespace TigerClaw.Core
 
                     byte[] all = new byte[stream.Length];
 
-                    stream.Read(all, 0, all.Length);
+                    int offset = 0;
+
+                    while (offset < all.Length)
+
+                    {
+
+                        int count = stream.Read(all, offset, all.Length - offset);
+
+                        if (count == 0)
+
+                        {
+
+                            break;
+
+                        }
+
+                        offset += count;
+
+                    }
 
                     if (LooksUtf8(all)) { return Encoding.UTF8; }
 

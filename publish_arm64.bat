@@ -50,7 +50,6 @@ if not defined MSBUILD echo ERROR: MSBuild.exe not found. & exit /b 1
 set "CORE_PROJECT=%ROOT%\next\TigerClaw.Core\TigerClaw.Core.csproj"
 set "OVERLAY_PROJECT=%ROOT%\next\TigerClaw.Overlay\TigerClaw.Overlay.csproj"
 set "DIALOG_PROJECT=%ROOT%\next\TigerClaw.Dialog\TigerClaw.Dialog.csproj"
-set "SENTENCE_PROJECT=%ROOT%\next\TigerClaw.Sentence\TigerClaw.Sentence.csproj"
 set "SENTENCE_NATIVE_BUILD=%ROOT%\next\build_sentence_native.bat"
 set "HOOK_PROJECT=%ROOT%\next\TigerClaw.Hook.Native\TigerClaw.Hook.Native.vcxproj"
 set "TSF_PROJECT=%ROOT%\BimeTSF2\SampleIME\BimeTSF2.vcxproj"
@@ -78,7 +77,7 @@ set "DIAGNOSE_TEMPLATE=%ROOT%\dist_arm64_diagnose.bat"
 set "UNINSTALL_TEMPLATE=%ROOT%\dist_arm64_uninstall.bat"
 set "UPDATE_EMBED_SCRIPT=%ROOT%\tools\update_embedded_build_info.ps1"
 
-for %%P in ("%CORE_PROJECT%" "%OVERLAY_PROJECT%" "%DIALOG_PROJECT%" "%SENTENCE_PROJECT%" "%SENTENCE_NATIVE_BUILD%" "%HOOK_PROJECT%" "%TSF_PROJECT%" "%TSF_SERVER_PROJECT%" "%WRAPPER_DIR%\build.bat" "%INSTALL_TEMPLATE%" "%INSTALL_DIRECT_TEMPLATE%" "%INSTALL_ARM64X_TEMPLATE%" "%INSTALL_LOCALSERVER_TEMPLATE%" "%DIAGNOSE_TEMPLATE%" "%UNINSTALL_TEMPLATE%" "%UPDATE_EMBED_SCRIPT%") do if not exist %%~P echo ERROR: Missing %%~P & exit /b 1
+for %%P in ("%CORE_PROJECT%" "%OVERLAY_PROJECT%" "%DIALOG_PROJECT%" "%SENTENCE_NATIVE_BUILD%" "%HOOK_PROJECT%" "%TSF_PROJECT%" "%TSF_SERVER_PROJECT%" "%WRAPPER_DIR%\build.bat" "%INSTALL_TEMPLATE%" "%INSTALL_DIRECT_TEMPLATE%" "%INSTALL_ARM64X_TEMPLATE%" "%INSTALL_LOCALSERVER_TEMPLATE%" "%DIAGNOSE_TEMPLATE%" "%UNINSTALL_TEMPLATE%" "%UPDATE_EMBED_SCRIPT%") do if not exist %%~P echo ERROR: Missing %%~P & exit /b 1
 
 echo Using MSBuild: %MSBUILD%
 echo Using dotnet : %DOTNET%
@@ -98,7 +97,6 @@ echo [2/10] Build .NET payload
 "%DOTNET%" msbuild /m /nr:false "%CORE_PROJECT%" /restore /p:Configuration=Release /p:Platform=AnyCPU /p:TigerClawTargetFramework=net481 /p:PlatformTarget=ARM64 /p:Prefer32Bit=false /p:OutDir="%CORE_OUT%\\" /v:minimal || exit /b 1
 "%DOTNET%" msbuild /m /nr:false "%OVERLAY_PROJECT%" /restore /p:Configuration=Release /p:Platform=AnyCPU /p:TigerClawTargetFramework=net481 /p:PlatformTarget=ARM64 /p:Prefer32Bit=false /p:OutDir="%CORE_OUT%\\" /v:minimal || exit /b 1
 "%DOTNET%" msbuild /m /nr:false "%DIALOG_PROJECT%" /restore /p:Configuration=Release /p:Platform=AnyCPU /p:TigerClawTargetFramework=net481 /p:PlatformTarget=ARM64 /p:Prefer32Bit=false /p:OutDir="%CORE_OUT%\\" /v:minimal || exit /b 1
-"%DOTNET%" msbuild /m /nr:false "%SENTENCE_PROJECT%" /restore /p:Configuration=Release /p:Platform=ARM64 /p:PlatformTarget=ARM64 /p:OutDir="%SENTENCE_OUT%\\" /v:minimal || exit /b 1
 call "%SENTENCE_NATIVE_BUILD%" ARM64 "%SENTENCE_OUT%" Release || exit /b 1
 if not exist "%CORE_OUT%\Models" mkdir "%CORE_OUT%\Models"
 if not exist "%SENTENCE_OUT%\Models" mkdir "%SENTENCE_OUT%\Models"
@@ -136,7 +134,7 @@ if not "%WRAP_EC%"=="0" exit /b %WRAP_EC%
 
 echo.
 echo [8/10] Validate artifacts
-for %%P in ("%CORE_OUT%\TigerClaw.Core.exe" "%CORE_OUT%\TigerClaw.Overlay.exe" "%CORE_OUT%\TigerClaw.Dialog.exe" "%CORE_OUT%\TigerClaw.Shared.dll" "%CORE_OUT%\Models\sentence-ngram-v2.bin" "%SENTENCE_OUT%\TigerClaw.Sentence.exe" "%SENTENCE_OUT%\TigerClaw.Sentence.Native.dll" "%SENTENCE_OUT%\Models\sentence-qwen-q8.gguf" "%SENTENCE_QWEN_LICENSE%" "%ROOT%\third_party\llama.cpp\LICENSE" "%HOOK_OUT%\TigerClaw.Hook.Native.exe" "%TSF_X86%" "%TSF_X64%" "%TSF_ARM64%" "%TSF_SERVER%" "%WRAPPER_DLL%") do if not exist %%~P echo ERROR: Missing %%~P & exit /b 1
+for %%P in ("%CORE_OUT%\TigerClaw.Core.exe" "%CORE_OUT%\TigerClaw.Overlay.exe" "%CORE_OUT%\TigerClaw.Dialog.exe" "%CORE_OUT%\TigerClaw.Shared.dll" "%CORE_OUT%\Models\sentence-ngram-v2.bin" "%SENTENCE_OUT%\TigerClaw.Sentence.exe" "%SENTENCE_OUT%\Models\sentence-qwen-q8.gguf" "%SENTENCE_QWEN_LICENSE%" "%ROOT%\third_party\llama.cpp\LICENSE" "%HOOK_OUT%\TigerClaw.Hook.Native.exe" "%TSF_X86%" "%TSF_X64%" "%TSF_ARM64%" "%TSF_SERVER%" "%WRAPPER_DLL%") do if not exist %%~P echo ERROR: Missing %%~P & exit /b 1
 
 echo.
 echo [9/10] Copy artifacts
@@ -160,9 +158,8 @@ if exist "%CORE_OUT%\TigerClaw.Overlay.exe.config" copy /Y "%CORE_OUT%\TigerClaw
 copy /Y "%CORE_OUT%\TigerClaw.Dialog.exe" "%RELEASE_DIR%\TigerClaw.Dialog.exe" >nul || exit /b 1
 if exist "%CORE_OUT%\TigerClaw.Dialog.exe.config" copy /Y "%CORE_OUT%\TigerClaw.Dialog.exe.config" "%RELEASE_DIR%\TigerClaw.Dialog.exe.config" >nul || exit /b 1
 copy /Y "%CORE_OUT%\TigerClaw.Shared.dll" "%RELEASE_DIR%\TigerClaw.Shared.dll" >nul || exit /b 1
-for %%F in (TigerClaw.Sentence.exe TigerClaw.Sentence.exe.config TigerClaw.Shared.dll TigerClaw.Sentence.Native.dll) do (
-  if exist "%SENTENCE_OUT%\%%F" copy /Y "%SENTENCE_OUT%\%%F" "%RELEASE_DIR%\sentence\%%F" >nul || exit /b 1
-)
+copy /Y "%SENTENCE_OUT%\TigerClaw.Sentence.exe" "%RELEASE_DIR%\sentence\TigerClaw.Sentence.exe" >nul || exit /b 1
+for %%F in (TigerClaw.Sentence.exe.config TigerClaw.Shared.dll TigerClaw.Sentence.Native.dll) do if exist "%RELEASE_DIR%\sentence\%%F" del /q "%RELEASE_DIR%\sentence\%%F"
 for %%F in (Microsoft.ML.OnnxRuntime.dll System.Buffers.dll System.Memory.dll System.Numerics.Tensors.dll System.Numerics.Vectors.dll System.Runtime.CompilerServices.Unsafe.dll onnxruntime.dll onnxruntime_providers_shared.dll) do if exist "%RELEASE_DIR%\sentence\%%F" del /q "%RELEASE_DIR%\sentence\%%F"
 for %%F in (sentence-transformer.onnx sentence-transformer.json sentence-transformer.tcmodel sentence-vocabulary.json sentence-vocabulary.tcmodel) do if exist "%RELEASE_DIR%\sentence\Models\%%F" del /q "%RELEASE_DIR%\sentence\Models\%%F"
 copy /Y "%SENTENCE_OUT%\Models\sentence-qwen-q8.gguf" "%RELEASE_DIR%\sentence\Models\sentence-qwen-q8.gguf" >nul || exit /b 1

@@ -60,7 +60,6 @@ if not defined MSBUILD (
 set "CORE_PROJECT=%ROOT%\next\TigerClaw.Core\TigerClaw.Core.csproj"
 set "OVERLAY_PROJECT=%ROOT%\next\TigerClaw.Overlay\TigerClaw.Overlay.csproj"
 set "DIALOG_PROJECT=%ROOT%\next\TigerClaw.Dialog\TigerClaw.Dialog.csproj"
-set "SENTENCE_PROJECT=%ROOT%\next\TigerClaw.Sentence\TigerClaw.Sentence.csproj"
 set "HOOK_NATIVE_PROJECT=%ROOT%\next\TigerClaw.Hook.Native\TigerClaw.Hook.Native.vcxproj"
 set "TSF_PROJECT=%ROOT%\BimeTSF2\SampleIME\BimeTSF2.vcxproj"
 
@@ -74,10 +73,6 @@ if not exist "%OVERLAY_PROJECT%" (
 )
 if not exist "%DIALOG_PROJECT%" (
     echo ERROR: Missing project: %DIALOG_PROJECT%
-    exit /b 1
-)
-if not exist "%SENTENCE_PROJECT%" (
-    echo ERROR: Missing project: %SENTENCE_PROJECT%
     exit /b 1
 )
 if not exist "%HOOK_NATIVE_PROJECT%" (
@@ -225,14 +220,9 @@ if errorlevel 1 (
 
 echo.
 echo [6/13] Build TigerClaw.Sentence Release
-"%DOTNET%" msbuild /m /nr:false "%SENTENCE_PROJECT%" /restore /p:Configuration=Release /p:Platform=x64 /p:OutDir="%SENTENCE_OUT%\\" /v:minimal
-if errorlevel 1 (
-    echo ERROR: TigerClaw.Sentence Release build failed.
-    exit /b 1
-)
 call "%SENTENCE_NATIVE_BUILD%" x64 "%SENTENCE_OUT%" Release
 if errorlevel 1 (
-    echo ERROR: TigerClaw.Sentence.Native x64 build failed.
+    echo ERROR: TigerClaw.Sentence C++ x64 build failed.
     exit /b 1
 )
 
@@ -314,7 +304,6 @@ call :RequireFile "%CORE_OUT%\TigerClaw.Core.exe" "TigerClaw.Core.exe" || exit /
 call :RequireFile "%OVERLAY_OUT%\TigerClaw.Overlay.exe" "TigerClaw.Overlay.exe" || exit /b 1
 call :RequireFile "%DIALOG_OUT%\TigerClaw.Dialog.exe" "TigerClaw.Dialog.exe" || exit /b 1
 call :RequireFile "%SENTENCE_OUT%\TigerClaw.Sentence.exe" "TigerClaw.Sentence.exe" || exit /b 1
-call :RequireFile "%SENTENCE_OUT%\TigerClaw.Sentence.Native.dll" "TigerClaw.Sentence.Native.dll" || exit /b 1
 call :RequireFile "%SENTENCE_NGRAM_MODEL%" "sentence n-gram model" || exit /b 1
 call :RequireFile "%SENTENCE_QWEN_MODEL%" "Qwen Q8 model" || exit /b 1
 call :RequireFile "%ROOT%\third_party\llama.cpp\LICENSE" "llama.cpp license" || exit /b 1
@@ -335,9 +324,8 @@ call :CopyFileStrict "%DIALOG_OUT%\TigerClaw.Dialog.exe" "%RELEASE_DIR%\TigerCla
 if exist "%DIALOG_OUT%\TigerClaw.Dialog.exe.config" call :CopyFileStrict "%DIALOG_OUT%\TigerClaw.Dialog.exe.config" "%RELEASE_DIR%\TigerClaw.Dialog.exe.config" || exit /b 1
 if exist "%DIALOG_OUT%\TigerClaw.Dialog.pdb" del /q "%RELEASE_DIR%\TigerClaw.Dialog.pdb" >nul 2>&1
 
-for %%F in (TigerClaw.Sentence.exe TigerClaw.Sentence.exe.config TigerClaw.Shared.dll TigerClaw.Sentence.Native.dll) do (
-    if exist "%SENTENCE_OUT%\%%F" call :CopyFileStrict "%SENTENCE_OUT%\%%F" "%RELEASE_SENTENCE%\%%F" || exit /b 1
-)
+call :CopyFileStrict "%SENTENCE_OUT%\TigerClaw.Sentence.exe" "%RELEASE_SENTENCE%\TigerClaw.Sentence.exe" || exit /b 1
+for %%F in (TigerClaw.Sentence.exe.config TigerClaw.Shared.dll TigerClaw.Sentence.Native.dll) do if exist "%RELEASE_SENTENCE%\%%F" del /q "%RELEASE_SENTENCE%\%%F"
 for %%F in (Microsoft.ML.OnnxRuntime.dll System.Buffers.dll System.Memory.dll System.Numerics.Tensors.dll System.Numerics.Vectors.dll System.Runtime.CompilerServices.Unsafe.dll onnxruntime.dll onnxruntime_providers_shared.dll) do (
     if exist "%RELEASE_SENTENCE%\%%F" del /q "%RELEASE_SENTENCE%\%%F"
 )

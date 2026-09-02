@@ -8,6 +8,10 @@ using System.Runtime.Serialization.Json;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+#if NET8_0_OR_GREATER
+using System.Text.Json;
+using System.Text.Json.Serialization;
+#endif
 using TigerClaw.Shared;
 
 namespace TigerClaw.Core
@@ -24,7 +28,7 @@ namespace TigerClaw.Core
         void Request(SentenceRerankRequest request);
     }
 
-    internal sealed class SentenceRerankClient : ISentenceRerankService
+    internal sealed partial class SentenceRerankClient : ISentenceRerankService
     {
         private readonly object _lock = new object();
         private readonly CoreRuntimeState _state;
@@ -160,7 +164,7 @@ namespace TigerClaw.Core
                             return;
                         }
                         string line = readTask.Result;
-                        SentencePipeResponse response = Deserialize<SentencePipeResponse>(line);
+                        SentencePipeResponse response = DeserializeResponse(line);
                         if (response != null && response.Success && response.Seq == seq &&
                             response.Generation == request.Generation && response.Scores != null)
                         {
@@ -221,29 +225,52 @@ namespace TigerClaw.Core
             return "\"" + (value ?? string.Empty).Replace("\"", "\\\"") + "\"";
         }
 
-        private static string Serialize<T>(T value)
+        private static string Serialize(SentencePipeRequest value)
         {
-            var serializer = new DataContractJsonSerializer(typeof(T));
+#if NET8_0_OR_GREATER
+            return JsonSerializer.Serialize(
+                value,
+                SentencePipeJsonContext.Default.SentencePipeRequest);
+#else
+            var serializer = new DataContractJsonSerializer(typeof(SentencePipeRequest));
             using (var stream = new MemoryStream())
             {
                 serializer.WriteObject(stream, value);
                 return Encoding.UTF8.GetString(stream.ToArray());
             }
+#endif
         }
 
-        private static T Deserialize<T>(string json) where T : class
+        private static SentencePipeResponse DeserializeResponse(string json)
         {
             if (string.IsNullOrWhiteSpace(json))
             {
                 return null;
             }
 
-            var serializer = new DataContractJsonSerializer(typeof(T));
+#if NET8_0_OR_GREATER
+            return JsonSerializer.Deserialize(
+                json,
+                SentencePipeJsonContext.Default.SentencePipeResponse);
+#else
+            var serializer = new DataContractJsonSerializer(typeof(SentencePipeResponse));
             using (var stream = new MemoryStream(Encoding.UTF8.GetBytes(json)))
             {
-                return serializer.ReadObject(stream) as T;
+                return serializer.ReadObject(stream) as SentencePipeResponse;
             }
+#endif
         }
+
+#if NET8_0_OR_GREATER
+        [JsonSourceGenerationOptions(
+            GenerationMode = JsonSourceGenerationMode.Metadata,
+            PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)]
+        [JsonSerializable(typeof(SentencePipeRequest))]
+        [JsonSerializable(typeof(SentencePipeResponse))]
+        private partial class SentencePipeJsonContext : JsonSerializerContext
+        {
+        }
+#endif
 
         [DataContract]
         private sealed class SentencePipeRequest

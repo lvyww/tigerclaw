@@ -96,6 +96,17 @@ namespace TigerClaw.Core
         {
             try
             {
+#if NET8_0_OR_GREATER
+                return NamedPipeServerStreamAcl.Create(
+                    RuntimeConstants.TsfPipeShortName,
+                    PipeDirection.InOut,
+                    NamedPipeServerStream.MaxAllowedServerInstances,
+                    PipeTransmissionMode.Message,
+                    PipeOptions.Asynchronous,
+                    4096,
+                    4096,
+                    BuildPipeSecurity());
+#else
                 return new NamedPipeServerStream(
                     RuntimeConstants.TsfPipeShortName,
                     PipeDirection.InOut,
@@ -105,6 +116,7 @@ namespace TigerClaw.Core
                     4096,
                     4096,
                     BuildPipeSecurity());
+#endif
             }
             catch
             {
