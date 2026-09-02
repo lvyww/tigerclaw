@@ -148,10 +148,10 @@ UI state:
   evidence pool; supported closed-boundary prefixes may count as a new evidence
   generation, but they must not re-widen the common complete-code path. Re-widening
   the complete path was a real performance regression once (beam pool up to 100x
-  the visible list on every keystroke). The Rime Lua and Fcitx5 Android
-  ports have not yet received the 2026-09-01 independent-prefix, dropped-tail
-  comparison and closed-boundary rules; synchronize them only after Windows
-  behavior is accepted.
+  the visible list on every keystroke). Fcitx5 Android `tigerclaw_sentence_core`
+  received these 2026-09-01 independent-prefix, dropped-tail comparison and
+  closed-boundary rules. The Rime Lua port has not; synchronize it only after
+  Windows behavior is accepted.
 - TSF key requests carry stable `client_session` + `event_id`; timeout retries
   reuse them and Core returns the cached first response without executing a
   physical key twice.
