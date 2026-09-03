@@ -22,7 +22,7 @@ if not defined DOTNET (
   exit /b 1
 )
 
-set "UNIFIED_OUT=%~dp0_run\Debug\net48"
+set "UNIFIED_OUT=%~dp0_run\Debug\x64"
 set "HOOK_NATIVE_PROJECT=%~dp0TigerClaw.Hook.Native\TigerClaw.Hook.Native.vcxproj"
 set "HOOK_NATIVE_OUT=%~dp0_run\Debug\native"
 set "SENTENCE_OUT=%~dp0_run\Debug\sentence"
@@ -38,8 +38,8 @@ for %%P in (TigerClaw.Core.exe TigerClaw.Overlay.exe TigerClaw.Dialog.exe TigerC
 echo [1/6] Build TigerClaw.Shared
 "%DOTNET%" msbuild "%~dp0TigerClaw.Shared\TigerClaw.Shared.csproj" /restore /p:Configuration=Debug /m || exit /b 1
 
-echo [2/6] Build TigerClaw.Core (OutDir: _run)
-"%DOTNET%" msbuild "%~dp0TigerClaw.Core\TigerClaw.Core.csproj" /restore /p:Configuration=Debug /p:OutDir="%UNIFIED_OUT%\\" /m || exit /b 1
+echo [2/6] Publish TigerClaw.Core Native AOT (win-x64)
+"%DOTNET%" publish "%~dp0TigerClaw.Core\TigerClaw.Core.csproj" -c Debug -r win-x64 --self-contained true -o "%UNIFIED_OUT%" /p:PublishAot=true || exit /b 1
 
 echo [3/6] Build TigerClaw.Overlay (OutDir: Core)
 "%DOTNET%" msbuild "%~dp0TigerClaw.Overlay\TigerClaw.Overlay.csproj" /restore /p:Configuration=Debug /p:OutDir="%UNIFIED_OUT%\\" /m || exit /b 1

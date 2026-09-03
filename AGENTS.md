@@ -32,10 +32,8 @@ Active components:
 - `BimeTSF2/SampleIME/`: bridge-only TSF DLL. It captures key, focus, caret and
   activation events, forwards them to Core, and applies Core responses.
 - `next/TigerClaw.Core/`: configuration, lexicons, input state, candidates,
-  sentence decoding, IPC and process lifecycle.
-- `next/TigerClaw.Core.NativeAot/`: experimental parallel .NET 10 Native AOT
-  host that compiles the maintained Core sources without replacing the net48
-  project.
+  sentence decoding, IPC and process lifecycle. It is a .NET 10 Native AOT
+  executable; there is no maintained .NET Framework Core configuration.
 - `next/TigerClaw.Overlay/`: WPF status/candidate UI and typing sounds.
 - `next/TigerClaw.Dialog/`: settings, add-word and selection-key UI.
 - `next/TigerClaw.Shared/`: shared constants, build identity, MMF and guards.
@@ -83,10 +81,19 @@ UI state:
   Other segments consume at least two keys. `;`, `'` and digits select explicit
   lexicon ranks. An implicit non-first rank is legal only when the whole input is
   consumed by one lexicon edge; segmented paths use first ranks unless selection
-  is explicit. Continuations retained by automatic commit also use first ranks.
-  Multi-character lexicon entries are legal edges.
-- Sentence input is disabled by default. `自动启用整句模式` only activates it for
-  a schema whose name contains `整句`; it does not change the `整句输入` switch.
+  is explicit. Empty-code automatic-commit continuations also use first ranks;
+  probabilistic early commit must preserve the already-ranked full-sentence paths,
+  including eligible non-first single-character segments.
+  Multi-character lexicon entries are legal edges. `允许单字重码组句` (default
+  off) additionally allows non-first single characters without a selector on
+  segmented paths and ranks those paths by language-model score so they can
+  become the visible first candidate. A whole-input single lexicon edge still
+  keeps first-rank characters ahead of later ranks. It does not bypass
+  `高频字仅使用最优码组句` or the full-code whitelist, and explicit digit/`;`/`'`
+  rank selection still works when it is on. Multi-character words still need an
+  explicit selector on segmented paths.
+- Sentence mode is controlled only by `自动启用整句模式` (default on). It
+  activates when the current schema name contains `整句`.
 - Sentence decoding is latest-generation-only and asynchronous. A stale Beam or
   Qwen result must never replace newer composition state. Pending UI keeps the
   previous candidate list and stitched live raw suffix.
@@ -133,8 +140,8 @@ UI state:
   `可佛`; Tiger `nuusvbbhoi` must finish as `左手匕首` rather than `左手要好自`;
   `iejryfenahbmsp` may commit `新人` but must finish as `新人上午来面试`, never
   `新人上窦...`.
-- `整句空码自动顶屏` defaults on and is independent of probabilistic early
-  commit. Before the new key, accept either exactly one group-eligible candidate
+- Empty-code automatic commit is a fixed part of `整句自动提前上屏` (default
+  off); there is no separate switch. Before the new key, accept either exactly one group-eligible candidate
   or a group-eligible candidate that is also the visible first candidate and has
   untruncated confidence share at least `0.99999`. Appending an ordinary letter
   must then leave no complete lexicon path; first check whether the selected last
@@ -212,7 +219,7 @@ Debug build and smoke test:
 ```batch
 next\build_next.bat
 next\register_dev_corepath.bat
-next\_run\Debug\net48\TigerClaw.Core.exe --with-overlay
+next\_run\Debug\x64\TigerClaw.Core.exe --with-overlay
 ```
 
 After testing:
@@ -235,10 +242,10 @@ The main release is `release/`. Windows on ARM development output is
 `release_arm64/`; its default uses an ARM64X wrapper with ARM64 and x64 TSF
 sidecars. `--diagnostic` enables embedded TSF logging.
 
-`publish_core_arm64.bat` rebuilds only `next/TigerClaw.Core/` and copies
-`TigerClaw.Core.exe`/`TigerClaw.Core.exe.config`/`TigerClaw.Shared.dll` into an
-existing `release_arm64/`, skipping Overlay, Dialog, Sentence, Hook.Native and
-both TSF DLLs for faster Core-only iteration. It does not touch
+`publish_core_arm64.bat` publishes only `next/TigerClaw.Core/` as a
+self-contained ARM64 Native AOT executable and replaces `TigerClaw.Core.exe` in
+an existing `release_arm64/`, skipping Overlay, Dialog, Sentence, Hook.Native,
+Shared.dll and both TSF DLLs for faster Core-only iteration. It does not touch
 `EmbeddedBuildInfo.h` or rebuild the TSF DLL. If the deployed TSF DLL was built
 with `core_hash_verify_enabled=1`, it embeds the old Core.exe's SHA256 and will
 disconnect the pipe against the new binary (`SampleIME.cpp`,
@@ -246,12 +253,6 @@ disconnect the pipe against the new binary (`SampleIME.cpp`,
 `core_hash_verify_enabled=0` in `publish_config.txt` and rebuild the TSF DLL
 once via `publish_arm64.bat`, or accept that a full `publish_arm64.bat` run is
 required whenever the embedded hash must match.
-
-`publish_aot_core_arm64.bat` publishes the parallel Core as a self-contained
-ARM64 Native AOT executable and directly replaces only
-`release_arm64/TigerClaw.Core.exe`. It leaves runtime data and the other release
-components untouched and has the same TSF embedded-hash caveat as the framework
-Core-only script.
 
 Important local rule: this checkout's `release_arm64/` is the user's daily
 runtime, not disposable build output. Never delete, clean, replace or partially

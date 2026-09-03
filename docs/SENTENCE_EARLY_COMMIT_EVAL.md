@@ -30,7 +30,7 @@ python3 tools/prepare_sentence_early_commit_eval.py
 先构建 Core 测试程序，再运行：
 
 ```batch
-next\_run\Tests\Debug\net48\TigerClaw.Core.Tests.exe ^
+next\_run\Tests\Debug\net10.0-windows\TigerClaw.Core.Tests.exe ^
   --sentence-early-commit-eval ^
   C:\Archive\tigerclaw_sentence_ml\baseline\tiger-sentence-early-commit-eval-v1.json ^
   release_arm64\Models\sentence-ngram-v2.bin ^
@@ -38,10 +38,7 @@ next\_run\Tests\Debug\net48\TigerClaw.Core.Tests.exe ^
   C:\Archive\tigerclaw_sentence_ml\baseline\tiger-sentence-early-commit-eval-v1-report.csv
 ```
 
-评测分别运行：
-
-- `probabilistic-only`：仅概率提前上屏，关闭空码顶屏；
-- `probabilistic-plus-empty-code`：概率提前上屏和空码顶屏都开启。
+评测运行 `early-commit`：概率提前上屏与空码顶屏作为同一流程开启。
 
 Qwen 重排关闭，以固定 n-gram 状态机结果。评测使用同步解码，避免机器负载改变
 样本结果；真实异步输入延迟应另做运行时性能评测。
@@ -77,7 +74,7 @@ Qwen 重排关闭，以固定 n-gram 状态机结果。评测使用同步解码�
 留码下限和合并不完整尾码代是否计数。第六个参数可选择单一变体：
 
 ```batch
-next\_run\Tests\Release\net48\TigerClaw.Core.Tests.exe ^
+next\_run\Tests\Release\net10.0-windows\TigerClaw.Core.Tests.exe ^
   --sentence-early-commit-policy-eval ^
   C:\Archive\tigerclaw_sentence_ml\baseline\tiger-sentence-early-commit-eval-v1.json ^
   release_arm64\Models\sentence-ngram-v2.bin ^

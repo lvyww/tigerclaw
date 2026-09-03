@@ -292,11 +292,11 @@ namespace TigerClaw.Core.Tests
         {
             var lines = new List<string>();
             var state = new CoreRuntimeState();
-            if (!state.TrySetConfigValue("整句输入", "是", out _, out string reason))
+            if (!state.TrySetConfigValue("自动启用整句模式", "是", out _, out string reason) ||
+                !state.TrySetConfigValue("当前码表", "虎整句", out _, out reason))
             {
                 throw new InvalidOperationException("golden." + item.Id + ": " + reason);
             }
-            state.TrySetConfigValue("整句空码自动顶屏", "否", out _, out _);
 
             var engine = new InputMethodEngine(state, CreateGoldenDecoder(item));
             int step = 0;

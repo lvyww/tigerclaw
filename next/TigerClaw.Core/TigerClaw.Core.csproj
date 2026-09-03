@@ -1,23 +1,23 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
-    <TigerClawTargetFramework Condition="'$(TigerClawTargetFramework)' == ''">net48</TigerClawTargetFramework>
-    <TargetFramework>$(TigerClawTargetFramework)</TargetFramework>
-    <UseWindowsForms>true</UseWindowsForms>
+    <OutputType>WinExe</OutputType>
+    <OutputType Condition="'$(Configuration)' == 'Debug'">Exe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <PublishAot>true</PublishAot>
+    <IsAotCompatible>true</IsAotCompatible>
+    <InvariantGlobalization>false</InvariantGlobalization>
     <ApplicationManifest>..\app.manifest</ApplicationManifest>
-    <LangVersion>7.3</LangVersion>
+    <LangVersion>latest</LangVersion>
     <Nullable>disable</Nullable>
     <AssemblyName>TigerClaw.Core</AssemblyName>
     <RootNamespace>TigerClaw.Core</RootNamespace>
     <BaseOutputPath>$(MSBuildThisFileDirectory)..\_run\</BaseOutputPath>
-  </PropertyGroup>
-
-  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
-    <OutputType>WinExe</OutputType>
+    <IlcOptimizationPreference>Speed</IlcOptimizationPreference>
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\TigerClaw.Shared\TigerClaw.Shared.csproj" />
+    <Compile Include="..\TigerClaw.Shared\*.cs" Link="Shared\%(Filename)%(Extension)" />
   </ItemGroup>
 
   <ItemGroup>

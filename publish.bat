@@ -92,7 +92,7 @@ if not exist "%SENTENCE_NATIVE_BUILD%" (
     exit /b 1
 )
 
-set "CORE_OUT=%ROOT%\next\_run\Release\net48"
+set "CORE_OUT=%ROOT%\next\_run\Release\core-x64"
 set "CORE_EXE_FOR_HASH=%CORE_OUT%\TigerClaw.Core.exe"
 set "OVERLAY_OUT=%ROOT%\next\_run\Release\net48"
 set "DIALOG_OUT=%ROOT%\next\_run\Release\net48"
@@ -195,8 +195,8 @@ if errorlevel 1 (
 )
 
 echo.
-echo [3/13] Build TigerClaw.Core Release
-"%DOTNET%" msbuild /m /nr:false "%CORE_PROJECT%" /restore /p:Configuration=Release /p:Platform=AnyCPU /p:OutDir="%CORE_OUT%\\" /v:minimal
+echo [3/13] Publish TigerClaw.Core Native AOT Release
+"%DOTNET%" publish "%CORE_PROJECT%" -c Release -r win-x64 --self-contained true -o "%CORE_OUT%" /p:PublishAot=true
 if errorlevel 1 (
     echo ERROR: TigerClaw.Core Release build failed.
     exit /b 1
@@ -313,7 +313,7 @@ call :RequireFile "%TSF_X64_DLL%" "TigerClaw.dll x64" || exit /b 1
 call :RequireFile "%TSF_X86_DLL%" "TigerClaw.dll Win32" || exit /b 1
 
 call :CopyFileStrict "%CORE_OUT%\TigerClaw.Core.exe" "%RELEASE_DIR%\TigerClaw.Core.exe" || exit /b 1
-if exist "%CORE_OUT%\TigerClaw.Core.exe.config" call :CopyFileStrict "%CORE_OUT%\TigerClaw.Core.exe.config" "%RELEASE_DIR%\TigerClaw.Core.exe.config" || exit /b 1
+if exist "%RELEASE_DIR%\TigerClaw.Core.exe.config" del /q "%RELEASE_DIR%\TigerClaw.Core.exe.config"
 if exist "%CORE_OUT%\TigerClaw.Core.pdb" del /q "%RELEASE_DIR%\TigerClaw.Core.pdb" >nul 2>&1
 
 call :CopyFileStrict "%OVERLAY_OUT%\TigerClaw.Overlay.exe" "%RELEASE_DIR%\TigerClaw.Overlay.exe" || exit /b 1
@@ -347,7 +347,7 @@ call :CopyFileStrict "%HOOK_NATIVE_OUT%\TigerClaw.Hook.Native.exe" "%RELEASE_DIR
 if exist "%HOOK_NATIVE_OUT%\TigerClaw.Hook.Native.pdb" del /q "%RELEASE_DIR%\TigerClaw.pdb" >nul 2>&1
 
 if exist "%ROOT%\next\TigerClaw.Dialog\bime.ico" call :CopyFileStrict "%ROOT%\next\TigerClaw.Dialog\bime.ico" "%RELEASE_DIR%\bime.ico" || exit /b 1
-call :CopyFileStrict "%CORE_OUT%\TigerClaw.Shared.dll" "%RELEASE_DIR%\TigerClaw.Shared.dll" || exit /b 1
+call :CopyFileStrict "%OVERLAY_OUT%\TigerClaw.Shared.dll" "%RELEASE_DIR%\TigerClaw.Shared.dll" || exit /b 1
 call :CopyFileStrict "%TSF_X64_DLL%" "%RELEASE_TSF_X64%\TigerClaw.dll" || exit /b 1
 call :CopyFileStrict "%TSF_X86_DLL%" "%RELEASE_TSF_X86%\TigerClaw.dll" || exit /b 1
 if defined CHANGELOG_NAME if exist "%CHANGELOG_FILE%" call :CopyFileStrict "%CHANGELOG_FILE%" "%RELEASE_DIR%\!CHANGELOG_NAME!" || exit /b 1

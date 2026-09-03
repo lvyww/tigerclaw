@@ -78,6 +78,7 @@ namespace TigerClaw.Core
         internal int SentenceEarlyCommitMinimumRetainedRawLength { get; set; } =
             SentenceEarlyCommitRetainedRawLength;
         internal bool SentenceEarlyCommitCountMergedTailEvidence { get; set; } = true;
+        internal bool? SentenceEmptyCodeAutoCommitOverride { get; set; }
 
         private sealed class SentenceAutoCommitTracker
         {
@@ -113,6 +114,9 @@ namespace TigerClaw.Core
         private readonly bool _sentenceDecodeSynchronously;
         private SentenceDecodeResult _sentenceDecodeResult = SentenceDecodeResult.Empty;
         private int _sentenceDecodedLexiconVersion = -1;
+        private int _sentenceDecodedOptimalCodeLimit = int.MinValue;
+        private string _sentenceDecodedFullCodeWhitelist;
+        private bool _sentenceDecodedAllowDuplicateSingleCharacters;
         private int _sentenceResultLexiconVersion = -1;
         private int _sentenceSelectedIndex;
         private string _sentenceCommittedText = string.Empty;
@@ -275,9 +279,15 @@ namespace TigerClaw.Core
                     DisposeSentenceLanguageModel();
                     _sentenceLanguageModel = null;
                     _sentenceDecodedLexiconVersion = -1;
+                    _sentenceDecodedOptimalCodeLimit = int.MinValue;
+                    _sentenceDecodedFullCodeWhitelist = null;
+                    _sentenceDecodedAllowDuplicateSingleCharacters = false;
                     return;
                 }
 
+                int optimalCodeLimit = _state.GetSentenceOptimalCodeHighFreqLimit();
+                string fullCodeWhitelistText = _state.GetSentenceFullCodeWhitelistText();
+                bool allowDuplicateSingleCharacters = _state.GetSentenceAllowDuplicateSingleCharacters();
                 if (_sentenceLanguageModel == null)
                 {
                     _sentenceLanguageModel = SentenceNgramModel.LoadAvailable(_state.GetRuntimeBaseDirectory());
@@ -286,18 +296,28 @@ namespace TigerClaw.Core
                 {
                     _sentenceInputDecoder = null;
                     _sentenceDecodedLexiconVersion = _state.LexiconVersion;
+                    _sentenceDecodedOptimalCodeLimit = optimalCodeLimit;
+                    _sentenceDecodedFullCodeWhitelist = fullCodeWhitelistText;
+                    _sentenceDecodedAllowDuplicateSingleCharacters = allowDuplicateSingleCharacters;
                     return;
                 }
 
-                SentenceLexiconIndex lexicon = SentenceLexiconIndex.Build(_state.GetSentenceLexiconSnapshot());
+                SentenceLexiconIndex lexicon = SentenceLexiconIndex.Build(
+                    _state.GetSentenceLexiconSnapshot(),
+                    SentenceCharacterRanks.TakeTop(optimalCodeLimit),
+                    CoreRuntimeState.ParseCharacterSet(fullCodeWhitelistText));
                 SentenceSupplementMatcher supplementMatcher = SentenceSupplementMatcher.Build(
                     _state.GetSentenceSupplementSnapshot());
                 _sentenceInputDecoder = new SentenceInputDecoder(
                     lexicon,
                     _sentenceLanguageModel,
                     emittedCharacterReward: SentenceEmittedCharacterReward,
-                    supplementMatcher: supplementMatcher);
+                    supplementMatcher: supplementMatcher,
+                    allowDuplicateSingleCharacters: allowDuplicateSingleCharacters);
                 _sentenceDecodedLexiconVersion = _state.LexiconVersion;
+                _sentenceDecodedOptimalCodeLimit = optimalCodeLimit;
+                _sentenceDecodedFullCodeWhitelist = fullCodeWhitelistText;
+                _sentenceDecodedAllowDuplicateSingleCharacters = allowDuplicateSingleCharacters;
             }
         }
 
@@ -349,7 +369,12 @@ namespace TigerClaw.Core
                     return false;
                 }
 
-                double neuralWeight = GetSentenceNeuralWeight(candidates, rerankCount);
+                bool preferScoreOverLexiconRank =
+                    ShouldPreferSentenceScoreOverLexiconRank(candidates, rerankCount);
+                double neuralWeight = GetSentenceNeuralWeight(
+                    candidates,
+                    rerankCount,
+                    preferScoreOverLexiconRank);
                 for (int index = 0; index < rerankCount; index++)
                 {
                     candidates[index].FinalScore = CombineSentenceNeuralScore(
@@ -361,7 +386,10 @@ namespace TigerClaw.Core
                     candidates,
                     0,
                     rerankCount,
-                    Comparer<SentenceCandidate>.Create(SentenceCandidate.CompareByLexiconRankThenScore));
+                    Comparer<SentenceCandidate>.Create(
+                        preferScoreOverLexiconRank
+                            ? SentenceCandidate.CompareByScoreThenLexiconRank
+                            : SentenceCandidate.CompareByLexiconRankThenScore));
                 _sentenceNeuralAcceptedRaw = rawCode;
                 _sentenceNeuralTopText = candidates.Length > 0 ? candidates[0].Text ?? string.Empty : string.Empty;
                 _sentenceSelectedIndex = 0;
@@ -371,18 +399,17 @@ namespace TigerClaw.Core
 
         private static double GetSentenceNeuralWeight(
             SentenceCandidate[] candidates,
-            int candidateCount)
+            int candidateCount,
+            bool preferScoreOverLexiconRank)
         {
             SentenceCandidate baseTop = null;
             for (int index = 0; index < candidateCount; index++)
             {
                 SentenceCandidate candidate = candidates[index];
-                if (baseTop == null ||
-                    candidate.MaxLexiconRank < baseTop.MaxLexiconRank ||
-                    (candidate.MaxLexiconRank == baseTop.MaxLexiconRank &&
-                     (candidate.BaseScore > baseTop.BaseScore ||
-                      (candidate.BaseScore == baseTop.BaseScore &&
-                       string.CompareOrdinal(candidate.Text, baseTop.Text) < 0))))
+                if (baseTop == null || IsBetterSentenceBaseCandidate(
+                        candidate,
+                        baseTop,
+                        preferScoreOverLexiconRank))
                 {
                     baseTop = candidate;
                 }
@@ -392,6 +419,48 @@ namespace TigerClaw.Core
                 ? 0
                 : new StringInfo(baseTop.Text).LengthInTextElements;
             return GetSentenceNeuralWeight(baseTopLength);
+        }
+
+        private bool ShouldPreferSentenceScoreOverLexiconRank(
+            SentenceCandidate[] candidates,
+            int candidateCount)
+        {
+            if (!_state.GetSentenceAllowDuplicateSingleCharacters())
+            {
+                return false;
+            }
+
+            for (int index = 0; index < candidateCount; index++)
+            {
+                SentencePathBoundary boundary = candidates[index]?.Boundary;
+                if (boundary != null && boundary.Previous != null)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool IsBetterSentenceBaseCandidate(
+            SentenceCandidate candidate,
+            SentenceCandidate current,
+            bool preferScoreOverLexiconRank)
+        {
+            if (preferScoreOverLexiconRank)
+            {
+                return candidate.BaseScore > current.BaseScore ||
+                       (candidate.BaseScore == current.BaseScore &&
+                        (candidate.MaxLexiconRank < current.MaxLexiconRank ||
+                         (candidate.MaxLexiconRank == current.MaxLexiconRank &&
+                          string.CompareOrdinal(candidate.Text, current.Text) < 0)));
+            }
+
+            return candidate.MaxLexiconRank < current.MaxLexiconRank ||
+                   (candidate.MaxLexiconRank == current.MaxLexiconRank &&
+                    (candidate.BaseScore > current.BaseScore ||
+                     (candidate.BaseScore == current.BaseScore &&
+                      string.CompareOrdinal(candidate.Text, current.Text) < 0)));
         }
 
         internal static double GetSentenceNeuralWeight(int baseTopLength)
@@ -2271,7 +2340,7 @@ namespace TigerClaw.Core
 
         private SentenceCandidate GetEmptyCodeAutoCommitCandidate()
         {
-            if (!_state.GetSentenceEmptyCodeAutoCommitEnabled() ||
+            if (!IsSentenceEmptyCodeAutoCommitActive() ||
                 _sentenceAutoCommitSuspended ||
                 _sentenceResultLexiconVersion != _state.LexiconVersion ||
                 !string.Equals(
@@ -2349,7 +2418,7 @@ namespace TigerClaw.Core
                 return null;
             }
 
-            if (!_state.GetSentenceEmptyCodeAutoCommitEnabled() || _sentenceInputDecoder == null)
+            if (!IsSentenceEmptyCodeAutoCommitActive() || _sentenceInputDecoder == null)
             {
                 ResetSentenceEmptyCodePending();
                 return null;
@@ -2421,6 +2490,11 @@ namespace TigerClaw.Core
         private void ResetSentenceEmptyCodePending()
         {
             _sentenceEmptyCodePending = null;
+        }
+
+        private bool IsSentenceEmptyCodeAutoCommitActive()
+        {
+            return SentenceEmptyCodeAutoCommitOverride ?? _state.GetSentenceAutoCommitEnabled();
         }
 
         private string TryAutoCommitSentencePrefix()
@@ -2771,7 +2845,15 @@ namespace TigerClaw.Core
             _sentenceCommittedText = selected.Text;
             _sentenceCommittedRawLength = selected.RawLength;
             _sentenceLastAutoCommitRawLength = selected.RawLength;
-            _sentenceContinuationAfterAutoCommit = true;
+            // Probabilistic early commit chooses a boundary from complete
+            // sentence paths that have already competed in the language
+            // model. Keep those paths eligible after committing their common
+            // prefix; otherwise a valid non-first single-character segment in
+            // the retained suffix disappears on the next decode. The stricter
+            // first-rank-only continuation rule is only for empty-code commit,
+            // where a standalone whole-input non-first candidate must not turn
+            // into an implicit segmented choice.
+            _sentenceContinuationAfterAutoCommit = false;
             ResetSentenceAutoCommitEvidence();
             _sentenceDecodeResult = FilterSentenceDecodeResultForCommittedPrefix(_sentenceDecodeResult);
             _sentenceGeneration++;
@@ -2967,14 +3049,20 @@ namespace TigerClaw.Core
 
         private bool ShouldCollectSentenceCommitEvidence()
         {
-            return _state.GetSentenceAutoCommitEnabled() ||
-                _state.GetSentenceEmptyCodeAutoCommitEnabled();
+            return _state.GetSentenceAutoCommitEnabled();
         }
 
         private void EnsureSentenceDecoderCurrent()
         {
             if (_sentenceDecoderExternallyProvided ||
-                (_sentenceInputDecoder != null && _sentenceDecodedLexiconVersion == _state.LexiconVersion))
+                (_sentenceInputDecoder != null &&
+                 _sentenceDecodedLexiconVersion == _state.LexiconVersion &&
+                 _sentenceDecodedOptimalCodeLimit == _state.GetSentenceOptimalCodeHighFreqLimit() &&
+                 string.Equals(
+                     _sentenceDecodedFullCodeWhitelist,
+                     _state.GetSentenceFullCodeWhitelistText(),
+                     StringComparison.Ordinal) &&
+                 _sentenceDecodedAllowDuplicateSingleCharacters == _state.GetSentenceAllowDuplicateSingleCharacters()))
             {
                 return;
             }

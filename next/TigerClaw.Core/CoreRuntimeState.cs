@@ -45,12 +45,16 @@ namespace TigerClaw.Core
 
         private const string KeyMaxCodeLen = "\u6700\u5927\u7801\u957f"; // unicode: 鏈€澶х爜闀?
         private const string KeyUnlimitedMixedChineseEnglishInput = "\u4e2d\u82f1\u6587\u4e0d\u9650\u957f\u6df7\u5408\u8f93\u5165"; // unicode: 中英文不限长混合输入
-        private const string KeySentenceInput = "\u6574\u53e5\u8f93\u5165"; // 整句输入
         private const string KeyAutoEnableSentenceBySchema = "\u81ea\u52a8\u542f\u7528\u6574\u53e5\u6a21\u5f0f"; // 自动启用整句模式
         private const string KeySentenceNeuralRerank = "\u6574\u53e5\u795e\u7ecf\u91cd\u6392"; // 整句神经重排
         private const string KeySentenceAutoCommit = "\u6574\u53e5\u81ea\u52a8\u63d0\u524d\u4e0a\u5c4f"; // 整句自动提前上屏
-        private const string KeySentenceEmptyCodeAutoCommit = "\u6574\u53e5\u7a7a\u7801\u81ea\u52a8\u9876\u5c4f"; // 整句空码自动顶屏
         private const string KeySentenceMinRetainedRawLength = "\u4fdd\u7559\u6700\u5c11\u7f16\u7801\u6570\u91cf"; // 保留最少编码数量
+        private const string KeySentenceOptimalCodeHighFreqLimit = "\u9ad8\u9891\u5b57\u4ec5\u4f7f\u7528\u6700\u4f18\u7801\u7ec4\u53e5"; // 高频字仅使用最优码组句
+        internal const int DefaultSentenceOptimalCodeHighFreqLimit = 1500;
+        private const string KeySentenceFullCodeWhitelist = "\u6574\u53e5\u5141\u8bb8\u5168\u7801\u7ec4\u53e5\u767d\u540d\u5355"; // 整句允许全码组句白名单
+        internal const string DefaultSentenceFullCodeWhitelist =
+            "便深候整调脸照病增响剑哪微营修愿密脑续假值弹您球激游模静源副座喝富宣呼检救嘴税探脱误释跳睡减蒙镇域洞湾卖暴输缓熟庭俄韩混词授摆诺稳塔潜硬萧侵懂蒋赞赛胸偷烧墙爆操挑撤筑戴植援凭聚凌梁箭圈惨飘旗牌废缩碎挺晓桥赫凝潮掩拔播艘滚兽隆薄愤漫爹撒佩绕";
+        private const string KeySentenceAllowDuplicateSingleCharacters = "\u5141\u8bb8\u5355\u5b57\u91cd\u7801\u7ec4\u53e5"; // 允许单字重码组句
         private const string KeyCnUseEnPunc = "\u4e2d\u6587\u72b6\u6001\u4e0b\u4f7f\u7528\u82f1\u6587\u6807\u70b9"; // unicode: 涓枃鐘舵€佷笅浣跨敤鑻辨枃鏍囩偣
 
         private const string KeyVerticalCandidates = "\u7ad6\u6392\u5019\u9009"; // unicode: 绔栨帓鍊欓€?
@@ -191,17 +195,19 @@ namespace TigerClaw.Core
 
             new KeyValuePair<string, string>(KeyUnlimitedMixedChineseEnglishInput, No),
 
-            new KeyValuePair<string, string>(KeySentenceInput, No),
-
             new KeyValuePair<string, string>(KeyAutoEnableSentenceBySchema, Yes),
 
             new KeyValuePair<string, string>(KeySentenceNeuralRerank, Yes),
 
             new KeyValuePair<string, string>(KeySentenceAutoCommit, No),
 
-            new KeyValuePair<string, string>(KeySentenceEmptyCodeAutoCommit, Yes),
-
             new KeyValuePair<string, string>(KeySentenceMinRetainedRawLength, "0"),
+
+            new KeyValuePair<string, string>(KeySentenceOptimalCodeHighFreqLimit, "1500"),
+
+            new KeyValuePair<string, string>(KeySentenceFullCodeWhitelist, DefaultSentenceFullCodeWhitelist),
+
+            new KeyValuePair<string, string>(KeySentenceAllowDuplicateSingleCharacters, No),
 
             new KeyValuePair<string, string>(KeyMaxAuto, Yes),
 
@@ -392,17 +398,17 @@ namespace TigerClaw.Core
 
                     if (string.IsNullOrWhiteSpace(raw)) { continue; }
 
-                    string line = raw.Trim();
+                    string line = raw.TrimStart().TrimEnd('\r', '\n');
 
-                    if (line.StartsWith("#", StringComparison.Ordinal)) { continue; }
+                    if (line.Length == 0 || line[0] == '#') { continue; }
 
                     int pos = FindSep(line);
 
-                    if (pos <= 0 || pos >= line.Length - 1) { continue; }
+                    if (pos <= 0) { continue; }
 
                     string key = line.Substring(0, pos).Trim();
 
-                    string value = line.Substring(pos + 1).Trim();
+                    string value = pos + 1 < line.Length ? line.Substring(pos + 1).Trim() : string.Empty;
 
                     if (key.Length == 0) { continue; }
                     if (!KnownConfigKeys.Contains(key)) { continue; }
@@ -1321,17 +1327,10 @@ namespace TigerClaw.Core
 
         public bool GetUnlimitedMixedChineseEnglishInput() => GetBool(KeyUnlimitedMixedChineseEnglishInput, false);
 
-        public bool GetSentenceInputEnabled() => GetBool(KeySentenceInput, false);
-
         public bool GetAutoEnableSentenceBySchema() => GetBool(KeyAutoEnableSentenceBySchema, true);
 
         public bool IsSentenceInputActive()
         {
-            if (GetSentenceInputEnabled())
-            {
-                return true;
-            }
-
             if (!GetAutoEnableSentenceBySchema())
             {
                 return false;
@@ -1345,8 +1344,6 @@ namespace TigerClaw.Core
         public bool GetSentenceNeuralRerankEnabled() => GetBool(KeySentenceNeuralRerank, true);
 
         public bool GetSentenceAutoCommitEnabled() => GetBool(KeySentenceAutoCommit, false);
-
-        public bool GetSentenceEmptyCodeAutoCommitEnabled() => GetBool(KeySentenceEmptyCodeAutoCommit, true);
 
         public int GetSentenceMinRetainedRawLength()
         {
@@ -1370,6 +1367,72 @@ namespace TigerClaw.Core
             }
 
             return 0;
+        }
+
+        public int GetSentenceOptimalCodeHighFreqLimit()
+        {
+            lock (_lock)
+            {
+                if (!_config.TryGetValue(KeySentenceOptimalCodeHighFreqLimit, out string raw))
+                {
+                    return DefaultSentenceOptimalCodeHighFreqLimit;
+                }
+
+                if (string.IsNullOrWhiteSpace(raw))
+                {
+                    return 0;
+                }
+
+                if (!int.TryParse(raw.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out int n) ||
+                    n < 0)
+                {
+                    return 0;
+                }
+
+                return n;
+            }
+        }
+
+        public string GetSentenceFullCodeWhitelistText()
+        {
+            lock (_lock)
+            {
+                if (_config.TryGetValue(KeySentenceFullCodeWhitelist, out string raw))
+                {
+                    return raw ?? string.Empty;
+                }
+            }
+
+            return DefaultSentenceFullCodeWhitelist;
+        }
+
+        public ISet<string> GetSentenceFullCodeWhitelist()
+        {
+            return ParseCharacterSet(GetSentenceFullCodeWhitelistText());
+        }
+
+        public bool GetSentenceAllowDuplicateSingleCharacters() =>
+            GetBool(KeySentenceAllowDuplicateSingleCharacters, false);
+
+        internal static ISet<string> ParseCharacterSet(string raw)
+        {
+            var result = new HashSet<string>(StringComparer.Ordinal);
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                return result;
+            }
+
+            TextElementEnumerator enumerator = StringInfo.GetTextElementEnumerator(raw.Trim());
+            while (enumerator.MoveNext())
+            {
+                string text = enumerator.GetTextElement();
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                    result.Add(text);
+                }
+            }
+
+            return result;
         }
 
         public bool GetShiftToggleEnabled() => GetBool(KeyShiftToggle, true);

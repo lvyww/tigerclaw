@@ -3,15 +3,11 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.IO.Pipes;
-using System.Runtime.Serialization;
-using System.Runtime.Serialization.Json;
 using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
-#if NET8_0_OR_GREATER
 using System.Text.Json;
 using System.Text.Json.Serialization;
-#endif
+using System.Threading;
+using System.Threading.Tasks;
 using TigerClaw.Shared;
 
 namespace TigerClaw.Core
@@ -227,18 +223,9 @@ namespace TigerClaw.Core
 
         private static string Serialize(SentencePipeRequest value)
         {
-#if NET8_0_OR_GREATER
             return JsonSerializer.Serialize(
                 value,
                 SentencePipeJsonContext.Default.SentencePipeRequest);
-#else
-            var serializer = new DataContractJsonSerializer(typeof(SentencePipeRequest));
-            using (var stream = new MemoryStream())
-            {
-                serializer.WriteObject(stream, value);
-                return Encoding.UTF8.GetString(stream.ToArray());
-            }
-#endif
         }
 
         private static SentencePipeResponse DeserializeResponse(string json)
@@ -248,20 +235,11 @@ namespace TigerClaw.Core
                 return null;
             }
 
-#if NET8_0_OR_GREATER
             return JsonSerializer.Deserialize(
                 json,
                 SentencePipeJsonContext.Default.SentencePipeResponse);
-#else
-            var serializer = new DataContractJsonSerializer(typeof(SentencePipeResponse));
-            using (var stream = new MemoryStream(Encoding.UTF8.GetBytes(json)))
-            {
-                return serializer.ReadObject(stream) as SentencePipeResponse;
-            }
-#endif
         }
 
-#if NET8_0_OR_GREATER
         [JsonSourceGenerationOptions(
             GenerationMode = JsonSourceGenerationMode.Metadata,
             PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)]
@@ -270,26 +248,23 @@ namespace TigerClaw.Core
         private partial class SentencePipeJsonContext : JsonSerializerContext
         {
         }
-#endif
 
-        [DataContract]
         private sealed class SentencePipeRequest
         {
-            [DataMember(Name = "type")] public string Type { get; set; }
-            [DataMember(Name = "seq")] public long Seq { get; set; }
-            [DataMember(Name = "generation")] public long Generation { get; set; }
-            [DataMember(Name = "raw_code")] public string RawCode { get; set; }
-            [DataMember(Name = "candidates")] public string[] Candidates { get; set; }
+            public string Type { get; set; }
+            public long Seq { get; set; }
+            public long Generation { get; set; }
+            public string RawCode { get; set; }
+            public string[] Candidates { get; set; }
         }
 
-        [DataContract]
         private sealed class SentencePipeResponse
         {
-            [DataMember(Name = "seq")] public long Seq { get; set; }
-            [DataMember(Name = "generation")] public long Generation { get; set; }
-            [DataMember(Name = "raw_code")] public string RawCode { get; set; }
-            [DataMember(Name = "success")] public bool Success { get; set; }
-            [DataMember(Name = "scores")] public double[] Scores { get; set; }
+            public long Seq { get; set; }
+            public long Generation { get; set; }
+            public string RawCode { get; set; }
+            public bool Success { get; set; }
+            public double[] Scores { get; set; }
         }
     }
 }

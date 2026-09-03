@@ -2,7 +2,7 @@
 setlocal
 
 set "SCRIPT_DIR=%~dp0"
-set "CORE_EXE=%SCRIPT_DIR%TigerClaw.Core\bin\Debug\net48\TigerClaw.Core.exe"
+set "CORE_EXE=%SCRIPT_DIR%_run\Debug\x64\TigerClaw.Core.exe"
 set "CORE_REG_KEY=HKCU\Software\TigerClaw\Install"
 set "CORE_REG_VALUE=CorePath"
 set "RUN_KEY=HKCU\Software\Microsoft\Windows\CurrentVersion\Run"

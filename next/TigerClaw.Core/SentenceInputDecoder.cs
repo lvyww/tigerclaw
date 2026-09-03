@@ -73,9 +73,11 @@ namespace TigerClaw.Core
 
         public static SentenceLexiconIndex Build(
             IDictionary<string, List<string>> source,
-            ISet<string> commonCharacters = null)
+            ISet<string> commonCharacters = null,
+            ISet<string> fullCodeWhitelist = null)
         {
-            ISet<string> common = commonCharacters ?? SentenceCommonCharacters.Top1500;
+            ISet<string> common = commonCharacters;
+            ISet<string> whitelist = fullCodeWhitelist;
             var exact = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
             if (source != null)
             {
@@ -147,7 +149,8 @@ namespace TigerClaw.Core
                     bool allowNonPrimary =
                         pair.Key.Length == 1 ||
                         !IsSingleTextElement(text) ||
-                        !IsCommonSingleCharacter(text, common);
+                        !IsCommonSingleCharacter(text, common) ||
+                        IsWhitelistedFullCodeCharacter(text, whitelist);
                     if (allowNonPrimary ||
                         (primaryBaseCodeByCharacter.TryGetValue(text, out string primaryCode) &&
                          string.Equals(primaryCode, pair.Key, StringComparison.OrdinalIgnoreCase)))
@@ -230,6 +233,13 @@ namespace TigerClaw.Core
                    commonCharacters.Contains(text);
         }
 
+        private static bool IsWhitelistedFullCodeCharacter(string text, ISet<string> fullCodeWhitelist)
+        {
+            return fullCodeWhitelist != null &&
+                   fullCodeWhitelist.Count > 0 &&
+                   fullCodeWhitelist.Contains(text);
+        }
+
         private static bool IsSingleTextElement(string text)
         {
             return !string.IsNullOrEmpty(text) && new StringInfo(text).LengthInTextElements == 1;
@@ -273,6 +283,18 @@ namespace TigerClaw.Core
 
             int score = right.FinalScore.CompareTo(left.FinalScore);
             return score != 0 ? score : string.CompareOrdinal(left.Text, right.Text);
+        }
+
+        public static int CompareByScoreThenLexiconRank(SentenceCandidate left, SentenceCandidate right)
+        {
+            int score = right.FinalScore.CompareTo(left.FinalScore);
+            if (score != 0)
+            {
+                return score;
+            }
+
+            int rank = left.MaxLexiconRank.CompareTo(right.MaxLexiconRank);
+            return rank != 0 ? rank : string.CompareOrdinal(left.Text, right.Text);
         }
     }
 
@@ -361,6 +383,7 @@ namespace TigerClaw.Core
         private readonly double _emittedCharacterReward;
         private readonly SentenceSupplementMatcher _supplementMatcher;
         private readonly bool _hasSupplements;
+        private readonly bool _allowDuplicateSingleCharacters;
         private readonly int _maxCodeLength;
         private readonly object _decodeLock = new object();
         private string _cachedRaw;
@@ -449,7 +472,7 @@ namespace TigerClaw.Core
                 AddAggregated(item);
             }
 
-            public List<BeamState> Limit(int limit, out bool truncated)
+            public List<BeamState> Limit(int limit, Comparison<BeamState> comparison, out bool truncated)
             {
                 if (_isFrozen)
                 {
@@ -463,13 +486,14 @@ namespace TigerClaw.Core
                 bool truncatedNow = values.Count > boundedLimit;
                 truncated = _wasTruncated || truncatedNow;
                 _wasTruncated = truncated;
+                Comparison<BeamState> order = comparison ?? CompareBeamStatesByLexiconRankThenScore;
                 if (truncatedNow)
                 {
-                    values = SelectExactTop(values, boundedLimit, CompareBeamStates);
+                    values = SelectExactTop(values, boundedLimit, order);
                 }
                 else
                 {
-                    values.Sort(CompareBeamStates);
+                    values.Sort(order);
                 }
 
                 // The lattice cache lives for the whole composition. Freeze a
@@ -528,13 +552,15 @@ namespace TigerClaw.Core
             SentenceIsolationPenalty isolationPenalty = null,
             bool scoreSentenceBoundaries = true,
             double emittedCharacterReward = 0.0,
-            SentenceSupplementMatcher supplementMatcher = null)
+            SentenceSupplementMatcher supplementMatcher = null,
+            bool allowDuplicateSingleCharacters = false)
         {
             _lexicon = lexicon ?? throw new ArgumentNullException(nameof(lexicon));
             _languageModel = languageModel ?? NeutralSentenceLanguageModel.Instance;
             _beamWidth = Math.Max(1, beamWidth);
             _rankPenalty = Math.Max(0.0, rankPenalty);
             _isolationPenalty = isolationPenalty ?? SentenceIsolationPenalty.CreateDefault();
+            _allowDuplicateSingleCharacters = allowDuplicateSingleCharacters;
             if (_isolationPenalty.Enabled)
             {
                 _isolationPenaltyCache = new Dictionary<string, double>(
@@ -700,10 +726,7 @@ namespace TigerClaw.Core
                     {
                         foreach (SentenceLexiconCandidate candidate in candidates)
                         {
-                            bool rankMatches = selectedRank > 0
-                                ? candidate.Rank == selectedRank
-                                : wholeInputEdge || candidate.Rank == 1;
-                            if (!rankMatches || !TryAdvanceRequiredPrefix(
+                            if (!RankMatches(candidate, selectedRank, wholeInputEdge) || !TryAdvanceRequiredPrefix(
                                 required,
                                 matchedPrefixLength,
                                 candidate.Text,
@@ -724,6 +747,23 @@ namespace TigerClaw.Core
         internal bool IsProperCodePrefix(string code)
         {
             return _lexicon.IsProperCodePrefix(NormalizeRawCode(code));
+        }
+
+        private bool RankMatches(SentenceLexiconCandidate candidate, int selectedRank, bool wholeInputEdge)
+        {
+            if (selectedRank > 0)
+            {
+                return candidate.Rank == selectedRank;
+            }
+
+            if (candidate.Rank == 1 || wholeInputEdge)
+            {
+                return true;
+            }
+
+            return _allowDuplicateSingleCharacters &&
+                   candidate.TextElements != null &&
+                   candidate.TextElements.Length == 1;
         }
 
         private static bool TryAdvanceRequiredPrefix(
@@ -954,7 +994,7 @@ namespace TigerClaw.Core
             int expandedStates = 0;
             for (int position = fromPos; position < length; position++)
             {
-                List<BeamState> current = states[position].Limit(_beamWidth, out _);
+                List<BeamState> current = states[position].Limit(_beamWidth, GetBeamStateComparison(), out _);
                 if (current.Count == 0)
                 {
                     continue;
@@ -1000,10 +1040,7 @@ namespace TigerClaw.Core
                     {
                         foreach (SentenceLexiconCandidate candidate in candidates)
                         {
-                            bool rankMatches = selectedRank > 0
-                                ? candidate.Rank == selectedRank
-                                : wholeInputEdge || candidate.Rank == 1;
-                            if (!rankMatches)
+                            if (!RankMatches(candidate, selectedRank, wholeInputEdge))
                             {
                                 continue;
                             }
@@ -1117,6 +1154,7 @@ namespace TigerClaw.Core
         {
             List<BeamState> completed = states[normalized.Length].Limit(
                 _beamWidth,
+                GetBeamStateComparison(),
                 out bool confidenceTruncated);
             var result = new List<SentenceCandidate>(completed.Count);
             foreach (BeamState item in completed)
@@ -1341,6 +1379,7 @@ namespace TigerClaw.Core
 
                 List<BeamState> partial = states[consumedLength].Limit(
                     _beamWidth,
+                    GetBeamStateComparison(),
                     out bool partialTruncated);
                 if (partial.Count == 0)
                 {
@@ -1529,20 +1568,46 @@ namespace TigerClaw.Core
                    (item.MaxLexiconRank == previous.MaxLexiconRank && item.Score > previous.Score);
         }
 
-        private static SentenceCandidate[] SelectExactTopCandidates(
+        private SentenceCandidate[] SelectExactTopCandidates(
             List<SentenceCandidate> values,
             int limit)
         {
             int boundedLimit = Math.Max(1, limit);
+            Comparison<SentenceCandidate> comparison = PreferScoreOverLexiconRank(values)
+                ? SentenceCandidate.CompareByScoreThenLexiconRank
+                : SentenceCandidate.CompareByLexiconRankThenScore;
             if (values.Count <= boundedLimit)
             {
-                values.Sort(SentenceCandidate.CompareByLexiconRankThenScore);
+                values.Sort(comparison);
                 return values.ToArray();
             }
-            return SelectExactTop(
-                values,
-                boundedLimit,
-                SentenceCandidate.CompareByLexiconRankThenScore).ToArray();
+            return SelectExactTop(values, boundedLimit, comparison).ToArray();
+        }
+
+        private bool PreferScoreOverLexiconRank(List<SentenceCandidate> values)
+        {
+            if (!_allowDuplicateSingleCharacters || values == null)
+            {
+                return false;
+            }
+
+            for (int index = 0; index < values.Count; index++)
+            {
+                SentencePathBoundary boundary = values[index] == null ? null : values[index].Boundary;
+                if (boundary != null && boundary.Previous != null)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private Comparison<BeamState> GetBeamStateComparison()
+        {
+            return _allowDuplicateSingleCharacters
+                ? CompareBeamStatesByScoreThenLexiconRank
+                : CompareBeamStatesByLexiconRankThenScore;
         }
 
         private static List<T> SelectExactTop<T>(
@@ -1618,7 +1683,7 @@ namespace TigerClaw.Core
             return max + Math.Log(Math.Exp(left - max) + Math.Exp(right - max));
         }
 
-        private static int CompareBeamStates(BeamState left, BeamState right)
+        private static int CompareBeamStatesByLexiconRankThenScore(BeamState left, BeamState right)
         {
             int rank = left.MaxLexiconRank.CompareTo(right.MaxLexiconRank);
             if (rank != 0)
@@ -1628,6 +1693,18 @@ namespace TigerClaw.Core
 
             int compared = right.Score.CompareTo(left.Score);
             return compared != 0 ? compared : string.CompareOrdinal(left.Text, right.Text);
+        }
+
+        private static int CompareBeamStatesByScoreThenLexiconRank(BeamState left, BeamState right)
+        {
+            int compared = right.Score.CompareTo(left.Score);
+            if (compared != 0)
+            {
+                return compared;
+            }
+
+            int rank = left.MaxLexiconRank.CompareTo(right.MaxLexiconRank);
+            return rank != 0 ? rank : string.CompareOrdinal(left.Text, right.Text);
         }
 
         private static string BuildSegmentedCode(string raw, SentencePathBoundary boundary)

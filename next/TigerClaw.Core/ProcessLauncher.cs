@@ -88,7 +88,7 @@ namespace TigerClaw.Core
                 return sentenceSubdirectory;
             }
 
-            // next/<Project>/bin/Debug/net48 => try siblings in ../.. style
+            // Development and publish layouts may place sidecars above or beside Core.
             string dir = _baseDir;
             for (int up = 0; up < 6 && !string.IsNullOrEmpty(dir); up++)
             {

@@ -801,8 +801,10 @@ namespace TigerClaw.Core
             }
 
             string trimmed = key.Trim();
-            return string.Equals(trimmed, "\u6574\u53e5\u8f93\u5165", StringComparison.OrdinalIgnoreCase) || // 整句输入
-                   string.Equals(trimmed, "\u81ea\u52a8\u542f\u7528\u6574\u53e5\u6a21\u5f0f", StringComparison.OrdinalIgnoreCase); // 自动启用整句模式
+            return string.Equals(trimmed, "\u81ea\u52a8\u542f\u7528\u6574\u53e5\u6a21\u5f0f", StringComparison.OrdinalIgnoreCase) || // 自动启用整句模式
+                   string.Equals(trimmed, "\u9ad8\u9891\u5b57\u4ec5\u4f7f\u7528\u6700\u4f18\u7801\u7ec4\u53e5", StringComparison.OrdinalIgnoreCase) || // 高频字仅使用最优码组句
+                   string.Equals(trimmed, "\u6574\u53e5\u5141\u8bb8\u5168\u7801\u7ec4\u53e5\u767d\u540d\u5355", StringComparison.OrdinalIgnoreCase) || // 整句允许全码组句白名单
+                   string.Equals(trimmed, "\u5141\u8bb8\u5355\u5b57\u91cd\u7801\u7ec4\u53e5", StringComparison.OrdinalIgnoreCase); // 允许单字重码组句
         }
 
         private static object GetFirstValue(SimpleJsonObject msg, params string[] keys)

@@ -37,7 +37,7 @@ if not defined DOTNET echo ERROR: dotnet.exe not found. & exit /b 1
 if not exist "%DOTNET_CLI_HOME%" mkdir "%DOTNET_CLI_HOME%" >nul 2>&1
 
 set "CORE_PROJECT=%ROOT%\next\TigerClaw.Core\TigerClaw.Core.csproj"
-set "CORE_OUT=%ROOT%\next\_run\ReleaseArm64\net481"
+set "CORE_OUT=%ROOT%\next\_run\ReleaseArm64\core-arm64"
 set "RELEASE_DIR=%ROOT%\release_arm64"
 
 if not exist "%CORE_PROJECT%" echo ERROR: Missing %CORE_PROJECT% & exit /b 1
@@ -55,18 +55,17 @@ if not defined BUILD_COMMIT set "BUILD_COMMIT=unknown"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$p='%SHARED_BUILD_INFO%';$q=[char]34;$lines=@('namespace TigerClaw.Shared','{','    public static class BuildInfo','    {',('        public const string VersionLabel = '+$q+'%BUILD_VERSION%'+$q+';'),('        public const string Commit = '+$q+'%BUILD_COMMIT%'+$q+';'),('        public const string BuildUtc = '+$q+'%BUILD_UTC%'+$q+';'),('        public const string TrialExpireUtc = '+$q+'%TRIAL_EXPIRE_UTC%'+$q+';'),'    }','}');[IO.File]::WriteAllText($p,[string]::Join([Environment]::NewLine,$lines),(New-Object Text.UTF8Encoding($true)))" || exit /b 1
 
 echo.
-echo [2/3] Build TigerClaw.Core (ARM64, net481)
-"%DOTNET%" msbuild /m /nr:false "%CORE_PROJECT%" /restore /p:Configuration=Release /p:Platform=AnyCPU /p:TigerClawTargetFramework=net481 /p:PlatformTarget=ARM64 /p:Prefer32Bit=false /p:OutDir="%CORE_OUT%\\" /v:minimal || exit /b 1
+echo [2/3] Publish TigerClaw.Core Native AOT (win-arm64)
+"%DOTNET%" publish "%CORE_PROJECT%" -c Release -r win-arm64 --self-contained true -o "%CORE_OUT%" /p:PublishAot=true || exit /b 1
 
-for %%P in ("%CORE_OUT%\TigerClaw.Core.exe" "%CORE_OUT%\TigerClaw.Shared.dll") do if not exist %%~P echo ERROR: Missing %%~P & exit /b 1
+if not exist "%CORE_OUT%\TigerClaw.Core.exe" echo ERROR: Missing %CORE_OUT%\TigerClaw.Core.exe & exit /b 1
 
 echo.
 echo [3/3] Copy artifacts into %RELEASE_DIR%
 taskkill /F /IM TigerClaw.Core.exe /T >nul 2>&1
 ping 127.0.0.1 -n 3 >nul
 copy /Y "%CORE_OUT%\TigerClaw.Core.exe" "%RELEASE_DIR%\TigerClaw.Core.exe" >nul || exit /b 1
-if exist "%CORE_OUT%\TigerClaw.Core.exe.config" copy /Y "%CORE_OUT%\TigerClaw.Core.exe.config" "%RELEASE_DIR%\TigerClaw.Core.exe.config" >nul || exit /b 1
-copy /Y "%CORE_OUT%\TigerClaw.Shared.dll" "%RELEASE_DIR%\TigerClaw.Shared.dll" >nul || exit /b 1
+if exist "%RELEASE_DIR%\TigerClaw.Core.exe.config" del /q "%RELEASE_DIR%\TigerClaw.Core.exe.config"
 
 echo.
 echo Done
