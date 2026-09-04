@@ -282,6 +282,32 @@ release tree. Keep `.bat` files CRLF.
   a 200-wide Beam through raw position 24 and uses 48 thereafter, preventing
   long low-confidence input from queuing candidate generations. It is not part
   of Windows TSF.
+- Open-source mirror `tiger-sentense-rime`
+  (https://github.com/lvyww/tiger-sentense-rime, GPL-3.0, public): the
+  standalone release of the Rime pack above. Publishing rules:
+  - `rime/tiger_sentence/` in this repo is the source of truth. Published
+    runtime files (schema, `lua/tiger_sentence.lua`, the three data txt
+    files, supplement, `symbols.yaml`, `rime.lua`, `default.custom.yaml`)
+    must stay byte-identical to it; only `tools/` (test + bench) gets path
+    adaptation (`/rime/tiger_sentence/lua` -> `/lua`, data dir -> repo
+    root). The exporter is never published; it is TigerClaw-internal.
+  - The mirror README is a standalone rewrite: installation, model download
+    from Releases, data-file customization. Do not leak internal paths
+    (`release_arm64/`, `dist_config.txt`, dev model paths) into it; the Lua
+    module keeps its inert dev fallback paths to stay byte-identical.
+  - The n-gram model never enters git (224 MB, above the 100 MB limit); it
+    ships only as a Release attachment. Canonical local copy:
+    `C:\Archive\tigerclaw_sentence_ml\runtime\sentence-ngram-mobile.bin`
+    (md5 77b1d38760fd5efcbdbedf9289c4d6d1).
+  - Release procedure per version: sync files into the mirror layout ->
+    run the full test suite from the mirror layout (Lua 5.4 with model and
+    luajit no-model) -> tag `vX.Y.Z` and push (SSH works) -> build the
+    end-user zip `tiger-sentense-rime-vX.Y.Z.zip` from the mirror layout
+    plus `LICENSE` and the model, excluding `tools/` (verify CRC, Lua
+    byte-identity, model md5) -> upload the Release. This environment has
+    no `gh` CLI and no stored HTTPS token, so Release assets are uploaded
+    manually by the user on the web UI. v1.0.0 was published this way on
+    2026-09-04.
 - `/home/yc/fx5/fcitx5-android`, plugin `tigerclaw`: standalone native Fcitx5
   Android port. Core stages and wiring are implemented; real-device performance,
   packaging and signed release acceptance remain. See
