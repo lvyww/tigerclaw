@@ -549,7 +549,7 @@ sentence.processor(fake_key("3"), env_dig)
 if #commits_dig ~= 1 or commits_dig[1] ~= "3" or context_dig.input ~= "" then
     fail("idle digit did not commit directly")
 end
-sentence.processor(fake_key("."), env_dig)
+sentence.processor(fake_key("period"), env_dig)
 if #commits_dig ~= 2 or commits_dig[2] ~= "." or context_dig.input ~= "" then
     fail("period after digit did not commit as an ASCII decimal point")
 end
@@ -566,8 +566,8 @@ end
 -- The arm is consumed by any non-digit key: a second period goes back to
 -- the punctuator (Chinese 。 via symbols.yaml).
 sentence.processor(fake_key("1"), env_dig)
-sentence.processor(fake_key("."), env_dig)
-sentence.processor(fake_key("."), env_dig)
+sentence.processor(fake_key("period"), env_dig)
+sentence.processor(fake_key("period"), env_dig)
 if #commits_dig ~= 6 or context_dig.input ~= "" then
     fail("the second period after a decimal point should pass through")
 end
@@ -577,7 +577,7 @@ print("OK  idle digits commit and the following period becomes a decimal point")
 local env_fdig, context_fdig, _, commits_fdig = fake_environment(true)
 context_fdig.full_shape = true
 sentence.processor(fake_key("3"), env_fdig)
-sentence.processor(fake_key("."), env_fdig)
+sentence.processor(fake_key("period"), env_fdig)
 if #commits_fdig ~= 2 or commits_fdig[1] ~= "３" or commits_fdig[2] ~= "." then
     fail("full-shape digit did not arm the half-width decimal point")
 end

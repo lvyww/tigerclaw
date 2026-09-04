@@ -3050,7 +3050,7 @@ local function processor(key_event, env)
         return 1
     end
     if not context:is_composing() then
-        if dot_armed and (repr == "." or repr == "KP_Decimal") and
+        if dot_armed and (repr == "period" or repr == "KP_Decimal") and
             not key_event:shift() and not key_event:ctrl() and
             not key_event:alt() and not key_event:super() then
             env.engine:commit_text(".")
