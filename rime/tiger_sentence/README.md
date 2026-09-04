@@ -176,3 +176,16 @@ lua tools/test_tiger_sentence_incremental.lua . --require-model
 加载自检（数据状态、`high_freq_limit` 重建、外部码表导入、字频缺失容错）、
 空码上屏开关门控、截断候选池拒绝高置信空码上屏、字符级共同前缀和提交时的
 原子 composition 重建。`tools/bench_tiger_sentence_lua.lua` 用于解码性能基准。
+
+性能基准直接调用正式模块的 `decode_full`、逐键 `decode` 和提前上屏证据路径，
+不会维护另一套简化解码器。它同时报告 mean/p50/p95/max、每轮 Lua GC 增量和
+实际 decode 次数：
+
+```bash
+lua tools/bench_tiger_sentence_lua.lua . --mode mobile --repeat 50 --require-model
+lua tools/bench_tiger_sentence_lua.lua . --mode none --repeat 50
+```
+
+`mobile` 要求实际加载 TCSKNM02；`auto` 接受搜索路径中第一个可用模型；`none`
+显式关闭模型，用于检查降级路径。`incremental` 是普通逐键解码，`evidence` 是
+每一键都构建提前上屏证据的压力测试。
