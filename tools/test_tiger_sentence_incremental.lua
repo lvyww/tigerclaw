@@ -385,6 +385,7 @@ local function fake_environment(early_commit, duplicate_single)
         input = "",
         early_commit = early_commit,
         duplicate_single = duplicate_single ~= false,
+        full_shape = false,
         input_mutations = 0,
         clear_calls = 0
     }
@@ -395,6 +396,7 @@ local function fake_environment(early_commit, duplicate_single)
         if name == "tiger_sentence_allow_duplicate_single" then
             return self.duplicate_single
         end
+        if name == "full_shape" then return self.full_shape end
         return false
     end
     context.duplicate_single = duplicate_single ~= false
@@ -441,6 +443,7 @@ local function fake_key(repr)
     function key:ctrl() return false end
     function key:alt() return false end
     function key:super() return false end
+    function key:shift() return false end
     return key
 end
 
@@ -538,6 +541,65 @@ if properties_mig.tiger_sentence_committed ~= "vp\t刘" or
     fail("legacy committed properties were not migrated to the combined property")
 end
 print("OK  legacy committed properties migrate to the combined property")
+
+-- Idle digits commit directly and arm the decimal-point follow-up,
+-- mirroring InputMethodEngine._dotAfterDigitArmed.
+local env_dig, context_dig, _, commits_dig = fake_environment(true)
+sentence.processor(fake_key("3"), env_dig)
+if #commits_dig ~= 1 or commits_dig[1] ~= "3" or context_dig.input ~= "" then
+    fail("idle digit did not commit directly")
+end
+sentence.processor(fake_key("."), env_dig)
+if #commits_dig ~= 2 or commits_dig[2] ~= "." or context_dig.input ~= "" then
+    fail("period after digit did not commit as an ASCII decimal point")
+end
+sentence.processor(fake_key("5"), env_dig)
+sentence.processor(fake_key("7"), env_dig)
+if #commits_dig ~= 4 or commits_dig[4] ~= "7" then
+    fail("digits stopped committing after a decimal point")
+end
+-- A comma passes through to the punctuator instead of being intercepted.
+sentence.processor(fake_key(","), env_dig)
+if #commits_dig ~= 4 or context_dig.input ~= "" then
+    fail("comma after digits should pass through to the punctuator")
+end
+-- The arm is consumed by any non-digit key: a second period goes back to
+-- the punctuator (Chinese 。 via symbols.yaml).
+sentence.processor(fake_key("1"), env_dig)
+sentence.processor(fake_key("."), env_dig)
+sentence.processor(fake_key("."), env_dig)
+if #commits_dig ~= 6 or context_dig.input ~= "" then
+    fail("the second period after a decimal point should pass through")
+end
+print("OK  idle digits commit and the following period becomes a decimal point")
+
+-- Full-shape digits still arm the half-width decimal point.
+local env_fdig, context_fdig, _, commits_fdig = fake_environment(true)
+context_fdig.full_shape = true
+sentence.processor(fake_key("3"), env_fdig)
+sentence.processor(fake_key("."), env_fdig)
+if #commits_fdig ~= 2 or commits_fdig[1] ~= "３" or commits_fdig[2] ~= "." then
+    fail("full-shape digit did not arm the half-width decimal point")
+end
+print("OK  full-shape digits arm the half-width decimal point")
+
+-- Numpad digits and the numpad decimal key behave like their main-row peers.
+local env_kp, _, _, commits_kp = fake_environment(true)
+sentence.processor(fake_key("KP_5"), env_kp)
+sentence.processor(fake_key("KP_Decimal"), env_kp)
+if #commits_kp ~= 2 or commits_kp[1] ~= "5" or commits_kp[2] ~= "." then
+    fail("numpad digit/decimal did not commit as 5.")
+end
+print("OK  numpad digits and decimal key mirror the main row")
+
+-- Letters after a digit still start a normal composition.
+local env_ldig, context_ldig, _, commits_ldig = fake_environment(true)
+sentence.processor(fake_key("1"), env_ldig)
+sentence.processor(fake_key("v"), env_ldig)
+if #commits_ldig ~= 1 or context_ldig.input ~= "v" then
+    fail("a letter after an idle digit did not start a composition")
+end
+print("OK  letters after idle digits start a normal composition")
 
 -- The early-commit switch gates empty-code auto commit too; there is no
 -- separate option for it.

@@ -2714,6 +2714,30 @@ local function get_min_retained_raw_length(env)
     return 0
 end
 
+-- Mirror InputMethodEngine.IsTextEndingWithDigit: both half- and
+-- full-width digits arm the decimal-point follow-up.
+local function ends_with_digit(text)
+    if not text or text == "" then
+        return false
+    end
+    local chars = utf_chars(text)
+    local last = chars[#chars]
+    return last:match("^[0-9]$") ~= nil or last:match("^\xEF\xBC[\x90-\x99]") ~= nil
+end
+
+-- Standalone modifier key events must not consume the armed decimal point.
+local function is_modifier_repr(repr)
+    return repr:match("^Shift") ~= nil or
+        repr:match("^Control") ~= nil or
+        repr:match("^Alt") ~= nil or
+        repr:match("^Super") ~= nil or
+        repr:match("^Meta") ~= nil or
+        repr:match("^Caps_Lock$") ~= nil or
+        repr:match("^Num_Lock$") ~= nil or
+        repr:match("^ISO_Level") ~= nil or
+        repr == "Mode_switch"
+end
+
 local function try_empty_code_commit(env, state, full_before, appended_letter)
     local context = env.engine.context
     -- Empty-code auto commit is part of 整句自动提前上屏; there is no
@@ -2776,6 +2800,9 @@ local function try_empty_code_commit(env, state, full_before, appended_letter)
     state.empty_code_pending = nil
     state.continuation_after_auto_commit = true
     env.engine:commit_text(commit)
+    if ends_with_digit(commit) then
+        env._tiger_sentence_dot_armed = true
+    end
     save_sentence_state(context, state, env)
     reset_decode_cache()
     restore_composition_input(context, retained_raw)
@@ -2827,6 +2854,9 @@ local function try_commit_mature_prefix(env, state, evidence_raw)
     reset_early_evidence(state)
     save_sentence_state(context, state, env)
     env.engine:commit_text(commit)
+    if ends_with_digit(commit) then
+        env._tiger_sentence_dot_armed = true
+    end
     restore_composition_input(context, evidence_raw:sub(selected.raw_length + 1))
     return true
 end
@@ -2966,6 +2996,13 @@ local function processor(key_event, env)
     local context = env.engine.context
     local state = sentence_state(context, env)
     local repr = key_event:repr()
+    -- Mirror InputMethodEngine._dotAfterDigitArmed: the period following a
+    -- digit output becomes an ASCII decimal point; any non-modifier key
+    -- consumes the arm.
+    local dot_armed = env._tiger_sentence_dot_armed or false
+    if not is_modifier_repr(repr) then
+        env._tiger_sentence_dot_armed = false
+    end
     local ch = is_plain_char_key(key_event, repr)
     if ch then
         if not context:is_composing() and
@@ -2985,18 +3022,18 @@ local function processor(key_event, env)
         if #(context.input or "") >= max_raw_length then
             return 1
         end
-        -- Digits are rank suffixes only while composing. Idle Chinese mode
-        -- should commit 0-9 like a normal Rime schema (including 全角).
+        -- Digits are rank suffixes only while composing. Idle digits commit
+        -- directly (half-width; full-width in full_shape mode). Returning
+        -- them to Rime instead would push them into the speller alphabet
+        -- and leave an unresolved composition behind.
         if ch:match("%d") and not context:is_composing() then
-            if #repr == 1 then
-                return 2
-            end
             if context:get_option("full_shape") then
                 local full = { "０", "１", "２", "３", "４", "５", "６", "７", "８", "９" }
                 env.engine:commit_text(full[tonumber(ch) + 1])
             else
                 env.engine:commit_text(ch)
             end
+            env._tiger_sentence_dot_armed = true
             return 1
         end
         local is_letter = ch:match("^[a-z]$") ~= nil
@@ -3013,6 +3050,12 @@ local function processor(key_event, env)
         return 1
     end
     if not context:is_composing() then
+        if dot_armed and (repr == "." or repr == "KP_Decimal") and
+            not key_event:shift() and not key_event:ctrl() and
+            not key_event:alt() and not key_event:super() then
+            env.engine:commit_text(".")
+            return 1
+        end
         return 2
     end
     if repr == "Return" or repr == "KP_Enter" then
