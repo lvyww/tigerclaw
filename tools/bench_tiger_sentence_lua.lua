@@ -15,8 +15,13 @@ for i = 2, #arg do
 end
 
 package.path = repo .. "/rime/tiger_sentence/lua/?.lua;" .. package.path
-local sentence_data = require("tiger_sentence_data")
-local lexicon = {codes = sentence_data.codes, lengths = sentence_data.lengths}
+rime_api = {
+    get_user_data_dir = function()
+        return repo .. "/rime/tiger_sentence"
+    end
+}
+local sentence = require("tiger_sentence")
+local lexicon = sentence.lexicon_data_view()
 
 local beam_width = 200
 local candidate_limit = 20

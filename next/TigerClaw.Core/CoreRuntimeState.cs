@@ -207,7 +207,7 @@ namespace TigerClaw.Core
 
             new KeyValuePair<string, string>(KeySentenceFullCodeWhitelist, DefaultSentenceFullCodeWhitelist),
 
-            new KeyValuePair<string, string>(KeySentenceAllowDuplicateSingleCharacters, No),
+            new KeyValuePair<string, string>(KeySentenceAllowDuplicateSingleCharacters, Yes),
 
             new KeyValuePair<string, string>(KeyMaxAuto, Yes),
 
@@ -1412,7 +1412,7 @@ namespace TigerClaw.Core
         }
 
         public bool GetSentenceAllowDuplicateSingleCharacters() =>
-            GetBool(KeySentenceAllowDuplicateSingleCharacters, false);
+            GetBool(KeySentenceAllowDuplicateSingleCharacters, true);
 
         internal static ISet<string> ParseCharacterSet(string raw)
         {

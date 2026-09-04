@@ -75,6 +75,7 @@ internal static partial class Program
 internal sealed class Options
 {
     public required string CorpusRoot { get; init; }
+    public string? ArticlesRoot { get; init; }
     public required string Output { get; init; }
     public int Workers { get; init; } = 16;
     public int QueueCapacity { get; init; } = 4096;
@@ -118,6 +119,10 @@ internal sealed class Options
         var result = new Options
         {
             CorpusRoot = Path.GetFullPath(corpusRoot),
+            ArticlesRoot = values.TryGetValue("--articles-root", out string? articlesRoot) &&
+                !string.IsNullOrWhiteSpace(articlesRoot)
+                    ? Path.GetFullPath(articlesRoot)
+                    : null,
             Output = Path.GetFullPath(output),
             Workers = Integer(values, "--workers", 16),
             QueueCapacity = Integer(values, "--queue-capacity", 4096),
@@ -143,6 +148,10 @@ internal sealed class Options
         if (!Directory.Exists(result.CorpusRoot))
         {
             throw new DirectoryNotFoundException("语料目录不存在: " + result.CorpusRoot);
+        }
+        if (result.ArticlesRoot is not null && !Directory.Exists(result.ArticlesRoot))
+        {
+            throw new DirectoryNotFoundException("文章目录不存在: " + result.ArticlesRoot);
         }
         if (Directory.Exists(result.Output) && Directory.EnumerateFileSystemEntries(result.Output).Any())
         {
@@ -174,9 +183,10 @@ internal sealed record SourceSpec(
     string Name,
     int Weight,
     string[] Fields,
-    IReadOnlyList<string> Paths);
+    IReadOnlyList<string> Paths,
+    bool IsPlainText = false);
 
-internal sealed record RecordLine(SourceSpec Source, string Json);
+internal sealed record RecordLine(SourceSpec Source, string Content);
 
 internal sealed class DatasetStats
 {
@@ -297,6 +307,7 @@ internal sealed class Trainer
             version = 2,
             created_utc = DateTimeOffset.UtcNow,
             corpus_root = _options.CorpusRoot,
+            articles_root = _options.ArticlesRoot,
             workers = _options.Workers,
             queue_capacity = _options.QueueCapacity,
             entries_per_run = _options.EntriesPerRun,
@@ -356,7 +367,7 @@ internal sealed class Trainer
                 .OrderBy(path => path, StringComparer.Ordinal)
                 .ToArray()
             : [];
-        var sources = new[]
+        var sources = new List<SourceSpec>
         {
             new SourceSpec("baike", 1, ["title", "desc", "answer"],
                 [Path.Combine(root, "baike2018qa", "baike_qa_train.json")]),
@@ -366,6 +377,14 @@ internal sealed class Trainer
                 [Path.Combine(root, "webtext2019zh", "web_text_zh_train.json")]),
             new SourceSpec("wiki", 1, ["title", "text"], wikiPaths),
         };
+        if (_options.ArticlesRoot is not null)
+        {
+            string[] articlePaths = Directory
+                .EnumerateFiles(_options.ArticlesRoot, "*.txt", SearchOption.AllDirectories)
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToArray();
+            sources.Add(new SourceSpec("articles", 1, [], articlePaths, IsPlainText: true));
+        }
         foreach (SourceSpec source in sources)
         {
             if (source.Paths.Count == 0 || source.Paths.Any(path => !File.Exists(path)))
@@ -382,6 +401,26 @@ internal sealed class Trainer
         long sourceRecords = 0;
         foreach (string path in source.Paths)
         {
+            if (source.IsPlainText)
+            {
+                if (_options.MaximumRecordsPerDataset > 0 &&
+                    sourceRecords >= _options.MaximumRecordsPerDataset)
+                {
+                    return;
+                }
+                sourceRecords++;
+                Interlocked.Increment(ref stats.Records);
+                if ((sourceRecords - 1) % _options.SampleModulus != 0)
+                {
+                    continue;
+                }
+                Interlocked.Increment(ref stats.SampledRecords);
+                string text = await File.ReadAllTextAsync(path, Encoding.UTF8);
+                await writer.WriteAsync(new RecordLine(source, text));
+                ReportQueuedRecord();
+                continue;
+            }
+
             using var stream = new FileStream(
                 path,
                 FileMode.Open,
@@ -411,12 +450,17 @@ internal sealed class Trainer
                 }
                 Interlocked.Increment(ref stats.SampledRecords);
                 await writer.WriteAsync(new RecordLine(source, line));
-                long queued = Interlocked.Increment(ref _queuedRecords);
-                if (queued % 100_000 == 0)
-                {
-                    Console.WriteLine($"queued={queued:N0}");
-                }
+                ReportQueuedRecord();
             }
+        }
+    }
+
+    private void ReportQueuedRecord()
+    {
+        long queued = Interlocked.Increment(ref _queuedRecords);
+        if (queued % 100_000 == 0)
+        {
+            Console.WriteLine($"queued={queued:N0}");
         }
     }
 
@@ -436,9 +480,15 @@ internal sealed class Trainer
     private void ProcessRecord(RecordLine record, LocalCounter counter)
     {
         DatasetStats stats = _statistics[record.Source.Name];
+        if (record.Source.IsPlainText)
+        {
+            ProcessField(record.Content, record.Source.Weight, stats, counter, truncate: false);
+            return;
+        }
+
         try
         {
-            using JsonDocument document = JsonDocument.Parse(record.Json);
+            using JsonDocument document = JsonDocument.Parse(record.Content);
             if (document.RootElement.ValueKind != JsonValueKind.Object)
             {
                 Interlocked.Increment(ref stats.InvalidRecords);
@@ -458,13 +508,7 @@ internal sealed class Trainer
                 {
                     continue;
                 }
-                Interlocked.Increment(ref stats.Fields);
-                foreach (int[] sequence in NormalizeSequences(text))
-                {
-                    counter.AddSequence(sequence, record.Source.Weight);
-                    Interlocked.Increment(ref stats.Sequences);
-                    Interlocked.Add(ref stats.Characters, sequence.Length);
-                }
+                ProcessField(text, record.Source.Weight, stats, counter, truncate: true);
             }
         }
         catch (JsonException)
@@ -473,9 +517,30 @@ internal sealed class Trainer
         }
     }
 
-    private IEnumerable<int[]> NormalizeSequences(string input)
+    private void ProcessField(
+        string text,
+        int weight,
+        DatasetStats stats,
+        LocalCounter counter,
+        bool truncate)
     {
-        string text = input.Length > _options.MaximumFieldCharacters
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return;
+        }
+
+        Interlocked.Increment(ref stats.Fields);
+        foreach (int[] sequence in NormalizeSequences(text, truncate))
+        {
+            counter.AddSequence(sequence, weight);
+            Interlocked.Increment(ref stats.Sequences);
+            Interlocked.Add(ref stats.Characters, sequence.Length);
+        }
+    }
+
+    private IEnumerable<int[]> NormalizeSequences(string input, bool truncate)
+    {
+        string text = truncate && input.Length > _options.MaximumFieldCharacters
             ? input[.._options.MaximumFieldCharacters]
             : input;
         text = WebUtility.HtmlDecode(text).Normalize(NormalizationForm.FormKC);

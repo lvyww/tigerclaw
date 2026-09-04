@@ -42,18 +42,23 @@ C:\Archive\tigerclaw_sentence_ml\qwen3-0.6b-gguf\downloaded\Qwen3-0.6B-Base-Q8_0
 dotnet run --project tools\SentenceNgramTrainer\TigerClaw.SentenceNgramTrainer.csproj ^
   -c Release -- ^
   --corpus-root C:\Archive\brightmart_nlp_chinese_corpus ^
-  --output C:\Archive\tigerclaw_sentence_ml\trainer_v2\full-counts-w16 ^
+  --articles-root C:\Archive\articles ^
+  --output C:\Archive\tigerclaw_sentence_ml\trainer_v2\full-counts-w16-articles ^
   --workers 16 --entries-per-run 2000000 --merge-fan-in 64 ^
   --min-bigram-count 1 --min-trigram-count 1
 ```
 
-再构建当前推荐档：
+`--articles-root` 可省略。指定后会递归读取其中所有 UTF-8 `.txt` 文件，每个文件
+作为一篇权重为 1 的文章，并处理全文；JSON 字段仍受
+`--max-field-characters` 限制，纯文本文章不受该字段上限截断。
+
+再用相同裁剪参数构建文章增强档：
 
 ```batch
 dotnet run --project tools\SentenceNgramTrainer\TigerClaw.SentenceNgramTrainer.csproj ^
   -c Release -- build-model ^
-  --counts C:\Archive\tigerclaw_sentence_ml\trainer_v2\full-counts-w16 ^
-  --output C:\Archive\tigerclaw_sentence_ml\trainer_v2\full-kn-m30-r20-p050-w025 ^
+  --counts C:\Archive\tigerclaw_sentence_ml\trainer_v2\full-counts-w16-articles ^
+  --output C:\Archive\tigerclaw_sentence_ml\trainer_v2\full-kn-m30-r20-p050-w025-articles ^
   --min-bigram-export-count 30 --min-trigram-export-count 30 ^
   --rescue-min-bigram-count 20 --rescue-min-trigram-count 20 ^
   --rescue-min-conditional-probability 0.5 --rescue-probability-weight 0.25

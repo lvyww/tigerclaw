@@ -2,14 +2,16 @@
 schema:
   schema_id: tiger_sentence
   name: 虎整句
-  version: "1.0"
+  version: "1.2"
   author:
     - TigerClaw
   description: |
     从虎整句常用字词表生成的变长整句方案。
-    检索码表在 lua/tiger_sentence_data.lua，不使用 Rime 词典文件或用户覆盖层。
+    码表/字频/白名单为明文 txt（tiger_sentence.codes.txt 等），运行时加载，
+    不使用 Rime 词典文件或用户覆盖层；可直接替换以导入其它形码方案。
     只有整个独立输入作为单一码表边时才隐式允许非首选。
-    多段整句路径和自动上屏续写只取首选；分号/引号/数字写入编码选重。
+    允许单字重码组句默认开启：分段路径中的非首选单字按语言模型分数竞争，
+    非首选多字词仍必须显式选重；分号/引号/数字写入编码选重。
     首次输入时用 Lua 优先分页加载 sentence-ngram-mobile.bin 做 Kneser-Ney 打分。
 
 switches:
@@ -23,6 +25,9 @@ switches:
   - name: tiger_sentence_early_commit
     reset: 1
     states: [ 提前上屏关, 提前上屏开 ]
+  - name: tiger_sentence_allow_duplicate_single
+    reset: 1
+    states: [ 单字重码组句关, 单字重码组句开 ]
 engine:
   processors:
     - ascii_composer
@@ -50,6 +55,13 @@ speller:
 
 menu:
   page_size: 5
+
+tiger_sentence:
+  # 提前上屏与空码自动上屏共用的最短保留编码数；0 表示不额外限制。
+  # 概率型提前上屏仍永远不少于 3。
+  min_retained_raw_length: 0
+  # 高频字仅使用最优码组句的字数上限；0 表示全部放开非最优码。
+  high_freq_limit: 1500
 
 key_binder:
   bindings:

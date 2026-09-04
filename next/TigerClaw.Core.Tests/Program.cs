@@ -155,7 +155,7 @@ namespace TigerClaw.Core.Tests
                 SentenceDecoderRequiresExplicitSelectionForEveryCode();
                 SentenceDecoderAllowsImplicitNonFirstOnlyForWholeInputEdge();
                 SentenceDecoderKeepsFirstChoiceAheadForWholeInputEdge();
-                SentenceAllowDuplicateSingleCharactersDefaultsOff();
+                SentenceAllowDuplicateSingleCharactersDefaultsOn();
                 SentenceDecoderAllowsSegmentedSingleDuplicatesWhenEnabled();
                 SentenceDecoderLetsSegmentedSingleDuplicatesCompeteWhenEnabled();
                 SentenceDecoderAppliesCharacterRewardInsideBeam();
@@ -4127,19 +4127,19 @@ namespace TigerClaw.Core.Tests
                 nameof(SentenceDecoderAllowsImplicitNonFirstOnlyForWholeInputEdge) + ".segmented_non_first_rejected");
         }
 
-        private static void SentenceAllowDuplicateSingleCharactersDefaultsOff()
+        private static void SentenceAllowDuplicateSingleCharactersDefaultsOn()
         {
             var state = new CoreRuntimeState();
-            True(!state.GetSentenceAllowDuplicateSingleCharacters(),
-                nameof(SentenceAllowDuplicateSingleCharactersDefaultsOff) + ".default");
-            True(state.TrySetConfigValue("允许单字重码组句", "是", out _, out _),
-                nameof(SentenceAllowDuplicateSingleCharactersDefaultsOff) + ".set");
             True(state.GetSentenceAllowDuplicateSingleCharacters(),
-                nameof(SentenceAllowDuplicateSingleCharactersDefaultsOff) + ".on");
+                nameof(SentenceAllowDuplicateSingleCharactersDefaultsOn) + ".default");
             True(state.TrySetConfigValue("允许单字重码组句", "否", out _, out _),
-                nameof(SentenceAllowDuplicateSingleCharactersDefaultsOff) + ".off");
+                nameof(SentenceAllowDuplicateSingleCharactersDefaultsOn) + ".off");
             True(!state.GetSentenceAllowDuplicateSingleCharacters(),
-                nameof(SentenceAllowDuplicateSingleCharactersDefaultsOff) + ".off_value");
+                nameof(SentenceAllowDuplicateSingleCharactersDefaultsOn) + ".off_value");
+            True(state.TrySetConfigValue("允许单字重码组句", "是", out _, out _),
+                nameof(SentenceAllowDuplicateSingleCharactersDefaultsOn) + ".on");
+            True(state.GetSentenceAllowDuplicateSingleCharacters(),
+                nameof(SentenceAllowDuplicateSingleCharactersDefaultsOn) + ".on_value");
         }
 
         private static void SentenceDecoderAllowsSegmentedSingleDuplicatesWhenEnabled()

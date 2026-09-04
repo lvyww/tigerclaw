@@ -85,7 +85,7 @@ UI state:
   probabilistic early commit must preserve the already-ranked full-sentence paths,
   including eligible non-first single-character segments.
   Multi-character lexicon entries are legal edges. `允许单字重码组句` (default
-  off) additionally allows non-first single characters without a selector on
+  on) additionally allows non-first single characters without a selector on
   segmented paths and ranks those paths by language-model score so they can
   become the visible first candidate. A whole-input single lexicon edge still
   keeps first-rank characters ahead of later ranks. It does not bypass
@@ -162,8 +162,9 @@ UI state:
   the complete path was a real performance regression once (beam pool up to 100x
   the visible list on every keystroke). Fcitx5 Android `tigerclaw_sentence_core`
   received these 2026-09-01 independent-prefix, dropped-tail comparison and
-  closed-boundary rules. The Rime Lua port has not; synchronize it only after
-  Windows behavior is accepted.
+  closed-boundary rules. The Rime Lua port received the same tracker rules,
+  the duplicate-single-character switch (default on) and the empty-code
+  continuation split on 2026-09-04.
 - TSF key requests carry stable `client_session` + `event_id`; timeout retries
   reuse them and Core returns the cached first response without executing a
   physical key twice.
@@ -266,8 +267,16 @@ release tree. Keep `.bat` files CRLF.
 
 ## Related Ports And Experiments
 
-- `rime/tiger_sentence/`: standalone experimental Rime pack. Regenerate with
-  `python3 tools/export_tiger_sentence_rime.py`. It is not part of Windows TSF.
+- `rime/tiger_sentence/`: standalone experimental Rime pack. Regenerate its
+  plain-text data files with `python3 tools/export_tiger_sentence_rime.py`.
+  The code table, character ranks and full-code whitelist are runtime-loaded
+  txt files (`tiger_sentence.codes.txt` and siblings) so users can edit or
+  import other shape-code tables without re-running the exporter; the
+  high-frequency optimal-code limit is the schema config
+  `tiger_sentence/high_freq_limit` (default 1500, 0 disables) and the exporter
+  only cross-checks that default against `dist_config.txt`. Auto commits
+  rebuild the composition with one atomic input assignment (no intermediate
+  `clear`) to avoid candidate-window flicker. It is not part of Windows TSF.
 - `/home/yc/fx5/fcitx5-android`, plugin `tigerclaw`: standalone native Fcitx5
   Android port. Core stages and wiring are implemented; real-device performance,
   packaging and signed release acceptance remain. See

@@ -1,6 +1,6 @@
 -- TigerClaw-style sentence lattice for Rime, with optional Lua KN scoring.
-local data = require("tiger_sentence_data")
-local lexicon = {codes = data.codes, lengths = data.lengths}
+-- Lexicon data is loaded from plain-text files (see load_lexicon_data below),
+-- so users can edit or replace the code table without re-running exporters.
 -- Pure Lua Kneser-Ney V2 reader. TCSKNM02 uses paged I/O and a bounded cache.
 local BOS = "\2"
 local EOS = "\3"
@@ -50,6 +50,405 @@ local function finish_performance_sample()
     performance.early_evidence_builds = 0
     performance.isolation_hits = 0
     performance.isolation_misses = 0
+end
+
+local reset_decode_cache_values -- forward declaration; assigned below
+local clear_model_dependent_caches -- forward declaration; assigned below
+
+-- Plain-text lexicon data.
+--   tiger_sentence.codes.txt             "text\tcode", line order = rank
+--   tiger_sentence.char_ranks.txt         one character per line, in rank order
+--   tiger_sentence.full_code_whitelist.txt whitelist characters
+-- Lookup order: user data directory, then shared data directory. Missing
+-- ranks disable the isolation penalty and the common-character filter.
+
+local function is_single_character(text)
+    local count = 0
+    local index = 1
+    while index <= #text do
+        local byte = text:byte(index)
+        if byte < 0x80 or byte >= 0xC0 then
+            count = count + 1
+        end
+        index = index + 1
+    end
+    return count == 1
+end
+
+local function character_at(text, index)
+    local byte = text:byte(index)
+    if not byte then
+        return nil, index
+    end
+    local length = 1
+    if byte >= 0xF0 then
+        length = 4
+    elseif byte >= 0xE0 then
+        length = 3
+    elseif byte >= 0xC0 then
+        length = 2
+    end
+    return text:sub(index, index + length - 1), index + length
+end
+
+local function normalize_text_content(content)
+    if content:sub(1, 3) == "\239\187\191" then
+        content = content:sub(4)
+    end
+    return (content:gsub("\r\n", "\n"):gsub("\r", "\n"))
+end
+
+local function each_content_line(content, callback)
+    for line in content:gmatch("[^\n]+") do
+        line = line:gsub("^%s+", ""):gsub("%s+$", "")
+        if line ~= "" and line:sub(1, 1) ~= "#" then
+            callback(line)
+        end
+    end
+end
+
+local function data_directories()
+    local directories = {}
+    if rime_api then
+        if type(rime_api.get_user_data_dir) == "function" then
+            local ok, path = pcall(rime_api.get_user_data_dir)
+            if ok and type(path) == "string" and path ~= "" then
+                directories[#directories + 1] = path
+            end
+        end
+        if type(rime_api.get_shared_data_dir) == "function" then
+            local ok, path = pcall(rime_api.get_shared_data_dir)
+            if ok and type(path) == "string" and path ~= "" then
+                directories[#directories + 1] = path
+            end
+        end
+    end
+    return directories
+end
+
+local function read_data_file(name)
+    for _, directory in ipairs(data_directories()) do
+        local path = directory .. "/" .. name
+        local ok, handle = pcall(io.open, path, "rb")
+        if ok and handle then
+            local content = handle:read("*a")
+            handle:close()
+            if content then
+                return content, path
+            end
+        end
+    end
+    return nil, nil
+end
+
+local function parse_codes_content(content)
+    local entries = {}
+    local seen = {}
+    each_content_line(normalize_text_content(content), function(line)
+        local word, code = line:match("^(%S+)%s+(%S+)")
+        if word and code then
+            code = code:lower()
+            if code:match("^[a-z]+$") then
+                local key = word .. "\0" .. code
+                if not seen[key] then
+                    seen[key] = true
+                    entries[#entries + 1] = { word = word, code = code }
+                end
+            end
+        end
+    end)
+    return entries
+end
+
+local function parse_ranks_content(content)
+    local ranks = {}
+    local count = 0
+    each_content_line(normalize_text_content(content), function(line)
+        local character = character_at(line, 1)
+        if character and ranks[character] == nil then
+            count = count + 1
+            ranks[character] = count
+        end
+    end)
+    return ranks, count
+end
+
+local function parse_whitelist_content(content)
+    local characters = {}
+    each_content_line(normalize_text_content(content), function(line)
+        local index = 1
+        while index <= #line do
+            local character
+            character, index = character_at(line, index)
+            characters[character] = true
+        end
+    end)
+    return characters
+end
+
+local default_high_freq_limit = 1500
+
+local lexicon_state = {
+    built = false,
+    high_freq_limit = nil,
+    codes = {},
+    lengths = {},
+    max_code_len = 1,
+    proper_code_prefixes = {},
+    character_ranks = nil,
+    ranks_count = 0,
+    unknown_character_rank = 20001,
+    isolation_enabled = false,
+    codes_path = nil,
+    codes_entries = 0,
+    codes_count = 0,
+    ranks_path = nil,
+    whitelist_path = nil,
+    whitelist_count = 0,
+    errors = {}
+}
+
+-- Port of SentenceLexiconIndex.Build: exact code table with line-order ranks,
+-- per-character primary code (shortest wins, first rank preferred on ties),
+-- then the high-frequency optimal-code filter with the full-code whitelist.
+local function build_lexicon_index(entries, character_ranks, high_freq_limit, whitelist)
+    local exact = {}
+    local codes_by_character = {}
+    for index = 1, #entries do
+        local word = entries[index].word
+        local code = entries[index].code
+        local texts = exact[code]
+        if not texts then
+            texts = {}
+            exact[code] = texts
+        end
+        local duplicate = false
+        for j = 1, #texts do
+            if texts[j] == word then
+                duplicate = true
+                break
+            end
+        end
+        if not duplicate then
+            texts[#texts + 1] = word
+        end
+        if is_single_character(word) then
+            local character_codes = codes_by_character[word]
+            if not character_codes then
+                character_codes = {}
+                codes_by_character[word] = character_codes
+            end
+            local code_duplicate = false
+            for j = 1, #character_codes do
+                if character_codes[j] == code then
+                    code_duplicate = true
+                    break
+                end
+            end
+            if not code_duplicate then
+                character_codes[#character_codes + 1] = code
+            end
+        end
+    end
+
+    local common = nil
+    if character_ranks and high_freq_limit > 0 then
+        local ordered = {}
+        for character, rank in pairs(character_ranks) do
+            ordered[#ordered + 1] = { character = character, rank = rank }
+        end
+        table.sort(ordered, function(a, b)
+            return a.rank < b.rank
+        end)
+        common = {}
+        local count = math.min(high_freq_limit, #ordered)
+        for index = 1, count do
+            common[ordered[index].character] = true
+        end
+    end
+
+    local primary = {}
+    for character, codes in pairs(codes_by_character) do
+        local best_first, best_any
+        for index = 1, #codes do
+            local code = codes[index]
+            if #code >= 2 then
+                if not best_any or #code < #best_any then
+                    best_any = code
+                end
+                local texts = exact[code]
+                if texts and texts[1] == character then
+                    if not best_first or #code < #best_first then
+                        best_first = code
+                    end
+                end
+            end
+        end
+        local chosen = best_first or best_any
+        if chosen then
+            primary[character] = chosen
+        end
+    end
+
+    local filtered = {}
+    local length_values = {}
+    local max_len = 1
+    local prefixes = {}
+    for code, texts in pairs(exact) do
+        local allowed = {}
+        for index = 1, #texts do
+            local text = texts[index]
+            local allow_non_primary =
+                #code == 1
+                or not is_single_character(text)
+                or not common
+                or not common[text]
+                or whitelist[text] == true
+            if allow_non_primary or primary[text] == code then
+                allowed[#allowed + 1] = { t = text, r = index }
+            end
+        end
+        if #allowed > 0 then
+            filtered[code] = allowed
+            length_values[#length_values + 1] = #code
+            if #code > max_len then
+                max_len = #code
+            end
+            for length = 1, #code - 1 do
+                prefixes[code:sub(1, length)] = true
+            end
+        end
+    end
+
+    table.sort(length_values)
+    local lengths = {}
+    local previous = 0
+    for _, value in ipairs(length_values) do
+        if value ~= previous then
+            lengths[#lengths + 1] = value
+            previous = value
+        end
+    end
+
+    return {
+        codes = filtered,
+        lengths = lengths,
+        max_code_len = max_len,
+        proper_code_prefixes = prefixes
+    }
+end
+
+local isolation_cache = {}
+local isolation_cache_keys = {}
+local isolation_cache_next = 1
+
+local function rebuild_lexicon(limit)
+    local errors = {}
+    local entries = {}
+    local codes_content, codes_path = read_data_file("tiger_sentence.codes.txt")
+    if codes_content then
+        entries = parse_codes_content(codes_content)
+    else
+        errors[#errors + 1] = "missing tiger_sentence.codes.txt"
+    end
+
+    local character_ranks = nil
+    local ranks_count = 0
+    local ranks_content, ranks_path = read_data_file("tiger_sentence.char_ranks.txt")
+    if ranks_content then
+        character_ranks, ranks_count = parse_ranks_content(ranks_content)
+        if ranks_count == 0 then
+            character_ranks = nil
+        end
+    end
+
+    local whitelist = {}
+    local whitelist_count = 0
+    local whitelist_content, whitelist_path =
+        read_data_file("tiger_sentence.full_code_whitelist.txt")
+    if whitelist_content then
+        whitelist = parse_whitelist_content(whitelist_content)
+        for _ in pairs(whitelist) do
+            whitelist_count = whitelist_count + 1
+        end
+    end
+
+    local index = build_lexicon_index(entries, character_ranks, limit, whitelist)
+    lexicon_state.built = true
+    lexicon_state.high_freq_limit = limit
+    lexicon_state.codes = index.codes
+    lexicon_state.lengths = index.lengths
+    lexicon_state.max_code_len = index.max_code_len
+    lexicon_state.proper_code_prefixes = index.proper_code_prefixes
+    lexicon_state.character_ranks = character_ranks
+    lexicon_state.ranks_count = ranks_count
+    lexicon_state.unknown_character_rank = ranks_count > 0 and ranks_count + 1 or 20001
+    lexicon_state.isolation_enabled = character_ranks ~= nil
+    lexicon_state.codes_path = codes_path
+    lexicon_state.codes_entries = #entries
+    lexicon_state.codes_count = 0
+    for _ in pairs(index.codes) do
+        lexicon_state.codes_count = lexicon_state.codes_count + 1
+    end
+    lexicon_state.ranks_path = ranks_path
+    lexicon_state.whitelist_path = whitelist_path
+    lexicon_state.whitelist_count = whitelist_count
+    lexicon_state.errors = errors
+
+    clear_model_dependent_caches()
+end
+
+local function configured_high_freq_limit(env)
+    -- Mirror CoreRuntimeState.GetSentenceOptimalCodeHighFreqLimit: an absent
+    -- key keeps the default; invalid or negative values mean 0 (no limit).
+    local schema = env and env.engine and env.engine.schema
+    local config = schema and schema.config
+    if not config then
+        return nil
+    end
+    local ok, value = pcall(function()
+        return config:get_int("tiger_sentence/high_freq_limit")
+    end)
+    if not ok or type(value) ~= "number" then
+        -- Absent or unreadable: keep the default. An explicit 0 in the
+        -- schema still disables the optimal-code restriction.
+        return nil
+    end
+    if value < 0 then
+        return 0
+    end
+    return math.floor(value)
+end
+
+local function ensure_lexicon(env)
+    local limit = configured_high_freq_limit(env)
+    if lexicon_state.built then
+        if limit == nil or limit == lexicon_state.high_freq_limit then
+            return lexicon_state
+        end
+    else
+        if limit == nil then
+            limit = default_high_freq_limit
+        end
+    end
+    rebuild_lexicon(limit)
+    return lexicon_state
+end
+
+local function data_status()
+    return {
+        built = lexicon_state.built,
+        high_freq_limit = lexicon_state.high_freq_limit,
+        codes_path = lexicon_state.codes_path,
+        codes_entries = lexicon_state.codes_entries,
+        codes_count = lexicon_state.codes_count,
+        ranks_path = lexicon_state.ranks_path,
+        ranks_count = lexicon_state.ranks_count,
+        isolation_enabled = lexicon_state.isolation_enabled,
+        whitelist_path = lexicon_state.whitelist_path,
+        whitelist_count = lexicon_state.whitelist_count,
+        errors = lexicon_state.errors
+    }
 end
 
 local kn_reader = {
@@ -667,12 +1066,6 @@ end
 
 supplement.file_name = file_name
 supplement.reward_for_weight = reward_for_weight
-local ranks = {
-    unknown = data.unknown_character_rank or 20001
-}
-function ranks.rank(ch)
-    return data.character_ranks[ch] or ranks.unknown
-end
 
 local beam_width = 200
 local candidate_limit = 20
@@ -681,28 +1074,27 @@ local rank_penalty = 0.03
 local emitted_character_reward = 2.0
 local isolation_threshold = 3000
 local isolation_lambda = 2.0
+local early_commit_minimum_share = 0.995
 -- Two consecutive generations may confirm only when dissenting Beam mass is
 -- below 0.001%; every weaker history keeps the original three-key window.
 local early_commit_strong_share = 0.99999
+local early_commit_closed_boundary_share = 0.99999
+local early_commit_required_evidence = 3
+local early_commit_required_strong = 2
+local early_commit_maximum_neutral_gap = 3
 local early_commit_retained_raw_length = 3
+-- 允许单字重码组句 defaults to on; the Rime switch only turns it off.
+local allow_duplicate_single_option = "tiger_sentence_allow_duplicate_single"
+local active_allow_duplicate_single = true
 local BOS = kn_reader.BOS
 local EOS = kn_reader.EOS
 local kn_model = false
 local kn_load_error = nil
+-- Test/frontend hook: force-disable the n-gram model so the no-model
+-- fallback ordering can be exercised deterministically.
+local model_disabled = false
 local supplement_matcher = supplement.load_default()
 local has_supplements = (supplement_matcher.count or 0) > 0
-local max_code_len = 1
-for i = 1, #lexicon.lengths do
-    if lexicon.lengths[i] > max_code_len then
-        max_code_len = lexicon.lengths[i]
-    end
-end
-local proper_code_prefixes = {}
-for code, _ in pairs(lexicon.codes) do
-    for length = 1, #code - 1 do
-        proper_code_prefixes[code:sub(1, length)] = true
-    end
-end
 
 local logp_cache_limit = 32768
 local logp_cache = {}
@@ -712,80 +1104,69 @@ local observed_cache_limit = 32768
 local observed_cache = {}
 local observed_cache_keys = {}
 local observed_cache_next = 1
-local isolation_cache = {}
-local isolation_cache_keys = {}
-local isolation_cache_next = 1
 local aggregate_during_expansion_threshold = 128
 local decode_cache = {
     raw = nil,
     states = nil,
     result = nil,
     includes_early_commit = false,
-    required_text_prefix = ""
+    required_text_prefix = "",
+    allow_duplicate = true
 }
 local state_separator = "\31"
+
+clear_model_dependent_caches = function()
+    for key in pairs(logp_cache) do logp_cache[key] = nil end
+    for key in pairs(logp_cache_keys) do logp_cache_keys[key] = nil end
+    logp_cache_next = 1
+    for key in pairs(observed_cache) do observed_cache[key] = nil end
+    for key in pairs(observed_cache_keys) do observed_cache_keys[key] = nil end
+    observed_cache_next = 1
+    for key in pairs(isolation_cache) do isolation_cache[key] = nil end
+    for key in pairs(isolation_cache_keys) do isolation_cache_keys[key] = nil end
+    isolation_cache_next = 1
+    if reset_decode_cache_values then
+        reset_decode_cache_values()
+    end
+end
 
 -- Only committed-prefix state must be visible to both the processor and
 -- translator. Keep per-key confidence state on the processor environment so
 -- it does not emit a Rime property update (and a redundant UI refresh) for
--- every physical key. The old properties are read once for live migration.
+-- every physical key. The old properties are cleared once for live migration.
 local state_keys = {
+    committed = "tiger_sentence_committed",
+    -- Read once during migration from the old two-property format.
     committed_text = "tiger_sentence_committed_text",
     committed_raw = "tiger_sentence_committed_raw",
+    -- Cleared once during migration from the old proposal-history format.
     confidence = "tiger_sentence_confidence",
-    -- Read and clear the old split properties once during migration.
     proposal = "tiger_sentence_proposal",
     stable = "tiger_sentence_stable",
     evidence_raw = "tiger_sentence_evidence_raw"
 }
 
-local function transient_state(context, env)
-    if not env then
-        return {
-            proposal = "",
-            stable = 0,
-            evidence_raw = "",
-            history = {},
-            suspended = false,
-            empty_code_pending = nil,
-            continuation_after_auto_commit = false
-        }
-    end
-    if not env._tiger_sentence_transient then
-        local confidence = context:get_property(state_keys.confidence) or ""
-        local proposal, stable, evidence_raw = confidence:match(
-            "^(.-)" .. state_separator .. "(%d+)" .. state_separator .. "(.*)$")
-        if proposal == nil then
-            proposal = context:get_property(state_keys.proposal) or ""
-            stable = context:get_property(state_keys.stable) or "0"
-            evidence_raw = context:get_property(state_keys.evidence_raw) or ""
-        end
-        env._tiger_sentence_transient = {
-            proposal = proposal,
-            stable = tonumber(stable) or 0,
-            evidence_raw = evidence_raw,
-            history = {},
-            suspended = false,
-            empty_code_pending = nil,
-            continuation_after_auto_commit = false
-        }
-    end
-    return env._tiger_sentence_transient
+local function fresh_transient_state()
+    return {
+        trackers = {},
+        last_seen_raw = "",
+        last_auto_commit_raw_length = 0,
+        suspended = false,
+        empty_code_pending = nil,
+        continuation_after_auto_commit = false
+    }
 end
 
-local function sentence_state(context, env)
-    local transient = transient_state(context, env)
-    return {
-        committed_text = context:get_property(state_keys.committed_text) or "",
-        committed_raw = context:get_property(state_keys.committed_raw) or "",
-        proposal = transient.proposal,
-        stable = transient.stable,
-        evidence_raw = transient.evidence_raw,
-        history = transient.history or {},
-        suspended = transient.suspended or false,
-        empty_code_pending = transient.empty_code_pending,
-        continuation_after_auto_commit = transient.continuation_after_auto_commit or false
-    }
+local function transient_state(context, env)
+    if not env then
+        return fresh_transient_state()
+    end
+    if not env._tiger_sentence_transient then
+        -- The old single-proposal history cannot be migrated into
+        -- independent (text, raw boundary) trackers; start clean.
+        env._tiger_sentence_transient = fresh_transient_state()
+    end
+    return env._tiger_sentence_transient
 end
 
 local function set_property_if_changed(context, key, value)
@@ -795,13 +1176,48 @@ local function set_property_if_changed(context, key, value)
     end
 end
 
+local function parse_committed_property(value)
+    local separator = (value or ""):find("\t", 1, true)
+    if not separator then
+        return "", ""
+    end
+    return value:sub(1, separator - 1), value:sub(separator + 1)
+end
+
+local function sentence_state(context, env)
+    local transient = transient_state(context, env)
+    local combined = context:get_property(state_keys.committed) or ""
+    local committed_raw, committed_text = parse_committed_property(combined)
+    if combined == "" then
+        -- One-time migration from the old two-property format.
+        local old_raw = context:get_property(state_keys.committed_raw) or ""
+        local old_text = context:get_property(state_keys.committed_text) or ""
+        if old_raw ~= "" or old_text ~= "" then
+            committed_raw, committed_text = old_raw, old_text
+            set_property_if_changed(context, state_keys.committed,
+                old_raw .. "\t" .. old_text)
+            set_property_if_changed(context, state_keys.committed_raw, "")
+            set_property_if_changed(context, state_keys.committed_text, "")
+        end
+    end
+    return {
+        committed_text = committed_text,
+        committed_raw = committed_raw,
+        trackers = transient.trackers or {},
+        last_seen_raw = transient.last_seen_raw or "",
+        last_auto_commit_raw_length = transient.last_auto_commit_raw_length or 0,
+        suspended = transient.suspended or false,
+        empty_code_pending = transient.empty_code_pending,
+        continuation_after_auto_commit = transient.continuation_after_auto_commit or false
+    }
+end
+
 local function save_transient_state(context, state, env)
     if env then
         env._tiger_sentence_transient = {
-            proposal = state.proposal or "",
-            stable = state.stable or 0,
-            evidence_raw = state.evidence_raw or "",
-            history = state.history or {},
+            trackers = state.trackers or {},
+            last_seen_raw = state.last_seen_raw or "",
+            last_auto_commit_raw_length = state.last_auto_commit_raw_length or 0,
             suspended = state.suspended or false,
             empty_code_pending = state.empty_code_pending,
             continuation_after_auto_commit = state.continuation_after_auto_commit or false
@@ -817,27 +1233,31 @@ local function save_transient_state(context, state, env)
 end
 
 local function save_sentence_state(context, state, env)
-    set_property_if_changed(context, state_keys.committed_text, state.committed_text)
-    set_property_if_changed(context, state_keys.committed_raw, state.committed_raw)
+    set_property_if_changed(context, state_keys.committed,
+        (state.committed_raw or "") .. "\t" .. (state.committed_text or ""))
     save_transient_state(context, state, env)
 end
 
 local function reset_sentence_state(context, env, continuation_after_auto_commit)
     finish_performance_sample()
+    local transient = fresh_transient_state()
+    transient.continuation_after_auto_commit = continuation_after_auto_commit or false
     save_sentence_state(context, {
         committed_text = "",
         committed_raw = "",
-        proposal = "",
-        stable = 0,
-        evidence_raw = "",
-        history = {},
-        suspended = false,
-        empty_code_pending = nil,
-        continuation_after_auto_commit = continuation_after_auto_commit or false
+        trackers = transient.trackers,
+        last_seen_raw = transient.last_seen_raw,
+        last_auto_commit_raw_length = transient.last_auto_commit_raw_length,
+        suspended = transient.suspended,
+        empty_code_pending = transient.empty_code_pending,
+        continuation_after_auto_commit = transient.continuation_after_auto_commit
     }, env)
 end
 
 local function ensure_kn()
+    if model_disabled then
+        return nil
+    end
     if kn_model ~= false then
         return kn_model
     end
@@ -936,9 +1356,34 @@ local function candidate_chars(candidate)
     return candidate._chars
 end
 
-local function eligible_candidates(candidates, selected_rank, allow_all_ranks)
-    if selected_rank == 0 and allow_all_ranks then
-        return candidates
+local function candidate_is_single(candidate)
+    if candidate._single == nil then
+        candidate._single = is_single_character(candidate.t)
+    end
+    return candidate._single
+end
+
+local function eligible_candidates(candidates, selected_rank, whole_input_edge, allow_duplicate_single)
+    if selected_rank == 0 then
+        if whole_input_edge then
+            return candidates
+        end
+        if allow_duplicate_single then
+            -- Rank one plus single-character duplicates; non-first
+            -- multi-character words still need an explicit selector.
+            local cached = candidates._duplicate
+            if cached then
+                return cached
+            end
+            local selected = {}
+            for index = 1, #candidates do
+                if candidates[index].r == 1 or candidate_is_single(candidates[index]) then
+                    selected[#selected + 1] = candidates[index]
+                end
+            end
+            candidates._duplicate = selected
+            return selected
+        end
     end
     local rank = selected_rank > 0 and selected_rank or 1
     local cache_key = "_rank_" .. tostring(rank)
@@ -977,7 +1422,8 @@ end
 
 local function isolation_penalty(text)
     local model = ensure_kn()
-    if not model or not model.has_observed_bigram or not text or text == "" then
+    if not model or not model.has_observed_bigram or not text or text == "" or
+        not lexicon_state.isolation_enabled then
         return 0
     end
     local cached = isolation_cache[text]
@@ -989,7 +1435,8 @@ local function isolation_penalty(text)
     local chars = utf_chars(text)
     local penalty = 0
     for index = 1, #chars do
-        local rank = ranks.rank(chars[index])
+        local rank = (lexicon_state.character_ranks[chars[index]] or
+            lexicon_state.unknown_character_rank)
         if rank > isolation_threshold then
             local left_hit = index > 1 and has_observed_bigram(chars[index - 1], chars[index])
             local right_hit = index < #chars and has_observed_bigram(chars[index], chars[index + 1])
@@ -1058,17 +1505,18 @@ local function has_complete_candidate(raw_code, required_text_prefix)
     states[0][0] = true
     for position = 0, #raw - 1 do
         if next(states[position]) then
-            for i = 1, #lexicon.lengths do
-                local code_length = lexicon.lengths[i]
+            for i = 1, #lexicon_state.lengths do
+                local code_length = lexicon_state.lengths[i]
                 local code_end = position + code_length
                 if code_end <= #raw then
-                    local candidates = lexicon.codes[raw:sub(position + 1, code_end)]
+                    local candidates = lexicon_state.codes[raw:sub(position + 1, code_end)]
                     if candidates then
                         local selected_rank, consumed_end = parse_selector(raw, code_end)
                         local whole_input_edge = position == 0 and consumed_end == #raw
                         if not (#raw > 1 and consumed_end - position < 2) then
                             local selected = eligible_candidates(
-                                candidates, selected_rank, whole_input_edge)
+                                candidates, selected_rank, whole_input_edge,
+                                active_allow_duplicate_single)
                             for matched_length in pairs(states[position]) do
                                 for candidate_index = 1, #selected do
                                     local next_matched = advance_required_prefix(
@@ -1089,7 +1537,7 @@ local function has_complete_candidate(raw_code, required_text_prefix)
     return states[#raw][#required] or false
 end
 
-local function state_better(left, right)
+local function state_better_rank_first(left, right)
     local left_rank = left.max_rank or 1
     local right_rank = right.max_rank or 1
     if left_rank ~= right_rank then
@@ -1101,11 +1549,60 @@ local function state_better(left, right)
     return left.score > right.score
 end
 
+local function state_better_score_first(left, right)
+    if left.score == right.score then
+        local left_rank = left.max_rank or 1
+        local right_rank = right.max_rank or 1
+        if left_rank ~= right_rank then
+            return left_rank < right_rank
+        end
+        return left.text < right.text
+    end
+    return left.score > right.score
+end
+
+-- Without an n-gram model the per-character reward dominates the score and
+-- multi-segment concatenations would outrank direct code entries. Fall back
+-- to lexicon rank first, then fewer lexicon edges, then score.
+local function state_better_no_model(left, right)
+    local left_rank = left.max_rank or 1
+    local right_rank = right.max_rank or 1
+    if left_rank ~= right_rank then
+        return left_rank < right_rank
+    end
+    local left_edges = left.edge_count or 0
+    local right_edges = right.edge_count or 0
+    if left_edges ~= right_edges then
+        return left_edges < right_edges
+    end
+    if left.score == right.score then
+        return left.text < right.text
+    end
+    return left.score > right.score
+end
+
+-- Mirrors SentenceInputDecoder.GetBeamStateComparison: with the duplicate
+-- single-character option enabled the lattice itself competes by score.
+local function beam_state_better(left, right)
+    if not ensure_kn() then
+        return state_better_no_model(left, right)
+    end
+    if active_allow_duplicate_single then
+        return state_better_score_first(left, right)
+    end
+    return state_better_rank_first(left, right)
+end
+
 local function duplicate_better(item, previous)
     local item_rank = item.max_rank or 1
     local previous_rank = previous.max_rank or 1
-    return item_rank < previous_rank or
-        (item_rank == previous_rank and item.score > previous.score)
+    if item_rank ~= previous_rank then
+        return item_rank < previous_rank
+    end
+    if item.score ~= previous.score then
+        return item.score > previous.score
+    end
+    return (item.edge_count or 0) < (previous.edge_count or 0)
 end
 
 local function logsumexp(left, right)
@@ -1184,10 +1681,10 @@ local function add_state(bucket, item)
     end
 end
 
-local function sift_worst_up(heap, index)
+local function sift_worst_up(heap, index, better)
     while index > 1 do
         local parent = math.floor(index / 2)
-        if not state_better(heap[parent], heap[index]) then
+        if not better(heap[parent], heap[index]) then
             return
         end
         heap[parent], heap[index] = heap[index], heap[parent]
@@ -1195,7 +1692,7 @@ local function sift_worst_up(heap, index)
     end
 end
 
-local function sift_worst_down(heap, index)
+local function sift_worst_down(heap, index, better)
     while true do
         local left = index * 2
         if left > #heap then
@@ -1203,10 +1700,10 @@ local function sift_worst_down(heap, index)
         end
         local right = left + 1
         local worse = left
-        if right <= #heap and state_better(heap[left], heap[right]) then
+        if right <= #heap and better(heap[left], heap[right]) then
             worse = right
         end
-        if not state_better(heap[index], heap[worse]) then
+        if not better(heap[index], heap[worse]) then
             return
         end
         heap[index], heap[worse] = heap[worse], heap[index]
@@ -1214,19 +1711,20 @@ local function sift_worst_down(heap, index)
     end
 end
 
-local function select_exact_top(values, limit)
+local function select_exact_top(values, limit, better)
+    better = better or state_better_rank_first
     local heap = {}
     for i = 1, #values do
         local item = values[i]
         if #heap < limit then
             heap[#heap + 1] = item
-            sift_worst_up(heap, #heap)
-        elseif state_better(item, heap[1]) then
+            sift_worst_up(heap, #heap, better)
+        elseif better(item, heap[1]) then
             heap[1] = item
-            sift_worst_down(heap, 1)
+            sift_worst_down(heap, 1, better)
         end
     end
-    table.sort(heap, state_better)
+    table.sort(heap, better)
     return heap
 end
 
@@ -1248,9 +1746,9 @@ local function dedup_limit(bucket, limit)
     local truncated_now = #result > limit
     local truncated = (bucket._truncated or false) or truncated_now
     if truncated_now then
-        result = select_exact_top(result, limit)
+        result = select_exact_top(result, limit, beam_state_better)
     else
-        table.sort(result, state_better)
+        table.sort(result, beam_state_better)
     end
     local limited = new_bucket()
     for i = 1, #result do
@@ -1277,7 +1775,8 @@ local function new_states(length)
         supplement_score = 0.0,
         previous = nil,
         text_length = 0,
-        raw_length = 0
+        raw_length = 0,
+        edge_count = 0
     })
     return states
 end
@@ -1288,18 +1787,19 @@ local function expand_range(raw, states, from_pos, length, minimum_consumed_end)
         local current = dedup_limit(states[position], beam_width)
         states[position] = current
         if #current > 0 then
-            for i = 1, #lexicon.lengths do
-                local code_length = lexicon.lengths[i]
+            for i = 1, #lexicon_state.lengths do
+                local code_length = lexicon_state.lengths[i]
                 if position + code_length <= length then
                     local code = raw:sub(position + 1, position + code_length)
-                    local candidates = lexicon.codes[code]
+                    local candidates = lexicon_state.codes[code]
                     if candidates then
                         local selected_rank, consumed_end = parse_selector(raw, position + code_length)
                         local whole_input_edge = position == 0 and consumed_end == length
                         if consumed_end > minimum_consumed_end and
                             not (length > 1 and consumed_end - position < 2) then
                             local selected_candidates = eligible_candidates(
-                                candidates, selected_rank, whole_input_edge)
+                                candidates, selected_rank, whole_input_edge,
+                                active_allow_duplicate_single)
                             for c = 1, #current do
                                 local item = current[c]
                                 for k = 1, #selected_candidates do
@@ -1342,7 +1842,8 @@ local function expand_range(raw, states, from_pos, length, minimum_consumed_end)
                                             supplement_added,
                                         previous = item,
                                         text_length = #text,
-                                        raw_length = consumed_end
+                                        raw_length = consumed_end,
+                                        edge_count = (item.edge_count or 0) + 1
                                     })
                                 end
                             end
@@ -1353,9 +1854,6 @@ local function expand_range(raw, states, from_pos, length, minimum_consumed_end)
         end
     end
 end
-
-local confidence_proposal
-local raw_lengths_for_proposal
 
 local function segmented_from_path(raw, path)
     if not raw or raw == "" or not path then
@@ -1387,89 +1885,244 @@ local function evaluate_state(item)
         prev1 = item.prev1,
         max_rank = math.max(1, item.max_rank or 1),
         supplement_score = item.supplement_score or 0.0,
+        edge_count = item.edge_count or 0,
         path = item
     }
 end
 
-local function add_early_commit_states(
-    values, required_text_prefix, mass_by_text, best_by_text)
-    for i = 1, #values do
-        local item = values[i]
-        local candidate = item.confidence_score and item or evaluate_state(item)
-        if candidate.text and candidate.text ~= "" and
-            (required_text_prefix == "" or
-             candidate.text:sub(1, #required_text_prefix) == required_text_prefix) then
-            local confidence_score = candidate.confidence_score
-            local previous_mass = mass_by_text[item.text]
-            if previous_mass == nil then
-                mass_by_text[candidate.text] = confidence_score
-            else
-                mass_by_text[candidate.text] = logsumexp(previous_mass, confidence_score)
-            end
-            local previous = best_by_text[candidate.text]
-            if not previous or confidence_score > previous.confidence_score then
-                best_by_text[candidate.text] = candidate
-            end
+local function add_early_commit_pool_candidate(pool, pool_index, candidate)
+    if not candidate.text or candidate.text == "" then
+        return
+    end
+    local raw_length = candidate.path and candidate.path.raw_length or 0
+    local key = candidate.text .. state_separator .. tostring(raw_length)
+    local previous = pool_index[key]
+    if not previous then
+        pool_index[key] = {
+            text = candidate.text,
+            raw_length = raw_length,
+            confidence_score = candidate.confidence_score,
+            path = candidate.path
+        }
+        pool[#pool + 1] = pool_index[key]
+        return
+    end
+    local combined = logsumexp(previous.confidence_score, candidate.confidence_score)
+    if candidate.confidence_score > previous.confidence_score then
+        previous.text = candidate.text
+        previous.raw_length = raw_length
+        previous.confidence_score = candidate.confidence_score
+        previous.path = candidate.path
+    end
+    previous.confidence_score = combined
+end
+
+-- Per-(text prefix, raw boundary) evidence, mirroring
+-- SentenceInputDecoder.BuildPrefixEvidence. Boundary mass is counted once per
+-- candidate and raw boundary so negligible crossing paths cannot veto an
+-- otherwise closed boundary.
+local function build_prefix_evidence(pool)
+    local prefixes = {}
+    if #pool == 0 then
+        return prefixes
+    end
+    local max_score = pool[1].confidence_score or pool[1].score
+    for i = 2, #pool do
+        local score = pool[i].confidence_score or pool[i].score
+        if score > max_score then
+            max_score = score
         end
     end
+    local total = 0
+    local weights = {}
+    for i = 1, #pool do
+        weights[i] = math.exp((pool[i].confidence_score or pool[i].score) - max_score)
+        total = total + weights[i]
+    end
+    if total <= 0 then
+        return prefixes
+    end
+    local mass = {}
+    local order = {}
+    local boundary_mass = {}
+    for i = 1, #pool do
+        local item = pool[i]
+        local weight = weights[i]
+        local seen_boundaries = {}
+        local state = item.path
+        while state do
+            local text_length = state.text_length or 0
+            if text_length > 0 and text_length <= #item.text then
+                local key = item.text:sub(1, text_length) ..
+                    state_separator .. tostring(state.raw_length)
+                local entry = mass[key]
+                if not entry then
+                    entry = {
+                        text = item.text:sub(1, text_length),
+                        raw_length = state.raw_length,
+                        weight = 0.0
+                    }
+                    mass[key] = entry
+                    order[#order + 1] = entry
+                end
+                entry.weight = entry.weight + weight
+                if not seen_boundaries[state.raw_length] then
+                    seen_boundaries[state.raw_length] = true
+                    boundary_mass[state.raw_length] =
+                        (boundary_mass[state.raw_length] or 0) + weight
+                end
+            end
+            state = state.previous
+        end
+    end
+    for i = 1, #order do
+        local entry = order[i]
+        local boundary_share = (boundary_mass[entry.raw_length] or 0) / total
+        prefixes[#prefixes + 1] = {
+            text = entry.text,
+            raw_length = entry.raw_length,
+            share = entry.weight / total,
+            boundary_share = boundary_share,
+            boundary_closed = boundary_share >= early_commit_closed_boundary_share
+        }
+    end
+    return prefixes
+end
+
+local function has_low_confidence_completed_generation(candidates)
+    if #candidates == 0 then
+        return false
+    end
+    local max_score = candidates[1].confidence_score or candidates[1].score
+    for i = 2, #candidates do
+        local score = candidates[i].confidence_score or candidates[i].score
+        if score > max_score then
+            max_score = score
+        end
+    end
+    local total = 0
+    for i = 1, #candidates do
+        total = total + math.exp((candidates[i].confidence_score or candidates[i].score) - max_score)
+    end
+    return total > 0 and 1.0 / total < early_commit_minimum_share
 end
 
 local function incomplete_code_tail(tail)
     if tail == "" or not tail:match("^[A-Za-z]+$") or
-        not proper_code_prefixes[tail] then
+        not lexicon_state.proper_code_prefixes[tail] then
         return false
     end
-    return #tail < 2 or lexicon.codes[tail] == nil
+    return #tail < 2 or lexicon_state.codes[tail] == nil
 end
 
 local function build_early_commit_evidence(
     raw, states, completed, completed_truncated, required_text_prefix)
     performance.early_evidence_builds = performance.early_evidence_builds + 1
-    local mass_by_text = {}
-    local best_by_text = {}
-    local truncated = completed_truncated or false
-    local uses_incomplete_tail = false
-    add_early_commit_states(
-        completed, required_text_prefix, mass_by_text, best_by_text)
+    local pool = {}
+    local pool_index = {}
+    local visible = {}
+    for i = 1, #completed do
+        local candidate = completed[i]
+        if candidate.text and candidate.text ~= "" and
+            (required_text_prefix == "" or
+             candidate.text:sub(1, #required_text_prefix) == required_text_prefix) then
+            visible[#visible + 1] = candidate
+            add_early_commit_pool_candidate(pool, pool_index, candidate)
+        end
+    end
 
-    local maximum_tail_length = math.min(max_code_len - 1, #raw - 1)
+    local truncated = completed_truncated or false
+    local merged_incomplete_tail = false
+    local maximum_tail_length = math.min(lexicon_state.max_code_len - 1, #raw - 1)
     for tail_length = 1, maximum_tail_length do
         local consumed_length = #raw - tail_length
         local tail = raw:sub(consumed_length + 1)
         if incomplete_code_tail(tail) and states[consumed_length] then
             local partial = dedup_limit(states[consumed_length], beam_width)
             states[consumed_length] = partial
-            if #partial > 0 then
-                uses_incomplete_tail = true
+            local added = false
+            for i = 1, #partial do
+                local candidate = evaluate_state(partial[i])
+                if candidate.text and candidate.text ~= "" and
+                    (required_text_prefix == "" or
+                     candidate.text:sub(1, #required_text_prefix) == required_text_prefix) then
+                    add_early_commit_pool_candidate(pool, pool_index, candidate)
+                    added = true
+                end
+            end
+            if added then
+                merged_incomplete_tail = true
                 truncated = truncated or (partial._truncated or false)
-                add_early_commit_states(
-                    partial, required_text_prefix, mass_by_text, best_by_text)
             end
         end
     end
 
-    local candidates = {}
-    for text, candidate in pairs(best_by_text) do
-        candidate.confidence_score = mass_by_text[text]
-        candidates[#candidates + 1] = candidate
-    end
-    if uses_incomplete_tail then
-        table.sort(candidates, function(left, right)
-            if left.confidence_score == right.confidence_score then
-                return left.text < right.text
+    local prefixes = build_prefix_evidence(pool)
+
+    local proposal = ""
+    local proposal_share = 0.0
+    local proposal_raw_length = 0
+    local raw_lengths = {}
+    for i = 1, #prefixes do
+        local prefix = prefixes[i]
+        if prefix.boundary_closed then
+            local current = raw_lengths[prefix.text]
+            if not current or prefix.share > current.share or
+                (prefix.share == current.share and
+                 prefix.raw_length < current.raw_length) then
+                raw_lengths[prefix.text] = prefix
             end
-            return left.confidence_score > right.confidence_score
-        end)
-    else
-        table.sort(candidates, state_better)
+            if prefix.share >= early_commit_minimum_share then
+                local replace = proposal == ""
+                if not replace then
+                    local prefix_chars = #utf_chars(prefix.text)
+                    local proposal_chars = #utf_chars(proposal)
+                    if prefix_chars ~= proposal_chars then
+                        replace = prefix_chars > proposal_chars
+                    elseif prefix.share ~= proposal_share then
+                        replace = prefix.share > proposal_share
+                    else
+                        replace = prefix.raw_length < proposal_raw_length
+                    end
+                end
+                if replace then
+                    proposal = prefix.text
+                    proposal_share = prefix.share
+                    proposal_raw_length = prefix.raw_length
+                end
+            end
+        end
     end
-    local proposal, proposal_share = confidence_proposal(candidates, 0.995)
+    local raw_length_values = {}
+    for text, prefix in pairs(raw_lengths) do
+        raw_length_values[text] = prefix.raw_length
+    end
+
     return {
+        prefixes = prefixes,
         proposal = proposal,
         proposal_share = proposal_share,
-        raw_lengths = raw_lengths_for_proposal(proposal, candidates),
+        raw_lengths = raw_length_values,
+        neutral_incomplete_tail = #visible == 0 and merged_incomplete_tail,
+        merged_incomplete_tail = merged_incomplete_tail,
+        neutral_low_confidence = has_low_confidence_completed_generation(visible),
         confidence_truncated = truncated
     }
+end
+
+-- With the duplicate single-character option enabled, segmented candidate
+-- lists compete by score; whole-input single edges keep lexicon-rank order.
+local function prefer_score_over_lexicon_rank(values)
+    if not active_allow_duplicate_single then
+        return false
+    end
+    for i = 1, #values do
+        local path = values[i].path
+        if path and path.previous and (path.previous.raw_length or 0) > 0 then
+            return true
+        end
+    end
+    return false
 end
 
 local function emit(raw, states, length, include_early_commit, required_text_prefix)
@@ -1478,14 +2131,27 @@ local function emit(raw, states, length, include_early_commit, required_text_pre
     for i = 1, #completed do
         all_candidates[i] = evaluate_state(completed[i])
     end
-    local result = select_exact_top(all_candidates, candidate_limit)
+    local better
+    if not ensure_kn() then
+        better = state_better_no_model
+    else
+        better = prefer_score_over_lexicon_rank(all_candidates)
+            and state_better_score_first
+            or state_better_rank_first
+    end
+    local result = select_exact_top(all_candidates, candidate_limit, better)
     for i = 1, #result do
         result[i].segmented = segmented_from_path(raw, result[i].path)
     end
     result.early_commit_evidence = {
+        prefixes = {},
         proposal = "",
+        proposal_share = 0.0,
         raw_lengths = {},
-        confidence_truncated = false
+        neutral_incomplete_tail = false,
+        merged_incomplete_tail = false,
+        neutral_low_confidence = false,
+        confidence_truncated = completed._truncated or false
     }
     if include_early_commit then
         -- The full-code path only needs the already-selected top candidates
@@ -1502,6 +2168,34 @@ local function emit(raw, states, length, include_early_commit, required_text_pre
     return result
 end
 
+local function prefix_evidence_equal(left, right)
+    local left_prefixes = left.prefixes or {}
+    local right_prefixes = right.prefixes or {}
+    if #left_prefixes ~= #right_prefixes then
+        return false
+    end
+    local right_by_key = {}
+    for i = 1, #right_prefixes do
+        right_by_key[right_prefixes[i].text .. state_separator ..
+            tostring(right_prefixes[i].raw_length)] = right_prefixes[i]
+    end
+    for i = 1, #left_prefixes do
+        local item = left_prefixes[i]
+        local other = right_by_key[item.text .. state_separator ..
+            tostring(item.raw_length)]
+        if not other or other.boundary_closed ~= item.boundary_closed or
+            math.abs((other.share or 0.0) - (item.share or 0.0)) > 1e-9 or
+            math.abs((other.boundary_share or 0.0) - (item.boundary_share or 0.0)) > 1e-9 then
+            return false
+        end
+    end
+    if (left.merged_incomplete_tail or false) ~= (right.merged_incomplete_tail or false) or
+        (left.neutral_low_confidence or false) ~= (right.neutral_low_confidence or false) then
+        return false
+    end
+    return true
+end
+
 local function results_equal(left, right)
     if #left ~= #right then
         return false
@@ -1512,7 +2206,8 @@ local function results_equal(left, right)
         (left_evidence.proposal_share or 0.0) ~=
         (right_evidence.proposal_share or 0.0) or
         (left_evidence.confidence_truncated or false) ~=
-        (right_evidence.confidence_truncated or false) then
+        (right_evidence.confidence_truncated or false) or
+        not prefix_evidence_equal(left_evidence, right_evidence) then
         return false
     end
     for i = 1, #left do
@@ -1523,7 +2218,8 @@ local function results_equal(left, right)
                 (right[i].confidence_score or right[i].score)
             or (left[i].supplement_score or 0.0) ~=
                 (right[i].supplement_score or 0.0)
-            or (left[i].max_rank or 1) ~= (right[i].max_rank or 1) then
+            or (left[i].max_rank or 1) ~= (right[i].max_rank or 1)
+            or (left[i].edge_count or 0) ~= (right[i].edge_count or 0) then
             return false
         end
     end
@@ -1541,6 +2237,7 @@ local function results_equal(left, right)
 end
 
 local function decode_full(raw_code, include_early_commit, required_text_prefix)
+    ensure_lexicon(nil)
     local raw = normalize(raw_code)
     if raw == "" or not has_letter(raw) then
         return {}
@@ -1560,6 +2257,7 @@ local function decode_full(raw_code, include_early_commit, required_text_prefix)
 end
 
 local function decode(raw_code, include_early_commit, required_text_prefix)
+    ensure_lexicon(nil)
     local raw = normalize(raw_code)
     required_text_prefix = required_text_prefix or ""
     if raw == "" or not has_letter(raw) then
@@ -1568,9 +2266,11 @@ local function decode(raw_code, include_early_commit, required_text_prefix)
         decode_cache.result = {}
         decode_cache.includes_early_commit = include_early_commit or false
         decode_cache.required_text_prefix = required_text_prefix
+        decode_cache.allow_duplicate = active_allow_duplicate_single
         return decode_cache.result
     end
     if decode_cache.raw == raw and decode_cache.result and
+        decode_cache.allow_duplicate == active_allow_duplicate_single and
         (not include_early_commit or
          (decode_cache.includes_early_commit and
           decode_cache.required_text_prefix == required_text_prefix)) then
@@ -1590,7 +2290,7 @@ local function decode(raw_code, include_early_commit, required_text_prefix)
         if old_n <= 4 or length <= 4 then
             states = nil
         elseif length > old_n and raw:sub(1, old_n) == old_raw then
-            local max_consume = max_code_len + trailing_selector_span(raw)
+            local max_consume = lexicon_state.max_code_len + trailing_selector_span(raw)
             local from_pos = math.max(0, old_n + 1 - max_consume)
             states = old_states
             for index = old_n + 1, length do
@@ -1621,6 +2321,7 @@ local function decode(raw_code, include_early_commit, required_text_prefix)
     decode_cache.result = result
     decode_cache.includes_early_commit = include_early_commit or false
     decode_cache.required_text_prefix = required_text_prefix
+    decode_cache.allow_duplicate = active_allow_duplicate_single
     record_decode(started)
     return result
 end
@@ -1660,174 +2361,191 @@ local function find_raw_length_for_text(text, candidates)
     return 0
 end
 
-raw_lengths_for_proposal = function(proposal, candidates)
-    local lengths = {}
-    local prefix_by_length = {}
-    local prefix = ""
-    local chars = utf_chars(proposal)
-    for i = 1, #chars do
-        prefix = prefix .. chars[i]
-        prefix_by_length[#prefix] = prefix
+-- Independent per-(text prefix, raw boundary) trackers, mirroring
+-- InputMethodEngine.TryAutoCommitSentencePrefix.
+local function find_prefix_evidence(prefixes, text, raw_length)
+    for i = 1, #prefixes do
+        if prefixes[i].text == text and prefixes[i].raw_length == raw_length then
+            return prefixes[i]
+        end
     end
-    local found = 0
-    for i = 1, #candidates do
-        local candidate = candidates[i]
-        local state = candidate.path
-        while state do
-            local wanted = prefix_by_length[state.text_length]
-            if wanted and lengths[wanted] == nil and
-                candidate.text:sub(1, state.text_length) == wanted then
-                lengths[wanted] = state.raw_length
-                found = found + 1
+    return nil
+end
+
+local function common_text_prefix(left, right)
+    local left_chars = utf_chars(left)
+    local right_chars = utf_chars(right)
+    local limit = math.min(#left_chars, #right_chars)
+    local index = 0
+    while index < limit and left_chars[index + 1] == right_chars[index + 1] do
+        index = index + 1
+    end
+    if index == 0 then
+        return ""
+    end
+    local parts = {}
+    for i = 1, index do
+        parts[i] = left_chars[i]
+    end
+    return table.concat(parts)
+end
+
+local function prefix_extends(left, right)
+    return left:sub(1, #right) == right or right:sub(1, #left) == left
+end
+
+local function prefix_contradicted(tracker, prefixes)
+    if #prefixes == 0 then
+        return false
+    end
+    local self = find_prefix_evidence(prefixes, tracker.text, tracker.raw_length)
+    local self_share = self and self.share or 0.0
+    for i = 1, #prefixes do
+        local prefix = prefixes[i]
+        if prefix.text ~= "" and prefix.text ~= tracker.text and
+            not prefix_extends(prefix.text, tracker.text) then
+            local shared_stem = common_text_prefix(prefix.text, tracker.text)
+            if shared_stem ~= "" and #shared_stem < #tracker.text then
+                if self == nil or prefix.share > self_share then
+                    return true
+                end
             end
-            state = state.previous
-        end
-        if found == #chars then break end
-    end
-    return lengths
-end
-
-local function common_history_prefix(history)
-    if #history == 0 then return "" end
-    local common = utf_chars(history[1].proposal or "")
-    for index = 2, #history do
-        local chars = utf_chars(history[index].proposal or "")
-        local count = math.min(#common, #chars)
-        local matched = 0
-        while matched < count and common[matched + 1] == chars[matched + 1] do
-            matched = matched + 1
-        end
-        while #common > matched do common[#common] = nil end
-        if #common == 0 then return "" end
-    end
-    return table.concat(common)
-end
-
-local function required_early_commit_history(history)
-    if #history < 2 then return 3 end
-    for i = 1, #history do
-        if not history[i].strong then return 3 end
-    end
-    return 2
-end
-
-local function stable_history_raw_length(history, text, minimum_count)
-    if text == "" or #history < (minimum_count or 3) then return 0 end
-    local stable = 0
-    for i = 1, #history do
-        local raw_length = (history[i].raw_lengths or {})[text] or 0
-        if raw_length <= 0 then return 0 end
-        if stable == 0 then
-            stable = raw_length
-        elseif stable ~= raw_length then
-            return 0
         end
     end
-    return stable
+    return false
 end
 
-local function constrain_early_commit_boundary(
-    history, stable_proposal, committed_text, full_raw, minimum_count)
-    local consumed = stable_history_raw_length(
-        history, stable_proposal, minimum_count)
-    while #stable_proposal > #committed_text and
-        (consumed == 0 or
-         #full_raw - consumed < early_commit_retained_raw_length) do
-        local chars = utf_chars(stable_proposal)
-        chars[#chars] = nil
-        stable_proposal = table.concat(chars)
-        consumed = stable_history_raw_length(
-            history, stable_proposal, minimum_count)
-    end
-    return stable_proposal, consumed
-end
-
-confidence_proposal = function(candidates, threshold)
-    if #candidates == 0 then
-        return "", 0.0
-    end
-    local max_score = candidates[1].confidence_score or candidates[1].score
-    for i = 2, #candidates do
-        local score = candidates[i].confidence_score or candidates[i].score
-        if score > max_score then max_score = score end
-    end
-    local total = 0
-    for i = 1, #candidates do
-        total = total + math.exp((candidates[i].confidence_score or candidates[i].score) - max_score)
-    end
-
-    local prefix_mass = {}
-    local prefix_length = {}
-    local prefix_order = {}
-    for i = 1, #candidates do
-        local weight = math.exp((candidates[i].confidence_score or candidates[i].score) - max_score)
-        local chars = utf_chars(candidates[i].text)
-        local prefix = ""
-        for length = 1, #chars do
-            prefix = prefix .. chars[length]
-            if prefix_mass[prefix] == nil then
-                prefix_mass[prefix] = 0
-                prefix_length[prefix] = length
-                prefix_order[#prefix_order + 1] = prefix
+local function prefix_belongs_to_visible(prefix, visible)
+    for i = 1, #visible do
+        local candidate = visible[i]
+        if candidate.text and candidate.text:sub(1, #prefix.text) == prefix.text then
+            local state = candidate.path
+            while state do
+                if state.raw_length == prefix.raw_length and
+                    state.text_length == #prefix.text then
+                    return true
+                end
+                state = state.previous
             end
-            prefix_mass[prefix] = prefix_mass[prefix] + weight
         end
     end
+    return false
+end
 
-    local proposal = ""
-    local proposal_length = 0
-    local proposal_share = 0.0
-    for index = 1, #prefix_order do
-        local prefix = prefix_order[index]
-        local length = prefix_length[prefix]
-        local share = prefix_mass[prefix] / total
-        if share >= threshold and length > proposal_length then
-            proposal = prefix
-            proposal_length = length
-            proposal_share = share
+local function retain_trackers_without_counting(trackers, prefixes)
+    local next_trackers = {}
+    for key, tracker in pairs(trackers) do
+        if not prefix_contradicted(tracker, prefixes) and
+            find_prefix_evidence(prefixes, tracker.text, tracker.raw_length) then
+            tracker.gap_count = tracker.gap_count + 1
+            if tracker.gap_count <= early_commit_maximum_neutral_gap then
+                local current = find_prefix_evidence(
+                    prefixes, tracker.text, tracker.raw_length)
+                if current then
+                    tracker.last_share = current.share
+                end
+                next_trackers[key] = tracker
+            end
         end
     end
-    return proposal, proposal_share
+    return next_trackers
+end
+
+local function tracker_better(left, right)
+    local left_chars = #utf_chars(left.text)
+    local right_chars = #utf_chars(right.text)
+    if left_chars ~= right_chars then
+        return left_chars > right_chars
+    end
+    if left.last_share ~= right.last_share then
+        return left.last_share > right.last_share
+    end
+    return left.raw_length < right.raw_length
 end
 
 local function has_selection_suffix(raw)
     return raw and raw:find("[;'0-9]") ~= nil
 end
 
-local function group_rank_allowed(candidate, raw)
+local function implicit_rank_allowed(candidate, raw, continuation_after_auto_commit)
+    if not continuation_after_auto_commit then
+        return true
+    end
+    -- Continuations after empty-code auto commit keep implicit first ranks
+    -- only; an explicit selector suffix still unlocks any rank.
     return has_selection_suffix(raw) or (candidate.max_rank or 1) <= 1
 end
 
-local function implicit_rank_allowed(candidate, raw, continuation_after_auto_commit)
-    return not continuation_after_auto_commit or group_rank_allowed(candidate, raw)
-end
-
-local function capture_empty_code_candidate(
-    full_raw, committed_text, continuation_after_auto_commit)
-    local decoded = decode(full_raw, false, committed_text)
-    local captured = nil
-    local count = 0
-    for i = 1, #decoded do
-        local candidate = decoded[i]
-        -- Whole-input non-first ranks are visible for explicit selection, but
-        -- are not legal implicit segments after the appended key makes the
-        -- edge dead. Do not count them as empty-code ambiguity.
-        if group_rank_allowed(candidate, full_raw) and
-            candidate.text and candidate.text ~= "" and
-            candidate.text:sub(1, #committed_text) == committed_text and
-            #candidate.text > #committed_text then
-            count = count + 1
-            if count > 1 then return nil end
-            local previous = candidate.path and candidate.path.previous
-            captured = {
-                candidate_text = candidate.text,
-                committed_text = committed_text,
-                base_raw_length = #full_raw,
-                last_segment_start = previous and previous.raw_length or 0
-            }
+local function strong_empty_code_candidate(candidate, eligible, visible_top, pool_truncated)
+    -- Confidence shares computed over a truncated pool are not trustworthy;
+    -- Windows requires ConfidenceTruncated == false for the strong accept.
+    if pool_truncated then
+        return false
+    end
+    if not visible_top or candidate.text ~= visible_top.text then
+        return false
+    end
+    local max_score = eligible[1].confidence_score or eligible[1].score
+    for i = 2, #eligible do
+        local score = eligible[i].confidence_score or eligible[i].score
+        if score > max_score then
+            max_score = score
         end
     end
-    return count == 1 and captured or nil
+    local total = 0
+    local candidate_mass = 0
+    for i = 1, #eligible do
+        local mass = math.exp(
+            (eligible[i].confidence_score or eligible[i].score) - max_score)
+        total = total + mass
+        if eligible[i] == candidate then
+            candidate_mass = candidate_mass + mass
+        end
+    end
+    return total > 0 and candidate_mass / total >= early_commit_strong_share
+end
+
+-- Mirrors InputMethodEngine.GetEmptyCodeAutoCommitCandidate: accept exactly
+-- one group-eligible candidate, or a group-eligible visible top whose
+-- untruncated confidence share reaches the strong threshold.
+local function capture_empty_code_candidate(full_before, committed_text)
+    local decoded = decode(full_before, false, committed_text)
+    if #decoded == 0 then
+        return nil
+    end
+    local visible_top = decoded[1]
+    local eligible = {}
+    local restrict = not has_selection_suffix(full_before)
+    for i = 1, #decoded do
+        -- Whole-input non-first ranks are visible for explicit selection, but
+        -- are not legal implicit segments after the appended key makes the
+        -- edge dead, so they never join the empty-code eligible group.
+        if not restrict or (decoded[i].max_rank or 1) <= 1 then
+            eligible[#eligible + 1] = decoded[i]
+        end
+    end
+    if #eligible == 0 then
+        return nil
+    end
+    local first = eligible[1]
+    if not first.text or first.text == "" or
+        first.text:sub(1, #committed_text) ~= committed_text or
+        #first.text <= #committed_text then
+        return nil
+    end
+    local pool_truncated =
+        (decoded.early_commit_evidence or {}).confidence_truncated or false
+    if #eligible > 1 and
+        not strong_empty_code_candidate(first, eligible, visible_top, pool_truncated) then
+        return nil
+    end
+    local previous = first.path and first.path.previous
+    return {
+        candidate_text = first.text,
+        committed_text = committed_text,
+        base_raw_length = #full_before,
+        last_segment_start = previous and previous.raw_length or 0
+    }
 end
 
 local function cycle_candidate(context, step)
@@ -1844,26 +2562,79 @@ local function cycle_candidate(context, step)
     return true
 end
 
-local function reset_decode_cache_values()
+reset_decode_cache_values = function()
     decode_cache.raw = nil
     decode_cache.states = nil
     decode_cache.result = nil
     decode_cache.includes_early_commit = false
     decode_cache.required_text_prefix = ""
+    decode_cache.allow_duplicate = active_allow_duplicate_single
+end
+
+local function set_allow_duplicate_single(context)
+    local allowed = true
+    if context and type(context.get_option) == "function" then
+        local ok, value = pcall(context.get_option, context, allow_duplicate_single_option)
+        if ok and value == false then
+            allowed = false
+        end
+    end
+    if allowed ~= active_allow_duplicate_single then
+        active_allow_duplicate_single = allowed
+        reset_decode_cache_values()
+    end
+    return allowed
+end
+
+-- Replace the live composition with one atomic input mutation. clear() plus
+-- push_input() emits an intermediate empty-composition notification that some
+-- frontends render as a one-frame flash; assigning context.input triggers a
+-- single change event carrying the final raw code. The set_input method hook
+-- exists for tests; the clear+push fallback covers frontends whose context
+-- does not accept direct input assignment.
+local function restore_composition_input(context, value)
+    if type(context.set_input) == "function" then
+        context:set_input(value)
+        return
+    end
+    local ok = pcall(function()
+        context.input = value
+    end)
+    if ok and context.input == value then
+        return
+    end
+    context:clear()
+    if value ~= "" then
+        context:push_input(value)
+    end
+end
+
+local function get_min_retained_raw_length(env)
+    local schema = env and env.engine and env.engine.schema
+    local config = schema and schema.config
+    if not config then
+        return 0
+    end
+    local ok, value = pcall(function()
+        return config:get_int("tiger_sentence/min_retained_raw_length")
+    end)
+    if ok and type(value) == "number" and value >= 0 then
+        return math.floor(value)
+    end
+    return 0
 end
 
 local function try_empty_code_commit(env, state, full_before, appended_letter)
     local context = env.engine.context
-    if state.suspended then
+    -- Empty-code auto commit is part of 整句自动提前上屏; there is no
+    -- separate switch, so the early-commit option gates it as well.
+    if not context:get_option("tiger_sentence_early_commit") or state.suspended then
         state.empty_code_pending = nil
         save_transient_state(context, state, env)
         return false
     end
     local pending = state.empty_code_pending or
-        capture_empty_code_candidate(
-            full_before,
-            state.committed_text,
-            state.continuation_after_auto_commit)
+        capture_empty_code_candidate(full_before, state.committed_text)
     local full_raw = full_before .. appended_letter
     state.empty_code_pending = pending
 
@@ -1889,7 +2660,13 @@ local function try_empty_code_commit(env, state, full_before, appended_letter)
     end
 
     local extended_last_segment = full_raw:sub(pending.last_segment_start + 1)
-    if proper_code_prefixes[extended_last_segment] then
+    if lexicon_state.proper_code_prefixes[extended_last_segment] then
+        save_transient_state(context, state, env)
+        return false
+    end
+
+    local required_retain = get_min_retained_raw_length(env)
+    if required_retain > 0 and #full_raw - pending.base_raw_length < required_retain then
         save_transient_state(context, state, env)
         return false
     end
@@ -1902,18 +2679,65 @@ local function try_empty_code_commit(env, state, full_before, appended_letter)
     -- has already been committed.
     state.committed_text = pending.candidate_text
     state.committed_raw = full_raw:sub(1, pending.base_raw_length)
-    state.proposal = ""
-    state.stable = 0
-    state.evidence_raw = ""
-    state.history = {}
+    state.last_auto_commit_raw_length = pending.base_raw_length
+    state.trackers = {}
+    state.last_seen_raw = ""
     state.suspended = false
     state.empty_code_pending = nil
     state.continuation_after_auto_commit = true
     env.engine:commit_text(commit)
-    context:clear()
     save_sentence_state(context, state, env)
     reset_decode_cache_values()
-    if retained_raw ~= "" then context:push_input(retained_raw) end
+    restore_composition_input(context, retained_raw)
+    return true
+end
+
+local function reset_early_evidence(state)
+    state.trackers = {}
+    state.last_seen_raw = ""
+end
+
+local function try_commit_mature_prefix(env, state, evidence_raw)
+    local configured = get_min_retained_raw_length(env)
+    local retain = configured > 0
+        and math.max(early_commit_retained_raw_length, configured)
+        or early_commit_retained_raw_length
+    local selected = nil
+    for _, tracker in pairs(state.trackers) do
+        if (tracker.evidence_count >= early_commit_required_evidence or
+            tracker.strong_count >= early_commit_required_strong) and
+            tracker.raw_length > #state.committed_raw and
+            tracker.raw_length <= #evidence_raw and
+            #evidence_raw - tracker.raw_length >= retain and
+            #tracker.text > #state.committed_text and
+            tracker.text:sub(1, #state.committed_text) == state.committed_text then
+            if not selected or tracker_better(tracker, selected) then
+                selected = tracker
+            end
+        end
+    end
+    if not selected or
+        #evidence_raw - state.last_auto_commit_raw_length <
+            early_commit_retained_raw_length then
+        return false
+    end
+    local commit = selected.text:sub(#state.committed_text + 1)
+    if #utf_chars(commit) < 1 then
+        return false
+    end
+    local context = env.engine.context
+    state.committed_text = selected.text
+    state.committed_raw = evidence_raw:sub(1, selected.raw_length)
+    state.last_auto_commit_raw_length = selected.raw_length
+    -- Probabilistic early commit chooses a boundary from complete sentence
+    -- paths that have already competed in the language model. Keep those
+    -- paths eligible after committing their common prefix; the stricter
+    -- first-rank-only continuation rule is only for empty-code commit.
+    state.continuation_after_auto_commit = false
+    reset_early_evidence(state)
+    save_sentence_state(context, state, env)
+    env.engine:commit_text(commit)
+    restore_composition_input(context, evidence_raw:sub(selected.raw_length + 1))
     return true
 end
 
@@ -1922,128 +2746,102 @@ local function try_early_commit(env)
     local state = sentence_state(context, env)
     local live_raw = context.input or ""
 
-    if not context:get_option("tiger_sentence_early_commit") then
-        state.proposal = ""
-        state.stable = 0
-        state.evidence_raw = ""
-        state.history = {}
-        save_transient_state(context, state, env)
-        return
-    end
-
-    if state.suspended then
-        state.proposal = ""
-        state.stable = 0
-        state.evidence_raw = ""
-        state.history = {}
+    if not context:get_option("tiger_sentence_early_commit") or state.suspended then
+        reset_early_evidence(state)
         save_transient_state(context, state, env)
         return
     end
 
     -- The first four raw encoding keys are never counted as stable evidence.
-    if #live_raw + #state.committed_raw <= 4 then
-        state.proposal = ""
-        state.stable = 0
-        state.evidence_raw = ""
-        state.history = {}
+    local full_raw = state.committed_raw .. live_raw
+    if #full_raw <= 4 then
+        reset_early_evidence(state)
         save_transient_state(context, state, env)
         return
     end
 
-    local full_raw = state.committed_raw .. live_raw
     local decoded = decode(full_raw, true, state.committed_text)
     local early_commit_evidence = decoded.early_commit_evidence or {}
     if early_commit_evidence.confidence_truncated then
-        state.proposal = ""
-        state.stable = 0
-        state.evidence_raw = ""
-        state.history = {}
+        reset_early_evidence(state)
         save_transient_state(context, state, env)
         return
     end
-    local proposal = early_commit_evidence.proposal or ""
-    if proposal == "" then
-        state.proposal = ""
-        state.stable = 0
-        state.evidence_raw = ""
-        state.history = {}
-        save_transient_state(context, state, env)
+    -- The decode above ran synchronously for exactly this raw code, so the
+    -- evidence generation always matches the live composition.
+    local evidence_raw = full_raw
+
+    if state.last_seen_raw == evidence_raw then
+        try_commit_mature_prefix(env, state, evidence_raw)
         return
     end
 
-    local visible_top = nil
-    for i = 1, #decoded do
-        if state.committed_text == "" or
-            decoded[i].text:sub(1, #state.committed_text) == state.committed_text then
-            visible_top = decoded[i]
-            break
+    local extends_previous_generation = state.last_seen_raw == "" or
+        (#evidence_raw == #state.last_seen_raw + 1 and
+         evidence_raw:sub(1, #state.last_seen_raw) == state.last_seen_raw)
+    if not extends_previous_generation then
+        state.trackers = {}
+    end
+    state.last_seen_raw = evidence_raw
+
+    local prefixes = early_commit_evidence.prefixes or {}
+    local accepted_top = nil
+    if #decoded > 0 and (decoded[1].supplement_score or 0.0) > 0.0 then
+        accepted_top = decoded[1].text
+    end
+
+    local merged_incomplete_tail = early_commit_evidence.merged_incomplete_tail or false
+    local qualifying = {}
+    for i = 1, #prefixes do
+        local prefix = prefixes[i]
+        if prefix.text and prefix.text ~= "" and
+            prefix.boundary_closed and
+            prefix.share >= early_commit_minimum_share and
+            prefix.raw_length > #state.committed_raw and
+            #prefix.text > #state.committed_text and
+            prefix.text:sub(1, #state.committed_text) == state.committed_text and
+            (accepted_top == nil or accepted_top:sub(1, #prefix.text) == prefix.text) and
+            (merged_incomplete_tail or prefix_belongs_to_visible(prefix, decoded)) then
+            qualifying[prefix.text .. state_separator .. tostring(prefix.raw_length)] = prefix
         end
     end
-    if visible_top and (visible_top.supplement_score or 0.0) > 0.0 then
-        local supplement_top = visible_top.text
-        while #proposal > #state.committed_text and
-            supplement_top:sub(1, #proposal) ~= proposal do
-            local chars = utf_chars(proposal)
-            chars[#chars] = nil
-            proposal = table.concat(chars)
-        end
-    end
-    if proposal == "" or #proposal <= #state.committed_text then
-        state.proposal = ""
-        state.stable = 0
-        state.evidence_raw = ""
-        state.history = {}
+
+    local retain_without_counting = next(qualifying) == nil and
+        (early_commit_evidence.neutral_low_confidence or merged_incomplete_tail)
+    if retain_without_counting then
+        -- Comparison-only gap: keep supported trackers alive without letting
+        -- them gain evidence, for at most three consecutive generations.
+        state.trackers = retain_trackers_without_counting(state.trackers, prefixes)
         save_transient_state(context, state, env)
+        try_commit_mature_prefix(env, state, evidence_raw)
         return
     end
 
-    local history = state.history or {}
-    local previous_raw = #history > 0 and history[#history].raw or ""
-    local extends_evidence = previous_raw ~= "" and
-        #full_raw == #previous_raw + 1 and
-        full_raw:sub(1, #previous_raw) == previous_raw
-    if not extends_evidence then
-        history = {}
+    local next_trackers = {}
+    for key, prefix in pairs(qualifying) do
+        local tracker = state.trackers[key]
+        if not tracker then
+            tracker = {
+                text = prefix.text,
+                raw_length = prefix.raw_length,
+                evidence_count = 0,
+                strong_count = 0,
+                gap_count = 0,
+                last_share = 0.0
+            }
+        end
+        tracker.evidence_count = math.min(
+            early_commit_required_evidence, tracker.evidence_count + 1)
+        tracker.strong_count = prefix.share >= early_commit_strong_share
+            and math.min(early_commit_required_strong, tracker.strong_count + 1)
+            or 0
+        tracker.gap_count = 0
+        tracker.last_share = prefix.share
+        next_trackers[key] = tracker
     end
-    history[#history + 1] = {
-        proposal = proposal,
-        raw = full_raw,
-        raw_lengths = early_commit_evidence.raw_lengths or {},
-        strong = (early_commit_evidence.proposal_share or 0.0) >=
-            early_commit_strong_share
-    }
-    while #history > 3 do table.remove(history, 1) end
-    state.history = history
-    state.proposal = proposal
-    state.stable = #history
-    state.evidence_raw = full_raw
+    state.trackers = next_trackers
     save_transient_state(context, state, env)
-    local required_history = required_early_commit_history(history)
-    if #history < required_history then return end
-
-    local stable_proposal, consumed = constrain_early_commit_boundary(
-        history,
-        common_history_prefix(history),
-        state.committed_text,
-        full_raw,
-        required_history)
-    if consumed <= #state.committed_raw or
-        consumed > #full_raw or
-        #full_raw - consumed < early_commit_retained_raw_length then return end
-    local commit = stable_proposal:sub(#state.committed_text + 1)
-    if #utf_chars(commit) < 1 or #live_raw < 3 then return end
-    state.committed_text = stable_proposal
-    state.committed_raw = full_raw:sub(1, consumed)
-    state.proposal = stable_proposal
-    state.stable = 0
-    state.evidence_raw = ""
-    state.history = {}
-    state.continuation_after_auto_commit = true
-    env.engine:commit_text(commit)
-    context:clear()
-    save_sentence_state(context, state, env)
-    local remaining = full_raw:sub(consumed + 1)
-    if remaining ~= "" then context:push_input(remaining) end
+    try_commit_mature_prefix(env, state, evidence_raw)
 end
 
 local function reset_decode_cache()
@@ -2052,6 +2850,7 @@ local function reset_decode_cache()
     decode_cache.result = nil
     decode_cache.includes_early_commit = false
     decode_cache.required_text_prefix = ""
+    decode_cache.allow_duplicate = active_allow_duplicate_single
 end
 
 local function is_plain_char_key(key_event, repr)
@@ -2081,18 +2880,20 @@ local function processor(key_event, env)
     if key_event:release() then
         return 2
     end
+    ensure_lexicon(env)
     local context = env.engine.context
     local state = sentence_state(context, env)
     local repr = key_event:repr()
     local ch = is_plain_char_key(key_event, repr)
     if ch then
         if not context:is_composing() and
-            (state.committed_raw ~= "" or state.proposal ~= "" or
-             state.evidence_raw ~= "" or state.suspended or
+            (state.committed_raw ~= "" or state.last_seen_raw ~= "" or
+             next(state.trackers or {}) ~= nil or state.suspended or
              state.continuation_after_auto_commit) then
             reset_sentence_state(context, env)
             state = sentence_state(context, env)
         end
+        set_allow_duplicate_single(context)
         if #(context.input or "") >= max_raw_length then
             return 1
         end
@@ -2138,19 +2939,13 @@ local function processor(key_event, env)
         return 1
     end
     if repr == "BackSpace" or repr == "Delete" then
-        state.proposal = ""
-        state.stable = 0
-        state.evidence_raw = ""
-        state.history = {}
+        reset_early_evidence(state)
         state.empty_code_pending = nil
         save_transient_state(context, state, env)
         return 2
     end
     if repr == "Tab" or repr == "ISO_Left_Tab" or repr == "Shift+Tab" then
-        state.proposal = ""
-        state.stable = 0
-        state.evidence_raw = ""
-        state.history = {}
+        reset_early_evidence(state)
         state.suspended = true
         state.empty_code_pending = nil
         save_transient_state(context, state, env)
@@ -2158,10 +2953,7 @@ local function processor(key_event, env)
         return 2
     end
     if repr == "Up" or repr == "Down" or repr == "Page_Up" or repr == "Page_Down" then
-        state.proposal = ""
-        state.stable = 0
-        state.evidence_raw = ""
-        state.history = {}
+        reset_early_evidence(state)
         state.suspended = true
         state.empty_code_pending = nil
         save_transient_state(context, state, env)
@@ -2178,8 +2970,10 @@ local function processor(key_event, env)
 end
 
 local function translator(input, seg, env)
+    ensure_lexicon(env)
     local context = env.engine.context
     local state = sentence_state(context, env)
+    set_allow_duplicate_single(context)
     local committed_text = state.committed_text
     local committed_raw = state.committed_raw
     local raw = committed_raw .. input
@@ -2208,6 +3002,15 @@ end
 local M = {}
 M.decode = decode
 M.decode_full = decode_full
+M.ensure_lexicon = ensure_lexicon
+M.data_status = data_status
+M.apply_high_freq_limit = function(limit)
+    local value = math.floor(tonumber(limit) or 0)
+    if value < 0 then
+        value = 0
+    end
+    rebuild_lexicon(value)
+end
 M.reset_decode_cache = reset_decode_cache
 M.results_equal = results_equal
 M.model_status = model_status
@@ -2220,10 +3023,51 @@ M.supplement_status = function()
     }
 end
 M.find_raw_length_for_text = find_raw_length_for_text
-M.confidence_proposal = confidence_proposal
-M.required_early_commit_history = required_early_commit_history
-M.constrain_early_commit_boundary = constrain_early_commit_boundary
+M.lexicon_probe = function(code)
+    local candidates = lexicon_state.codes[code]
+    if not candidates then
+        return nil
+    end
+    local copy = {}
+    for index = 1, #candidates do
+        copy[index] = { t = candidates[index].t, r = candidates[index].r }
+    end
+    return copy
+end
+M.lexicon_lengths = function()
+    local copy = {}
+    for index = 1, #lexicon_state.lengths do
+        copy[index] = lexicon_state.lengths[index]
+    end
+    return copy
+end
+-- Read-only view for benchmarks and diagnostics; callers must not mutate.
+M.lexicon_data_view = function()
+    ensure_lexicon(nil)
+    return {
+        codes = lexicon_state.codes,
+        lengths = lexicon_state.lengths
+    }
+end
 M.capture_empty_code_candidate = capture_empty_code_candidate
+M.set_allow_duplicate_single = set_allow_duplicate_single
+M.build_prefix_evidence = build_prefix_evidence
+M.find_prefix_evidence = find_prefix_evidence
+M.common_text_prefix = common_text_prefix
+M.strong_empty_code_candidate = strong_empty_code_candidate
+M.set_model_enabled = function(enabled)
+    local disabled = enabled == false
+    if disabled == model_disabled then
+        return
+    end
+    model_disabled = disabled
+    kn_model = false
+    kn_load_error = nil
+    clear_model_dependent_caches()
+end
+M.prefix_extends = prefix_extends
+M.prefix_contradicted = prefix_contradicted
+M.retain_trackers_without_counting = retain_trackers_without_counting
 M.performance_status = function()
     return {
         current = {
