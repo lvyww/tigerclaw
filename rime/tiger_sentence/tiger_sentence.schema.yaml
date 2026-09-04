@@ -71,7 +71,9 @@ key_binder:
     - { when: has_menu, accept: equal, send: Page_Down }
 
 punctuator:
-  import_preset: default
+  # Use the user's symbols.yaml punctuation table. Scalar/{commit: ...}
+  # entries commit directly; list entries intentionally open a symbol menu.
+  import_preset: symbols
 
 recognizer:
   import_preset: default

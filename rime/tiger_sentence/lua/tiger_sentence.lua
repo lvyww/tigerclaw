@@ -1101,6 +1101,14 @@ supplement.file_name = file_name
 supplement.reward_for_weight = reward_for_weight
 
 local beam_width = 200
+-- A 200-wide beam protects ambiguity near the start of a sentence. Once a
+-- long composition already has substantial left context, retaining all 200
+-- states makes random/low-confidence input slower on every following key and
+-- lets synchronous Rime translations queue behind physical input. Bound only
+-- the long tail; deriving the limit from the lattice position keeps full and
+-- incremental decoding identical.
+local long_input_full_beam_length = 24
+local long_input_beam_width = 48
 local candidate_limit = 20
 local max_raw_length = 128
 local rank_penalty = 0.03
@@ -1147,6 +1155,13 @@ local decode_cache = {
     allow_duplicate = true
 }
 local state_separator = "\31"
+
+local function beam_limit_at(raw_length)
+    if raw_length > long_input_full_beam_length then
+        return long_input_beam_width
+    end
+    return beam_width
+end
 
 clear_model_dependent_caches = function()
     clear_table(logp_cache)
@@ -1823,7 +1838,7 @@ end
 local function expand_range(raw, states, from_pos, length, minimum_consumed_end)
     minimum_consumed_end = minimum_consumed_end or -1
     for position = from_pos, length - 1 do
-        local current = dedup_limit(states[position], beam_width)
+        local current = dedup_limit(states[position], beam_limit_at(position))
         states[position] = current
         if #current > 0 then
             for i = 1, #lexicon_state.lengths do
@@ -2065,9 +2080,28 @@ local function incomplete_code_tail(tail)
     return #tail < 2 or lexicon_state.codes[tail] == nil
 end
 
+local function truncated_early_commit_evidence()
+    return {
+        prefixes = {},
+        proposal = "",
+        proposal_share = 0.0,
+        raw_lengths = {},
+        neutral_incomplete_tail = false,
+        merged_incomplete_tail = false,
+        neutral_low_confidence = false,
+        confidence_truncated = true
+    }
+end
+
 local function build_early_commit_evidence(
     raw, states, completed, completed_truncated, required_text_prefix)
     performance.early_evidence_builds = performance.early_evidence_builds + 1
+    -- A truncated confidence pool is never allowed to advance or preserve an
+    -- early-commit tracker. Avoid materializing thousands of prefix records
+    -- that try_early_commit would immediately discard.
+    if completed_truncated then
+        return truncated_early_commit_evidence()
+    end
     local pool = {}
     local pool_index = {}
     local visible = {}
@@ -2088,7 +2122,8 @@ local function build_early_commit_evidence(
         local consumed_length = #raw - tail_length
         local tail = raw:sub(consumed_length + 1)
         if incomplete_code_tail(tail) and states[consumed_length] then
-            local partial = dedup_limit(states[consumed_length], beam_width)
+            local partial = dedup_limit(
+                states[consumed_length], beam_limit_at(consumed_length))
             states[consumed_length] = partial
             local added = false
             for i = 1, #partial do
@@ -2102,7 +2137,9 @@ local function build_early_commit_evidence(
             end
             if added then
                 merged_incomplete_tail = true
-                truncated = truncated or (partial._truncated or false)
+                if partial._truncated then
+                    return truncated_early_commit_evidence()
+                end
             end
         end
     end
@@ -2176,7 +2213,7 @@ local function prefer_score_over_lexicon_rank(values)
 end
 
 local function emit(raw, states, length, include_early_commit, required_text_prefix)
-    local completed = dedup_limit(states[length], beam_width)
+    local completed = dedup_limit(states[length], beam_limit_at(length))
     local all_candidates = {}
     for i = 1, #completed do
         all_candidates[i] = evaluate_state(completed[i])
@@ -2332,7 +2369,15 @@ local function decode(raw_code, include_early_commit, required_text_prefix)
     local states = nil
     local old_raw = decode_cache.raw
     local old_states = decode_cache.states
-    if old_states and type(old_raw) == "string" and old_raw ~= "" then
+    if old_states and old_raw == raw and
+        decode_cache.allow_duplicate == active_allow_duplicate_single then
+        -- The translator normally cached this exact composition without
+        -- confidence metadata. The processor may immediately request the same
+        -- lattice with early-commit evidence before accepting the next key.
+        -- Reuse the lattice; rebuilding a long composition here caused the
+        -- visible pause after roughly forty uncommitted keys.
+        states = old_states
+    elseif old_states and type(old_raw) == "string" and old_raw ~= "" then
         local old_n = #old_raw
         -- Whole-input one-key edges and implicit non-first ranks may become
         -- segmented after an append. Rebuild the small four-code prefix so
@@ -2585,7 +2630,7 @@ local function capture_empty_code_candidate(full_before, committed_text)
     }
 end
 
-local function cycle_candidate(context, step)
+local function cycle_candidate_highlight(context, step)
     if not context:has_menu() then return false end
     local composition = context.composition
     if not composition or composition:empty() then return false end
@@ -2595,8 +2640,16 @@ local function cycle_candidate(context, step)
     local count = menu:candidate_count()
     if not count or count <= 0 then return false end
     local selected = segment.selected_index or 0
-    context:select((selected + step) % count)
-    return true
+    local target = (selected + step) % count
+    -- Highlight changes only the active index. Context:select(), by contrast,
+    -- selects the candidate and may commit a whole-composition sentence.
+    if type(context.highlight) == "function" and context:highlight(target) then
+        return true
+    end
+    -- Compatibility fallback for a librime build predating Context::Highlight.
+    -- librime-lua exposes Segment.selected_index as a writable field.
+    segment.selected_index = target
+    return segment.selected_index == target
 end
 
 reset_decode_cache = function()
@@ -2922,6 +2975,12 @@ local function processor(key_event, env)
             reset_sentence_state(context, env)
             state = sentence_state(context, env)
         end
+        -- Semicolon and apostrophe are rank selectors only for an existing
+        -- composition. At idle, leave them to punctuator so symbols.yaml can
+        -- commit Chinese punctuation directly.
+        if not context:is_composing() and (ch == ";" or ch == "'") then
+            return 2
+        end
         set_allow_duplicate_single(context)
         if #(context.input or "") >= max_raw_length then
             return 1
@@ -2978,7 +3037,11 @@ local function processor(key_event, env)
         state.suspended = true
         state.empty_code_pending = nil
         save_transient_state(context, state, env)
-        if cycle_candidate(context, repr == "Tab" and 1 or -1) then return 1 end
+        if cycle_candidate_highlight(context, repr == "Tab" and 1 or -1) then
+            return 1
+        end
+        -- Without a usable menu, leave the key to the schema's Down/Up
+        -- bindings and the standard navigator.
         return 2
     end
     if repr == "Up" or repr == "Down" or repr == "Page_Up" or repr == "Page_Down" then

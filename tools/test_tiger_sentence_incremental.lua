@@ -204,6 +204,28 @@ for i = 1, #samples do
     check_equal("early full " .. raw, with_early, sentence.decode_full(raw, true))
 end
 
+-- The frontend first asks the translator for ordinary candidates, then asks
+-- the processor for confidence metadata on the exact same composition before
+-- accepting the next key. Long ambiguous input must reuse that cached lattice,
+-- and a truncated pool must not wastefully expose unusable prefix evidence.
+local ambiguous_40 = "nnczggqrrjrrltwwbwkedmkswgjgiuapnphbszbp"
+sentence.reset_decode_cache()
+local ordinary_40 = {}
+for n = 1, #ambiguous_40 do
+    ordinary_40 = sentence.decode(ambiguous_40:sub(1, n), false)
+end
+local evidence_40 = sentence.decode(ambiguous_40, true)
+check_visible_equal("same-raw evidence cache at 40 keys", ordinary_40, evidence_40)
+local evidence_metadata_40 = evidence_40.early_commit_evidence or {}
+if not evidence_metadata_40.confidence_truncated then
+    fail("40-key ambiguity sample did not exercise truncated confidence")
+end
+if #(evidence_metadata_40.prefixes or {}) ~= 0 or
+    (evidence_metadata_40.proposal or "") ~= "" then
+    fail("truncated confidence retained unusable early-commit evidence")
+end
+print("OK  40-key truncated confidence reuses the lattice and skips prefix materialization")
+
 sentence.reset_decode_cache()
 local shrinking = {}
 for n = #long_code, 1, -1 do
@@ -394,7 +416,15 @@ local function fake_environment(early_commit, duplicate_single)
     function composition:back() return segment end
     context.composition = composition
     function context:has_menu() return menu.count > 0 end
+    context.select_calls = 0
     function context:select(index)
+        self.select_calls = self.select_calls + 1
+        segment.selected_index = index
+        return true
+    end
+    context.highlight_calls = 0
+    function context:highlight(index)
+        self.highlight_calls = self.highlight_calls + 1
         segment.selected_index = index
         return true
     end
@@ -414,11 +444,42 @@ local function fake_key(repr)
     return key
 end
 
+local env_idle_punct, context_idle_punct = fake_environment(false)
+if sentence.processor(fake_key("semicolon"), env_idle_punct) ~= 2 or
+    sentence.processor(fake_key("apostrophe"), env_idle_punct) ~= 2 or
+    context_idle_punct.input ~= "" then
+    fail("idle semicolon/apostrophe did not pass through to punctuator")
+end
+local punctuation_schema = assert(io.open(
+    repo .. "/rime/tiger_sentence/tiger_sentence.schema.yaml", "rb"))
+local punctuation_schema_content = punctuation_schema:read("*a")
+punctuation_schema:close()
+if not punctuation_schema_content:find("import_preset: symbols", 1, true) then
+    fail("schema does not import the editable symbols.yaml punctuation table")
+end
+local symbols_file = assert(io.open(
+    repo .. "/rime/tiger_sentence/symbols.yaml", "rb"))
+local symbols_content = symbols_file:read("*a")
+symbols_file:close()
+for _, mapping in ipairs({
+        '",": { commit: ， }',
+        '".": { commit: 。 }',
+        '"/": { commit: 、 }',
+        '";": { commit: ； }',
+        '"?": { commit: ？ }'
+    }) do
+    if not symbols_content:find(mapping, 1, true) then
+        fail("default symbols.yaml is missing direct punctuation mapping " .. mapping)
+    end
+end
+print("OK  idle punctuation is delegated to the symbols.yaml preset")
+
 local env_tab, context_tab, _, _, menu_tab, segment_tab = fake_environment(false)
 context_tab.input = "rl"
 menu_tab.count = 3
-if sentence.processor(fake_key("Tab"), env_tab) ~= 1 or segment_tab.selected_index ~= 1 then
-    fail("Tab did not select the next candidate")
+if sentence.processor(fake_key("Tab"), env_tab) ~= 1 or
+    segment_tab.selected_index ~= 1 then
+    fail("Tab did not highlight the next candidate")
 end
 sentence.processor(fake_key("Tab"), env_tab)
 sentence.processor(fake_key("Tab"), env_tab)
@@ -429,7 +490,18 @@ if sentence.processor(fake_key("ISO_Left_Tab"), env_tab) ~= 1 or
     segment_tab.selected_index ~= 2 then
     fail("Shift+Tab did not wrap from the first candidate to the last")
 end
-print("OK  Tab and Shift+Tab cycle sentence candidates")
+if context_tab.select_calls ~= 0 or context_tab.highlight_calls ~= 4 then
+    fail("Tab called context:select and could commit a sentence candidate")
+end
+local schema_file = assert(io.open(
+    repo .. "/rime/tiger_sentence/tiger_sentence.schema.yaml", "rb"))
+local schema_content = schema_file:read("*a")
+schema_file:close()
+if not schema_content:find("accept: Tab, send: Down", 1, true) or
+    not schema_content:find("accept: Shift+Tab, send: Up", 1, true) then
+    fail("schema does not route Tab navigation through key_binder")
+end
+print("OK  Tab highlights candidates cyclically without selecting them")
 
 local env_empty, context_empty, properties_empty, commits_empty = fake_environment(true)
 sentence.processor(fake_key("v"), env_empty)

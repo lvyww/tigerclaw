@@ -21,7 +21,8 @@ schema 默认值一致（不一致直接报错），白名单可用 `--full-code
 
 1. 复制 `tiger_sentence.schema.yaml`、`tiger_sentence.supplement.txt`、三个
    数据 txt（`tiger_sentence.codes.txt`、`tiger_sentence.char_ranks.txt`、
-   `tiger_sentence.full_code_whitelist.txt`）和 `rime.lua`；
+   `tiger_sentence.full_code_whitelist.txt`）、默认标点 `symbols.yaml` 和
+   `rime.lua`；
 2. 复制 `lua/`；
 3. 在已有 `default.custom.yaml` 中加入 `tiger_sentence`；
 4. 重新部署，使 Lua 和数据文件重新加载。
@@ -58,7 +59,10 @@ schema 配置 `tiger_sentence/high_freq_limit`（默认 `1500`）对应 Windows 
 
 开发仓库中修改 `release_arm64/码表/虎整句/虎整句.txt` 后重新运行导出器即可
 重新生成三个 txt。发布包不再提供用户自定义编码覆盖层，避免出现多套码表来源；
-直接修改其他 YAML 或旧词典文件不会改变本方案候选。
+直接修改其他 YAML 或旧词典文件不会改变本方案候选。标点是例外：方案导入用户
+目录的 `symbols.yaml`。方案包自带一份与 Windows Core 日常输入相符的默认值，
+其中标量或 `{ commit: ... }` 映射直接上屏，列表映射才打开符号候选。用户可在
+部署后继续修改，修改后需要重新部署。
 
 数据加载状态可从模块的 `data_status()` 查询（路径、条目数、字频与白名单计数、
 错误列表），用于排查文件缺失或格式问题。
@@ -67,7 +71,9 @@ schema 配置 `tiger_sentence/high_freq_limit`（默认 `1500`）对应 Windows 
 
 - 字母连续输入整句编码；空格提交候选，回车提交原始编码，Esc 清空。
 - 有编码时，`;`、`'`、数字分别选择码表第 2、第 3、第 N 项，`0` 为第 10 项。
-- Up/Down 或 Tab/Shift+Tab 遍历可见候选。
+- 无编码时，`;` 和 `'` 不作为选重后缀，由 `symbols.yaml` 输出中文标点。
+- Up/Down 或 Tab/Shift+Tab 遍历可见候选；Tab 在首尾间循环，只调用高亮接口，
+  不选择或提交候选。
 - 一码段只在整段输入只有一码时合法。
 - 只有整个独立输入由单一码表边消费时，才隐式显示该编码全部名次。
 - `tiger_sentence_allow_duplicate_single` 开关（默认开，即“允许单字重码组句”）
@@ -131,6 +137,12 @@ Lua 方案能力范围。
 避免连续按键时反复扫描和查询相同字串。缓存满后循环替换旧项，不会随使用时间
 无限增长。
 
+Rime Lua 的 translator 是同步调用，不能像 Windows Core 那样让后台 generation
+淘汰过期结果。为避免长串快速输入时每一代候选在按键队列中追赶，格图前 24 码
+保持 200 Beam；第 25 码起按格图位置收敛为 48 Beam。按位置而不是当前输入长度
+裁剪，因此逐键增量解码与同一编码的全量解码仍完全一致。该裁剪主要约束无稳定
+候选的长随机输入；前 24 码的搜索宽度不变。
+
 Lua 按一次 composition 在内存中汇总解码次数、模型缺页、读取字节数、提前上屏
 证据构建次数和孤立惩罚缓存命中，不自动写入日志。调试时可从模块的
 `performance_status()` 查看当前及上一次汇总。
@@ -179,7 +191,8 @@ lua tools/test_tiger_sentence_incremental.lua . --require-model
 
 性能基准直接调用正式模块的 `decode_full`、逐键 `decode` 和提前上屏证据路径，
 不会维护另一套简化解码器。它同时报告 mean/p50/p95/max、每轮 Lua GC 增量和
-实际 decode 次数：
+实际 decode 次数。命令开头还会用 20 组未预热随机 40 码报告整串耗时和单键
+P95/P99；可用 `--burst-cases N` 调整数量，或设为 0 跳过：
 
 ```bash
 lua tools/bench_tiger_sentence_lua.lua . --mode mobile --repeat 50 --require-model

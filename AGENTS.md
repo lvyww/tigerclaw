@@ -269,6 +269,8 @@ release tree. Keep `.bat` files CRLF.
 
 - `rime/tiger_sentence/`: standalone experimental Rime pack. Regenerate its
   plain-text data files with `python3 tools/export_tiger_sentence_rime.py`.
+  The pack includes `symbols.yaml` as its directly-committing punctuation
+  default; the schema imports that preset instead of Rime's `default` preset.
   The code table, character ranks and full-code whitelist are runtime-loaded
   txt files (`tiger_sentence.codes.txt` and siblings) so users can edit or
   import other shape-code tables without re-running the exporter; the
@@ -276,7 +278,10 @@ release tree. Keep `.bat` files CRLF.
   `tiger_sentence/high_freq_limit` (default 1500, 0 disables) and the exporter
   only cross-checks that default against `dist_config.txt`. Auto commits
   rebuild the composition with one atomic input assignment (no intermediate
-  `clear`) to avoid candidate-window flicker. It is not part of Windows TSF.
+  `clear`) to avoid candidate-window flicker. Its synchronous Lua decoder keeps
+  a 200-wide Beam through raw position 24 and uses 48 thereafter, preventing
+  long low-confidence input from queuing candidate generations. It is not part
+  of Windows TSF.
 - `/home/yc/fx5/fcitx5-android`, plugin `tigerclaw`: standalone native Fcitx5
   Android port. Core stages and wiring are implemented; real-device performance,
   packaging and signed release acceptance remain. See

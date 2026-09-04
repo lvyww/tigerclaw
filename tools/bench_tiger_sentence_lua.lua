@@ -1,17 +1,21 @@
 -- Benchmark the production Rime Lua sentence decoder.
 -- Usage:
 --   lua tools/bench_tiger_sentence_lua.lua [repo_root]
---       [--mode auto|mobile|none] [--repeat N] [--require-model]
+--       [--mode auto|mobile|none] [--repeat N] [--burst-cases N]
+--       [--require-model]
 
 local repo = arg[1] or "."
 local mode = "auto"
 local repeats = 50
+local burst_cases = 20
 local require_model = false
 for i = 2, #arg do
     if arg[i] == "--mode" then
         mode = arg[i + 1] or mode
     elseif arg[i] == "--repeat" then
         repeats = math.max(1, tonumber(arg[i + 1]) or repeats)
+    elseif arg[i] == "--burst-cases" then
+        burst_cases = math.max(0, tonumber(arg[i + 1]) or burst_cases)
     elseif arg[i] == "--require-model" then
         require_model = true
     end
@@ -51,6 +55,7 @@ local cases = {
     { name = "今天早上我吃了两个面包", raw = "jaefmonyftuderlmljgbmnvs" },
     { name = "这个问题其实没有那么复杂", raw = "vujgadkotwzhwwkrnvautkeohke" },
     { name = "他把那本书放在桌子上面然后离开了", raw = "jeumbauefaalhngyoehiyfbmvmxfzbflrl" },
+    { name = "40码低置信", raw = "nnczggqrrjrrltwwbwkedmkswgjgiuapnphbszbp" },
 }
 
 local function percentile(sorted, share)
@@ -70,6 +75,7 @@ local function summarize(times, gc_total)
         mean = total / #times,
         p50 = percentile(sorted, 0.50),
         p95 = percentile(sorted, 0.95),
+        p99 = percentile(sorted, 0.99),
         maximum = maximum,
         gc_kib = gc_total / #times
     }
@@ -103,6 +109,23 @@ local function run_incremental(raw, evidence)
         local result = {}
         for length = 1, #raw do
             result = sentence.decode(raw:sub(1, length), evidence, "")
+        end
+        return result
+    end
+end
+
+-- Match the real frontend order: the translator caches ordinary candidates;
+-- before the following key, the processor requests confidence metadata for
+-- that same composition, then the translator decodes the appended key.
+local function run_frontend(raw)
+    return function()
+        sentence.reset_decode_cache()
+        local result = {}
+        for length = 1, #raw do
+            if length > 1 then
+                sentence.decode(raw:sub(1, length - 1), true, "")
+            end
+            result = sentence.decode(raw:sub(1, length), false, "")
         end
         return result
     end
@@ -144,10 +167,41 @@ local function benchmark(case, kind, run)
 end
 
 io.write(string.format(
-    "engine=%s mode=%s repeats=%d model=%s path=%s\n",
+    "engine=%s mode=%s repeats=%d burst_cases=%d model=%s path=%s\n",
     (_VERSION or "?") .. (jit and ("/" .. jit.version) or ""),
-    mode, repeats, model.loaded and tostring(model.format) or "none",
+    mode, repeats, burst_cases, model.loaded and tostring(model.format) or "none",
     tostring(model.path or model.error or "")))
+
+-- Do this before prewarming the named cases. It models the reported workload:
+-- a series of previously unseen, low-confidence 40-key compositions.
+if burst_cases > 0 then
+    math.randomseed(20260904)
+    local totals = {}
+    local per_key = {}
+    for case_index = 1, burst_cases do
+        local chars = {}
+        for key_index = 1, 40 do
+            chars[key_index] = string.char(96 + math.random(26))
+        end
+        local raw = table.concat(chars)
+        sentence.reset_decode_cache()
+        local total_started = os.clock()
+        for length = 1, #raw do
+            local key_started = os.clock()
+            sentence.decode(raw:sub(1, length), false, "")
+            per_key[#per_key + 1] = (os.clock() - key_started) * 1000
+        end
+        totals[#totals + 1] = (os.clock() - total_started) * 1000
+    end
+    local total_stats = summarize(totals, 0.0)
+    local key_stats = summarize(per_key, 0.0)
+    io.write(string.format(
+        "%-18s %-11s cases=%2d mean=%7.2fms p50=%7.2fms p95=%7.2fms " ..
+        "max=%7.2fms key_p95=%6.2fms key_p99=%6.2fms key_max=%6.2fms\n",
+        "40码未预热随机串", "burst", burst_cases, total_stats.mean,
+        total_stats.p50, total_stats.p95, total_stats.maximum,
+        key_stats.p95, key_stats.p99, key_stats.maximum))
+end
 
 for _, case in ipairs(cases) do
     sentence.reset_decode_cache()
@@ -156,9 +210,11 @@ for _, case in ipairs(cases) do
     local full = benchmark(case, "full", run_full(case.raw, false))
     local incremental = benchmark(case, "incremental", run_incremental(case.raw, false))
     local evidence = benchmark(case, "evidence", run_incremental(case.raw, true))
+    local frontend = benchmark(case, "frontend", run_frontend(case.raw))
 
     if not sentence.results_equal(incremental, sentence.decode_full(case.raw, false, "")) or
-        not sentence.results_equal(evidence, sentence.decode_full(case.raw, true, "")) then
+        not sentence.results_equal(evidence, sentence.decode_full(case.raw, true, "")) or
+        not sentence.results_equal(frontend, incremental) then
         io.stderr:write("incremental/full mismatch for " .. case.raw .. "\n")
         os.exit(1)
     end
