@@ -5,7 +5,7 @@ using TigerClaw.Engine.Experimental.Input;
 using TigerClaw.Engine.Experimental.Lexicon;
 
 string repoRoot = FindRepoRoot(AppContext.BaseDirectory);
-string rimeDictPath = Path.Combine(repoRoot, "rime", "tiger_sentence", "tiger_sentence.dict.yaml");
+string rimeDictPath = Path.Combine(repoRoot, "rime", "tiger_sentence", "tiger_sentence.codes.txt");
 RimeLexiconProvider lexicon = RimeLexiconProvider.Load(rimeDictPath);
 
 Assert(lexicon.EntryCount > 100, "real Rime lexicon loads more than the header seed rows");
@@ -136,7 +136,7 @@ static string FindRepoRoot(string start)
     DirectoryInfo? dir = new(start);
     while (dir is not null)
     {
-        if (File.Exists(Path.Combine(dir.FullName, "rime", "tiger_sentence", "tiger_sentence.dict.yaml")))
+        if (File.Exists(Path.Combine(dir.FullName, "rime", "tiger_sentence", "tiger_sentence.codes.txt")))
         {
             return dir.FullName;
         }

@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Linq;
+using System.Threading;
 
 namespace TigerClaw.Core
 {
@@ -71,9 +73,11 @@ namespace TigerClaw.Core
 
         public static SentenceLexiconIndex Build(
             IDictionary<string, List<string>> source,
-            ISet<string> commonCharacters = null)
+            ISet<string> commonCharacters = null,
+            ISet<string> fullCodeWhitelist = null)
         {
-            ISet<string> common = commonCharacters ?? SentenceCommonCharacters.Top1500;
+            ISet<string> common = commonCharacters;
+            ISet<string> whitelist = fullCodeWhitelist;
             var exact = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
             if (source != null)
             {
@@ -145,7 +149,8 @@ namespace TigerClaw.Core
                     bool allowNonPrimary =
                         pair.Key.Length == 1 ||
                         !IsSingleTextElement(text) ||
-                        !IsCommonSingleCharacter(text, common);
+                        !IsCommonSingleCharacter(text, common) ||
+                        IsWhitelistedFullCodeCharacter(text, whitelist);
                     if (allowNonPrimary ||
                         (primaryBaseCodeByCharacter.TryGetValue(text, out string primaryCode) &&
                          string.Equals(primaryCode, pair.Key, StringComparison.OrdinalIgnoreCase)))
@@ -209,12 +214,15 @@ namespace TigerClaw.Core
         private static string ChooseShorter(string current, string candidate)
         {
             if (string.IsNullOrEmpty(current) ||
-                candidate.Length < current.Length ||
-                (candidate.Length == current.Length && string.CompareOrdinal(candidate, current) < 0))
+                candidate.Length < current.Length)
             {
                 return candidate;
             }
 
+            // `source` is built in code-table priority order. For equal-length
+            // codes, retain the first code from that order instead of choosing
+            // lexicographically; otherwise an alternate code such as `ladc`
+            // can incorrectly displace the higher-priority `ldac` for 燕.
             return current;
         }
 
@@ -223,6 +231,13 @@ namespace TigerClaw.Core
             return commonCharacters != null &&
                    commonCharacters.Count > 0 &&
                    commonCharacters.Contains(text);
+        }
+
+        private static bool IsWhitelistedFullCodeCharacter(string text, ISet<string> fullCodeWhitelist)
+        {
+            return fullCodeWhitelist != null &&
+                   fullCodeWhitelist.Count > 0 &&
+                   fullCodeWhitelist.Contains(text);
         }
 
         private static bool IsSingleTextElement(string text)
@@ -269,6 +284,18 @@ namespace TigerClaw.Core
             int score = right.FinalScore.CompareTo(left.FinalScore);
             return score != 0 ? score : string.CompareOrdinal(left.Text, right.Text);
         }
+
+        public static int CompareByScoreThenLexiconRank(SentenceCandidate left, SentenceCandidate right)
+        {
+            int score = right.FinalScore.CompareTo(left.FinalScore);
+            if (score != 0)
+            {
+                return score;
+            }
+
+            int rank = left.MaxLexiconRank.CompareTo(right.MaxLexiconRank);
+            return rank != 0 ? rank : string.CompareOrdinal(left.Text, right.Text);
+        }
     }
 
     internal sealed class SentencePathBoundary
@@ -298,22 +325,55 @@ namespace TigerClaw.Core
     {
         public static readonly SentenceEarlyCommitEvidence Empty = new SentenceEarlyCommitEvidence
         {
-            Proposal = string.Empty,
-            RawLengths = new Dictionary<string, int>(StringComparer.Ordinal),
+            Prefixes = Array.Empty<SentencePrefixEvidence>(),
+            NeutralIncompleteTail = false,
+            MergedIncompleteTail = false,
+            NeutralLowConfidence = false,
             ConfidenceTruncated = false,
+            Proposal = string.Empty,
+            ProposalShare = 0.0,
+            RawLengths = new Dictionary<string, int>(StringComparer.Ordinal),
             IgnoreNeuralConstraint = false
         };
 
-        public string Proposal { get; set; }
-        public Dictionary<string, int> RawLengths { get; set; }
+        public SentencePrefixEvidence[] Prefixes { get; set; }
+        public bool NeutralIncompleteTail { get; set; }
+        public bool MergedIncompleteTail { get; set; }
+        public bool NeutralLowConfidence { get; set; }
         public bool ConfidenceTruncated { get; set; }
+        // Compatibility projection for differential/golden tooling. Runtime
+        // commit policy consumes Prefixes and never treats this as authoritative.
+        public string Proposal { get; set; }
+        public double ProposalShare { get; set; }
+        public Dictionary<string, int> RawLengths { get; set; }
         public bool IgnoreNeuralConstraint { get; set; }
+    }
+
+    internal sealed class SentencePrefixEvidence
+    {
+        public string Text { get; set; }
+        public int RawLength { get; set; }
+        public double Share { get; set; }
+        public double BoundaryShare { get; set; }
+        public bool BoundaryClosed { get; set; }
+    }
+
+    internal sealed class SentenceDecodePerformanceSample
+    {
+        public int DecodeCalls { get; set; }
+        public double DecodeTotalMilliseconds { get; set; }
+        public double DecodeMaximumMilliseconds { get; set; }
+        public long IsolationCacheHits { get; set; }
+        public long IsolationCacheMisses { get; set; }
     }
 
     internal sealed class SentenceInputDecoder
     {
         private const string Bos = "\x02";
         private const string Eos = "\x03";
+        private const double EarlyCommitMinimumShare = 0.995;
+        private const double EarlyCommitClosedBoundaryShare = 0.99999;
+        private const int IsolationPenaltyCacheCapacity = 8192;
         private readonly SentenceLexiconIndex _lexicon;
         private readonly ISentenceLanguageModel _languageModel;
         private readonly int _beamWidth;
@@ -323,6 +383,7 @@ namespace TigerClaw.Core
         private readonly double _emittedCharacterReward;
         private readonly SentenceSupplementMatcher _supplementMatcher;
         private readonly bool _hasSupplements;
+        private readonly bool _allowDuplicateSingleCharacters;
         private readonly int _maxCodeLength;
         private readonly object _decodeLock = new object();
         private string _cachedRaw;
@@ -331,6 +392,17 @@ namespace TigerClaw.Core
         private int _cachedLimit;
         private bool _cachedIncludesEarlyCommitEvidence;
         private string _cachedRequiredTextPrefix = string.Empty;
+        private readonly Dictionary<string, double> _isolationPenaltyCache;
+        private readonly string[] _isolationPenaltyCacheKeys;
+        private int _isolationPenaltyCacheNext;
+        private int _performanceDecodeCalls;
+        private long _performanceDecodeTotalTicks;
+        private long _performanceDecodeMaximumTicks;
+        private long _isolationPenaltyCacheHits;
+        private long _isolationPenaltyCacheMisses;
+        private long _performanceIsolationCacheHits;
+        private long _performanceIsolationCacheMisses;
+        private SentenceDecodePerformanceSample _lastPerformanceSample;
 
         private sealed class BeamState
         {
@@ -345,12 +417,6 @@ namespace TigerClaw.Core
             public SentencePathBoundary Boundary;
         }
 
-        private sealed class EarlyCommitCandidate
-        {
-            public SentenceCandidate Candidate;
-            public double ConfidenceScore;
-        }
-
         private sealed class BeamBucket
         {
             private const int AggregateDuringExpansionThreshold = 256;
@@ -358,6 +424,25 @@ namespace TigerClaw.Core
             private Dictionary<string, BeamState> _bestByText;
             private bool _wasTruncated;
             private bool _isFrozen;
+
+            public bool HasItems =>
+                (_pending != null && _pending.Count > 0) ||
+                (_bestByText != null && _bestByText.Count > 0);
+
+            public bool HasItemWithTextPrefix(string requiredTextPrefix)
+            {
+                if (string.IsNullOrEmpty(requiredTextPrefix))
+                {
+                    return HasItems;
+                }
+                if (_pending != null)
+                {
+                    return _pending.Any(item =>
+                        HasRequiredPrefix(item?.Text, requiredTextPrefix));
+                }
+                return _bestByText != null && _bestByText.Keys.Any(text =>
+                    HasRequiredPrefix(text, requiredTextPrefix));
+            }
 
             public void Add(BeamState item)
             {
@@ -387,7 +472,7 @@ namespace TigerClaw.Core
                 AddAggregated(item);
             }
 
-            public List<BeamState> Limit(int limit, out bool truncated)
+            public List<BeamState> Limit(int limit, Comparison<BeamState> comparison, out bool truncated)
             {
                 if (_isFrozen)
                 {
@@ -401,13 +486,14 @@ namespace TigerClaw.Core
                 bool truncatedNow = values.Count > boundedLimit;
                 truncated = _wasTruncated || truncatedNow;
                 _wasTruncated = truncated;
+                Comparison<BeamState> order = comparison ?? CompareBeamStatesByLexiconRankThenScore;
                 if (truncatedNow)
                 {
-                    values = SelectExactTop(values, boundedLimit, CompareBeamStates);
+                    values = SelectExactTop(values, boundedLimit, order);
                 }
                 else
                 {
-                    values.Sort(CompareBeamStates);
+                    values.Sort(order);
                 }
 
                 // The lattice cache lives for the whole composition. Freeze a
@@ -466,13 +552,22 @@ namespace TigerClaw.Core
             SentenceIsolationPenalty isolationPenalty = null,
             bool scoreSentenceBoundaries = true,
             double emittedCharacterReward = 0.0,
-            SentenceSupplementMatcher supplementMatcher = null)
+            SentenceSupplementMatcher supplementMatcher = null,
+            bool allowDuplicateSingleCharacters = false)
         {
             _lexicon = lexicon ?? throw new ArgumentNullException(nameof(lexicon));
             _languageModel = languageModel ?? NeutralSentenceLanguageModel.Instance;
             _beamWidth = Math.Max(1, beamWidth);
             _rankPenalty = Math.Max(0.0, rankPenalty);
             _isolationPenalty = isolationPenalty ?? SentenceIsolationPenalty.CreateDefault();
+            _allowDuplicateSingleCharacters = allowDuplicateSingleCharacters;
+            if (_isolationPenalty.Enabled)
+            {
+                _isolationPenaltyCache = new Dictionary<string, double>(
+                    IsolationPenaltyCacheCapacity,
+                    StringComparer.Ordinal);
+                _isolationPenaltyCacheKeys = new string[IsolationPenaltyCacheCapacity];
+            }
             _scoreSentenceBoundaries = scoreSentenceBoundaries;
             _emittedCharacterReward = Math.Max(0.0, emittedCharacterReward);
             _supplementMatcher = supplementMatcher ?? SentenceSupplementMatcher.Empty;
@@ -497,11 +592,19 @@ namespace TigerClaw.Core
         {
             lock (_decodeLock)
             {
-                return DecodeIncrementalLocked(
+                long started = Stopwatch.GetTimestamp();
+                long isolationHitsBefore = _isolationPenaltyCacheHits;
+                long isolationMissesBefore = _isolationPenaltyCacheMisses;
+                SentenceDecodeResult result = DecodeIncrementalLocked(
                     rawCode,
                     candidateLimit,
                     includeEarlyCommitEvidence,
                     requiredTextPrefix);
+                RecordDecodePerformance(
+                    Stopwatch.GetTimestamp() - started,
+                    _isolationPenaltyCacheHits - isolationHitsBefore,
+                    _isolationPenaltyCacheMisses - isolationMissesBefore);
+                return result;
             }
         }
 
@@ -534,6 +637,161 @@ namespace TigerClaw.Core
             {
                 ClearCache();
             }
+        }
+
+        internal void CompleteComposition()
+        {
+            // Completion can happen while the asynchronous Beam worker still
+            // owns the decoder. Diagnostics must never put that work back on
+            // the TSF key path, so a busy decoder simply carries its aggregate
+            // into the next completion sample.
+            if (!Monitor.TryEnter(_decodeLock))
+            {
+                return;
+            }
+
+            try
+            {
+                FinishPerformanceSample();
+            }
+            finally
+            {
+                Monitor.Exit(_decodeLock);
+            }
+        }
+
+        internal SentenceDecodePerformanceSample GetCurrentPerformanceSample()
+        {
+            lock (_decodeLock)
+            {
+                return CreatePerformanceSample();
+            }
+        }
+
+        internal SentenceDecodePerformanceSample GetLastPerformanceSample()
+        {
+            lock (_decodeLock)
+            {
+                return CopyPerformanceSample(_lastPerformanceSample);
+            }
+        }
+
+        internal bool HasCompleteCandidate(string rawCode, string requiredTextPrefix = null)
+        {
+            string normalized = NormalizeRawCode(rawCode);
+            if (normalized.Length == 0 || !normalized.Any(char.IsLetter))
+            {
+                return false;
+            }
+
+            string required = requiredTextPrefix ?? string.Empty;
+            var states = new HashSet<int>[normalized.Length + 1];
+            for (int index = 0; index < states.Length; index++)
+            {
+                states[index] = new HashSet<int>();
+            }
+            states[0].Add(0);
+
+            for (int position = 0; position < normalized.Length; position++)
+            {
+                if (states[position].Count == 0)
+                {
+                    continue;
+                }
+
+                foreach (int codeLength in _lexicon.CodeLengths)
+                {
+                    int codeEnd = position + codeLength;
+                    if (codeEnd > normalized.Length ||
+                        (position > 0 && IsShortSymbolCode(normalized[position])))
+                    {
+                        continue;
+                    }
+
+                    SentenceLexiconCandidate[] candidates =
+                        _lexicon.GetCandidates(normalized.Substring(position, codeLength));
+                    if (candidates == null || candidates.Length == 0)
+                    {
+                        continue;
+                    }
+
+                    int consumedEnd = ReadCodeSuffix(normalized, codeEnd, out int selectedRank);
+                    bool wholeInputEdge = position == 0 && consumedEnd == normalized.Length;
+                    if (normalized.Length > 1 && consumedEnd - position < 2)
+                    {
+                        continue;
+                    }
+
+                    foreach (int matchedPrefixLength in states[position])
+                    {
+                        foreach (SentenceLexiconCandidate candidate in candidates)
+                        {
+                            if (!RankMatches(candidate, selectedRank, wholeInputEdge) || !TryAdvanceRequiredPrefix(
+                                required,
+                                matchedPrefixLength,
+                                candidate.Text,
+                                out int nextMatchedPrefixLength))
+                            {
+                                continue;
+                            }
+
+                            states[consumedEnd].Add(nextMatchedPrefixLength);
+                        }
+                    }
+                }
+            }
+
+            return states[normalized.Length].Contains(required.Length);
+        }
+
+        internal bool IsProperCodePrefix(string code)
+        {
+            return _lexicon.IsProperCodePrefix(NormalizeRawCode(code));
+        }
+
+        private bool RankMatches(SentenceLexiconCandidate candidate, int selectedRank, bool wholeInputEdge)
+        {
+            if (selectedRank > 0)
+            {
+                return candidate.Rank == selectedRank;
+            }
+
+            if (candidate.Rank == 1 || wholeInputEdge)
+            {
+                return true;
+            }
+
+            return _allowDuplicateSingleCharacters &&
+                   candidate.TextElements != null &&
+                   candidate.TextElements.Length == 1;
+        }
+
+        private static bool TryAdvanceRequiredPrefix(
+            string required,
+            int matchedLength,
+            string text,
+            out int nextMatchedLength)
+        {
+            nextMatchedLength = matchedLength;
+            if (matchedLength >= required.Length)
+            {
+                return true;
+            }
+
+            string candidateText = text ?? string.Empty;
+            int compareLength = Math.Min(candidateText.Length, required.Length - matchedLength);
+            if (compareLength == 0 || string.CompareOrdinal(
+                required,
+                matchedLength,
+                candidateText,
+                0,
+                compareLength) != 0)
+            {
+                return false;
+            }
+
+            nextMatchedLength = Math.Min(required.Length, matchedLength + candidateText.Length);
+            return true;
         }
 
         private SentenceDecodeResult DecodeIncrementalLocked(
@@ -591,9 +849,10 @@ namespace TigerClaw.Core
             if (oldStates != null && !string.IsNullOrEmpty(oldRaw))
             {
                 int oldLength = oldRaw.Length;
-                // A one-key segment is legal only when the whole input is one key.
-                // Crossing four keys also changes whether bare segments keep every rank.
-                if (oldLength == 1 || length == 1 || (oldLength <= 4) != (length <= 4))
+                // Whole-input one-key edges and implicit non-first ranks may
+                // become segmented after an append. Rebuild the small
+                // four-code prefix so formerly legal states cannot leak.
+                if (oldLength <= 4 || length <= 4)
                 {
                     states = null;
                 }
@@ -733,10 +992,9 @@ namespace TigerClaw.Core
             int minimumConsumedEndExclusive = -1)
         {
             int expandedStates = 0;
-            bool allowAllRanks = raw.Length <= 4;
             for (int position = fromPos; position < length; position++)
             {
-                List<BeamState> current = states[position].Limit(_beamWidth, out _);
+                List<BeamState> current = states[position].Limit(_beamWidth, GetBeamStateComparison(), out _);
                 if (current.Count == 0)
                 {
                     continue;
@@ -768,6 +1026,7 @@ namespace TigerClaw.Core
 
                     int selectedRank;
                     int consumedEnd = ReadCodeSuffix(raw, codeEnd, out selectedRank);
+                    bool wholeInputEdge = position == 0 && consumedEnd == length;
                     if (consumedEnd <= minimumConsumedEndExclusive)
                     {
                         continue;
@@ -781,10 +1040,7 @@ namespace TigerClaw.Core
                     {
                         foreach (SentenceLexiconCandidate candidate in candidates)
                         {
-                            bool rankMatches = selectedRank > 0
-                                ? candidate.Rank == selectedRank
-                                : allowAllRanks || candidate.Rank == 1;
-                            if (!rankMatches)
+                            if (!RankMatches(candidate, selectedRank, wholeInputEdge))
                             {
                                 continue;
                             }
@@ -898,22 +1154,12 @@ namespace TigerClaw.Core
         {
             List<BeamState> completed = states[normalized.Length].Limit(
                 _beamWidth,
+                GetBeamStateComparison(),
                 out bool confidenceTruncated);
             var result = new List<SentenceCandidate>(completed.Count);
             foreach (BeamState item in completed)
             {
                 result.Add(EvaluateState(item));
-            }
-
-            SentenceEarlyCommitEvidence earlyCommitEvidence = SentenceEarlyCommitEvidence.Empty;
-            if (includeEarlyCommitEvidence)
-            {
-                earlyCommitEvidence = BuildEarlyCommitEvidence(
-                    normalized,
-                    states,
-                    result,
-                    confidenceTruncated,
-                    requiredTextPrefix);
             }
 
             SentenceCandidate[] visible = SelectExactTopCandidates(
@@ -922,6 +1168,20 @@ namespace TigerClaw.Core
             foreach (SentenceCandidate candidate in visible)
             {
                 candidate.SegmentedCode = BuildSegmentedCode(normalized, candidate.Boundary);
+            }
+
+            SentenceEarlyCommitEvidence earlyCommitEvidence = SentenceEarlyCommitEvidence.Empty;
+            if (includeEarlyCommitEvidence)
+            {
+                // The complete-code path stays on the already-selected visible
+                // list. Dropped incomplete-tail states are merged only into the
+                // evidence pool so competing prefixes can be compared.
+                earlyCommitEvidence = BuildEarlyCommitEvidence(
+                    normalized,
+                    states,
+                    visible,
+                    confidenceTruncated,
+                    requiredTextPrefix);
             }
 
             return new SentenceDecodeResult
@@ -936,7 +1196,7 @@ namespace TigerClaw.Core
         private SentenceCandidate EvaluateState(BeamState item)
         {
             double endingAdjustment = TransitionScore(item.Previous2, item.Previous1, Eos) -
-                _isolationPenalty.Apply(item.Text, _languageModel);
+                ApplyIsolationPenalty(item.Text);
             double score = item.Score + endingAdjustment;
             return new SentenceCandidate
             {
@@ -950,6 +1210,97 @@ namespace TigerClaw.Core
             };
         }
 
+        private double ApplyIsolationPenalty(string text)
+        {
+            if (!_isolationPenalty.Enabled || string.IsNullOrEmpty(text))
+            {
+                return 0.0;
+            }
+
+            if (_isolationPenaltyCache != null &&
+                _isolationPenaltyCache.TryGetValue(text, out double cached))
+            {
+                _isolationPenaltyCacheHits++;
+                return cached;
+            }
+
+            _isolationPenaltyCacheMisses++;
+            double penalty = _isolationPenalty.Apply(text, _languageModel);
+            string oldKey = _isolationPenaltyCacheKeys[_isolationPenaltyCacheNext];
+            if (oldKey != null)
+            {
+                _isolationPenaltyCache.Remove(oldKey);
+            }
+            _isolationPenaltyCache[text] = penalty;
+            _isolationPenaltyCacheKeys[_isolationPenaltyCacheNext] = text;
+            _isolationPenaltyCacheNext =
+                (_isolationPenaltyCacheNext + 1) % IsolationPenaltyCacheCapacity;
+            return penalty;
+        }
+
+        private void RecordDecodePerformance(long elapsedTicks, long isolationHits, long isolationMisses)
+        {
+            _performanceDecodeCalls++;
+            _performanceDecodeTotalTicks += Math.Max(0L, elapsedTicks);
+            _performanceDecodeMaximumTicks = Math.Max(
+                _performanceDecodeMaximumTicks,
+                Math.Max(0L, elapsedTicks));
+            _performanceIsolationCacheHits += Math.Max(0L, isolationHits);
+            _performanceIsolationCacheMisses += Math.Max(0L, isolationMisses);
+        }
+
+        private void FinishPerformanceSample()
+        {
+            if (_performanceDecodeCalls == 0)
+            {
+                return;
+            }
+
+            SentenceDecodePerformanceSample sample = CreatePerformanceSample();
+            _lastPerformanceSample = sample;
+
+            _performanceDecodeCalls = 0;
+            _performanceDecodeTotalTicks = 0;
+            _performanceDecodeMaximumTicks = 0;
+            _performanceIsolationCacheHits = 0;
+            _performanceIsolationCacheMisses = 0;
+        }
+
+        private SentenceDecodePerformanceSample CreatePerformanceSample()
+        {
+            return new SentenceDecodePerformanceSample
+            {
+                DecodeCalls = _performanceDecodeCalls,
+                DecodeTotalMilliseconds = TicksToMilliseconds(_performanceDecodeTotalTicks),
+                DecodeMaximumMilliseconds = TicksToMilliseconds(_performanceDecodeMaximumTicks),
+                IsolationCacheHits = _performanceIsolationCacheHits,
+                IsolationCacheMisses = _performanceIsolationCacheMisses
+            };
+        }
+
+        private static SentenceDecodePerformanceSample CopyPerformanceSample(
+            SentenceDecodePerformanceSample sample)
+        {
+            if (sample == null)
+            {
+                return null;
+            }
+
+            return new SentenceDecodePerformanceSample
+            {
+                DecodeCalls = sample.DecodeCalls,
+                DecodeTotalMilliseconds = sample.DecodeTotalMilliseconds,
+                DecodeMaximumMilliseconds = sample.DecodeMaximumMilliseconds,
+                IsolationCacheHits = sample.IsolationCacheHits,
+                IsolationCacheMisses = sample.IsolationCacheMisses
+            };
+        }
+
+        private static double TicksToMilliseconds(long ticks)
+        {
+            return ticks * 1000.0 / Stopwatch.Frequency;
+        }
+
         private SentenceEarlyCommitEvidence BuildEarlyCommitEvidence(
             string normalized,
             BeamBucket[] states,
@@ -957,11 +1308,65 @@ namespace TigerClaw.Core
             bool completedTruncated,
             string requiredTextPrefix)
         {
+            SentenceCandidate[] visibleCandidates = completed
+                .Where(candidate => HasRequiredPrefix(candidate?.Text, requiredTextPrefix))
+                .ToArray();
             bool confidenceTruncated = completedTruncated;
-            bool usesIncompleteTail = false;
-            var candidatesByText = new Dictionary<string, EarlyCommitCandidate>(StringComparer.Ordinal);
-            AddEarlyCommitCandidates(completed, requiredTextPrefix, candidatesByText);
+            bool mergedIncompleteTail;
+            SentenceCandidate[] pool = CollectEarlyCommitPool(
+                normalized,
+                states,
+                visibleCandidates,
+                requiredTextPrefix,
+                out mergedIncompleteTail,
+                ref confidenceTruncated);
+            SentencePrefixEvidence[] prefixes = BuildPrefixEvidence(pool);
+            SentencePrefixEvidence longest = prefixes
+                .Where(prefix =>
+                    prefix.BoundaryClosed && prefix.Share >= EarlyCommitMinimumShare)
+                .OrderByDescending(prefix =>
+                    new StringInfo(prefix.Text).LengthInTextElements)
+                .ThenByDescending(prefix => prefix.Share)
+                .ThenBy(prefix => prefix.RawLength)
+                .FirstOrDefault();
+            return new SentenceEarlyCommitEvidence
+            {
+                Prefixes = prefixes,
+                NeutralIncompleteTail = visibleCandidates.Length == 0 && mergedIncompleteTail,
+                MergedIncompleteTail = mergedIncompleteTail,
+                NeutralLowConfidence = HasLowConfidenceCompletedGeneration(visibleCandidates),
+                ConfidenceTruncated = confidenceTruncated,
+                Proposal = longest?.Text ?? string.Empty,
+                ProposalShare = longest?.Share ?? 0.0,
+                RawLengths = prefixes
+                    .Where(prefix => prefix.BoundaryClosed)
+                    .GroupBy(prefix => prefix.Text, StringComparer.Ordinal)
+                    .ToDictionary(
+                        group => group.Key,
+                        group => group
+                            .OrderByDescending(prefix => prefix.Share)
+                            .ThenBy(prefix => prefix.RawLength)
+                            .First().RawLength,
+                        StringComparer.Ordinal),
+                IgnoreNeuralConstraint = false
+            };
+        }
 
+        private SentenceCandidate[] CollectEarlyCommitPool(
+            string normalized,
+            BeamBucket[] states,
+            SentenceCandidate[] visibleCandidates,
+            string requiredTextPrefix,
+            out bool mergedIncompleteTail,
+            ref bool confidenceTruncated)
+        {
+            var pool = new Dictionary<Tuple<string, int>, SentenceCandidate>();
+            foreach (SentenceCandidate candidate in visibleCandidates)
+            {
+                AddEarlyCommitPoolCandidate(pool, candidate);
+            }
+
+            mergedIncompleteTail = false;
             int maximumTailLength = Math.Min(_maxCodeLength - 1, normalized.Length - 1);
             for (int tailLength = 1; tailLength <= maximumTailLength; tailLength++)
             {
@@ -974,61 +1379,153 @@ namespace TigerClaw.Core
 
                 List<BeamState> partial = states[consumedLength].Limit(
                     _beamWidth,
+                    GetBeamStateComparison(),
                     out bool partialTruncated);
                 if (partial.Count == 0)
                 {
                     continue;
                 }
 
-                usesIncompleteTail = true;
-                confidenceTruncated |= partialTruncated;
+                bool added = false;
                 foreach (BeamState item in partial)
                 {
-                    AddEarlyCommitCandidate(
-                        EvaluateState(item),
-                        requiredTextPrefix,
-                        candidatesByText);
+                    SentenceCandidate candidate = EvaluateState(item);
+                    if (!HasRequiredPrefix(candidate.Text, requiredTextPrefix))
+                    {
+                        continue;
+                    }
+
+                    AddEarlyCommitPoolCandidate(pool, candidate);
+                    added = true;
+                }
+
+                if (added)
+                {
+                    mergedIncompleteTail = true;
+                    confidenceTruncated |= partialTruncated;
                 }
             }
 
-            if (candidatesByText.Count == 0)
+            if (pool.Count == 0)
             {
-                return new SentenceEarlyCommitEvidence
-                {
-                    Proposal = string.Empty,
-                    RawLengths = new Dictionary<string, int>(StringComparer.Ordinal),
-                    ConfidenceTruncated = confidenceTruncated,
-                    IgnoreNeuralConstraint = false
-                };
+                return Array.Empty<SentenceCandidate>();
             }
 
-            List<EarlyCommitCandidate> orderedCandidates = candidatesByText.Values.ToList();
-            if (usesIncompleteTail)
+            return pool.Values.ToArray();
+        }
+
+        private static void AddEarlyCommitPoolCandidate(
+            Dictionary<Tuple<string, int>, SentenceCandidate> pool,
+            SentenceCandidate candidate)
+        {
+            if (candidate == null || string.IsNullOrEmpty(candidate.Text))
             {
-                orderedCandidates.Sort(CompareEarlyCommitConfidence);
+                return;
             }
-            else
+
+            int rawEndpoint = candidate.Boundary?.RawLength ?? 0;
+            var key = Tuple.Create(candidate.Text, rawEndpoint);
+            if (!pool.TryGetValue(key, out SentenceCandidate previous))
             {
-                orderedCandidates.Sort((left, right) =>
-                    SentenceCandidate.CompareByLexiconRankThenScore(
-                        left.Candidate,
-                        right.Candidate));
+                pool[key] = CopyEarlyCommitPoolCandidate(candidate);
+                return;
             }
-            SentenceCandidate fullTop = FindConfidenceTop(
-                completed.Where(candidate => HasRequiredPrefix(candidate.Text, requiredTextPrefix)));
-            string proposal = BuildConfidenceProposal(orderedCandidates, 0.995);
-            return new SentenceEarlyCommitEvidence
+
+            double combinedMass = LogSumExp(previous.ConfidenceScore, candidate.ConfidenceScore);
+            if (candidate.ConfidenceScore > previous.ConfidenceScore)
             {
-                Proposal = proposal,
-                RawLengths = BuildRawLengthsForProposal(proposal, orderedCandidates),
-                ConfidenceTruncated = confidenceTruncated,
-                IgnoreNeuralConstraint = usesIncompleteTail &&
-                    orderedCandidates.Count > 0 &&
-                    !string.Equals(
-                        orderedCandidates[0].Candidate.Text,
-                        fullTop?.Text,
-                        StringComparison.Ordinal)
+                previous = CopyEarlyCommitPoolCandidate(candidate);
+                pool[key] = previous;
+            }
+
+            previous.ConfidenceScore = combinedMass;
+        }
+
+        private static SentenceCandidate CopyEarlyCommitPoolCandidate(SentenceCandidate candidate)
+        {
+            return new SentenceCandidate
+            {
+                Text = candidate.Text,
+                ConfidenceScore = candidate.ConfidenceScore,
+                Boundary = candidate.Boundary
             };
+        }
+
+        private static bool HasLowConfidenceCompletedGeneration(
+            SentenceCandidate[] candidates)
+        {
+            if (candidates == null || candidates.Length == 0)
+            {
+                return false;
+            }
+
+            double maximum = candidates.Max(candidate => candidate.ConfidenceScore);
+            double total = 0.0;
+            foreach (SentenceCandidate candidate in candidates)
+            {
+                total += Math.Exp(candidate.ConfidenceScore - maximum);
+            }
+            return total > 0.0 && 1.0 / total < EarlyCommitMinimumShare;
+        }
+
+        private static SentencePrefixEvidence[] BuildPrefixEvidence(
+            SentenceCandidate[] candidates)
+        {
+            if (candidates == null || candidates.Length == 0)
+            {
+                return Array.Empty<SentencePrefixEvidence>();
+            }
+
+            double maximum = candidates.Max(candidate => candidate.ConfidenceScore);
+            double total = 0.0;
+            var mass = new Dictionary<Tuple<string, int>, double>();
+            var boundaryMass = new Dictionary<int, double>();
+            foreach (SentenceCandidate candidate in candidates)
+            {
+                double weight = Math.Exp(candidate.ConfidenceScore - maximum);
+                total += weight;
+                SentencePathBoundary boundary = candidate.Boundary;
+                var candidateRawBoundaries = new HashSet<int>();
+                while (boundary != null)
+                {
+                    if (boundary.TextLength > 0 && boundary.TextLength <= candidate.Text.Length)
+                    {
+                        string prefix = candidate.Text.Substring(0, boundary.TextLength);
+                        var key = Tuple.Create(prefix, boundary.RawLength);
+                        mass.TryGetValue(key, out double previous);
+                        mass[key] = previous + weight;
+                        candidateRawBoundaries.Add(boundary.RawLength);
+                    }
+                    boundary = boundary.Previous;
+                }
+                foreach (int rawBoundary in candidateRawBoundaries)
+                {
+                    boundaryMass.TryGetValue(rawBoundary, out double previous);
+                    boundaryMass[rawBoundary] = previous + weight;
+                }
+            }
+
+            if (total <= 0.0)
+            {
+                return Array.Empty<SentencePrefixEvidence>();
+            }
+
+            return mass.Select(item =>
+                {
+                    double boundaryShare = boundaryMass.TryGetValue(
+                        item.Key.Item2, out double value)
+                        ? value / total
+                        : 0.0;
+                    return new SentencePrefixEvidence
+                    {
+                        Text = item.Key.Item1,
+                        RawLength = item.Key.Item2,
+                        Share = item.Value / total,
+                        BoundaryShare = boundaryShare,
+                        BoundaryClosed = boundaryShare >= EarlyCommitClosedBoundaryShare
+                    };
+                })
+                .ToArray();
         }
 
         private bool IsIncompleteCodeTail(string tail)
@@ -1042,156 +1539,11 @@ namespace TigerClaw.Core
             return tail.Length < 2 || _lexicon.GetCandidates(tail) == null;
         }
 
-        private static void AddEarlyCommitCandidates(
-            IEnumerable<SentenceCandidate> candidates,
-            string requiredTextPrefix,
-            IDictionary<string, EarlyCommitCandidate> candidatesByText)
-        {
-            foreach (SentenceCandidate candidate in candidates)
-            {
-                AddEarlyCommitCandidate(candidate, requiredTextPrefix, candidatesByText);
-            }
-        }
-
-        private static void AddEarlyCommitCandidate(
-            SentenceCandidate candidate,
-            string requiredTextPrefix,
-            IDictionary<string, EarlyCommitCandidate> candidatesByText)
-        {
-            if (candidate == null || string.IsNullOrEmpty(candidate.Text) ||
-                !HasRequiredPrefix(candidate.Text, requiredTextPrefix))
-            {
-                return;
-            }
-
-            if (!candidatesByText.TryGetValue(candidate.Text, out EarlyCommitCandidate previous))
-            {
-                candidatesByText[candidate.Text] = new EarlyCommitCandidate
-                {
-                    Candidate = candidate,
-                    ConfidenceScore = candidate.ConfidenceScore
-                };
-                return;
-            }
-
-            double combinedMass = LogSumExp(previous.ConfidenceScore, candidate.ConfidenceScore);
-            if (candidate.ConfidenceScore > previous.Candidate.ConfidenceScore)
-            {
-                previous.Candidate = candidate;
-            }
-            previous.ConfidenceScore = combinedMass;
-        }
-
         private static bool HasRequiredPrefix(string text, string requiredTextPrefix)
         {
             return string.IsNullOrEmpty(requiredTextPrefix) ||
                 (!string.IsNullOrEmpty(text) &&
                  text.StartsWith(requiredTextPrefix, StringComparison.Ordinal));
-        }
-
-        private static int CompareEarlyCommitConfidence(
-            EarlyCommitCandidate left,
-            EarlyCommitCandidate right)
-        {
-            int confidence = right.ConfidenceScore.CompareTo(left.ConfidenceScore);
-            return confidence != 0
-                ? confidence
-                : string.CompareOrdinal(left.Candidate.Text, right.Candidate.Text);
-        }
-
-        private static SentenceCandidate FindConfidenceTop(
-            IEnumerable<SentenceCandidate> candidates)
-        {
-            SentenceCandidate best = null;
-            foreach (SentenceCandidate candidate in candidates)
-            {
-                if (best == null ||
-                    candidate.ConfidenceScore > best.ConfidenceScore ||
-                    (candidate.ConfidenceScore == best.ConfidenceScore &&
-                     string.CompareOrdinal(candidate.Text, best.Text) < 0))
-                {
-                    best = candidate;
-                }
-            }
-            return best;
-        }
-
-        private static string BuildConfidenceProposal(
-            IEnumerable<EarlyCommitCandidate> candidates,
-            double threshold)
-        {
-            EarlyCommitCandidate[] values = candidates.ToArray();
-            if (values.Length == 0)
-            {
-                return string.Empty;
-            }
-
-            double max = values.Max(candidate => candidate.ConfidenceScore);
-            double total = 0.0;
-            var prefixMass = new Dictionary<string, double>(StringComparer.Ordinal);
-            var prefixTextElements = new Dictionary<string, int>(StringComparer.Ordinal);
-            foreach (EarlyCommitCandidate candidate in values)
-            {
-                double weight = Math.Exp(candidate.ConfidenceScore - max);
-                total += weight;
-                int[] textEnds = GetTextElementEndOffsets(candidate.Candidate.Text);
-                for (int index = 0; index + 1 < textEnds.Length; index++)
-                {
-                    string prefix = candidate.Candidate.Text.Substring(0, textEnds[index]);
-                    prefixMass.TryGetValue(prefix, out double previousMass);
-                    prefixMass[prefix] = previousMass + weight;
-                    prefixTextElements[prefix] = index + 1;
-                }
-            }
-
-            string proposal = string.Empty;
-            int proposalTextElements = 0;
-            foreach (KeyValuePair<string, double> item in prefixMass)
-            {
-                int textElements = prefixTextElements[item.Key];
-                if (item.Value / total >= threshold && textElements > proposalTextElements)
-                {
-                    proposal = item.Key;
-                    proposalTextElements = textElements;
-                }
-            }
-            return proposal;
-        }
-
-        private static Dictionary<string, int> BuildRawLengthsForProposal(
-            string proposal,
-            IEnumerable<EarlyCommitCandidate> orderedCandidates)
-        {
-            var rawLengths = new Dictionary<string, int>(StringComparer.Ordinal);
-            if (string.IsNullOrEmpty(proposal))
-            {
-                return rawLengths;
-            }
-
-            var prefixByTextLength = new Dictionary<int, string>();
-            foreach (int end in GetTextElementEndOffsets(proposal))
-            {
-                prefixByTextLength[end] = proposal.Substring(0, end);
-            }
-            foreach (EarlyCommitCandidate candidate in orderedCandidates)
-            {
-                SentencePathBoundary boundary = candidate.Candidate.Boundary;
-                while (boundary != null)
-                {
-                    if (prefixByTextLength.TryGetValue(boundary.TextLength, out string prefix) &&
-                        candidate.Candidate.Text.StartsWith(prefix, StringComparison.Ordinal) &&
-                        !rawLengths.ContainsKey(prefix))
-                    {
-                        rawLengths[prefix] = boundary.RawLength;
-                    }
-                    boundary = boundary.Previous;
-                }
-                if (rawLengths.Count == prefixByTextLength.Count)
-                {
-                    break;
-                }
-            }
-            return rawLengths;
         }
 
         private static int[] GetTextElementEndOffsets(string text)
@@ -1216,20 +1568,46 @@ namespace TigerClaw.Core
                    (item.MaxLexiconRank == previous.MaxLexiconRank && item.Score > previous.Score);
         }
 
-        private static SentenceCandidate[] SelectExactTopCandidates(
+        private SentenceCandidate[] SelectExactTopCandidates(
             List<SentenceCandidate> values,
             int limit)
         {
             int boundedLimit = Math.Max(1, limit);
+            Comparison<SentenceCandidate> comparison = PreferScoreOverLexiconRank(values)
+                ? SentenceCandidate.CompareByScoreThenLexiconRank
+                : SentenceCandidate.CompareByLexiconRankThenScore;
             if (values.Count <= boundedLimit)
             {
-                values.Sort(SentenceCandidate.CompareByLexiconRankThenScore);
+                values.Sort(comparison);
                 return values.ToArray();
             }
-            return SelectExactTop(
-                values,
-                boundedLimit,
-                SentenceCandidate.CompareByLexiconRankThenScore).ToArray();
+            return SelectExactTop(values, boundedLimit, comparison).ToArray();
+        }
+
+        private bool PreferScoreOverLexiconRank(List<SentenceCandidate> values)
+        {
+            if (!_allowDuplicateSingleCharacters || values == null)
+            {
+                return false;
+            }
+
+            for (int index = 0; index < values.Count; index++)
+            {
+                SentencePathBoundary boundary = values[index] == null ? null : values[index].Boundary;
+                if (boundary != null && boundary.Previous != null)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private Comparison<BeamState> GetBeamStateComparison()
+        {
+            return _allowDuplicateSingleCharacters
+                ? CompareBeamStatesByScoreThenLexiconRank
+                : CompareBeamStatesByLexiconRankThenScore;
         }
 
         private static List<T> SelectExactTop<T>(
@@ -1305,7 +1683,7 @@ namespace TigerClaw.Core
             return max + Math.Log(Math.Exp(left - max) + Math.Exp(right - max));
         }
 
-        private static int CompareBeamStates(BeamState left, BeamState right)
+        private static int CompareBeamStatesByLexiconRankThenScore(BeamState left, BeamState right)
         {
             int rank = left.MaxLexiconRank.CompareTo(right.MaxLexiconRank);
             if (rank != 0)
@@ -1315,6 +1693,18 @@ namespace TigerClaw.Core
 
             int compared = right.Score.CompareTo(left.Score);
             return compared != 0 ? compared : string.CompareOrdinal(left.Text, right.Text);
+        }
+
+        private static int CompareBeamStatesByScoreThenLexiconRank(BeamState left, BeamState right)
+        {
+            int compared = right.Score.CompareTo(left.Score);
+            if (compared != 0)
+            {
+                return compared;
+            }
+
+            int rank = left.MaxLexiconRank.CompareTo(right.MaxLexiconRank);
+            return rank != 0 ? rank : string.CompareOrdinal(left.Text, right.Text);
         }
 
         private static string BuildSegmentedCode(string raw, SentencePathBoundary boundary)

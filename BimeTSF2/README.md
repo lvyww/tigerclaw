@@ -1,6 +1,6 @@
 # BimeTSF2
 
-当前项目交接入口是根目录 `AGENTS.md`。
+当前项目交接入口是根目录 `AGENTS.md`，文档索引见 `../docs/README.md`。
 
 本目录是 TigerClaw 当前 TSF DLL 构建来源。当前实现为 bridge-only：TSF 侧捕获 key/focus/caret/IME activation 等事件，通过 `\\.\pipe\BimeIPC` 转发给 TigerClaw Core，并把 Core 响应镜像回 TSF。
 

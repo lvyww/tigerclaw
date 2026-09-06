@@ -36,6 +36,7 @@ _dotnet_home_tmp/
 _tmp*/
 _run*/
 _run)
+.core_diff/
 *.tmp
 *.temp
 *.bak
@@ -80,3 +81,8 @@ Desktop.ini
 # macOS Finder and locally built spike payloads
 .DS_Store
 /spikes/swift-dotnet-bridge/XcodeHost/TigerClaw/Resources/DummyEngine.dylib
+
+# Rust / Python build artifacts
+rust/**/target/
+__pycache__/
+*.pyc

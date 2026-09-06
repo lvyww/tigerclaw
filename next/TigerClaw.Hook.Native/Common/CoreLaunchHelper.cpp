@@ -118,7 +118,7 @@ namespace TigerClawHookNative
             return sameDirectoryCandidate;
         }
 
-        const std::wstring debugCandidate = basePath + L"\\..\\net48\\" + std::wstring(CoreProcessName);
+        const std::wstring debugCandidate = basePath + L"\\..\\x64\\" + std::wstring(CoreProcessName);
         if (GetFullPathNameW(debugCandidate.c_str(), ARRAYSIZE(fullPath), fullPath, nullptr) == 0)
         {
             return debugCandidate;

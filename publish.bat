@@ -60,7 +60,6 @@ if not defined MSBUILD (
 set "CORE_PROJECT=%ROOT%\next\TigerClaw.Core\TigerClaw.Core.csproj"
 set "OVERLAY_PROJECT=%ROOT%\next\TigerClaw.Overlay\TigerClaw.Overlay.csproj"
 set "DIALOG_PROJECT=%ROOT%\next\TigerClaw.Dialog\TigerClaw.Dialog.csproj"
-set "SENTENCE_PROJECT=%ROOT%\next\TigerClaw.Sentence\TigerClaw.Sentence.csproj"
 set "HOOK_NATIVE_PROJECT=%ROOT%\next\TigerClaw.Hook.Native\TigerClaw.Hook.Native.vcxproj"
 set "TSF_PROJECT=%ROOT%\BimeTSF2\SampleIME\BimeTSF2.vcxproj"
 
@@ -74,10 +73,6 @@ if not exist "%OVERLAY_PROJECT%" (
 )
 if not exist "%DIALOG_PROJECT%" (
     echo ERROR: Missing project: %DIALOG_PROJECT%
-    exit /b 1
-)
-if not exist "%SENTENCE_PROJECT%" (
-    echo ERROR: Missing project: %SENTENCE_PROJECT%
     exit /b 1
 )
 if not exist "%HOOK_NATIVE_PROJECT%" (
@@ -97,7 +92,7 @@ if not exist "%SENTENCE_NATIVE_BUILD%" (
     exit /b 1
 )
 
-set "CORE_OUT=%ROOT%\next\_run\Release\net48"
+set "CORE_OUT=%ROOT%\next\_run\Release\core-x64"
 set "CORE_EXE_FOR_HASH=%CORE_OUT%\TigerClaw.Core.exe"
 set "OVERLAY_OUT=%ROOT%\next\_run\Release\net48"
 set "DIALOG_OUT=%ROOT%\next\_run\Release\net48"
@@ -118,14 +113,17 @@ set "RELEASE_SENTENCE=%RELEASE_DIR%\sentence"
 set "RELEASE_MODELS=%RELEASE_DIR%\Models"
 set "DIST_INSTALL_TEMPLATE=%ROOT%\dist_install.bat"
 set "DIST_UNINSTALL_TEMPLATE=%ROOT%\dist_uninstall.bat"
+set "DIST_SELECTION_KEYS_TEMPLATE=%ROOT%\dist_selection_keys.txt"
 set "CHANGELOG_FILE="
 set "CHANGELOG_NAME="
 set "INSTALL_SCRIPT="
 set "UNINSTALL_SCRIPT="
+set "SELECTION_KEYS_FILE="
 for /f "usebackq delims=" %%I in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "(-join ([char[]](0x66F4,0x65B0,0x65E5,0x5FD7))) + '.txt'"`) do set "CHANGELOG_NAME=%%I"
 if defined CHANGELOG_NAME set "CHANGELOG_FILE=%ROOT%\!CHANGELOG_NAME!"
 for /f "usebackq delims=" %%I in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "[char]0x5B89 + [char]0x88C5 + '.bat'"`) do set "INSTALL_SCRIPT=%%I"
 for /f "usebackq delims=" %%I in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "[char]0x5378 + [char]0x8F7D + '.bat'"`) do set "UNINSTALL_SCRIPT=%%I"
+for /f "usebackq delims=" %%I in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "(-join ([char[]](0x81EA,0x5B9A,0x4E49,0x9009,0x91CD,0x952E))) + '.txt'"`) do set "SELECTION_KEYS_FILE=%%I"
 
 echo Using MSBuild:
 echo   %MSBUILD%
@@ -144,6 +142,18 @@ if not exist "%SHARED_BUILD_INFO%" (
 )
 if not exist "%SENTENCE_NGRAM_MODEL%" (
     echo ERROR: Missing sentence n-gram model: %SENTENCE_NGRAM_MODEL%
+    exit /b 1
+)
+if not exist "%DIST_INSTALL_TEMPLATE%" (
+    echo ERROR: Missing distribution install template: %DIST_INSTALL_TEMPLATE%
+    exit /b 1
+)
+if not exist "%DIST_UNINSTALL_TEMPLATE%" (
+    echo ERROR: Missing distribution uninstall template: %DIST_UNINSTALL_TEMPLATE%
+    exit /b 1
+)
+if not exist "%DIST_SELECTION_KEYS_TEMPLATE%" (
+    echo ERROR: Missing distribution selection-key template: %DIST_SELECTION_KEYS_TEMPLATE%
     exit /b 1
 )
 echo   text_log_enabled=%TEXT_LOG_ENABLED%
@@ -185,8 +195,8 @@ if errorlevel 1 (
 )
 
 echo.
-echo [3/13] Build TigerClaw.Core Release
-"%DOTNET%" msbuild /m /nr:false "%CORE_PROJECT%" /restore /p:Configuration=Release /p:Platform=AnyCPU /p:OutDir="%CORE_OUT%\\" /v:minimal
+echo [3/13] Publish TigerClaw.Core Native AOT Release
+"%DOTNET%" publish "%CORE_PROJECT%" -c Release -r win-x64 --self-contained true -o "%CORE_OUT%" /p:PublishAot=true
 if errorlevel 1 (
     echo ERROR: TigerClaw.Core Release build failed.
     exit /b 1
@@ -210,14 +220,9 @@ if errorlevel 1 (
 
 echo.
 echo [6/13] Build TigerClaw.Sentence Release
-"%DOTNET%" msbuild /m /nr:false "%SENTENCE_PROJECT%" /restore /p:Configuration=Release /p:Platform=x64 /p:OutDir="%SENTENCE_OUT%\\" /v:minimal
-if errorlevel 1 (
-    echo ERROR: TigerClaw.Sentence Release build failed.
-    exit /b 1
-)
 call "%SENTENCE_NATIVE_BUILD%" x64 "%SENTENCE_OUT%" Release
 if errorlevel 1 (
-    echo ERROR: TigerClaw.Sentence.Native x64 build failed.
+    echo ERROR: TigerClaw.Sentence C++ x64 build failed.
     exit /b 1
 )
 
@@ -299,7 +304,6 @@ call :RequireFile "%CORE_OUT%\TigerClaw.Core.exe" "TigerClaw.Core.exe" || exit /
 call :RequireFile "%OVERLAY_OUT%\TigerClaw.Overlay.exe" "TigerClaw.Overlay.exe" || exit /b 1
 call :RequireFile "%DIALOG_OUT%\TigerClaw.Dialog.exe" "TigerClaw.Dialog.exe" || exit /b 1
 call :RequireFile "%SENTENCE_OUT%\TigerClaw.Sentence.exe" "TigerClaw.Sentence.exe" || exit /b 1
-call :RequireFile "%SENTENCE_OUT%\TigerClaw.Sentence.Native.dll" "TigerClaw.Sentence.Native.dll" || exit /b 1
 call :RequireFile "%SENTENCE_NGRAM_MODEL%" "sentence n-gram model" || exit /b 1
 call :RequireFile "%SENTENCE_QWEN_MODEL%" "Qwen Q8 model" || exit /b 1
 call :RequireFile "%ROOT%\third_party\llama.cpp\LICENSE" "llama.cpp license" || exit /b 1
@@ -309,7 +313,7 @@ call :RequireFile "%TSF_X64_DLL%" "TigerClaw.dll x64" || exit /b 1
 call :RequireFile "%TSF_X86_DLL%" "TigerClaw.dll Win32" || exit /b 1
 
 call :CopyFileStrict "%CORE_OUT%\TigerClaw.Core.exe" "%RELEASE_DIR%\TigerClaw.Core.exe" || exit /b 1
-if exist "%CORE_OUT%\TigerClaw.Core.exe.config" call :CopyFileStrict "%CORE_OUT%\TigerClaw.Core.exe.config" "%RELEASE_DIR%\TigerClaw.Core.exe.config" || exit /b 1
+if exist "%RELEASE_DIR%\TigerClaw.Core.exe.config" del /q "%RELEASE_DIR%\TigerClaw.Core.exe.config"
 if exist "%CORE_OUT%\TigerClaw.Core.pdb" del /q "%RELEASE_DIR%\TigerClaw.Core.pdb" >nul 2>&1
 
 call :CopyFileStrict "%OVERLAY_OUT%\TigerClaw.Overlay.exe" "%RELEASE_DIR%\TigerClaw.Overlay.exe" || exit /b 1
@@ -320,9 +324,8 @@ call :CopyFileStrict "%DIALOG_OUT%\TigerClaw.Dialog.exe" "%RELEASE_DIR%\TigerCla
 if exist "%DIALOG_OUT%\TigerClaw.Dialog.exe.config" call :CopyFileStrict "%DIALOG_OUT%\TigerClaw.Dialog.exe.config" "%RELEASE_DIR%\TigerClaw.Dialog.exe.config" || exit /b 1
 if exist "%DIALOG_OUT%\TigerClaw.Dialog.pdb" del /q "%RELEASE_DIR%\TigerClaw.Dialog.pdb" >nul 2>&1
 
-for %%F in (TigerClaw.Sentence.exe TigerClaw.Sentence.exe.config TigerClaw.Shared.dll TigerClaw.Sentence.Native.dll) do (
-    if exist "%SENTENCE_OUT%\%%F" call :CopyFileStrict "%SENTENCE_OUT%\%%F" "%RELEASE_SENTENCE%\%%F" || exit /b 1
-)
+call :CopyFileStrict "%SENTENCE_OUT%\TigerClaw.Sentence.exe" "%RELEASE_SENTENCE%\TigerClaw.Sentence.exe" || exit /b 1
+for %%F in (TigerClaw.Sentence.exe.config TigerClaw.Shared.dll TigerClaw.Sentence.Native.dll) do if exist "%RELEASE_SENTENCE%\%%F" del /q "%RELEASE_SENTENCE%\%%F"
 for %%F in (Microsoft.ML.OnnxRuntime.dll System.Buffers.dll System.Memory.dll System.Numerics.Tensors.dll System.Numerics.Vectors.dll System.Runtime.CompilerServices.Unsafe.dll onnxruntime.dll onnxruntime_providers_shared.dll) do (
     if exist "%RELEASE_SENTENCE%\%%F" del /q "%RELEASE_SENTENCE%\%%F"
 )
@@ -344,13 +347,14 @@ call :CopyFileStrict "%HOOK_NATIVE_OUT%\TigerClaw.Hook.Native.exe" "%RELEASE_DIR
 if exist "%HOOK_NATIVE_OUT%\TigerClaw.Hook.Native.pdb" del /q "%RELEASE_DIR%\TigerClaw.pdb" >nul 2>&1
 
 if exist "%ROOT%\next\TigerClaw.Dialog\bime.ico" call :CopyFileStrict "%ROOT%\next\TigerClaw.Dialog\bime.ico" "%RELEASE_DIR%\bime.ico" || exit /b 1
-call :CopyFileStrict "%CORE_OUT%\TigerClaw.Shared.dll" "%RELEASE_DIR%\TigerClaw.Shared.dll" || exit /b 1
+call :CopyFileStrict "%OVERLAY_OUT%\TigerClaw.Shared.dll" "%RELEASE_DIR%\TigerClaw.Shared.dll" || exit /b 1
 call :CopyFileStrict "%TSF_X64_DLL%" "%RELEASE_TSF_X64%\TigerClaw.dll" || exit /b 1
 call :CopyFileStrict "%TSF_X86_DLL%" "%RELEASE_TSF_X86%\TigerClaw.dll" || exit /b 1
 if defined CHANGELOG_NAME if exist "%CHANGELOG_FILE%" call :CopyFileStrict "%CHANGELOG_FILE%" "%RELEASE_DIR%\!CHANGELOG_NAME!" || exit /b 1
 
-if exist "%DIST_INSTALL_TEMPLATE%" call :CopyFileStrict "%DIST_INSTALL_TEMPLATE%" "%RELEASE_DIR%\!INSTALL_SCRIPT!" || exit /b 1
-if exist "%DIST_UNINSTALL_TEMPLATE%" call :CopyFileStrict "%DIST_UNINSTALL_TEMPLATE%" "%RELEASE_DIR%\!UNINSTALL_SCRIPT!" || exit /b 1
+call :CopyFileStrict "%DIST_INSTALL_TEMPLATE%" "%RELEASE_DIR%\!INSTALL_SCRIPT!" || exit /b 1
+call :CopyFileStrict "%DIST_UNINSTALL_TEMPLATE%" "%RELEASE_DIR%\!UNINSTALL_SCRIPT!" || exit /b 1
+call :CopyFileStrict "%DIST_SELECTION_KEYS_TEMPLATE%" "%RELEASE_DIR%\!SELECTION_KEYS_FILE!" || exit /b 1
 if exist "%RELEASE_DIR%\install.bat" del /q "%RELEASE_DIR%\install.bat" >nul 2>&1
 if exist "%RELEASE_DIR%\uninstall.bat" del /q "%RELEASE_DIR%\uninstall.bat" >nul 2>&1
 

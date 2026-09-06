@@ -26,6 +26,10 @@ namespace TigerClaw.Core
         private readonly KeyRequestReplayCache _keyRequestReplayCache = new KeyRequestReplayCache();
         private readonly object _keyRequestLock = new object();
         private readonly object _publishLock = new object();
+        private readonly AutoResetEvent _deferredUiPublishSignal;
+        private readonly Thread _deferredUiPublishThread;
+        private int _deferredUiPublishRequested;
+        private int _deferredUiPublishStopping;
         private const int FreshCaretAwaitWindowMs = 30;
         private bool _hookNativeDisabled;
         // TSF 是否处于激活态（本 IME 被选中且焦点在可编辑文档）。默认 false → 启动即隐藏状态窗，直到首个 ime_active:true。
@@ -34,6 +38,8 @@ namespace TigerClaw.Core
         private long _soundSeq;
         private int _soundVk;
         private int _soundVolumePercent;
+        private long _candidateAnchorRevision;
+        private bool _candidateAnchorRefreshPending;
         private bool _awaitingFreshCaretForComposition;
         private long _awaitingFreshCaretDeadlineTick;
         private bool _pendingFrontendCompositionReset;
@@ -52,12 +58,86 @@ namespace TigerClaw.Core
             _engine.SetSentenceDecodeCompletedCallback(PublishUiState);
             _engine.SetChinese(_state.GetDefaultChinese(), out _);
             PublishUiState();
+            if (_uiStatePublisher != null)
+            {
+                _deferredUiPublishSignal = new AutoResetEvent(false);
+                _deferredUiPublishThread = new Thread(RunDeferredUiPublishLoop)
+                {
+                    IsBackground = true,
+                    Name = "TigerClaw.Core.UiPublish"
+                };
+                _deferredUiPublishThread.Start();
+            }
         }
 
         public void Dispose()
         {
+            if (_deferredUiPublishThread != null &&
+                Interlocked.Exchange(ref _deferredUiPublishStopping, 1) == 0)
+            {
+                _deferredUiPublishSignal.Set();
+                _deferredUiPublishThread.Join();
+                _deferredUiPublishSignal.Dispose();
+            }
             _sentenceRerankClient?.Dispose();
             _engine?.Dispose();
+        }
+
+        internal bool WaitForDifferentialIdle(int timeoutMs)
+        {
+            Stopwatch watch = Stopwatch.StartNew();
+            while (_engine.IsSentenceDecodePending && watch.ElapsedMilliseconds < timeoutMs)
+            {
+                Thread.Sleep(2);
+            }
+
+            return !_engine.IsSentenceDecodePending;
+        }
+
+        internal string BuildDifferentialSnapshotJson(bool? pendingOverride = null)
+        {
+            EngineDifferentialSnapshot differential = _engine.GetDifferentialSnapshot(_state.GetPageSize());
+            EngineUiSnapshot ui = differential.Ui;
+            string inputBuffer = BuildDisplayComposition(ui.CompositionPrefix, ui.ActiveInputCode);
+            return "{" +
+                   "\"keyboard_open\":" + (ui.IsChinese ? "true" : "false") + "," +
+                   "\"is_composing\":" + (ui.IsComposing ? "true" : "false") + "," +
+                   "\"composition_state\":" + ui.CompositionState + "," +
+                   "\"raw_input\":" + Quote(differential.RawInput) + "," +
+                   "\"input_buffer\":" + Quote(inputBuffer) + "," +
+                   "\"composition_prefix\":" + Quote(ui.CompositionPrefix) + "," +
+                   "\"active_input_code\":" + Quote(ui.ActiveInputCode) + "," +
+                   "\"candidates\":" + QuoteArray(ui.Candidates) + "," +
+                   "\"candidate_annotations\":" + QuoteArray(ui.CandidateAnnotations) + "," +
+                   "\"selected_index\":" + ui.SelectedCandidateIndex + "," +
+                   "\"candidate_page\":" + differential.CandidatePageIndex + "," +
+                   "\"composition_tracking\":" + (_engine.IsSentenceCompositionActive ? "true" : "false") + "," +
+                   "\"composition_pending\":" + ((pendingOverride ?? _engine.IsSentenceDecodePending) ? "true" : "false") + "," +
+                   "\"sentence_committed_text\":" + Quote(differential.SentenceCommittedText) + "," +
+                   "\"sentence_committed_raw_length\":" + differential.SentenceCommittedRawLength + "," +
+                   "\"sentence_generation\":" + differential.SentenceGeneration +
+                   "}";
+        }
+
+        private static string QuoteArray(string[] values)
+        {
+            if (values == null || values.Length == 0)
+            {
+                return "[]";
+            }
+
+            var builder = new StringBuilder();
+            builder.Append('[');
+            for (int index = 0; index < values.Length; index++)
+            {
+                if (index > 0)
+                {
+                    builder.Append(',');
+                }
+                builder.Append(Quote(values[index]));
+            }
+            builder.Append(']');
+            return builder.ToString();
         }
 
         private void OnSentenceRerankResult(long generation, string rawCode, double[] scores)
@@ -70,6 +150,17 @@ namespace TigerClaw.Core
 
         public string Handle(string json)
         {
+            return HandleCore(json, false, out _);
+        }
+
+        internal string HandleTransport(string json, out bool publishUiAfterResponse)
+        {
+            return HandleCore(json, true, out publishUiAfterResponse);
+        }
+
+        private string HandleCore(string json, bool deferKeyUiPublish, out bool publishUiAfterResponse)
+        {
+            publishUiAfterResponse = false;
             SimpleJsonObject msg = SimpleJson.Parse(json);
             if (msg == null)
             {
@@ -348,7 +439,18 @@ namespace TigerClaw.Core
                     }
 
                 case "key":
-                    return HandleKeyMessage(msg, seq);
+                    {
+                        string response = HandleKeyMessage(msg, seq);
+                        if (deferKeyUiPublish)
+                        {
+                            publishUiAfterResponse = true;
+                        }
+                        else
+                        {
+                            PublishUiState();
+                        }
+                        return response;
+                    }
 
                 case "caret":
                     MarkFrontendMode(ConvertToString(msg.GetValue("frontend")));
@@ -365,6 +467,7 @@ namespace TigerClaw.Core
                 case "composition_canceled":
                     MarkFrontendMode(ConvertToString(msg.GetValue("frontend")));
                     _engine.OnExternalCompositionCanceled();
+                    _candidateAnchorRefreshPending = false;
                     ClearFreshCaretAwaitState();
                     PublishUiState();
                     return null;
@@ -375,6 +478,7 @@ namespace TigerClaw.Core
                     if (_hookNativeDisabled)
                     {
                         _engine.OnExternalCompositionCanceled();
+                        _candidateAnchorRefreshPending = false;
                         ClearFreshCaretAwaitState();
                     }
                     PublishUiState();
@@ -383,6 +487,10 @@ namespace TigerClaw.Core
                 case "ime_active":
                     _isNativeHookStatus = false;
                     _imeActive = ConvertToBool(msg.GetValue("active"), false);
+                    if (!_imeActive)
+                    {
+                        _candidateAnchorRefreshPending = false;
+                    }
                     PublishUiState();
                     return null;
 
@@ -414,7 +522,7 @@ namespace TigerClaw.Core
         {
             string frontend = ConvertToString(msg.GetValue("frontend"));
             MarkFrontendMode(frontend);
-            EngineUiSnapshot beforeState = _engine.GetUiSnapshot(_state.GetPageSize());
+            _engine.GetKeyState(out bool wasChinese, out bool wasComposing);
             int vk = ConvertToInt(msg.GetValue("vk"), 0);
             int scan = ConvertToInt(GetFirstValue(msg, "scan", "scan_code"), 0);
             string action = ConvertToString(msg.GetValue("action"));
@@ -446,12 +554,20 @@ namespace TigerClaw.Core
                 _state.GetCaret(out _, out _, out int previousWidth, out int previousHeight);
                 int width = ConvertToInt(msg.GetValue("width"), previousWidth);
                 int height = ConvertToInt(msg.GetValue("height"), previousHeight);
-                _state.UpdateCaret(caretX, caretY, width, height);
+                UpdateCaretAndCompleteCandidateAnchorRefresh(caretX, caretY, width, height);
             }
 
             KeyEngineResult result = _engine.ProcessKey(vk, scan, action, shift, ctrl, alt, win, capsLock, numLock, repeat, extended);
             _engine.PostProcessKey(vk, action, result, shift, ctrl, alt, win, capsLock);
-            UpdateFreshCaretAwaitState(beforeState, result, isKeyDown, hasKeyCaret);
+            if (result.IsComposing && !string.IsNullOrEmpty(result.TextToOutput))
+            {
+                _candidateAnchorRefreshPending = true;
+            }
+            else if (!result.IsComposing)
+            {
+                _candidateAnchorRefreshPending = false;
+            }
+            UpdateFreshCaretAwaitState(wasComposing, result, isKeyDown, hasKeyCaret);
             if (result.OpenAddCiWindow)
             {
                 _uiCommandCallback?.Invoke(CoreUiCommand.ShowAddCi);
@@ -460,15 +576,20 @@ namespace TigerClaw.Core
             string inputCode = BuildDisplayComposition(compositionPrefix, activeInputCode);
             bool cancelComposition = result.CancelComposition || _pendingFrontendCompositionReset;
             _pendingFrontendCompositionReset = false;
-            bool languageStateChanged = beforeState != null && beforeState.IsChinese != result.IsChinese;
+            bool languageStateChanged = wasChinese != result.IsChinese;
             string extraJsonPairs = BuildHookNativeConfigExtraJson(frontend) + BuildCompositionStatusExtraJson();
+            if (isKeyDown)
+            {
+                bool expectKeyUp = _engine.ShouldExpectKeyUp(vk, scan, extended);
+                extraJsonPairs += ",\"expect_keyup\":" + (expectKeyUp ? "true" : "false");
+            }
             if (IsHookNativeFrontend(frontend) &&
                 languageStateChanged &&
                 _state.GetAutoSwitchSystemLanguageEnabled())
             {
                 extraJsonPairs += ",\"ensure_system_layout_en\":true";
             }
-            return BuildResponseWithUiState(
+            return BuildResponse(
                 seq,
                 true,
                 result.Handled,
@@ -479,6 +600,39 @@ namespace TigerClaw.Core
                 extraJsonPairs: extraJsonPairs);
         }
 
+        internal void RequestDeferredUiStatePublish()
+        {
+            if (_deferredUiPublishSignal == null ||
+                Volatile.Read(ref _deferredUiPublishStopping) != 0)
+            {
+                return;
+            }
+
+            Interlocked.Exchange(ref _deferredUiPublishRequested, 1);
+            _deferredUiPublishSignal.Set();
+        }
+
+        private void RunDeferredUiPublishLoop()
+        {
+            while (true)
+            {
+                _deferredUiPublishSignal.WaitOne();
+                if (Volatile.Read(ref _deferredUiPublishStopping) != 0)
+                {
+                    return;
+                }
+
+                while (Interlocked.Exchange(ref _deferredUiPublishRequested, 0) != 0)
+                {
+                    PublishUiState();
+                    if (Volatile.Read(ref _deferredUiPublishStopping) != 0)
+                    {
+                        return;
+                    }
+                }
+            }
+        }
+
         private void HandleCaretMessage(SimpleJsonObject msg)
         {
             int x = ConvertToInt(msg.GetValue("x"), 0);
@@ -486,7 +640,17 @@ namespace TigerClaw.Core
             int width = ConvertToInt(msg.GetValue("width"), 2);
             int height = ConvertToInt(msg.GetValue("height"), 20);
             ClearFreshCaretAwaitState();
+            UpdateCaretAndCompleteCandidateAnchorRefresh(x, y, width, height);
+        }
+
+        private void UpdateCaretAndCompleteCandidateAnchorRefresh(int x, int y, int width, int height)
+        {
             _state.UpdateCaret(x, y, width, height);
+            if (_candidateAnchorRefreshPending)
+            {
+                _candidateAnchorRefreshPending = false;
+                Interlocked.Increment(ref _candidateAnchorRevision);
+            }
         }
 
         private void HandleFocusMessage(SimpleJsonObject msg)
@@ -512,6 +676,7 @@ namespace TigerClaw.Core
                 _engine.OnFocusChanged();
             }
 
+            _candidateAnchorRefreshPending = false;
             ClearFreshCaretAwaitState();
         }
 
@@ -523,7 +688,7 @@ namespace TigerClaw.Core
                    "\"seq\":" + seq + "," +
                    "\"success\":true," +
                    "\"handled\":false," +
-                   "\"protocol_version\":1," +
+                   "\"protocol_version\":2," +
                    "\"core_build\":\"next-dev\"," +
                    "\"core_commit\":\"next\"," +
                    "\"core_branch\":\"next\"," +
@@ -636,8 +801,10 @@ namespace TigerClaw.Core
             }
 
             string trimmed = key.Trim();
-            return string.Equals(trimmed, "\u6574\u53e5\u8f93\u5165", StringComparison.OrdinalIgnoreCase) || // 整句输入
-                   string.Equals(trimmed, "\u81ea\u52a8\u542f\u7528\u6574\u53e5\u6a21\u5f0f", StringComparison.OrdinalIgnoreCase); // 自动启用整句模式
+            return string.Equals(trimmed, "\u81ea\u52a8\u542f\u7528\u6574\u53e5\u6a21\u5f0f", StringComparison.OrdinalIgnoreCase) || // 自动启用整句模式
+                   string.Equals(trimmed, "\u9ad8\u9891\u5b57\u4ec5\u4f7f\u7528\u6700\u4f18\u7801\u7ec4\u53e5", StringComparison.OrdinalIgnoreCase) || // 高频字仅使用最优码组句
+                   string.Equals(trimmed, "\u6574\u53e5\u5141\u8bb8\u5168\u7801\u7ec4\u53e5\u767d\u540d\u5355", StringComparison.OrdinalIgnoreCase) || // 整句允许全码组句白名单
+                   string.Equals(trimmed, "\u5141\u8bb8\u5355\u5b57\u91cd\u7801\u7ec4\u53e5", StringComparison.OrdinalIgnoreCase); // 允许单字重码组句
         }
 
         private static object GetFirstValue(SimpleJsonObject msg, params string[] keys)
@@ -704,7 +871,8 @@ namespace TigerClaw.Core
                         FontSize = _state.GetFontSize(),
                         SoundSeq = Interlocked.Read(ref _soundSeq),
                         SoundVk = _soundVk,
-                        SoundVolumePercent = _soundVolumePercent
+                        SoundVolumePercent = _soundVolumePercent,
+                        CandidateAnchorRevision = Interlocked.Read(ref _candidateAnchorRevision)
                     };
 
                     _uiStatePublisher.Publish(state);
@@ -743,7 +911,7 @@ namespace TigerClaw.Core
             return false;
         }
 
-        private void UpdateFreshCaretAwaitState(EngineUiSnapshot beforeState, KeyEngineResult result, bool isKeyDown, bool hasKeyCaret)
+        private void UpdateFreshCaretAwaitState(bool wasComposing, KeyEngineResult result, bool isKeyDown, bool hasKeyCaret)
         {
             if (!isKeyDown)
             {
@@ -762,7 +930,7 @@ namespace TigerClaw.Core
                 return;
             }
 
-            if (!beforeState.IsComposing)
+            if (!wasComposing)
             {
                 _awaitingFreshCaretForComposition = true;
                 _awaitingFreshCaretDeadlineTick = GetNowMs() + FreshCaretAwaitWindowMs;

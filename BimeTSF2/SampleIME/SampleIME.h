@@ -192,6 +192,10 @@ private:
     void _ClearPendingResponseCache();
     void _StorePendingResponseCache(BOOL isKeyDown, WPARAM wParam, UINT scanCode, BOOL extended, _In_ const BimeResponse &response);
     BOOL _TryConsumePendingResponseCache(BOOL isKeyDown, WPARAM wParam, LPARAM lParam, _Out_ BimeResponse *pResponse);
+    void _RefreshKeyUpWindowForKeyDown(UINT vkCode, UINT scanCode, BOOL extended, _In_ const BimeResponse &response);
+    void _RefreshKeyUpWindowForFailedKeyDown(UINT vkCode, UINT scanCode, BOOL extended);
+    BOOL _ShouldForwardKeyUp(WPARAM wParam, LPARAM lParam) const;
+    void _AdvanceKeyUpWindow(WPARAM wParam, LPARAM lParam);
     void _ClearPendingKeyEvent();
     void _StorePendingKeyEvent(BOOL isKeyDown, WPARAM wParam, UINT scanCode, BOOL extended, ULONGLONG eventId);
     BOOL _TryConsumePendingKeyEvent(BOOL isKeyDown, WPARAM wParam, LPARAM lParam, _Out_ ULONGLONG *pEventId);
@@ -345,6 +349,7 @@ private:
     UINT _pendingResponseScanCode;
     BOOL _pendingResponseExtended;
     BOOL _pendingResponseHandled;
+    BOOL _pendingResponseExpectKeyUp;
     BOOL _pendingResponseHasKeyboardOpen;
     BOOL _pendingResponseKeyboardOpen;
     BOOL _pendingResponseCancelComposition;
@@ -363,6 +368,7 @@ private:
     BOOL _pendingKeyEventExtended = FALSE;
     ULONGLONG _pendingKeyEventId = 0;
     BOOL _compositionRefreshScheduled = FALSE;
+    UINT _keyUpForwardBudget = 0;
 
     LONG _refCount;
 

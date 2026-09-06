@@ -20,7 +20,7 @@ public sealed class RimeLexiconProvider : ILexiconProvider
         }
 
         var entriesByCode = new Dictionary<string, SortedDictionary<int, LexiconEntry>>(StringComparer.OrdinalIgnoreCase);
-        bool inBody = false;
+        bool inBody = !path.EndsWith(".yaml", StringComparison.OrdinalIgnoreCase);
         int order = 0;
 
         foreach (string rawLine in File.ReadLines(path))
@@ -44,11 +44,10 @@ public sealed class RimeLexiconProvider : ILexiconProvider
             }
 
             string code = parts[1];
-            int rank = 1;
-            if (TryParseSelectionSuffix(code, out string baseCode, out int selectedRank))
+            bool hasExplicitRank = TryParseSelectionSuffix(code, out string baseCode, out int selectedRank);
+            if (hasExplicitRank)
             {
                 code = baseCode;
-                rank = selectedRank;
             }
 
             if (!entriesByCode.TryGetValue(code, out SortedDictionary<int, LexiconEntry>? ranked))
@@ -56,6 +55,10 @@ public sealed class RimeLexiconProvider : ILexiconProvider
                 ranked = [];
                 entriesByCode.Add(code, ranked);
             }
+
+            int rank = hasExplicitRank
+                ? selectedRank
+                : ranked.Count == 0 ? 1 : ranked.Keys.Max() + 1;
 
             if (!ranked.TryGetValue(rank, out LexiconEntry? existing))
             {

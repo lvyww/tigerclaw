@@ -50,7 +50,7 @@ zsh "${settings_dir}/scripts/build_package.sh" >&2
 mkdir -p "${vendor_dir}" "${resource_dir}" "${build_dir}" "${dist_dir}"
 cp "${publish_dir}/TigerClaw.Engine.NativeAot.dylib" "${vendor_dir}/TigerClaw.Engine.NativeAot.dylib"
 cp "${publish_dir}/tigerclaw_engine_nativeaot.h" "${vendor_dir}/tigerclaw_engine_nativeaot.h"
-cp "${repo_dir}/rime/tiger_sentence/tiger_sentence.dict.yaml" "${resource_dir}/tiger_sentence.dict.yaml"
+cp "${repo_dir}/rime/tiger_sentence/tiger_sentence.codes.txt" "${resource_dir}/tiger_sentence.codes.txt"
 
 xcodebuild \
   -project "${spike_dir}/TigerClawRealImeNativeAotHost.xcodeproj" \

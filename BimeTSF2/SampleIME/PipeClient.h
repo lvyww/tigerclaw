@@ -14,6 +14,7 @@ struct BimeResponse
     LONG seq;
     BOOL success;
     BOOL handled;
+    BOOL expectKeyUp;
     std::wstring textToOutput;
     std::wstring inputBuffer;
     BOOL hasProtocolVersion;
@@ -32,6 +33,7 @@ struct BimeResponse
         : seq(-1),
           success(FALSE),
           handled(FALSE),
+          expectKeyUp(TRUE),
           hasProtocolVersion(FALSE),
           protocolVersion(0),
           hasKeyboardOpen(FALSE),

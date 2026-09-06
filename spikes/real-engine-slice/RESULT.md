@@ -10,7 +10,7 @@ touching the Windows Core runtime.
 | Dependency | Included in slice | Notes |
 | --- | --- | --- |
 | Platform key event contract | yes | `InputEvent`, `InputKey`, `InputModifiers`, `KeyAction` |
-| Real lexicon file | yes | loads `rime/tiger_sentence/tiger_sentence.dict.yaml` |
+| Real lexicon file | yes | loads `rime/tiger_sentence/tiger_sentence.codes.txt` |
 | Basic input state | yes | per-engine code buffer and selection index |
 | Candidate generation | yes | exact-code lookup, repository lexicon order |
 | Space commit | yes | commits selected candidate and clears composition |
@@ -39,6 +39,6 @@ Result:
 ```text
 REAL_ENGINE_SLICE_PASS
 LexiconEntries=36698
-Dictionary=rime/tiger_sentence/tiger_sentence.dict.yaml
+Dictionary=rime/tiger_sentence/tiger_sentence.codes.txt
 Fixture=tests/engine_cases/basic_real_code_commit.json
 ```

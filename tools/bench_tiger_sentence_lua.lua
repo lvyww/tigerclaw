@@ -1,518 +1,48 @@
--- Benchmark the Rime Lua sentence lattice, with optional language-model scoring.
+-- Benchmark the production Rime Lua sentence decoder.
 -- Usage:
---   lua tools/bench_tiger_sentence_lua.lua [repo_root] [--mode none|dummy|mobile|knlua|kn] [--repeat N]
---   luajit tools/bench_tiger_sentence_lua.lua ... --mode kn
+--   lua tools/bench_tiger_sentence_lua.lua [repo_root]
+--       [--mode auto|mobile|none] [--repeat N] [--burst-cases N]
+--       [--require-model]
 
 local repo = arg[1] or "."
-local mode = "none"
-local repeats = 20
+local mode = "auto"
+local repeats = 50
+local burst_cases = 20
+local require_model = false
 for i = 2, #arg do
     if arg[i] == "--mode" then
         mode = arg[i + 1] or mode
     elseif arg[i] == "--repeat" then
-        repeats = tonumber(arg[i + 1]) or repeats
+        repeats = math.max(1, tonumber(arg[i + 1]) or repeats)
+    elseif arg[i] == "--burst-cases" then
+        burst_cases = math.max(0, tonumber(arg[i + 1]) or burst_cases)
+    elseif arg[i] == "--require-model" then
+        require_model = true
     end
+end
+if mode ~= "auto" and mode ~= "mobile" and mode ~= "none" then
+    io.stderr:write("unknown mode: " .. mode .. "\n")
+    os.exit(2)
 end
 
 package.path = repo .. "/rime/tiger_sentence/lua/?.lua;" .. package.path
-local lexicon = require("tiger_sentence_lexicon")
+rime_api = {
+    get_user_data_dir = function()
+        return repo .. "/rime/tiger_sentence"
+    end
+}
 
-local beam_width = 200
-local candidate_limit = 20
-local BOS = "\2"
-local EOS = "\3"
-
-local function normalize(raw)
-    return (raw or ""):lower():gsub("%s+", "")
+local sentence = require("tiger_sentence")
+sentence.ensure_lexicon(nil)
+sentence.set_model_enabled(mode ~= "none")
+local model = sentence.model_status()
+if require_model and not model.loaded then
+    io.stderr:write("sentence model is required: " .. tostring(model.error) .. "\n")
+    os.exit(2)
 end
-
-local function utf_len(text)
-    if utf8 and utf8.len then
-        return utf8.len(text) or #text
-    end
-    return #text
-end
-
-local function utf_chars(text)
-    local chars = {}
-    if utf8 and utf8.codes then
-        for _, cp in utf8.codes(text) do
-            chars[#chars + 1] = utf8.char(cp)
-        end
-        return chars
-    end
-    chars[1] = text
-    return chars
-end
-
-local function parse_selector(raw, code_end)
-    local next_index = code_end + 1
-    if next_index > #raw then
-        return 0, code_end
-    end
-    local mark = raw:sub(next_index, next_index)
-    if mark == ";" then
-        return 2, next_index
-    end
-    if mark == "'" then
-        return 3, next_index
-    end
-    if mark:match("%d") then
-        local digit_end = next_index
-        while digit_end < #raw and raw:sub(digit_end + 1, digit_end + 1):match("%d") do
-            digit_end = digit_end + 1
-        end
-        local token = raw:sub(next_index, digit_end)
-        if token == "0" then
-            return 10, digit_end
-        end
-        return tonumber(token) or 0, digit_end
-    end
-    return 0, code_end
-end
-
-local function dedup_limit(states, limit)
-    if not states or #states == 0 then
-        return {}
-    end
-    local best = {}
-    local order = {}
-    for i = 1, #states do
-        local item = states[i]
-        local previous = best[item.text]
-        if not previous then
-            order[#order + 1] = item.text
-            best[item.text] = item
-        elseif item.score > previous.score then
-            best[item.text] = item
-        end
-    end
-    local result = {}
-    for i = 1, #order do
-        result[#result + 1] = best[order[i]]
-    end
-    table.sort(result, function(left, right)
-        return left.score > right.score
-    end)
-    if #result > limit then
-        local trimmed = {}
-        for i = 1, limit do
-            trimmed[i] = result[i]
-        end
-        return trimmed
-    end
-    return result
-end
-
-local logp = function()
-    return 0
-end
-
-local function decode(raw_code)
-    local raw = normalize(raw_code)
-    if raw == "" or not raw:find("%a") then
-        return {}, 0
-    end
-    local length = #raw
-    local states = {}
-    for index = 0, length do
-        states[index] = {}
-    end
-    states[0][1] = { score = 0, text = "", segmented = "", prev2 = BOS, prev1 = BOS }
-    local expansions = 0
-
-    for position = 0, length - 1 do
-        local current = dedup_limit(states[position], beam_width)
-        if #current > 0 then
-            for i = 1, #lexicon.lengths do
-                local code_length = lexicon.lengths[i]
-                if position + code_length <= length then
-                    local code = raw:sub(position + 1, position + code_length)
-                    local candidates = lexicon.codes[code]
-                    if candidates then
-                        local selected_rank, consumed_end = parse_selector(raw, position + code_length)
-                        if not (length > 1 and consumed_end - position < 2) then
-                            local required_rank = selected_rank > 0 and selected_rank or 1
-                            for c = 1, #current do
-                                local item = current[c]
-                                for k = 1, #candidates do
-                                    local candidate = candidates[k]
-                                    if candidate.r == required_rank then
-                                        local score = item.score
-                                        local prev2, prev1 = item.prev2, item.prev1
-                                        local chars = utf_chars(candidate.t)
-                                        for ci = 1, #chars do
-                                            score = score + logp(prev2, prev1, chars[ci])
-                                            prev2 = prev1
-                                            prev1 = chars[ci]
-                                        end
-                                        expansions = expansions + 1
-                                        local piece = raw:sub(position + 1, consumed_end)
-                                        local segmented = item.segmented
-                                        if segmented == "" then
-                                            segmented = piece
-                                        else
-                                            segmented = segmented .. " " .. piece
-                                        end
-                                        local next_states = states[consumed_end]
-                                        next_states[#next_states + 1] = {
-                                            score = score,
-                                            text = item.text .. candidate.t,
-                                            segmented = segmented,
-                                            prev2 = prev2,
-                                            prev1 = prev1
-                                        }
-                                    end
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-        end
-    end
-
-    local completed = dedup_limit(states[length], beam_width)
-    for i = 1, #completed do
-        completed[i].score = completed[i].score + logp(completed[i].prev2, completed[i].prev1, EOS)
-    end
-    table.sort(completed, function(a, b)
-        return a.score > b.score
-    end)
-    if #completed > candidate_limit then
-        local trimmed = {}
-        for i = 1, candidate_limit do
-            trimmed[i] = completed[i]
-        end
-        completed = trimmed
-    end
-    return completed, expansions
-end
-
-local function dummy_logp(prev2, prev1, target)
-    local key = prev2 .. "\0" .. prev1 .. "\0" .. target
-    local h = 2166136261
-    for i = 1, #key do
-        h = (h + key:byte(i)) * 16777619
-        h = h % 4294967296
-    end
-    return math.log(((h % 100000) + 1) / 100000)
-end
-
-local function load_kn(path)
-    local ffi = require("ffi")
-    ffi.cdef[[
-        int open(const char *pathname, int flags);
-        int close(int fd);
-        void *mmap(void *addr, size_t length, int prot, int flags, int fd, long offset);
-        int munmap(void *addr, size_t length);
-        long lseek(int fd, long offset, int whence);
-    ]]
-    local O_RDONLY = 0
-    local PROT_READ = 1
-    local MAP_PRIVATE = 2
-    local SEEK_END = 2
-    local fd = ffi.C.open(path, O_RDONLY)
-    assert(fd >= 0, "cannot open model: " .. path)
-    local length = tonumber(ffi.C.lseek(fd, 0, SEEK_END))
-    local ptr = ffi.cast("const uint8_t*", ffi.C.mmap(nil, length, PROT_READ, MAP_PRIVATE, fd, 0))
-    assert(ptr ~= nil and ptr ~= ffi.cast("const uint8_t*", -1), "mmap failed")
-
-    local tmp32 = ffi.new("uint32_t[1]")
-    local tmp64 = ffi.new("uint64_t[1]")
-    local tmpf = ffi.new("float[1]")
-    local function u32(off)
-        ffi.copy(tmp32, ptr + off, 4)
-        return tonumber(tmp32[0])
-    end
-    local function i32(off)
-        local value = u32(off)
-        if value >= 0x80000000 then
-            return value - 0x100000000
-        end
-        return value
-    end
-    local function u64(off)
-        ffi.copy(tmp64, ptr + off, 8)
-        return tmp64[0]
-    end
-    local function f32(off)
-        ffi.copy(tmpf, ptr + off, 4)
-        return tonumber(tmpf[0])
-    end
-
-    assert(ffi.string(ptr, 8) == "TCSKNM01", "bad magic")
-    assert(i32(8) == 1, "bad version")
-    local uni_count = i32(12)
-    local pos = 16
-    local uni_off = pos
-    pos = pos + uni_count * 8
-    local bi_count = tonumber(u64(pos))
-    pos = pos + 8
-    local bi_off = pos
-    pos = pos + bi_count * 12
-    local bi_ctx_count = i32(pos)
-    pos = pos + 4
-    local bi_ctx_off = pos
-    pos = pos + bi_ctx_count * 8
-    local tri_count = tonumber(u64(pos))
-    pos = pos + 8
-    local tri_off = pos
-    pos = pos + tri_count * 12
-    local tri_ctx_count = tonumber(u64(pos))
-    pos = pos + 8
-    local tri_ctx_off = pos
-
-    local unknown = f32(uni_off + 4)
-    local SCALAR_BITS = 21
-    local SCALAR_MASK = 0x1FFFFF
-
-    local function lookup_i32(offset, count, key, fallback)
-        local low, high = 0, count
-        while low < high do
-            local middle = low + math.floor((high - low) / 2)
-            local value = i32(offset + middle * 8)
-            if value < key then
-                low = middle + 1
-            else
-                high = middle
-            end
-        end
-        if low >= count then
-            return fallback
-        end
-        local at = offset + low * 8
-        if i32(at) == key then
-            return f32(at + 4)
-        end
-        return fallback
-    end
-
-    local function lookup_u64(offset, count, key, fallback)
-        local low, high = 0, count
-        while low < high do
-            local middle = low + math.floor((high - low) / 2)
-            local value = u64(offset + middle * 12)
-            if value < key then
-                low = middle + 1
-            else
-                high = middle
-            end
-        end
-        if low >= count then
-            return fallback
-        end
-        local at = offset + low * 12
-        if u64(at) == key then
-            return f32(at + 8)
-        end
-        return fallback
-    end
-
-    local function scalar(token)
-        if not token or token == "" then
-            return 0
-        end
-        if token == BOS or token == EOS then
-            return string.byte(token)
-        end
-        if utf8 and utf8.codepoint then
-            return utf8.codepoint(token)
-        end
-        return 0
-    end
-
-    local SHIFT = ffi.cast("uint64_t", SCALAR_MASK + 1)
-    local function pack2(first, second)
-        return ffi.cast("uint64_t", first) * SHIFT + ffi.cast("uint64_t", second % (SCALAR_MASK + 1))
-    end
-    local function pack3(first, second, third)
-        return pack2(first, second) * SHIFT + ffi.cast("uint64_t", third % (SCALAR_MASK + 1))
-    end
-
-    local function kn_logp(prev2, prev1, target)
-        local first = scalar(prev2)
-        local second = scalar(prev1)
-        local third = scalar(target)
-        local unigram = lookup_i32(uni_off, uni_count, third, unknown)
-        local bigram = lookup_u64(bi_off, bi_count, pack2(second, third), 0.0)
-        local bigram_lambda = lookup_i32(bi_ctx_off, bi_ctx_count, second, 1.0)
-        bigram = bigram + bigram_lambda * unigram
-        local trigram = lookup_u64(tri_off, tri_count, pack3(first, second, third), 0.0)
-        local trigram_lambda = lookup_u64(tri_ctx_off, tri_ctx_count, pack2(first, second), 1.0)
-        trigram = trigram + trigram_lambda * bigram
-        if trigram < 1e-300 then
-            trigram = 1e-300
-        end
-        return math.log(trigram)
-    end
-
-    return {
-        logp = kn_logp,
-        length = length,
-        uni = uni_count,
-        bi = bi_count,
-        tri = tri_count,
-        close = function()
-            ffi.C.munmap(ffi.cast("void*", ptr), length)
-            ffi.C.close(fd)
-        end
-    }
-end
-
-local function load_kn_lua(path)
-    local file = assert(io.open(path, "rb"))
-    local data = file:read("*a")
-    file:close()
-    assert(data:sub(1, 8) == "TCSKNM01", "bad magic")
-    local function i32(off)
-        return (string.unpack("<i4", data, off + 1))
-    end
-    local function u64(off)
-        return (string.unpack("<I8", data, off + 1))
-    end
-    local function f32(off)
-        return (string.unpack("<f", data, off + 1))
-    end
-    assert(i32(8) == 1, "bad version")
-    local uni_count = i32(12)
-    local pos = 16
-    local uni_off = pos
-    pos = pos + uni_count * 8
-    local bi_count = u64(pos)
-    pos = pos + 8
-    local bi_off = pos
-    pos = pos + bi_count * 12
-    local bi_ctx_count = i32(pos)
-    pos = pos + 4
-    local bi_ctx_off = pos
-    pos = pos + bi_ctx_count * 8
-    local tri_count = u64(pos)
-    pos = pos + 8
-    local tri_off = pos
-    pos = pos + tri_count * 12
-    local tri_ctx_count = u64(pos)
-    pos = pos + 8
-    local tri_ctx_off = pos
-    local unknown = f32(uni_off + 4)
-    local SHIFT = 2097152
-    local MASK = 2097151
-
-    local function lookup_i32(offset, count, key, fallback)
-        local low, high = 0, count
-        while low < high do
-            local middle = low + ((high - low) // 2)
-            local value = i32(offset + middle * 8)
-            if value < key then
-                low = middle + 1
-            else
-                high = middle
-            end
-        end
-        if low >= count then
-            return fallback
-        end
-        local at = offset + low * 8
-        if i32(at) == key then
-            return f32(at + 4)
-        end
-        return fallback
-    end
-
-    local function lookup_u64(offset, count, key, fallback)
-        local low, high = 0, count
-        while low < high do
-            local middle = low + ((high - low) // 2)
-            local value = u64(offset + middle * 12)
-            if value < key then
-                low = middle + 1
-            else
-                high = middle
-            end
-        end
-        if low >= count then
-            return fallback
-        end
-        local at = offset + low * 12
-        if u64(at) == key then
-            return f32(at + 8)
-        end
-        return fallback
-    end
-
-    local function scalar(token)
-        if not token or token == "" then
-            return 0
-        end
-        if token == BOS or token == EOS then
-            return string.byte(token)
-        end
-        return utf8.codepoint(token)
-    end
-
-    local function pack2(first, second)
-        return first * SHIFT + (second & MASK)
-    end
-    local function pack3(first, second, third)
-        return pack2(first, second) * SHIFT + (third & MASK)
-    end
-
-    local function kn_logp(prev2, prev1, target)
-        local first = scalar(prev2)
-        local second = scalar(prev1)
-        local third = scalar(target)
-        local unigram = lookup_i32(uni_off, uni_count, third, unknown)
-        local bigram = lookup_u64(bi_off, bi_count, pack2(second, third), 0.0)
-        local bigram_lambda = lookup_i32(bi_ctx_off, bi_ctx_count, second, 1.0)
-        bigram = bigram + bigram_lambda * unigram
-        local trigram = lookup_u64(tri_off, tri_count, pack3(first, second, third), 0.0)
-        local trigram_lambda = lookup_u64(tri_ctx_off, tri_ctx_count, pack2(first, second), 1.0)
-        trigram = trigram + trigram_lambda * bigram
-        if trigram < 1e-300 then
-            trigram = 1e-300
-        end
-        return math.log(trigram)
-    end
-
-    return {
-        logp = kn_logp,
-        length = #data,
-        uni = uni_count,
-        bi = bi_count,
-        tri = tri_count
-    }
-end
-
-if mode == "dummy" then
-    logp = dummy_logp
-elseif mode == "knlua" then
-    local t0 = os.clock()
-    local kn = load_kn_lua("/mnt/c/Archive/tigerclaw_sentence_ml/runtime/sentence-ngram-v2.bin")
-    io.write(string.format(
-        "loaded KN lua-string %.1f MiB in %.2fs  uni=%d bi=%d tri=%d\n",
-        kn.length / 1048576, os.clock() - t0, kn.uni, kn.bi, kn.tri))
-    logp = kn.logp
-elseif mode == "kn" then
-    local ok, kn_or_err = pcall(load_kn, "/mnt/c/Archive/tigerclaw_sentence_ml/runtime/sentence-ngram-v2.bin")
-    if not ok then
-        io.stderr:write("KN mmap unavailable: " .. tostring(kn_or_err) .. "\n")
-        os.exit(2)
-    end
-    logp = kn_or_err.logp
-    io.write(string.format(
-        "loaded KN mmap %.1f MiB  uni=%d bi=%d tri=%d\n",
-        kn_or_err.length / 1048576, kn_or_err.uni, kn_or_err.bi, kn_or_err.tri))
-elseif mode == "mobile" then
-    local t0 = os.clock()
-    local reader = require("tiger_sentence_kn")
-    local kn = reader.load("/mnt/c/Archive/tigerclaw_sentence_ml/runtime/sentence-ngram-mobile.bin")
-    io.write(string.format(
-        "loaded KN mobile %.1f MiB in %.2fs  resident-index=%.2fMiB cache-limit=%.1fMiB\n",
-        kn.bytes / 1048576, os.clock() - t0,
-        kn.resident_index_bytes / 1048576, kn.cache_limit_bytes / 1048576))
-    logp = kn.logp
-elseif mode ~= "none" then
-    io.stderr:write("unknown mode: " .. mode .. "\n")
+if mode == "mobile" and model.loaded and model.format ~= "TCSKNM02" then
+    io.stderr:write("mobile mode loaded unexpected model format: " ..
+        tostring(model.format) .. "\n")
     os.exit(2)
 end
 
@@ -521,38 +51,171 @@ local cases = {
     { name = "的是", raw = "ueot" },
     { name = "我不是", raw = "tucbot" },
     { name = "我们现在还没有", raw = "tujanengcukrnv" },
+    { name = "买椟还珠", raw = "awmenamcunta" },
     { name = "今天早上我吃了两个面包", raw = "jaefmonyftuderlmljgbmnvs" },
     { name = "这个问题其实没有那么复杂", raw = "vujgadkotwzhwwkrnvautkeohke" },
     { name = "他把那本书放在桌子上面然后离开了", raw = "jeumbauefaalhngyoehiyfbmvmxfzbflrl" },
+    { name = "40码低置信", raw = "nnczggqrrjrrltwwbwkedmkswgjgiuapnphbszbp" },
 }
 
-local function median(values)
-    table.sort(values)
-    return values[math.ceil(#values / 2)]
+local function percentile(sorted, share)
+    return sorted[math.max(1, math.ceil(#sorted * share))]
 end
 
-io.write(string.format("engine=%s mode=%s repeats=%d beam=%d\n",
+local function summarize(times, gc_total)
+    local sorted = {}
+    local total, maximum = 0.0, 0.0
+    for i = 1, #times do
+        sorted[i] = times[i]
+        total = total + times[i]
+        maximum = math.max(maximum, times[i])
+    end
+    table.sort(sorted)
+    return {
+        mean = total / #times,
+        p50 = percentile(sorted, 0.50),
+        p95 = percentile(sorted, 0.95),
+        p99 = percentile(sorted, 0.99),
+        maximum = maximum,
+        gc_kib = gc_total / #times
+    }
+end
+
+local function measure(run)
+    local times = {}
+    local gc_total = 0.0
+    local result
+    for _ = 1, repeats do
+        collectgarbage("collect")
+        local before_gc = collectgarbage("count")
+        local started = os.clock()
+        result = run()
+        times[#times + 1] = (os.clock() - started) * 1000
+        gc_total = gc_total + math.max(0.0, collectgarbage("count") - before_gc)
+    end
+    return result, summarize(times, gc_total)
+end
+
+local function run_full(raw, evidence)
+    return function()
+        sentence.reset_decode_cache()
+        return sentence.decode_full(raw, evidence, "")
+    end
+end
+
+local function run_incremental(raw, evidence)
+    return function()
+        sentence.reset_decode_cache()
+        local result = {}
+        for length = 1, #raw do
+            result = sentence.decode(raw:sub(1, length), evidence, "")
+        end
+        return result
+    end
+end
+
+-- Match the real frontend order: the translator caches ordinary candidates;
+-- before the following key, the processor requests confidence metadata for
+-- that same composition, then the translator decodes the appended key.
+local function run_frontend(raw)
+    return function()
+        sentence.reset_decode_cache()
+        local result = {}
+        for length = 1, #raw do
+            if length > 1 then
+                sentence.decode(raw:sub(1, length - 1), true, "")
+            end
+            result = sentence.decode(raw:sub(1, length), false, "")
+        end
+        return result
+    end
+end
+
+local function performance_snapshot()
+    local current = sentence.performance_status().current
+    return {
+        decode_calls = current.decode_calls,
+        page_misses = current.page_misses,
+        page_bytes = current.page_bytes,
+        evidence_builds = current.early_evidence_builds
+    }
+end
+
+local function print_result(case, kind, result, stats, metrics)
+    local top = result[1] and result[1].text or ""
+    io.write(string.format(
+        "%-18s %-11s keys=%2d cands=%2d mean=%7.2fms p50=%7.2fms " ..
+        "p95=%7.2fms max=%7.2fms gc=%7.1fKiB calls=%5.1f ev=%5.1f " ..
+        "miss=%5.1f read=%7.1fKiB top=%s\n",
+        case.name, kind, #case.raw, #result, stats.mean, stats.p50,
+        stats.p95, stats.maximum, stats.gc_kib, metrics.decode_calls,
+        metrics.evidence_builds, metrics.page_misses, metrics.page_kib, top))
+end
+
+local function benchmark(case, kind, run)
+    local before = performance_snapshot()
+    local result, stats = measure(run)
+    local after = performance_snapshot()
+    local metrics = {
+        decode_calls = (after.decode_calls - before.decode_calls) / repeats,
+        evidence_builds = (after.evidence_builds - before.evidence_builds) / repeats,
+        page_misses = (after.page_misses - before.page_misses) / repeats,
+        page_kib = (after.page_bytes - before.page_bytes) / repeats / 1024
+    }
+    print_result(case, kind, result, stats, metrics)
+    return result
+end
+
+io.write(string.format(
+    "engine=%s mode=%s repeats=%d burst_cases=%d model=%s path=%s\n",
     (_VERSION or "?") .. (jit and ("/" .. jit.version) or ""),
-    mode, repeats, beam_width))
+    mode, repeats, burst_cases, model.loaded and tostring(model.format) or "none",
+    tostring(model.path or model.error or "")))
+
+-- Do this before prewarming the named cases. It models the reported workload:
+-- a series of previously unseen, low-confidence 40-key compositions.
+if burst_cases > 0 then
+    math.randomseed(20260904)
+    local totals = {}
+    local per_key = {}
+    for case_index = 1, burst_cases do
+        local chars = {}
+        for key_index = 1, 40 do
+            chars[key_index] = string.char(96 + math.random(26))
+        end
+        local raw = table.concat(chars)
+        sentence.reset_decode_cache()
+        local total_started = os.clock()
+        for length = 1, #raw do
+            local key_started = os.clock()
+            sentence.decode(raw:sub(1, length), false, "")
+            per_key[#per_key + 1] = (os.clock() - key_started) * 1000
+        end
+        totals[#totals + 1] = (os.clock() - total_started) * 1000
+    end
+    local total_stats = summarize(totals, 0.0)
+    local key_stats = summarize(per_key, 0.0)
+    io.write(string.format(
+        "%-18s %-11s cases=%2d mean=%7.2fms p50=%7.2fms p95=%7.2fms " ..
+        "max=%7.2fms key_p95=%6.2fms key_p99=%6.2fms key_max=%6.2fms\n",
+        "40码未预热随机串", "burst", burst_cases, total_stats.mean,
+        total_stats.p50, total_stats.p95, total_stats.maximum,
+        key_stats.p95, key_stats.p99, key_stats.maximum))
+end
 
 for _, case in ipairs(cases) do
-    local warmup, expansions = decode(case.raw)
-    local times = {}
-    for _ = 1, repeats do
-        local t0 = os.clock()
-        decode(case.raw)
-        times[#times + 1] = (os.clock() - t0) * 1000
+    sentence.reset_decode_cache()
+    sentence.decode_full(case.raw, true, "")
+
+    local full = benchmark(case, "full", run_full(case.raw, false))
+    local incremental = benchmark(case, "incremental", run_incremental(case.raw, false))
+    local evidence = benchmark(case, "evidence", run_incremental(case.raw, true))
+    local frontend = benchmark(case, "frontend", run_frontend(case.raw))
+
+    if not sentence.results_equal(incremental, sentence.decode_full(case.raw, false, "")) or
+        not sentence.results_equal(evidence, sentence.decode_full(case.raw, true, "")) or
+        not sentence.results_equal(frontend, incremental) then
+        io.stderr:write("incremental/full mismatch for " .. case.raw .. "\n")
+        os.exit(1)
     end
-    local sum = 0
-    local max_ms = 0
-    for i = 1, #times do
-        sum = sum + times[i]
-        if times[i] > max_ms then
-            max_ms = times[i]
-        end
-    end
-    local top = warmup[1] and warmup[1].text or ""
-    io.write(string.format(
-        "%-20s keys=%2d cands=%2d expand=%6d  mean=%7.2fms  med=%7.2fms  max=%7.2fms  top=%s\n",
-        case.name, #case.raw, #warmup, expansions, sum / #times, median(times), max_ms, top))
 end

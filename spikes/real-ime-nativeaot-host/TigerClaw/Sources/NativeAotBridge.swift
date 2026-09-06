@@ -657,25 +657,33 @@ struct NativeAotSchema: Equatable {
         let single = NativeAotSchema(
             identifier: "tiger_sentence",
             displayName: "虎单",
-            lexiconResourceName: "tiger_sentence.dict.yaml",
+            lexiconResourceName: "tiger_sentence.codes.txt",
             importedLexiconURL: nil,
             builtIn: true)
         let fallbackSentence = NativeAotSchema(
             identifier: "tiger_sentence_full",
             displayName: "虎整句",
-            lexiconResourceName: "tiger_sentence.dict.yaml",
+            lexiconResourceName: "tiger_sentence.codes.txt",
             importedLexiconURL: nil,
             builtIn: true)
-        guard let source = Bundle.main.url(forResource: "tiger_sentence.dict", withExtension: "yaml"),
+        guard let source = Bundle.main.url(forResource: "tiger_sentence.codes", withExtension: "txt"),
               let schemasDirectory = try? NativeAotDataRoot.schemasDirectoryURL() else {
             return [single, fallbackSentence]
         }
         let directory = schemasDirectory.appendingPathComponent("tiger_sentence_full", isDirectory: true)
-        let lexicon = directory.appendingPathComponent("虎整句.dict.yaml", isDirectory: false)
+        let preferredLexicon = directory.appendingPathComponent("虎整句.codes.txt", isDirectory: false)
+        let legacyLexicon = directory.appendingPathComponent("虎整句.dict.yaml", isDirectory: false)
         do {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            if !FileManager.default.fileExists(atPath: lexicon.path) {
-                try FileManager.default.copyItem(at: source, to: lexicon)
+            let lexicon: URL
+            if FileManager.default.fileExists(atPath: preferredLexicon.path) {
+                lexicon = preferredLexicon
+            } else if FileManager.default.fileExists(atPath: legacyLexicon.path) {
+                // Keep prior editable installations working; new installs use the upstream plain-text table.
+                lexicon = legacyLexicon
+            } else {
+                try FileManager.default.copyItem(at: source, to: preferredLexicon)
+                lexicon = preferredLexicon
             }
             let supplement = directory.appendingPathComponent("补充语料.txt", isDirectory: false)
             if !FileManager.default.fileExists(atPath: supplement.path) {
@@ -696,7 +704,7 @@ struct NativeAotSchema: Equatable {
                 NativeAotSchema(
                     identifier: "tiger_sentence_full",
                     displayName: "虎整句",
-                    lexiconResourceName: "tiger_sentence.dict.yaml",
+                    lexiconResourceName: "tiger_sentence.codes.txt",
                     importedLexiconURL: lexicon,
                     importedDirectoryURL: directory,
                     builtIn: true),
@@ -2182,7 +2190,7 @@ enum NativeAotBridgeError: Error, CustomStringConvertible {
     var description: String {
         switch self {
         case .missingLexicon:
-            return "missing bundled tiger_sentence.dict.yaml"
+            return "missing bundled tiger_sentence.codes.txt"
         case .runtimeCreateFailed(let status):
             return "tc_runtime_create failed status=\(status)"
         case .sessionCreateFailed(let status):

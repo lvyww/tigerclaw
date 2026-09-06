@@ -1,182 +1,124 @@
-﻿# BimeIPC 消息协议（当前实现）
+# BimeIPC 消息协议
 
-## 概览
+实现入口：`next/TigerClaw.Core/ProtocolHandler.cs`。修改协议时必须同步 TSF、Dialog
+或 Native Hook 调用方。
 
-BimeTSF2、Dialog、Native Hook 与 TigerClaw Core 通过命名管道通信。
+## 传输
 
-- 管道名: `\\.\pipe\BimeIPC`
-- 编码: UTF-8
-- 分隔: 每条 JSON 以换行 `\n` 结尾
-- 方向:
-  - 前端 -> Core: 请求/通知
-  - Core -> 前端: 响应
+- 命名管道：`\\.\pipe\BimeIPC`
+- UTF-8 JSON，每行一个对象
+- 需要响应的请求携带 `seq`；响应使用相同 `seq`
+- 通知不返回内容
+- Core 是中英文状态、composition 和候选的唯一权威
 
-## 通用约定
+TSF `key` 请求可携带 `client_session` + `event_id`。同一次物理按键超时重试必须
+复用这两个值；Core 返回首次缓存响应，不再次执行按键。
 
-- `type` 为消息类型。
-- `seq` 仅在“需要响应”的请求中使用，用于请求-响应配对。
-- TSF `key` 请求使用 `client_session` + `event_id` 标识一次物理按键；超时重发必须复用该标识，Core 会返回首次处理结果而不重复执行。
-- 布尔字段默认值由发送方显式给出，不要依赖隐式默认。
-- 中英文状态以 TigerClaw Core 为准，通过 `response.keyboard_open` 向前端同步。
-- 可选整句神经重排使用独立管道，见 `Protocol/sentence_messages.md`；它不改变 BimeIPC 的前端协议。
+## 消息清单
 
-## 消息类型
+| 类型 | 主要调用方 | 响应 | 用途 |
+|---|---|---:|---|
+| `hello` | TSF/Hook | 是 | 协议、构建和前端配置握手 |
+| `query_state` | TSF/Hook | 是 | 查询中英状态、composition 和版本 |
+| `key` | TSF/Hook | 是 | 物理按键 |
+| `ctrl_space` | TSF | 是 | 语言栏触发中英切换 |
+| `show_menu` | TSF/Overlay | 是 | 打开状态菜单 |
+| `show_config` | Overlay | 是 | 打开设置 |
+| `show_addci` | Overlay/快捷键 | 是 | 打开加词 |
+| `reload_config` | Dialog | 是 | 重载配置、码表和相关资源 |
+| `reload_mb` | Dialog/Overlay | 是 | 重载当前码表快照 |
+| `get_config` / `set_config` | Dialog | 是 | 读取或修改配置 |
+| `get_schema_list` | Dialog | 是 | 方案列表和当前方案 |
+| `get_selection_key_config` / `set_selection_key_config` | Dialog | 是 | 自定义选重键 |
+| `add_ci` / `construct_ci` / `get_last_ci` | Dialog | 是 | 加词、构词、历史文本 |
+| `get_send_history_count` | Dialog | 是 | 已发送文本元素计数 |
+| `open_mb_folder` / `export_mb` | Dialog/Overlay | 是 | 打开或导出码表 |
+| `open_official` | Dialog/Overlay | 是 | 打开项目主页 |
+| `exit_core` | Overlay | 是 | 回复后退出 Core |
+| `focus` / `caret` / `ime_active` | TSF | 否 | 窗口、光标和激活状态 |
+| `composition_canceled` | TSF/Hook | 否 | 前端已取消 composition |
+| `hook_native_disabled` | Hook | 否 | Native Hook 禁用状态 |
 
-### 1. `key`（TSF -> Core，需响应）
+未知消息返回 `success:false` 的普通 `response`，不使用独立错误消息类型。
 
-用途: 发送按键事件到 Core，由 Core 决定是否处理、是否上屏。
-
-示例:
+## `key`
 
 ```json
-{"type":"key","seq":101,"client_session":"1234-5678-1","event_id":"42","action":"down","vk":65,"scan":30,"shift":false,"ctrl":false,"alt":false,"win":false,"capsLock":false,"numLock":false,"repeat":1,"extended":false,"caret_x":800,"caret_y":500}
+{"type":"key","seq":101,"client_session":"1234-1","event_id":"42","frontend":"tsf","action":"down","vk":65,"scan":30,"shift":false,"ctrl":false,"alt":false,"win":false,"capsLock":false,"numLock":false,"repeat":1,"extended":false,"caret_x":800,"caret_y":500,"width":2,"height":20}
 ```
 
-字段:
+字段：
 
-- `action`: `"down" | "up"`
-- `client_session`/`event_id`: TSF 提供的可选幂等标识；同一按键重发时保持不变
-- `vk`: 虚拟键码
-- `scan`: 扫描码
-- `shift`/`ctrl`/`alt`/`win`: 修饰键状态
-- `capsLock`/`numLock`: 锁定键状态
-- `repeat`: 重复次数
-- `extended`: 是否扩展键
-- `caret_x`/`caret_y`: 可选，按键时光标屏幕坐标
+- `action`：`down` / `up`（兼容 `key_down`）。
+- `vk`、`scan`：虚拟键和扫描码；扫描码也兼容 `scan_code`。
+- `shift`、`ctrl`、`alt`、`win`：修饰键。
+- `capsLock`、`numLock`：锁定状态；也兼容 snake_case 名称。
+- `repeat`、`extended`：重复次数和扩展键。
+- `caret_x/y/width/height`：可选的按键时新鲜光标位置。
+- `frontend`：`tsf`、Hook Native 标识或省略。
+- `client_session/event_id`：可选幂等身份。
 
-对应响应: `response`
+Core 以 `handled` 决定前端是否吞键，以 `commit_text` 要求前端上屏。
 
-### 2. `hello`（TSF -> Core，需响应）
-
-用途: 建立连接后的协议/版本握手，便于定位“DLL 是否最新”“Core 是否匹配”。
-
-示例:
+## 通知
 
 ```json
-{"type":"hello","seq":2,"protocol_version":2}
-```
-
-对应响应: `response`（包含 `protocol_version`、`core_build`、`core_commit`、`core_branch`、`core_path`）
-
-### 3. `ctrl_space`（TSF -> Core，需响应）
-
-用途: 由 TSF 显式请求 Core 执行“中英切换”。
-
-示例:
-
-```json
-{"type":"ctrl_space","seq":102}
-```
-
-对应响应: `response`
-
-### 4. `show_menu`（TSF -> Core，需响应）
-
-用途: 请求 Core 弹出状态窗上下文菜单（语言栏右键等）。
-
-示例:
-
-```json
-{"type":"show_menu","seq":103}
-```
-
-对应响应: `response`
-
-### 5. `focus`（TSF -> Core，通知）
-
-用途: 通知当前焦点窗口信息。
-
-示例:
-
-```json
-{"type":"focus","hwnd":123456,"processId":4321}
-```
-
-说明: 当前实现不要求响应。
-
-### 6. `caret`（TSF -> Core，通知）
-
-用途: 通知光标位置，供 Core 更新候选窗定位。
-
-示例:
-
-```json
-{"type":"caret","x":100,"y":200,"width":2,"height":20}
-```
-
-说明: 当前实现不要求响应。
-
-### 7. `ime_active`（TSF -> Core，通知）
-
-用途: 通知本输入法是否处于激活态，供 Core 控制状态窗显隐。激活态 = 本 IME 是当前选中输入法（profile）且焦点落在可编辑文档上；两者任一不满足即未激活。
-
-示例:
-
-```json
+{"type":"caret","x":100,"y":200,"width":2,"height":20,"frontend":"tsf"}
+{"type":"focus","hwnd":123456,"processId":4321,"processName":"app.exe","className":"Class","windowTitle":"Title","frontend":"tsf"}
 {"type":"ime_active","active":true}
+{"type":"composition_canceled","frontend":"tsf"}
+{"type":"hook_native_disabled","disabled":true}
 ```
 
-字段:
+焦点变化会清理按键/chord 临时状态。`ime_active` 只表示 TigerClaw profile 当前激活，
+用于状态窗显隐；它不替代 Core 的 `keyboard_open` 中英状态。
 
-- `active`: `true`=已激活（状态窗显示），`false`=未激活（状态窗隐藏）
-
-说明:
-- 当前实现不要求响应。
-- TSF 在 `ActiveLanguageProfileNotifySink::OnActivated`（输入法切换）和 `ThreadMgrEventSink::OnSetFocus`（焦点变化）时计算并上报；`Deactivate` 卸载前强制上报 `false`。
-- Core 收到后将其折入 `OverlayUiState.HideStatusBar`（未激活时强制隐藏）。
-
-### 8. `query_state`（TSF -> Core，需响应）
-
-用途: TSF 在焦点切换等场景主动查询 Core 当前中英文状态，避免语言栏显示漂移。
-
-示例:
+## 统一响应
 
 ```json
-{"type":"query_state","seq":105}
+{"type":"response","seq":101,"success":true,"handled":true,"commit_text":"你好","input_buffer":"ni hao","keyboard_open":true,"cancel_composition":false,"expect_keyup":false}
 ```
 
-对应响应: `response`（关注 `keyboard_open` 字段）
+通用字段：
 
-## 统一响应 `response`（Core -> TSF）
+- `success`：请求本身是否成功。
+- `handled`：按键/命令是否由 Core 接管。
+- `commit_text`：前端应提交的文本，可省略或为空。
+- `input_buffer`：对外 composition。混合输入时是解析前缀加活动尾码；整句时可含
+  仅用于显示的分段空格，不等于权威 raw code。
+- `keyboard_open`：`true` 中文、`false` 英文。
+- `cancel_composition`：先取消前端旧 composition，再应用本次状态。
+- `composition_tracking`：当前是否为需异步刷新分段的整句 composition。
+- `composition_pending`：当前 raw 的本地解码是否仍在后台运行。
+- `expect_keyup`：仅按下事件响应携带。`true` 表示 Core 的当前按键状态还需要
+  对应物理键的释放事件；`false` 表示 TSF 可直接放行该 KeyUp 而不访问 Core。
+  前端遇到旧 Core 未返回该字段或按下请求失败时必须按 `true` 处理。
+  Windows TSF 还必须始终转发 Space 和引号键的孤立 KeyUp：系统保留快捷键或宿主
+  可能不提供对应 KeyDown，Core 用这两个释放事件完成 Ctrl+Space 和引号回退。
+  当前 TSF 不做严格 Down/Up 配对：修饰键或一次性动作开启20个 KeyUp 的宽限窗口，
+  窗口内释放事件全部转发并逐次递减；修饰键释放会刷新窗口。Space和引号始终
+  转发但不主动刷新窗口。这样可以容忍宿主丢失、拆分或重排键盘回调。
+- `config_version`、`lexicon_version`：对应快照版本，部分响应携带。
+- `error`：失败原因，部分写操作携带。
 
-示例:
+`hello` 还可返回 `protocol_version`（当前为 2）、`core_build`、`core_commit`、
+`core_branch`、`core_path` 和 Hook Native 所需配置。`query_state` 对 TSF 保持轻量，
+候选列表由共享内存提供给 Overlay，不通过 TSF 响应传输。
 
-```json
-{"type":"response","seq":101,"success":true,"handled":true,"commit_text":"你好","input_buffer":"nihao","keyboard_open":true}
-```
+编码伪装只修改对外活动尾码，不能改变 Core 保存的 raw、候选查找或提交文本。
 
-字段:
+## Dialog 数据字段
 
-- `success`: 请求处理是否成功
-- `handled`: 当前按键/命令是否由 Core 接管
-- `commit_text`: 需要前端代为上屏/回放的字符串（可为空或省略）
-- `input_buffer`: 前端应显示的当前 composition 字符串（可选）。开启“中英文不限长混合输入”时，它是“已解析前缀 + 活动尾码”的表面显示串；已解析前缀中的有码段显示候选字词，无码段显示原始英文编码，因此不等同于 Core 保存的本轮完整原始编码。整句模式下，它会按照当前首选候选的切分路径插入显示空格；Core 保存的原始整句编码仍不含这些空格。
-- `composition_tracking`: 当前是否为需要异步刷新显示切分的整句 composition。
-- `composition_pending`: 当前原始编码的本地整句解码是否仍在后台运行；TSF 等待其结束后用 `query_state` 取得最新 `input_buffer`。
-- `keyboard_open`: Core 当前中英状态（可选，`true`=中文，`false`=英文）
-- `protocol_version`: 协议版本（`hello` 响应可选）
-- `core_build`: Core 构建标识（`hello` 响应可选）
-- `core_commit`: Core 提交短哈希（`hello` 响应可选）
-- `core_branch`: Core 分支名（`hello` 响应可选）
-- `core_path`: Core 进程路径（`hello` 响应可选）
-- `cancel_composition`: 要求前端先取消旧 composition（可选）。该字段可与 `handled:true` 和新的 `input_buffer` 同时出现，此时应先取消旧串，再应用本次响应。
+- `get_config`：返回 `config_text`、`config_version`。
+- `set_config`：请求 `key`、`value`；返回 `changed`、配置/码表版本或 `error`。
+- `get_schema_list`：返回换行分隔的 `schema_list` 和 `current_schema`。
+- `get_selection_key_config`：返回 `config_text`、`default_text`、`config_path`。
+- `set_selection_key_config`：请求 `config_text`；失败保留原绑定并返回 `error`。
+- `construct_ci`：请求 `text`，返回 `code`。
+- `get_last_ci`：请求非负 `history_len`，返回 `text`。
+- `add_ci`：请求 `code`、`text`。
+- `open_mb_folder`：成功返回 `path`。
+- `export_mb`：失败时返回 `error`。
 
-说明:
-
-- 对 `key` 消息，TSF 以 `handled` 决定是否吞键。
-- TSF 不应自行切换中英文本地状态；语言栏状态同步只使用 `keyboard_open`。
-- 编码伪装只作用于 `input_buffer` 中的活动尾码；大写尾码按对应小写字母的位置伪装。已解析前缀中的候选字词和无码英文段均不伪装，原始大小写保持不变。
-
-## 错误响应 `error`（Core -> TSF）
-
-示例:
-
-```json
-{"type":"error","code":3000,"message":"Unknown command: xxx"}
-```
-
-常见错误码:
-
-- `1000`: 内部异常
-- `1001`: JSON 格式错误
-- `3000`: 未知消息类型
+自定义选重键支持十进制、`0x` 十六进制和 `VK_*` 名称；空绑定行用于清除该选位
+默认键。

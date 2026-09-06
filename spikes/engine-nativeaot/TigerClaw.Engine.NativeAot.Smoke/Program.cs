@@ -3,7 +3,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 
 string repoRoot = FindRepoRoot(AppContext.BaseDirectory);
-string lexiconPath = Path.Combine(repoRoot, "rime", "tiger_sentence", "tiger_sentence.dict.yaml");
+string lexiconPath = Path.Combine(repoRoot, "rime", "tiger_sentence", "tiger_sentence.codes.txt");
 string libraryPath = args.Length > 0
     ? Path.GetFullPath(args[0])
     : Path.Combine(
@@ -698,7 +698,7 @@ static string FindRepoRoot(string start)
     DirectoryInfo? dir = new(start);
     while (dir is not null)
     {
-        if (File.Exists(Path.Combine(dir.FullName, "rime", "tiger_sentence", "tiger_sentence.dict.yaml")))
+        if (File.Exists(Path.Combine(dir.FullName, "rime", "tiger_sentence", "tiger_sentence.codes.txt")))
         {
             return dir.FullName;
         }

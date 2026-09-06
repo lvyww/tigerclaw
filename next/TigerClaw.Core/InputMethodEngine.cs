@@ -7,7 +7,6 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
-using Forms = System.Windows.Forms;
 
 namespace TigerClaw.Core
 {
@@ -64,12 +63,39 @@ namespace TigerClaw.Core
         private const int VK_M = 0x4D;
         private const int VK_Z = 0x5A;
         private const double SentenceEmittedCharacterReward = 2.0;
+        private const double SentenceNeuralWeight = 0.84;
+        private const double SentenceShortNeuralWeight = 0.30;
+        private const int SentenceShortNeuralMaximumLength = 2;
+        private const double SentenceEarlyCommitMinimumShare = 0.995;
+        private const double SentenceEarlyCommitStrongShare = 0.99999;
+        private const int SentenceEarlyCommitRetainedRawLength = 3;
+        private const int SentenceEarlyCommitMaximumNeutralGap = 3;
 
-        private sealed class SentenceAutoCommitEvidence
+        // Internal controls let the end-to-end evaluator compare policy
+        // variants without exposing experimental switches in user config.
+        internal int SentenceEarlyCommitRequiredEvidenceCount { get; set; } = 3;
+        internal int SentenceEarlyCommitRequiredStrongCount { get; set; } = 2;
+        internal int SentenceEarlyCommitMinimumRetainedRawLength { get; set; } =
+            SentenceEarlyCommitRetainedRawLength;
+        internal bool SentenceEarlyCommitCountMergedTailEvidence { get; set; } = true;
+        internal bool? SentenceEmptyCodeAutoCommitOverride { get; set; }
+
+        private sealed class SentenceAutoCommitTracker
         {
-            public string RawCode { get; set; }
-            public string Proposal { get; set; }
-            public Dictionary<string, int> RawLengths { get; set; }
+            public string Text { get; set; }
+            public int RawLength { get; set; }
+            public int EvidenceCount { get; set; }
+            public int ConsecutiveStrongCount { get; set; }
+            public int NeutralGapCount { get; set; }
+            public double LastShare { get; set; }
+        }
+
+        private sealed class SentenceEmptyCodePending
+        {
+            public string CandidateText { get; set; }
+            public string CommittedText { get; set; }
+            public int BaseRawLength { get; set; }
+            public int LastSegmentStart { get; set; }
         }
 
         private readonly object _lock = new object();
@@ -88,14 +114,20 @@ namespace TigerClaw.Core
         private readonly bool _sentenceDecodeSynchronously;
         private SentenceDecodeResult _sentenceDecodeResult = SentenceDecodeResult.Empty;
         private int _sentenceDecodedLexiconVersion = -1;
+        private int _sentenceDecodedOptimalCodeLimit = int.MinValue;
+        private string _sentenceDecodedFullCodeWhitelist;
+        private bool _sentenceDecodedAllowDuplicateSingleCharacters;
         private int _sentenceResultLexiconVersion = -1;
         private int _sentenceSelectedIndex;
         private string _sentenceCommittedText = string.Empty;
         private int _sentenceCommittedRawLength;
-        private readonly List<SentenceAutoCommitEvidence> _sentenceAutoCommitEvidence =
-            new List<SentenceAutoCommitEvidence>(3);
+        private Dictionary<string, SentenceAutoCommitTracker> _sentenceAutoCommitTrackers =
+            new Dictionary<string, SentenceAutoCommitTracker>(StringComparer.Ordinal);
+        private string _sentenceAutoCommitLastSeenRaw = string.Empty;
         private int _sentenceLastAutoCommitRawLength;
         private bool _sentenceAutoCommitSuspended;
+        private bool _sentenceContinuationAfterAutoCommit;
+        private SentenceEmptyCodePending _sentenceEmptyCodePending;
         private string _sentenceNeuralAcceptedRaw = string.Empty;
         private string _sentenceNeuralTopText = string.Empty;
         private long _sentenceGeneration;
@@ -247,29 +279,45 @@ namespace TigerClaw.Core
                     DisposeSentenceLanguageModel();
                     _sentenceLanguageModel = null;
                     _sentenceDecodedLexiconVersion = -1;
+                    _sentenceDecodedOptimalCodeLimit = int.MinValue;
+                    _sentenceDecodedFullCodeWhitelist = null;
+                    _sentenceDecodedAllowDuplicateSingleCharacters = false;
                     return;
                 }
 
+                int optimalCodeLimit = _state.GetSentenceOptimalCodeHighFreqLimit();
+                string fullCodeWhitelistText = _state.GetSentenceFullCodeWhitelistText();
+                bool allowDuplicateSingleCharacters = _state.GetSentenceAllowDuplicateSingleCharacters();
                 if (_sentenceLanguageModel == null)
                 {
-                    _sentenceLanguageModel = SentenceNgramModel.LoadAvailable(AppContext.BaseDirectory);
+                    _sentenceLanguageModel = SentenceNgramModel.LoadAvailable(_state.GetRuntimeBaseDirectory());
                 }
                 if (_sentenceLanguageModel == null)
                 {
                     _sentenceInputDecoder = null;
                     _sentenceDecodedLexiconVersion = _state.LexiconVersion;
+                    _sentenceDecodedOptimalCodeLimit = optimalCodeLimit;
+                    _sentenceDecodedFullCodeWhitelist = fullCodeWhitelistText;
+                    _sentenceDecodedAllowDuplicateSingleCharacters = allowDuplicateSingleCharacters;
                     return;
                 }
 
-                SentenceLexiconIndex lexicon = SentenceLexiconIndex.Build(_state.GetSentenceLexiconSnapshot());
+                SentenceLexiconIndex lexicon = SentenceLexiconIndex.Build(
+                    _state.GetSentenceLexiconSnapshot(),
+                    SentenceCharacterRanks.TakeTop(optimalCodeLimit),
+                    CoreRuntimeState.ParseCharacterSet(fullCodeWhitelistText));
                 SentenceSupplementMatcher supplementMatcher = SentenceSupplementMatcher.Build(
                     _state.GetSentenceSupplementSnapshot());
                 _sentenceInputDecoder = new SentenceInputDecoder(
                     lexicon,
                     _sentenceLanguageModel,
                     emittedCharacterReward: SentenceEmittedCharacterReward,
-                    supplementMatcher: supplementMatcher);
+                    supplementMatcher: supplementMatcher,
+                    allowDuplicateSingleCharacters: allowDuplicateSingleCharacters);
                 _sentenceDecodedLexiconVersion = _state.LexiconVersion;
+                _sentenceDecodedOptimalCodeLimit = optimalCodeLimit;
+                _sentenceDecodedFullCodeWhitelist = fullCodeWhitelistText;
+                _sentenceDecodedAllowDuplicateSingleCharacters = allowDuplicateSingleCharacters;
             }
         }
 
@@ -321,20 +369,113 @@ namespace TigerClaw.Core
                     return false;
                 }
 
+                bool preferScoreOverLexiconRank =
+                    ShouldPreferSentenceScoreOverLexiconRank(candidates, rerankCount);
+                double neuralWeight = GetSentenceNeuralWeight(
+                    candidates,
+                    rerankCount,
+                    preferScoreOverLexiconRank);
                 for (int index = 0; index < rerankCount; index++)
                 {
-                    candidates[index].FinalScore = candidates[index].BaseScore + 0.84 * scores[index];
+                    candidates[index].FinalScore = CombineSentenceNeuralScore(
+                        candidates[index].BaseScore,
+                        scores[index],
+                        neuralWeight);
                 }
                 Array.Sort(
                     candidates,
                     0,
                     rerankCount,
-                    Comparer<SentenceCandidate>.Create(SentenceCandidate.CompareByLexiconRankThenScore));
+                    Comparer<SentenceCandidate>.Create(
+                        preferScoreOverLexiconRank
+                            ? SentenceCandidate.CompareByScoreThenLexiconRank
+                            : SentenceCandidate.CompareByLexiconRankThenScore));
                 _sentenceNeuralAcceptedRaw = rawCode;
                 _sentenceNeuralTopText = candidates.Length > 0 ? candidates[0].Text ?? string.Empty : string.Empty;
                 _sentenceSelectedIndex = 0;
                 return true;
             }
+        }
+
+        private static double GetSentenceNeuralWeight(
+            SentenceCandidate[] candidates,
+            int candidateCount,
+            bool preferScoreOverLexiconRank)
+        {
+            SentenceCandidate baseTop = null;
+            for (int index = 0; index < candidateCount; index++)
+            {
+                SentenceCandidate candidate = candidates[index];
+                if (baseTop == null || IsBetterSentenceBaseCandidate(
+                        candidate,
+                        baseTop,
+                        preferScoreOverLexiconRank))
+                {
+                    baseTop = candidate;
+                }
+            }
+
+            int baseTopLength = baseTop == null || string.IsNullOrEmpty(baseTop.Text)
+                ? 0
+                : new StringInfo(baseTop.Text).LengthInTextElements;
+            return GetSentenceNeuralWeight(baseTopLength);
+        }
+
+        private bool ShouldPreferSentenceScoreOverLexiconRank(
+            SentenceCandidate[] candidates,
+            int candidateCount)
+        {
+            if (!_state.GetSentenceAllowDuplicateSingleCharacters())
+            {
+                return false;
+            }
+
+            for (int index = 0; index < candidateCount; index++)
+            {
+                SentencePathBoundary boundary = candidates[index]?.Boundary;
+                if (boundary != null && boundary.Previous != null)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool IsBetterSentenceBaseCandidate(
+            SentenceCandidate candidate,
+            SentenceCandidate current,
+            bool preferScoreOverLexiconRank)
+        {
+            if (preferScoreOverLexiconRank)
+            {
+                return candidate.BaseScore > current.BaseScore ||
+                       (candidate.BaseScore == current.BaseScore &&
+                        (candidate.MaxLexiconRank < current.MaxLexiconRank ||
+                         (candidate.MaxLexiconRank == current.MaxLexiconRank &&
+                          string.CompareOrdinal(candidate.Text, current.Text) < 0)));
+            }
+
+            return candidate.MaxLexiconRank < current.MaxLexiconRank ||
+                   (candidate.MaxLexiconRank == current.MaxLexiconRank &&
+                    (candidate.BaseScore > current.BaseScore ||
+                     (candidate.BaseScore == current.BaseScore &&
+                      string.CompareOrdinal(candidate.Text, current.Text) < 0)));
+        }
+
+        internal static double GetSentenceNeuralWeight(int baseTopLength)
+        {
+            return baseTopLength > 0 && baseTopLength <= SentenceShortNeuralMaximumLength
+                ? SentenceShortNeuralWeight
+                : SentenceNeuralWeight;
+        }
+
+        internal static double CombineSentenceNeuralScore(
+            double baseScore,
+            double neuralScore,
+            double neuralWeight)
+        {
+            return baseScore + neuralWeight * neuralScore;
         }
 
         public bool IsChinese
@@ -345,6 +486,23 @@ namespace TigerClaw.Core
                 {
                     return _isChinese;
                 }
+            }
+        }
+
+        internal void GetKeyState(out bool isChinese, out bool isComposing)
+        {
+            lock (_lock)
+            {
+                isChinese = _isChinese;
+                bool compositionState =
+                    _compositionState == CompositionState.CnComposing ||
+                    _compositionState == CompositionState.CnPinyin ||
+                    _compositionState == CompositionState.CnUpperCase ||
+                    _compositionState == CompositionState.CnSentence;
+                int activeLength = _compositionState == CompositionState.CnSentence
+                    ? _sentenceRawBuffer.Length
+                    : _inputBuffer.Length;
+                isComposing = compositionState && activeLength > 0;
             }
         }
 
@@ -1273,6 +1431,7 @@ namespace TigerClaw.Core
             if (vk == VK_BACK)
             {
                 ResetSentenceAutoCommitEvidence();
+                ResetSentenceEmptyCodePending();
                 // The raw buffer retains the committed prefix so the decoder
                 // can keep its full context, but that prefix no longer belongs
                 // to the active TSF composition. Backspace must consume only
@@ -1332,6 +1491,7 @@ namespace TigerClaw.Core
 
             if (vk == VK_TAB)
             {
+                ResetSentenceEmptyCodePending();
                 EnsureSentenceDecodeCurrent();
                 if (HasSentenceCandidates())
                 {
@@ -1353,6 +1513,7 @@ namespace TigerClaw.Core
 
             if (vk == VK_SPACE)
             {
+                ResetSentenceEmptyCodePending();
                 EnsureSentenceDecodeCurrent();
                 if (!HasSentenceCandidates())
                 {
@@ -1364,6 +1525,7 @@ namespace TigerClaw.Core
 
             if (vk == VK_UP || vk == VK_DOWN)
             {
+                ResetSentenceEmptyCodePending();
                 EnsureSentenceDecodeCurrent();
                 _sentenceAutoCommitSuspended = true;
                 MoveSentenceSelection(vk == VK_UP ? -1 : 1);
@@ -1809,13 +1971,9 @@ namespace TigerClaw.Core
         {
             try
             {
-                Forms.MessageBox.Show(
+                NativeMessageBox.ShowDesktopInformation(
                     "\u65F6\u95F4\u5DEE\u4E0D\u591A\u54AF\uFF01", // unicode: 时间差不多咯！
-                    "\u8BA1\u65F6\u5668", // unicode: 计时器
-                    Forms.MessageBoxButtons.OK,
-                    Forms.MessageBoxIcon.Information,
-                    Forms.MessageBoxDefaultButton.Button1,
-                    Forms.MessageBoxOptions.DefaultDesktopOnly);
+                    "\u8BA1\u65F6\u5668"); // unicode: 计时器
             }
             catch
             {
@@ -2124,14 +2282,20 @@ namespace TigerClaw.Core
 
         private void StartSentenceInput(char firstCodeChar)
         {
+            RestartSentenceInput(char.ToLowerInvariant(firstCodeChar).ToString());
+        }
+
+        private void RestartSentenceInput(string rawCode, bool continuationAfterAutoCommit = false)
+        {
             ClearCompositionInput();
             _sentenceCommittedText = string.Empty;
             _sentenceCommittedRawLength = 0;
             _sentenceLastAutoCommitRawLength = 0;
             _sentenceAutoCommitSuspended = false;
+            _sentenceContinuationAfterAutoCommit = continuationAfterAutoCommit;
             _sentenceNeuralAcceptedRaw = string.Empty;
             _sentenceNeuralTopText = string.Empty;
-            _sentenceRawBuffer.Append(char.ToLowerInvariant(firstCodeChar));
+            _sentenceRawBuffer.Append((rawCode ?? string.Empty).ToLowerInvariant());
             RebuildSentenceInput();
         }
 
@@ -2142,7 +2306,24 @@ namespace TigerClaw.Core
                 return null;
             }
 
-            _sentenceRawBuffer.Append(char.ToLowerInvariant(value));
+            char normalizedValue = char.ToLowerInvariant(value);
+            bool isLetter = normalizedValue >= 'a' && normalizedValue <= 'z';
+            SentenceCandidate emptyCodeCommitCandidate = isLetter && _sentenceEmptyCodePending == null
+                ? GetEmptyCodeAutoCommitCandidate()
+                : null;
+            if (!isLetter)
+            {
+                ResetSentenceEmptyCodePending();
+            }
+            _sentenceRawBuffer.Append(normalizedValue);
+            if (isLetter)
+            {
+                string emptyCodeCommit = ResolveEmptyCodeAutoCommit(emptyCodeCommitCandidate);
+                if (emptyCodeCommit != null)
+                {
+                    return emptyCodeCommit;
+                }
+            }
             if (!_sentenceDecodeSynchronously)
             {
                 // Runtime early commit consumes only an already completed
@@ -2155,6 +2336,165 @@ namespace TigerClaw.Core
 
             RebuildSentenceInput();
             return TryAutoCommitSentencePrefix();
+        }
+
+        private SentenceCandidate GetEmptyCodeAutoCommitCandidate()
+        {
+            if (!IsSentenceEmptyCodeAutoCommitActive() ||
+                _sentenceAutoCommitSuspended ||
+                _sentenceResultLexiconVersion != _state.LexiconVersion ||
+                !string.Equals(
+                    _sentenceDecodeResult.RawCode,
+                    _sentenceRawBuffer.ToString(),
+                    StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            SentenceCandidate[] candidates = _sentenceDecodeResult.Candidates ??
+                Array.Empty<SentenceCandidate>();
+            SentenceCandidate visibleTop = candidates.FirstOrDefault(candidate => candidate != null);
+            if (!_sentenceRawBuffer.ToString().Any(character =>
+                    char.IsDigit(character) || character == ';' || character == '\''))
+            {
+                // Whole-input non-first ranks are visible for explicit
+                // selection, but are not legal implicit sentence segments
+                // after the appended letter makes that edge dead.
+                candidates = candidates
+                    .Where(candidate => candidate != null && candidate.MaxLexiconRank <= 1)
+                    .ToArray();
+            }
+            if (candidates.Length == 0 ||
+                string.IsNullOrEmpty(candidates[0]?.Text) ||
+                !candidates[0].Text.StartsWith(_sentenceCommittedText, StringComparison.Ordinal) ||
+                candidates[0].Text.Length <= _sentenceCommittedText.Length)
+            {
+                return null;
+            }
+
+            if (candidates.Length > 1 &&
+                !IsStrongSentenceEmptyCodeCandidate(candidates[0], candidates, visibleTop))
+            {
+                return null;
+            }
+
+            return candidates[0];
+        }
+
+        private bool IsStrongSentenceEmptyCodeCandidate(
+            SentenceCandidate candidate,
+            SentenceCandidate[] eligibleCandidates,
+            SentenceCandidate visibleTop)
+        {
+            SentenceEarlyCommitEvidence evidence =
+                _sentenceDecodeResult.EarlyCommitEvidence ?? SentenceEarlyCommitEvidence.Empty;
+            if (evidence.ConfidenceTruncated || evidence.Prefixes == null ||
+                evidence.Prefixes.Length == 0 || candidate == null || visibleTop == null ||
+                !string.Equals(candidate.Text, visibleTop.Text, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            double maximum = eligibleCandidates.Max(item => item.ConfidenceScore);
+            double total = 0.0;
+            double candidateMass = 0.0;
+            foreach (SentenceCandidate item in eligibleCandidates)
+            {
+                double mass = Math.Exp(item.ConfidenceScore - maximum);
+                total += mass;
+                if (ReferenceEquals(item, candidate))
+                {
+                    candidateMass += mass;
+                }
+            }
+            return total > 0.0 &&
+                candidateMass / total >= SentenceEarlyCommitStrongShare;
+        }
+
+        private string ResolveEmptyCodeAutoCommit(SentenceCandidate capturedCandidate)
+        {
+            if (_sentenceEmptyCodePending == null && capturedCandidate == null)
+            {
+                return null;
+            }
+
+            if (!IsSentenceEmptyCodeAutoCommitActive() || _sentenceInputDecoder == null)
+            {
+                ResetSentenceEmptyCodePending();
+                return null;
+            }
+
+            string fullRaw = _sentenceRawBuffer.ToString();
+            if (_sentenceInputDecoder.HasCompleteCandidate(fullRaw, _sentenceCommittedText))
+            {
+                ResetSentenceEmptyCodePending();
+                return null;
+            }
+
+            if (_sentenceEmptyCodePending == null && capturedCandidate != null)
+            {
+                SentencePathBoundary boundary = capturedCandidate.Boundary;
+                int lastSegmentStart = boundary?.Previous?.RawLength ?? 0;
+                _sentenceEmptyCodePending = new SentenceEmptyCodePending
+                {
+                    CandidateText = capturedCandidate.Text,
+                    CommittedText = _sentenceCommittedText,
+                    BaseRawLength = fullRaw.Length - 1,
+                    LastSegmentStart = lastSegmentStart
+                };
+            }
+
+            SentenceEmptyCodePending pending = _sentenceEmptyCodePending;
+            if (pending == null ||
+                !string.Equals(pending.CommittedText, _sentenceCommittedText, StringComparison.Ordinal) ||
+                pending.BaseRawLength < 0 || pending.BaseRawLength >= fullRaw.Length ||
+                pending.LastSegmentStart < 0 || pending.LastSegmentStart >= fullRaw.Length)
+            {
+                ResetSentenceEmptyCodePending();
+                return null;
+            }
+
+            string extendedLastSegment = fullRaw.Substring(pending.LastSegmentStart);
+            if (_sentenceInputDecoder.IsProperCodePrefix(extendedLastSegment))
+            {
+                return null;
+            }
+
+            int requiredRetain = _state.GetSentenceMinRetainedRawLength();
+            if (requiredRetain > 0 &&
+                fullRaw.Length - pending.BaseRawLength < requiredRetain)
+            {
+                return null;
+            }
+
+            string commit = pending.CandidateText.Substring(pending.CommittedText.Length);
+            // Keep the complete raw sentence and the committed text as decoder
+            // context. Restarting from only the retained suffix loses the
+            // preceding words, which can make early commit stabilize a locally
+            // plausible but globally wrong continuation.
+            _sentenceCommittedText = pending.CandidateText;
+            _sentenceCommittedRawLength = pending.BaseRawLength;
+            _sentenceLastAutoCommitRawLength = pending.BaseRawLength;
+            _sentenceContinuationAfterAutoCommit = true;
+            _sentenceAutoCommitSuspended = false;
+            _sentenceNeuralAcceptedRaw = string.Empty;
+            _sentenceNeuralTopText = string.Empty;
+            ResetSentenceAutoCommitEvidence();
+            ResetSentenceEmptyCodePending();
+            _sentenceDecodeResult = FilterSentenceDecodeResultForCommittedPrefix(
+                _sentenceDecodeResult);
+            RebuildSentenceInput();
+            return commit;
+        }
+
+        private void ResetSentenceEmptyCodePending()
+        {
+            _sentenceEmptyCodePending = null;
+        }
+
+        private bool IsSentenceEmptyCodeAutoCommitActive()
+        {
+            return SentenceEmptyCodeAutoCommitOverride ?? _state.GetSentenceAutoCommitEnabled();
         }
 
         private string TryAutoCommitSentencePrefix()
@@ -2188,89 +2528,332 @@ namespace TigerClaw.Core
 
             SentenceEarlyCommitEvidence earlyCommitEvidence =
                 _sentenceDecodeResult.EarlyCommitEvidence ?? SentenceEarlyCommitEvidence.Empty;
-            if (earlyCommitEvidence.ConfidenceTruncated ||
-                string.IsNullOrEmpty(earlyCommitEvidence.Proposal))
+            if (earlyCommitEvidence.ConfidenceTruncated)
             {
                 ResetSentenceAutoCommitEvidence();
                 return null;
             }
 
-            // The decoder has already summarized the complete retained
-            // confidence mass. Temporal stability and commit policy remain in
-            // the engine; candidate arrays no longer cross this boundary.
-            string proposal = earlyCommitEvidence.Proposal;
-
-            if (!earlyCommitEvidence.IgnoreNeuralConstraint &&
-                string.Equals(_sentenceNeuralAcceptedRaw, evidenceRaw, StringComparison.Ordinal))
+            if (_sentenceAutoCommitLastSeenRaw.Length > 0 &&
+                string.Equals(_sentenceAutoCommitLastSeenRaw, evidenceRaw, StringComparison.Ordinal))
             {
-                while (proposal.Length > _sentenceCommittedText.Length &&
-                    !_sentenceNeuralTopText.StartsWith(proposal, StringComparison.Ordinal))
-                {
-                    proposal = RemoveLastTextElement(proposal);
-                }
+                return TryCommitMatureSentencePrefix(evidenceRaw, currentGeneration);
             }
 
+            bool extendsPreviousGeneration = _sentenceAutoCommitLastSeenRaw.Length == 0 ||
+                (evidenceRaw.Length == _sentenceAutoCommitLastSeenRaw.Length + 1 &&
+                 evidenceRaw.StartsWith(_sentenceAutoCommitLastSeenRaw, StringComparison.Ordinal));
+            if (!extendsPreviousGeneration)
+            {
+                _sentenceAutoCommitTrackers.Clear();
+            }
+            _sentenceAutoCommitLastSeenRaw = evidenceRaw;
+
+            SentencePrefixEvidence[] prefixes = earlyCommitEvidence.Prefixes ??
+                Array.Empty<SentencePrefixEvidence>();
+            string acceptedTop = null;
+            if (string.Equals(_sentenceNeuralAcceptedRaw, evidenceRaw, StringComparison.Ordinal))
+            {
+                acceptedTop = _sentenceNeuralTopText ?? string.Empty;
+            }
             SentenceCandidate[] visibleCandidates = _sentenceDecodeResult.Candidates ??
                 Array.Empty<SentenceCandidate>();
             if (visibleCandidates.Length > 0 && visibleCandidates[0].SupplementScore > 0.0)
             {
-                string supplementTopText = visibleCandidates[0].Text ?? string.Empty;
-                while (proposal.Length > _sentenceCommittedText.Length &&
-                    !supplementTopText.StartsWith(proposal, StringComparison.Ordinal))
+                acceptedTop = visibleCandidates[0].Text ?? string.Empty;
+            }
+
+            var qualifying = new Dictionary<string, SentencePrefixEvidence>(StringComparer.Ordinal);
+            // Dropped incomplete-tail states still participate in comparison.
+            // The release policy also lets their supported closed boundaries
+            // count as evidence; the evaluator can restore comparison-only mode.
+            bool mergedIncompleteTail = earlyCommitEvidence.MergedIncompleteTail;
+            bool comparisonOnly = mergedIncompleteTail &&
+                !SentenceEarlyCommitCountMergedTailEvidence;
+            foreach (SentencePrefixEvidence prefix in prefixes)
+            {
+                if (prefix == null || string.IsNullOrEmpty(prefix.Text) ||
+                    !prefix.BoundaryClosed ||
+                    prefix.Share < SentenceEarlyCommitMinimumShare ||
+                    prefix.RawLength <= _sentenceCommittedRawLength ||
+                    prefix.Text.Length <= _sentenceCommittedText.Length ||
+                    !prefix.Text.StartsWith(_sentenceCommittedText, StringComparison.Ordinal) ||
+                    (acceptedTop != null &&
+                     !acceptedTop.StartsWith(prefix.Text, StringComparison.Ordinal)))
                 {
-                    proposal = RemoveLastTextElement(proposal);
+                    continue;
+                }
+
+                if (!mergedIncompleteTail &&
+                    !SentencePrefixBelongsToVisible(prefix, visibleCandidates))
+                {
+                    continue;
+                }
+
+                qualifying[BuildSentencePrefixTrackerKey(prefix.Text, prefix.RawLength)] = prefix;
+            }
+
+            bool retainWithoutCounting = comparisonOnly ||
+                (qualifying.Count == 0 &&
+                 (earlyCommitEvidence.NeutralLowConfidence ||
+                  earlyCommitEvidence.MergedIncompleteTail));
+            if (retainWithoutCounting)
+            {
+                _sentenceAutoCommitTrackers = RetainSentenceAutoCommitTrackersWithoutCounting(
+                    prefixes);
+                return TryCommitMatureSentencePrefix(evidenceRaw, currentGeneration);
+            }
+
+            var nextTrackers = new Dictionary<string, SentenceAutoCommitTracker>(
+                StringComparer.Ordinal);
+            foreach (KeyValuePair<string, SentencePrefixEvidence> item in qualifying)
+            {
+                SentencePrefixEvidence prefix = item.Value;
+                if (!_sentenceAutoCommitTrackers.TryGetValue(
+                        item.Key, out SentenceAutoCommitTracker tracker))
+                {
+                    tracker = new SentenceAutoCommitTracker
+                    {
+                        Text = prefix.Text,
+                        RawLength = prefix.RawLength
+                    };
+                }
+                tracker.EvidenceCount = Math.Min(
+                    Math.Max(1, SentenceEarlyCommitRequiredEvidenceCount),
+                    tracker.EvidenceCount + 1);
+                tracker.ConsecutiveStrongCount = prefix.Share >= SentenceEarlyCommitStrongShare
+                    ? Math.Min(
+                        Math.Max(1, SentenceEarlyCommitRequiredStrongCount),
+                        tracker.ConsecutiveStrongCount + 1)
+                    : 0;
+                tracker.NeutralGapCount = 0;
+                tracker.LastShare = prefix.Share;
+                nextTrackers[item.Key] = tracker;
+            }
+            _sentenceAutoCommitTrackers = nextTrackers;
+            return TryCommitMatureSentencePrefix(evidenceRaw, currentGeneration);
+        }
+
+        private Dictionary<string, SentenceAutoCommitTracker> RetainSentenceAutoCommitTrackersWithoutCounting(
+            SentencePrefixEvidence[] prefixes)
+        {
+            var nextTrackers = new Dictionary<string, SentenceAutoCommitTracker>(
+                StringComparer.Ordinal);
+            foreach (KeyValuePair<string, SentenceAutoCommitTracker> item in _sentenceAutoCommitTrackers)
+            {
+                SentenceAutoCommitTracker tracker = item.Value;
+                if (tracker == null ||
+                    SentencePrefixContradicted(tracker, prefixes) ||
+                    !SentenceTrackerStillSupported(tracker, prefixes))
+                {
+                    continue;
+                }
+
+                tracker.NeutralGapCount++;
+                if (tracker.NeutralGapCount > SentenceEarlyCommitMaximumNeutralGap)
+                {
+                    continue;
+                }
+
+                SentencePrefixEvidence current = FindSentencePrefixEvidence(
+                    prefixes,
+                    tracker.Text,
+                    tracker.RawLength);
+                if (current != null)
+                {
+                    tracker.LastShare = current.Share;
+                }
+
+                nextTrackers[item.Key] = tracker;
+            }
+
+            return nextTrackers;
+        }
+
+        internal static SentencePrefixEvidence FindSentencePrefixEvidence(
+            SentencePrefixEvidence[] prefixes,
+            string text,
+            int rawLength)
+        {
+            if (prefixes == null || string.IsNullOrEmpty(text))
+            {
+                return null;
+            }
+
+            foreach (SentencePrefixEvidence prefix in prefixes)
+            {
+                if (prefix == null ||
+                    !string.Equals(prefix.Text, text, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                if (prefix.RawLength == rawLength)
+                {
+                    return prefix;
                 }
             }
 
-            if (proposal.Length <= _sentenceCommittedText.Length)
+            return null;
+        }
+
+        private static bool SentencePrefixContradicted(
+            SentenceAutoCommitTracker tracker,
+            SentencePrefixEvidence[] prefixes)
+        {
+            if (tracker == null || prefixes == null || prefixes.Length == 0)
             {
-                ResetSentenceAutoCommitEvidence();
-                return null;
+                return false;
             }
 
-            bool extendsEvidence = _sentenceAutoCommitEvidence.Count > 0 &&
-                evidenceRaw.Length == _sentenceAutoCommitEvidence[_sentenceAutoCommitEvidence.Count - 1].RawCode.Length + 1 &&
-                evidenceRaw.StartsWith(
-                    _sentenceAutoCommitEvidence[_sentenceAutoCommitEvidence.Count - 1].RawCode,
-                    StringComparison.Ordinal);
-            if (!extendsEvidence)
+            SentencePrefixEvidence self = FindSentencePrefixEvidence(
+                prefixes,
+                tracker.Text,
+                tracker.RawLength);
+            double selfShare = self == null ? 0.0 : self.Share;
+            foreach (SentencePrefixEvidence prefix in prefixes)
             {
-                _sentenceAutoCommitEvidence.Clear();
-            }
-            _sentenceAutoCommitEvidence.Add(new SentenceAutoCommitEvidence
-            {
-                RawCode = evidenceRaw,
-                Proposal = proposal,
-                RawLengths = earlyCommitEvidence.RawLengths ??
-                    new Dictionary<string, int>(StringComparer.Ordinal)
-            });
-            if (_sentenceAutoCommitEvidence.Count > 3)
-            {
-                _sentenceAutoCommitEvidence.RemoveAt(0);
-            }
-            if (_sentenceAutoCommitEvidence.Count < 3) return null;
+                if (prefix == null ||
+                    string.IsNullOrEmpty(prefix.Text) ||
+                    string.Equals(prefix.Text, tracker.Text, StringComparison.Ordinal) ||
+                    SentencePrefixExtends(prefix.Text, tracker.Text))
+                {
+                    continue;
+                }
 
-            string stableProposal = LongestCommonTextElementPrefix(
-                _sentenceAutoCommitEvidence.Select(item => item.Proposal));
-            int committedRawLength = FindStableSentenceRawLength(stableProposal);
-            while (stableProposal.Length > _sentenceCommittedText.Length && committedRawLength == 0)
-            {
-                stableProposal = RemoveLastTextElement(stableProposal);
-                committedRawLength = FindStableSentenceRawLength(stableProposal);
+                string sharedStem = CommonOrdinalPrefix(prefix.Text, tracker.Text);
+                if (string.IsNullOrEmpty(sharedStem) ||
+                    sharedStem.Length >= tracker.Text.Length)
+                {
+                    continue;
+                }
+
+                if (self == null || prefix.Share > selfShare)
+                {
+                    return true;
+                }
             }
-            if (committedRawLength <= _sentenceCommittedRawLength || committedRawLength > evidenceRaw.Length)
+
+            return false;
+        }
+
+        private static string CommonOrdinalPrefix(string left, string right)
+        {
+            if (string.IsNullOrEmpty(left) || string.IsNullOrEmpty(right))
             {
-                return null;
+                return string.Empty;
             }
-            string commit = stableProposal.Substring(_sentenceCommittedText.Length);
-            if (new StringInfo(commit).LengthInTextElements < 1 ||
+
+            int limit = Math.Min(left.Length, right.Length);
+            int index = 0;
+            while (index < limit && left[index] == right[index])
+            {
+                index++;
+            }
+
+            return index == 0 ? string.Empty : left.Substring(0, index);
+        }
+
+        private static bool SentenceTrackerStillSupported(
+            SentenceAutoCommitTracker tracker,
+            SentencePrefixEvidence[] prefixes)
+        {
+            if (tracker == null || string.IsNullOrEmpty(tracker.Text))
+            {
+                return false;
+            }
+
+            // Prefix evidence contains every boundary from the merged pool.
+            // Textual prefix agreement alone is insufficient because commit
+            // bookkeeping consumes raw code at the tracker's exact boundary.
+            return FindSentencePrefixEvidence(
+                prefixes,
+                tracker.Text,
+                tracker.RawLength) != null;
+        }
+
+        private static bool SentencePrefixExtends(string left, string right)
+        {
+            return !string.IsNullOrEmpty(left) &&
+                !string.IsNullOrEmpty(right) &&
+                (left.StartsWith(right, StringComparison.Ordinal) ||
+                 right.StartsWith(left, StringComparison.Ordinal));
+        }
+
+        private static bool SentencePrefixBelongsToVisible(
+            SentencePrefixEvidence prefix,
+            SentenceCandidate[] visibleCandidates)
+        {
+            if (prefix == null || visibleCandidates == null ||
+                string.IsNullOrEmpty(prefix.Text))
+            {
+                return false;
+            }
+
+            foreach (SentenceCandidate candidate in visibleCandidates)
+            {
+                if (candidate == null ||
+                    string.IsNullOrEmpty(candidate.Text) ||
+                    !candidate.Text.StartsWith(prefix.Text, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                SentencePathBoundary boundary = candidate.Boundary;
+                while (boundary != null)
+                {
+                    if (boundary.RawLength == prefix.RawLength &&
+                        boundary.TextLength == prefix.Text.Length)
+                    {
+                        return true;
+                    }
+
+                    boundary = boundary.Previous;
+                }
+            }
+
+            return false;
+        }
+
+        private string TryCommitMatureSentencePrefix(string evidenceRaw, bool currentGeneration)
+        {
+            SentenceAutoCommitTracker selected = _sentenceAutoCommitTrackers.Values
+                .Where(tracker =>
+                    (tracker.EvidenceCount >= SentenceEarlyCommitRequiredEvidenceCount ||
+                     tracker.ConsecutiveStrongCount >= SentenceEarlyCommitRequiredStrongCount) &&
+                    tracker.RawLength > _sentenceCommittedRawLength &&
+                    tracker.RawLength <= evidenceRaw.Length &&
+                    evidenceRaw.Length - tracker.RawLength >=
+                        GetSentenceAutoCommitRetainRawLength() &&
+                    tracker.Text.Length > _sentenceCommittedText.Length &&
+                    tracker.Text.StartsWith(_sentenceCommittedText, StringComparison.Ordinal))
+                .OrderByDescending(tracker =>
+                    new StringInfo(tracker.Text).LengthInTextElements)
+                .ThenByDescending(tracker => tracker.LastShare)
+                .ThenBy(tracker => tracker.RawLength)
+                .FirstOrDefault();
+            if (selected == null ||
                 evidenceRaw.Length - _sentenceLastAutoCommitRawLength < 3)
             {
                 return null;
             }
-            _sentenceCommittedText = stableProposal;
-            _sentenceCommittedRawLength = committedRawLength;
-            _sentenceLastAutoCommitRawLength = committedRawLength;
+            string commit = selected.Text.Substring(_sentenceCommittedText.Length);
+            if (new StringInfo(commit).LengthInTextElements < 1)
+            {
+                return null;
+            }
+            _sentenceCommittedText = selected.Text;
+            _sentenceCommittedRawLength = selected.RawLength;
+            _sentenceLastAutoCommitRawLength = selected.RawLength;
+            // Probabilistic early commit chooses a boundary from complete
+            // sentence paths that have already competed in the language
+            // model. Keep those paths eligible after committing their common
+            // prefix; otherwise a valid non-first single-character segment in
+            // the retained suffix disappears on the next decode. The stricter
+            // first-rank-only continuation rule is only for empty-code commit,
+            // where a standalone whole-input non-first candidate must not turn
+            // into an implicit segmented choice.
+            _sentenceContinuationAfterAutoCommit = false;
             ResetSentenceAutoCommitEvidence();
             _sentenceDecodeResult = FilterSentenceDecodeResultForCommittedPrefix(_sentenceDecodeResult);
             _sentenceGeneration++;
@@ -2281,78 +2864,24 @@ namespace TigerClaw.Core
             return commit;
         }
 
-        private int FindStableSentenceRawLength(string text)
+        private int GetSentenceAutoCommitRetainRawLength()
         {
-            if (string.IsNullOrEmpty(text) || _sentenceAutoCommitEvidence.Count < 3)
-            {
-                return 0;
-            }
+            int configured = _state.GetSentenceMinRetainedRawLength();
+            return configured > 0
+                ? Math.Max(SentenceEarlyCommitMinimumRetainedRawLength, configured)
+                : SentenceEarlyCommitMinimumRetainedRawLength;
+        }
 
-            int stableRawLength = 0;
-            foreach (SentenceAutoCommitEvidence evidence in _sentenceAutoCommitEvidence)
-            {
-                if (!evidence.RawLengths.TryGetValue(text, out int rawLength) || rawLength <= 0)
-                {
-                    return 0;
-                }
-                if (stableRawLength == 0)
-                {
-                    stableRawLength = rawLength;
-                }
-                else if (stableRawLength != rawLength)
-                {
-                    return 0;
-                }
-            }
-            return stableRawLength;
+        private static string BuildSentencePrefixTrackerKey(string text, int rawLength)
+        {
+            return (text ?? string.Empty) + "\u001F" +
+                rawLength.ToString(CultureInfo.InvariantCulture);
         }
 
         private void ResetSentenceAutoCommitEvidence()
         {
-            _sentenceAutoCommitEvidence.Clear();
-        }
-
-        private static string LongestCommonTextElementPrefix(IEnumerable<string> values)
-        {
-            string[] texts = (values ?? Enumerable.Empty<string>()).ToArray();
-            if (texts.Length == 0 || texts.Any(string.IsNullOrEmpty))
-            {
-                return string.Empty;
-            }
-
-            string shortest = texts.OrderBy(text => new StringInfo(text).LengthInTextElements).First();
-            int[] ends = GetTextElementEndOffsets(shortest);
-            for (int index = ends.Length - 1; index >= 0; index--)
-            {
-                string prefix = shortest.Substring(0, ends[index]);
-                if (texts.All(text => text.StartsWith(prefix, StringComparison.Ordinal)))
-                {
-                    return prefix;
-                }
-            }
-            return string.Empty;
-        }
-
-        private static int[] GetTextElementEndOffsets(string text)
-        {
-            if (string.IsNullOrEmpty(text))
-            {
-                return Array.Empty<int>();
-            }
-
-            var ends = new List<int>();
-            TextElementEnumerator enumerator = StringInfo.GetTextElementEnumerator(text);
-            while (enumerator.MoveNext())
-            {
-                ends.Add(enumerator.ElementIndex + enumerator.GetTextElement().Length);
-            }
-            return ends.ToArray();
-        }
-
-        private static string RemoveLastTextElement(string text)
-        {
-            int[] ends = GetTextElementEndOffsets(text);
-            return ends.Length <= 1 ? string.Empty : text.Substring(0, ends[ends.Length - 2]);
+            _sentenceAutoCommitTrackers.Clear();
+            _sentenceAutoCommitLastSeenRaw = string.Empty;
         }
 
         private void RebuildSentenceInput()
@@ -2373,7 +2902,7 @@ namespace TigerClaw.Core
                     _sentenceInputDecoder?.Decode(
                         _sentenceRawBuffer.ToString(),
                         20,
-                        _state.GetSentenceAutoCommitEnabled(),
+                        ShouldCollectSentenceCommitEvidence(),
                         _sentenceCommittedText) ?? SentenceDecodeResult.Empty);
                 return;
             }
@@ -2415,7 +2944,7 @@ namespace TigerClaw.Core
                     rawCode = _sentenceRawBuffer.ToString();
                     lexiconVersion = _state.LexiconVersion;
                     decoder = _sentenceInputDecoder;
-                    includeEarlyCommitEvidence = _state.GetSentenceAutoCommitEnabled();
+                    includeEarlyCommitEvidence = ShouldCollectSentenceCommitEvidence();
                     requiredTextPrefix = _sentenceCommittedText;
                 }
 
@@ -2468,8 +2997,10 @@ namespace TigerClaw.Core
 
         private void ApplySentenceDecodeResult(long generation, string rawCode, int lexiconVersion, SentenceDecodeResult result)
         {
-            _sentenceDecodeResult = FilterSentenceDecodeResultForCommittedPrefix(
-                result ?? SentenceDecodeResult.Empty);
+            _sentenceDecodeResult = FilterSentenceDecodeResultForImplicitRanks(
+                FilterSentenceDecodeResultForCommittedPrefix(
+                    result ?? SentenceDecodeResult.Empty),
+                rawCode);
             _sentenceResultLexiconVersion = lexiconVersion;
             _sentenceSelectedIndex = 0;
 
@@ -2512,14 +3043,26 @@ namespace TigerClaw.Core
                 _sentenceInputDecoder?.Decode(
                     rawCode,
                     20,
-                    _state.GetSentenceAutoCommitEnabled(),
+                    ShouldCollectSentenceCommitEvidence(),
                     _sentenceCommittedText) ?? SentenceDecodeResult.Empty);
+        }
+
+        private bool ShouldCollectSentenceCommitEvidence()
+        {
+            return _state.GetSentenceAutoCommitEnabled();
         }
 
         private void EnsureSentenceDecoderCurrent()
         {
             if (_sentenceDecoderExternallyProvided ||
-                (_sentenceInputDecoder != null && _sentenceDecodedLexiconVersion == _state.LexiconVersion))
+                (_sentenceInputDecoder != null &&
+                 _sentenceDecodedLexiconVersion == _state.LexiconVersion &&
+                 _sentenceDecodedOptimalCodeLimit == _state.GetSentenceOptimalCodeHighFreqLimit() &&
+                 string.Equals(
+                     _sentenceDecodedFullCodeWhitelist,
+                     _state.GetSentenceFullCodeWhitelistText(),
+                     StringComparison.Ordinal) &&
+                 _sentenceDecodedAllowDuplicateSingleCharacters == _state.GetSentenceAllowDuplicateSingleCharacters()))
             {
                 return;
             }
@@ -2680,6 +3223,10 @@ namespace TigerClaw.Core
 
         private void ClearCompositionInput()
         {
+            if (_sentenceRawBuffer.Length > 0)
+            {
+                _sentenceInputDecoder?.CompleteComposition();
+            }
             _inputBuffer.Clear();
             _mixedRawBuffer.Clear();
             _mixedPreferredCandidateText.Clear();
@@ -2695,6 +3242,8 @@ namespace TigerClaw.Core
             ResetSentenceAutoCommitEvidence();
             _sentenceLastAutoCommitRawLength = 0;
             _sentenceAutoCommitSuspended = false;
+            _sentenceContinuationAfterAutoCommit = false;
+            ResetSentenceEmptyCodePending();
             _sentenceNeuralAcceptedRaw = string.Empty;
             _sentenceNeuralTopText = string.Empty;
             _sentenceGeneration++;
@@ -4145,6 +4694,60 @@ namespace TigerClaw.Core
             return fullDisplayCode;
         }
 
+        internal EngineDifferentialSnapshot GetDifferentialSnapshot(int pageSize)
+        {
+            lock (_lock)
+            {
+                EngineUiSnapshot ui = GetUiSnapshot(pageSize);
+                string rawInput;
+                if (_compositionState == CompositionState.CnSentence)
+                {
+                    rawInput = _sentenceRawBuffer.ToString();
+                }
+                else if (_mixedRawBuffer.Length > 0)
+                {
+                    rawInput = _mixedRawBuffer.ToString();
+                }
+                else
+                {
+                    rawInput = _inputBuffer.ToString();
+                }
+
+                return new EngineDifferentialSnapshot
+                {
+                    Ui = ui,
+                    RawInput = rawInput,
+                    SentenceCommittedText = _sentenceCommittedText,
+                    SentenceCommittedRawLength = _sentenceCommittedRawLength,
+                    CandidatePageIndex = _candidatePageIndex,
+                    SentenceGeneration = _sentenceGeneration
+                };
+            }
+        }
+
+        internal bool ShouldExpectKeyUp(int vk, int scan, bool extended)
+        {
+            lock (_lock)
+            {
+                int resolvedVk = ResolveSelectionVirtualKey(vk, scan, extended);
+                if (IsShiftKey(resolvedVk) ||
+                    resolvedVk == VK_OEM_7 ||
+                    resolvedVk == VK_CAPITAL)
+                {
+                    return true;
+                }
+
+                if (_state.GetCtrlSpaceToggleEnabled() &&
+                    (IsControlKey(resolvedVk) || resolvedVk == VK_SPACE))
+                {
+                    return true;
+                }
+
+                return _handledModifierSelectionKeys.Contains(resolvedVk) ||
+                       _oneShotActionKey == resolvedVk;
+            }
+        }
+
         private SentenceDecodeResult FilterSentenceDecodeResultForCommittedPrefix(SentenceDecodeResult result)
         {
             if (_sentenceCommittedText.Length == 0 || result == null)
@@ -4157,6 +4760,35 @@ namespace TigerClaw.Core
                 .Where(candidate => candidate != null &&
                     candidate.Text != null &&
                     candidate.Text.StartsWith(_sentenceCommittedText, StringComparison.Ordinal))
+                .ToArray();
+            if (filtered.Length == candidates.Length)
+            {
+                return result;
+            }
+
+            return new SentenceDecodeResult
+            {
+                RawCode = result.RawCode,
+                Candidates = filtered,
+                EarlyCommitEvidence = result.EarlyCommitEvidence,
+                ExpandedStates = result.ExpandedStates
+            };
+        }
+
+        private SentenceDecodeResult FilterSentenceDecodeResultForImplicitRanks(
+            SentenceDecodeResult result,
+            string rawCode)
+        {
+            if (!_sentenceContinuationAfterAutoCommit || result == null ||
+                string.IsNullOrEmpty(rawCode) ||
+                rawCode.Any(mark => char.IsDigit(mark) || mark == ';' || mark == '\''))
+            {
+                return result ?? SentenceDecodeResult.Empty;
+            }
+
+            SentenceCandidate[] candidates = result.Candidates ?? Array.Empty<SentenceCandidate>();
+            SentenceCandidate[] filtered = candidates
+                .Where(candidate => candidate != null && candidate.MaxLexiconRank <= 1)
                 .ToArray();
             if (filtered.Length == candidates.Length)
             {
@@ -4249,6 +4881,16 @@ namespace TigerClaw.Core
         public string[] CandidateAnnotations { get; set; }
         public int SelectedCandidateIndex { get; set; }
         public int CompositionState { get; set; }
+    }
+
+    internal sealed class EngineDifferentialSnapshot
+    {
+        public EngineUiSnapshot Ui { get; set; }
+        public string RawInput { get; set; }
+        public string SentenceCommittedText { get; set; }
+        public int SentenceCommittedRawLength { get; set; }
+        public int CandidatePageIndex { get; set; }
+        public long SentenceGeneration { get; set; }
     }
 
     internal sealed class KeyEngineResult

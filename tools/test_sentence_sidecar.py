@@ -44,7 +44,7 @@ def main() -> int:
             try:
                 pipe = open(pipe_path, "r+b", buffering=0)
                 break
-            except FileNotFoundError:
+            except OSError:
                 if process.poll() is not None:
                     raise RuntimeError(f"sidecar exited with {process.returncode}")
                 if time.monotonic() >= deadline:
@@ -95,6 +95,20 @@ def main() -> int:
                     "candidates": ["一", "二", "三", "四", "五", "六"],
                 },
             )
+        reconnect_deadline = time.monotonic() + 10
+        while True:
+            try:
+                reconnect_pipe = open(pipe_path, "r+b", buffering=0)
+                break
+            except OSError:
+                if process.poll() is not None:
+                    raise RuntimeError(f"sidecar exited before reconnect: {process.returncode}")
+                if time.monotonic() >= reconnect_deadline:
+                    raise TimeoutError("timed out reconnecting to sidecar pipe")
+                time.sleep(0.05)
+        with reconnect_pipe:
+            ping = send(reconnect_pipe, {"type": "ping", "seq": 5})
+            shutdown = send(reconnect_pipe, {"type": "shutdown", "seq": 6})
         print(
             json.dumps(
                 {
@@ -102,6 +116,8 @@ def main() -> int:
                     "rerank": rerank,
                     "brand": brand,
                     "too_many": too_many,
+                    "ping": ping,
+                    "shutdown": shutdown,
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -119,6 +135,13 @@ def main() -> int:
             return 5
         if too_many.get("success"):
             return 6
+        if not ping.get("success") or ping.get("seq") != 5:
+            return 7
+        if not shutdown.get("success") or shutdown.get("seq") != 6:
+            return 8
+        process.wait(timeout=10)
+        if process.returncode != 0:
+            return 9
         return 0
     finally:
         if process.poll() is None:

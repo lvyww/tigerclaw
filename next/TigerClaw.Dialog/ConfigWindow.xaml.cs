@@ -32,6 +32,7 @@ namespace TigerClaw.Dialog
 
         private const string SectionSystem = "system";
         private const string SectionCodeInput = "codeInput";
+        private const string SectionSentence = "sentence";
         private const string SectionKeys = "keys";
         private const string SectionCandidate = "candidate";
         private const string SectionNative = "native";
@@ -119,6 +120,7 @@ namespace TigerClaw.Dialog
 
             SystemDynamicPanel.Children.Clear();
             CodeInputDynamicPanel.Children.Clear();
+            SentenceDynamicPanel.Children.Clear();
             KeysDynamicPanel.Children.Clear();
             CandidateDynamicPanel.Children.Clear();
             NativeDynamicPanel.Children.Clear();
@@ -497,6 +499,8 @@ namespace TigerClaw.Dialog
                     return SystemDynamicPanel;
                 case SectionCodeInput:
                     return CodeInputDynamicPanel;
+                case SectionSentence:
+                    return SentenceDynamicPanel;
                 case SectionKeys:
                     return KeysDynamicPanel;
                 case SectionCandidate:
@@ -519,6 +523,7 @@ namespace TigerClaw.Dialog
             string query = NormalizeText(SearchBox.Text);
             int systemVisible = 0;
             int codeInputVisible = 0;
+            int sentenceVisible = 0;
             int keysVisible = 0;
             int candidateVisible = 0;
             int nativeVisible = 0;
@@ -541,6 +546,9 @@ namespace TigerClaw.Dialog
                     case SectionCodeInput:
                         codeInputVisible++;
                         break;
+                    case SectionSentence:
+                        sentenceVisible++;
+                        break;
                     case SectionKeys:
                         keysVisible++;
                         break;
@@ -560,6 +568,7 @@ namespace TigerClaw.Dialog
             {
                 [SectionSystem] = systemVisible,
                 [SectionCodeInput] = codeInputVisible,
+                [SectionSentence] = sentenceVisible,
                 [SectionKeys] = keysVisible,
                 [SectionCandidate] = candidateVisible,
                 [SectionNative] = nativeVisible,
@@ -574,6 +583,7 @@ namespace TigerClaw.Dialog
             bool hasAnyResult = counts.Values.Any(value => value > 0);
             SetSectionVisibility(SystemSection, SectionSystem, counts, query);
             SetSectionVisibility(CodeInputSection, SectionCodeInput, counts, query);
+            SetSectionVisibility(SentenceSection, SectionSentence, counts, query);
             SetSectionVisibility(KeysSection, SectionKeys, counts, query);
             SetSectionVisibility(CandidateSection, SectionCandidate, counts, query);
             SetSectionVisibility(NativeSection, SectionNative, counts, query);
@@ -618,6 +628,10 @@ namespace TigerClaw.Dialog
             else if (sender == CodeInputNavButton)
             {
                 _activeSection = SectionCodeInput;
+            }
+            else if (sender == SentenceNavButton)
+            {
+                _activeSection = SectionSentence;
             }
             else if (sender == KeysNavButton)
             {
@@ -1148,14 +1162,20 @@ namespace TigerClaw.Dialog
                     return "回车键是否立即清掉编码串。";
                 case "中英文不限长混合输入":
                     return "允许超过最大码长，暂存顶字上屏的候选字词，最后一起上屏。";
-                case "整句输入":
-                    return "连续输入整句编码，由本地语言模型自动切分并生成整句候选。";
                 case "自动启用整句模式":
-                    return "方案名含“整句”时，自动启用整句模式。";
+                    return "方案名含“整句”时启用整句输入：连续编码由本地模型自动切分并生成整句候选。";
                 case "整句神经重排":
                     return "使用独立 Qwen 推理进程重排前 5 个整句候选；不可用时自动保留三元模型结果。";
                 case "整句自动提前上屏":
-                    return "整句模式下高置信度且连续稳定的前缀自动提前上屏；默认关闭。";
+                    return "高置信度且连续稳定的前缀自动提前上屏；空码无法继续补全当前码段时也会顶上已确认的字并保留新键。默认关闭。";
+                case "保留最少编码数量":
+                    return "自动上屏后至少留在编码里的码数。0 表示不额外限制；大于 0 时，提前上屏（含空码顶屏）都必须留下这么多未上屏编码。";
+                case "高频字仅使用最优码组句":
+                    return "前多少个高频单字组句时只使用最优码。默认 1500。0 或空表示不限制，码表里的全部编码都可参与切分。";
+                case "整句允许全码组句白名单":
+                    return "这些单字即使属于高频最优码限制，仍可用全码组句。连续填写汉字，不用分隔符；空表示没有例外。";
+                case "允许单字重码组句":
+                    return "默认关闭。开启后，未带选重的非首选单字也可参与整句切分，并与首选按语言模型竞争，可成为整句首选。单独只打一个编码时仍是码表首选在前。多字词仍须选重。不绕过“高频字仅使用最优码组句”和白名单。开启后仍可用数字、分号、引号显式选重。";
                 case "TAB清屏":
                     return "Tab 键在对应场景下是否直接清屏。整句有候选时，Tab / Shift+Tab 仍遍历整句候选，不会清屏。";
                 case "竖排候选":
@@ -1242,12 +1262,17 @@ namespace TigerClaw.Dialog
                 case "最大码长":
                 case "最大码长无重自动上屏":
                 case "中英文不限长混合输入":
-                case "整句输入":
+                case "空码自动清屏":
+                    return SectionCodeInput;
+
                 case "自动启用整句模式":
                 case "整句神经重排":
                 case "整句自动提前上屏":
-                case "空码自动清屏":
-                    return SectionCodeInput;
+                case "保留最少编码数量":
+                case "高频字仅使用最优码组句":
+                case "整句允许全码组句白名单":
+                case "允许单字重码组句":
+                    return SectionSentence;
 
                 case KeySelectionKeys:
                 case "shift切换中英文":
@@ -1291,6 +1316,11 @@ namespace TigerClaw.Dialog
             if (ContainsAny(key, "候选", "注释", "拆分", "字体", "竖排", "显示编码", "伪装"))
             {
                 return SectionCandidate;
+            }
+
+            if (ContainsAny(key, "整句"))
+            {
+                return SectionSentence;
             }
 
             if (ContainsAny(key, "码表", "码长", "空码"))
@@ -1463,6 +1493,7 @@ namespace TigerClaw.Dialog
         {
             return string.Equals(section, SectionSystem, StringComparison.Ordinal) ||
                    string.Equals(section, SectionCodeInput, StringComparison.Ordinal) ||
+                   string.Equals(section, SectionSentence, StringComparison.Ordinal) ||
                    string.Equals(section, SectionKeys, StringComparison.Ordinal) ||
                    string.Equals(section, SectionCandidate, StringComparison.Ordinal) ||
                    string.Equals(section, SectionNative, StringComparison.Ordinal) ||
@@ -1512,6 +1543,8 @@ namespace TigerClaw.Dialog
                     return "系统";
                 case SectionCodeInput:
                     return "码表及输入行为";
+                case SectionSentence:
+                    return "整句";
                 case SectionKeys:
                     return "按键";
                 case SectionCandidate:
@@ -1544,6 +1577,7 @@ namespace TigerClaw.Dialog
         {
             UpdateNavigationButton(SystemNavButton, SectionSystem, counts, hasQuery);
             UpdateNavigationButton(CodeInputNavButton, SectionCodeInput, counts, hasQuery);
+            UpdateNavigationButton(SentenceNavButton, SectionSentence, counts, hasQuery);
             UpdateNavigationButton(KeysNavButton, SectionKeys, counts, hasQuery);
             UpdateNavigationButton(CandidateNavButton, SectionCandidate, counts, hasQuery);
             UpdateNavigationButton(NativeNavButton, SectionNative, counts, hasQuery);

@@ -139,6 +139,11 @@ namespace TigerClaw.Overlay
                 RenderCandidateText();
             }
 
+            if ((changes & OverlayUiChangeFlags.CandidateAnchor) != 0)
+            {
+                _positioner.RefreshCaretAnchorPreservingPlacement();
+            }
+
             if ((changes & (OverlayUiChangeFlags.Content | OverlayUiChangeFlags.Style | OverlayUiChangeFlags.Position)) != 0)
             {
                 UpdatePosition();

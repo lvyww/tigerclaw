@@ -17,7 +17,7 @@
 		A20000000000000000000026 /* CandidatePanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000027 /* CandidatePanel.swift */; };
 		A20000000000000000000008 /* TigerClaw.Engine.NativeAot.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000018 /* TigerClaw.Engine.NativeAot.dylib */; };
 		A20000000000000000000009 /* TigerClaw.Engine.NativeAot.dylib in Copy Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000018 /* TigerClaw.Engine.NativeAot.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
-		A2000000000000000000000A /* tiger_sentence.dict.yaml in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000019 /* tiger_sentence.dict.yaml */; };
+		A2000000000000000000000A /* tiger_sentence.codes.txt in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000019 /* tiger_sentence.codes.txt */; };
 		A20000000000000000000028 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000029 /* InfoPlist.strings */; };
 		A2000000000000000000002E /* English InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000002F /* English InfoPlist.strings */; };
 		A2000000000000000000002A /* TigerClaw.pdf in Resources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000002C /* TigerClaw.pdf */; };
@@ -50,7 +50,7 @@
 		A2000000000000000000001E /* InputSourceInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/InputSourceInstaller.swift; sourceTree = "<group>"; };
 		A20000000000000000000027 /* CandidatePanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/CandidatePanel.swift; sourceTree = "<group>"; };
 		A20000000000000000000018 /* TigerClaw.Engine.NativeAot.dylib */ = {isa = PBXFileReference; lastKnownFileType = compiled.mach-o.dylib; path = Vendor/TigerClaw.Engine.NativeAot.dylib; sourceTree = "<group>"; };
-		A20000000000000000000019 /* tiger_sentence.dict.yaml */ = {isa = PBXFileReference; lastKnownFileType = text; path = Resources/tiger_sentence.dict.yaml; sourceTree = "<group>"; };
+		A20000000000000000000019 /* tiger_sentence.codes.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = Resources/tiger_sentence.codes.txt; sourceTree = "<group>"; };
 		A20000000000000000000029 /* InfoPlist.strings */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; path = Resources/zh-Hans.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		A2000000000000000000002F /* English InfoPlist.strings */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; path = Resources/en.lproj/InfoPlist.strings; sourceTree = "<group>"; };
 		A2000000000000000000002C /* TigerClaw.pdf */ = {isa = PBXFileReference; lastKnownFileType = image.pdf; path = Resources/TigerClaw.pdf; sourceTree = "<group>"; };
@@ -97,7 +97,7 @@
 				A2000000000000000000001B /* NativeAotBridgingHeader.h */,
 				A2000000000000000000001C /* tigerclaw_engine_nativeaot.h */,
 				A20000000000000000000018 /* TigerClaw.Engine.NativeAot.dylib */,
-				A20000000000000000000019 /* tiger_sentence.dict.yaml */,
+				A20000000000000000000019 /* tiger_sentence.codes.txt */,
 				A20000000000000000000029 /* InfoPlist.strings */,
 				A2000000000000000000002F /* English InfoPlist.strings */,
 				A2000000000000000000002C /* TigerClaw.pdf */,
@@ -171,7 +171,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A2000000000000000000000A /* tiger_sentence.dict.yaml in Resources */,
+				A2000000000000000000000A /* tiger_sentence.codes.txt in Resources */,
 				A20000000000000000000028 /* InfoPlist.strings in Resources */,
 				A2000000000000000000002E /* English InfoPlist.strings in Resources */,
 				A2000000000000000000002A /* TigerClaw.pdf in Resources */,
@@ -223,7 +223,7 @@
 			buildSettings = {
 				CODE_SIGNING_ALLOWED = NO;
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 24;
+				CURRENT_PROJECT_VERSION = 25;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/TigerClaw/Vendor";
@@ -243,7 +243,7 @@
 			buildSettings = {
 				CODE_SIGNING_ALLOWED = NO;
 				CODE_SIGN_STYLE = Manual;
-				CURRENT_PROJECT_VERSION = 24;
+				CURRENT_PROJECT_VERSION = 25;
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/TigerClaw/Vendor";

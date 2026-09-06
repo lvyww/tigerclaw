@@ -1,4 +1,4 @@
 build/
 dist/
 TigerClaw/Vendor/*
-TigerClaw/Resources/tiger_sentence.dict.yaml
+TigerClaw/Resources/tiger_sentence.codes.txt

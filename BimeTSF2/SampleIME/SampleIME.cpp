@@ -969,6 +969,7 @@ CSampleIME::CSampleIME()
     _pendingResponseScanCode = 0;
     _pendingResponseExtended = FALSE;
     _pendingResponseHandled = FALSE;
+    _pendingResponseExpectKeyUp = TRUE;
     _pendingResponseHasKeyboardOpen = FALSE;
     _pendingResponseKeyboardOpen = FALSE;
     _pendingResponseCancelComposition = FALSE;
@@ -977,6 +978,7 @@ CSampleIME::CSampleIME()
     _pendingResponseTextToOutput.clear();
     _pendingResponseInputBuffer.clear();
     _deferredReopenInputBuffer.clear();
+    _keyUpForwardBudget = 0;
 
     _refCount = 1;
 }
@@ -1321,6 +1323,7 @@ STDAPI CSampleIME::Deactivate()
     _pendingResponseScanCode = 0;
     _pendingResponseExtended = FALSE;
     _pendingResponseHandled = FALSE;
+    _pendingResponseExpectKeyUp = TRUE;
     _pendingResponseHasKeyboardOpen = FALSE;
     _pendingResponseKeyboardOpen = FALSE;
     _pendingResponseCancelComposition = FALSE;
@@ -1328,6 +1331,7 @@ STDAPI CSampleIME::Deactivate()
     _pendingResponseCompositionPending = FALSE;
     _pendingResponseTextToOutput.clear();
     _pendingResponseInputBuffer.clear();
+    _keyUpForwardBudget = 0;
     _CancelCompositionRefresh();
 
     return S_OK;
@@ -3656,6 +3660,33 @@ void CSampleIME::_SendCaretMessage(LONG x, LONG y, LONG width, LONG height, int 
     if (isHighPrioritySource)
     {
         _lastHighPriorityCaretTick = now;
+    }
+
+    if (source == CARET_SOURCE_LAYOUT && !_forceNextCaret)
+    {
+        const BOOL matchesPendingLayout =
+            _hasPendingCaret &&
+            _pendingCaretSource == CARET_SOURCE_LAYOUT &&
+            _pendingCaretX == x &&
+            _pendingCaretY == y &&
+            _pendingCaretWidth == width &&
+            _pendingCaretHeight == height;
+        if (matchesPendingLayout)
+        {
+            return;
+        }
+
+        const BOOL matchesLastSentCaret =
+            !_hasPendingCaret &&
+            _hasSentCaret &&
+            _lastSentCaretX == x &&
+            _lastSentCaretY == y &&
+            _lastSentCaretWidth == width &&
+            _lastSentCaretHeight == height;
+        if (matchesLastSentCaret)
+        {
+            return;
+        }
     }
 
     LONG dx = 0;

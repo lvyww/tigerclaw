@@ -1,44 +1,41 @@
-# 虎整句 iOS Rime 测试包
+# 虎整句 iOS Rime 测试
 
-这是移动端内存优化测试包。语言模型为 `TCSKNM02` 分页格式，保留桌面版
-Kneser-Ney 模型的全部 n-gram 和 float32 概率。Lua 不再一次读入整个模型，
-常驻索引约 2.1 MiB，上下文页缓存上限 8 MiB。
+这是当前 Rime 独立实验版的 iOS 验收清单。移动模型使用 TCSKNM02 分页格式；Lua
+常驻稀疏索引约 2.1 MiB，上下文页缓存上限 8 MiB。
 
-## 安装
+## 部署
 
-1. 先在输入法应用中备份现有 Rime 用户目录。
-2. 把压缩包 `Rime/` 目录内的文件导入输入法应用的 Rime 用户目录。
-3. 在输入法应用中执行“重新部署”或“部署”。
-4. 选择“虎整句”方案测试。
+1. 备份输入法应用的 Rime 用户目录。
+2. 按同目录 `README.md` 部署方案、Lua 和三个明文数据 txt。
+3. 把仓库外的 `sentence-ngram-mobile.bin` 放到用户目录 `models/`。
+4. 合并而不是覆盖已有 `default.custom.yaml` 和 `rime.lua`。
+5. 重新部署并选择“虎整句”。
 
-如果使用全新的测试配置，可以完整复制 `Rime/`。其中的
-`default.custom.yaml` 只启用虎整句。
+删除模型后方案应仍可输入，但失去语言模型排序；这可区分模型读取与方案本身问题。
+删除 `tiger_sentence.char_ranks.txt` 后仍可输入，但常用字过滤与生僻字孤立惩罚
+一并禁用。
 
-如果用户目录已有其他方案，不要覆盖已有的 `default.custom.yaml` 和
-`rime.lua`：
+## 验收
 
-- 在已有 `default.custom.yaml` 的 `schema_list` 中加入
-  `- schema: tiger_sentence`。
-- 在已有 `rime.lua` 末尾追加 `merge/rime.lua.fragment` 的三行内容。
-- 其余 `tiger_sentence.*`、`lua/tiger_sentence*.lua` 和
-  `models/sentence-ngram-mobile.bin` 可以直接复制。
+- 首次两码以上输入是否闪退、被系统杀死或切回系统键盘。
+- 冷启动首次候选和后续逐键候选的延时（明文码表索引在首次解码前构建，
+  应只多出一次几十毫秒级的加载）。
+- 连续输入 5、10、20 分钟后的内存和稳定性。
+- Space/Enter/Esc、退格、候选切换和选重后缀是否正确。
+- “单字重码组句”开关开/关时，分段路径的非首选单字竞争与整段单边首选顺序
+  是否与 Windows 基准一致（如 `gyygch` 开启时可见“羊羔”，单独 `gch` 仍
+  “赤”在前）。
+- “提前上屏”开关关闭后，概率型提前上屏与空码自动上屏是否一并停止。
+- 自动提前上屏是否出现重复提交、漏字或明显闪烁（提交通过一次原子输入
+  赋值重建 composition，不经过清空）；`awmenamcunta`、`nuusvbbhoi`、
+  `iejryfenahbmsp`、`uriczwxmjou` 四组回归的提交与剩余候选
+  是否与 Windows 一致。
+- `tiger_sentence/min_retained_raw_length` 配置为正数时，空码与概率型提交
+  是否遵守最少保留编码数。
+- 直接编辑用户目录的 `tiger_sentence.codes.txt`（如给某字增加一条编码）
+  并重新部署后，新编码是否生效；`tiger_sentence/high_freq_limit` 设为 `0`
+  后非最优码是否全部保留。
+- 候选顺序是否与同一模型和码表下的 Windows/Rime 基准一致。
 
-## 测试重点
-
-- 首次输入两码以上整句时，输入法是否被系统杀死、闪退或自动切回系统键盘。
-- 第一次出候选的耗时，以及后续连续输入时的响应速度。
-- 连续输入 5、10、20 分钟后的稳定性和内存变化。
-- 候选顺序是否与 Windows 虎整句一致。
-- 删除 `models/sentence-ngram-mobile.bin` 后应仍能输入，但会失去语言模型打分；
-  这可用于区分模型加载问题与方案本身的问题。
-
-反馈时请注明：iPhone/iPad 型号、iOS 版本、Rime 输入法应用及版本、是否开启
-完全访问、发生问题前输入的编码，以及应用能显示的内存或崩溃日志。
-
-## 按键
-
-- 连续输入字母组成整句编码。
-- 空格提交当前候选，回车提交原始编码，Esc 清空。
-- `;`、`'`、数字分别选择第 2、第 3、第 N 个码表候选，`0` 表示第 10 个。
-- 上下方向键或 Tab、Shift+Tab 遍历候选；移动端可使用输入法提供的候选操作。
-
+反馈请附：设备、iOS 版本、Rime 应用及版本、是否开启完全访问、复现编码、模型
+SHA-256，以及可取得的内存或崩溃日志。

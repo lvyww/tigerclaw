@@ -22,10 +22,9 @@ if not defined DOTNET (
   exit /b 1
 )
 
-set "UNIFIED_OUT=%~dp0_run\Debug\net48"
+set "UNIFIED_OUT=%~dp0_run\Debug\x64"
 set "HOOK_NATIVE_PROJECT=%~dp0TigerClaw.Hook.Native\TigerClaw.Hook.Native.vcxproj"
 set "HOOK_NATIVE_OUT=%~dp0_run\Debug\native"
-set "SENTENCE_PROJECT=%~dp0TigerClaw.Sentence\TigerClaw.Sentence.csproj"
 set "SENTENCE_OUT=%~dp0_run\Debug\sentence"
 set "SENTENCE_MODEL_ROOT=C:\Archive\tigerclaw_sentence_ml\runtime"
 set "SENTENCE_QWEN_MODEL=C:\Archive\tigerclaw_sentence_ml\qwen3-0.6b-gguf\downloaded\Qwen3-0.6B-Base-Q8_0.gguf"
@@ -39,8 +38,8 @@ for %%P in (TigerClaw.Core.exe TigerClaw.Overlay.exe TigerClaw.Dialog.exe TigerC
 echo [1/6] Build TigerClaw.Shared
 "%DOTNET%" msbuild "%~dp0TigerClaw.Shared\TigerClaw.Shared.csproj" /restore /p:Configuration=Debug /m || exit /b 1
 
-echo [2/6] Build TigerClaw.Core (OutDir: _run)
-"%DOTNET%" msbuild "%~dp0TigerClaw.Core\TigerClaw.Core.csproj" /restore /p:Configuration=Debug /p:OutDir="%UNIFIED_OUT%\\" /m || exit /b 1
+echo [2/6] Publish TigerClaw.Core Native AOT (win-x64)
+"%DOTNET%" publish "%~dp0TigerClaw.Core\TigerClaw.Core.csproj" -c Debug -r win-x64 --self-contained true -o "%UNIFIED_OUT%" /p:PublishAot=true || exit /b 1
 
 echo [3/6] Build TigerClaw.Overlay (OutDir: Core)
 "%DOTNET%" msbuild "%~dp0TigerClaw.Overlay\TigerClaw.Overlay.csproj" /restore /p:Configuration=Debug /p:OutDir="%UNIFIED_OUT%\\" /m || exit /b 1
@@ -49,7 +48,6 @@ echo [4/6] Build TigerClaw.Dialog (OutDir: Core)
 "%DOTNET%" msbuild "%~dp0TigerClaw.Dialog\TigerClaw.Dialog.csproj" /restore /p:Configuration=Debug /p:OutDir="%UNIFIED_OUT%\\" /m || exit /b 1
 
 echo [5/6] Publish optional TigerClaw.Sentence sidecar
-"%DOTNET%" msbuild "%SENTENCE_PROJECT%" /restore /p:Configuration=Debug /p:Platform=x64 /p:OutDir="%SENTENCE_OUT%\\" /m || exit /b 1
 call "%SENTENCE_NATIVE_BUILD%" x64 "%SENTENCE_OUT%" Debug || exit /b 1
 if not exist "%UNIFIED_OUT%\Models" mkdir "%UNIFIED_OUT%\Models"
 if not exist "%SENTENCE_OUT%\Models" mkdir "%SENTENCE_OUT%\Models"
@@ -78,10 +76,6 @@ if not exist "%UNIFIED_OUT%\TigerClaw.Dialog.exe" (
 )
 if not exist "%SENTENCE_OUT%\TigerClaw.Sentence.exe" (
   echo Missing output: %SENTENCE_OUT%\TigerClaw.Sentence.exe
-  exit /b 1
-)
-if not exist "%SENTENCE_OUT%\TigerClaw.Sentence.Native.dll" (
-  echo Missing output: %SENTENCE_OUT%\TigerClaw.Sentence.Native.dll
   exit /b 1
 )
 if exist "%HOOK_NATIVE_PROJECT%" if not exist "%HOOK_NATIVE_OUT%\TigerClaw.Hook.Native.exe" (

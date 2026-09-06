@@ -37,3 +37,27 @@ endif()
 
 set_target_properties(TigerClaw.Sentence.Native PROPERTIES
     OUTPUT_NAME "TigerClaw.Sentence.Native")
+
+# The named-pipe sentence host is part of the Windows Core deployment. macOS
+# embeds the shared scorer dylib in the IMK bundle, so do not compile this
+# Windows.h-dependent executable on Apple platforms.
+if(WIN32)
+    add_executable(TigerClaw.Sentence.Host WIN32
+        SentenceHost.cpp
+        SentenceQwenNative.cpp
+        SentenceQwenNative.h)
+
+    target_compile_features(TigerClaw.Sentence.Host PRIVATE cxx_std_17)
+    target_compile_definitions(TigerClaw.Sentence.Host PRIVATE TIGERCLAW_SENTENCE_NATIVE_STATIC)
+    target_include_directories(TigerClaw.Sentence.Host PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/llama.cpp/include"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/llama.cpp/vendor")
+    target_link_libraries(TigerClaw.Sentence.Host PRIVATE llama shell32)
+
+    if(MSVC)
+        target_compile_options(TigerClaw.Sentence.Host PRIVATE /utf-8 /EHsc)
+    endif()
+
+    set_target_properties(TigerClaw.Sentence.Host PROPERTIES
+        OUTPUT_NAME "TigerClaw.Sentence")
+endif()

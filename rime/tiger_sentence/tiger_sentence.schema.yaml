@@ -2,13 +2,16 @@
 schema:
   schema_id: tiger_sentence
   name: 虎整句
-  version: "1.0"
+  version: "1.2"
   author:
     - TigerClaw
   description: |
     从虎整句常用字词表生成的变长整句方案。
-    整段不超过 4 码时检索该码位全部字词，首选排在非首选前面；
-    超过 4 码后光秃编码只取第 1 候选。分号/引号/数字写入编码选重。
+    码表/字频/白名单为明文 txt（tiger_sentence.codes.txt 等），运行时加载，
+    不使用 Rime 词典文件或用户覆盖层；可直接替换以导入其它形码方案。
+    只有整个独立输入作为单一码表边时才隐式允许非首选。
+    允许单字重码组句默认开启：分段路径中的非首选单字按语言模型分数竞争，
+    非首选多字词仍必须显式选重；分号/引号/数字写入编码选重。
     首次输入时用 Lua 优先分页加载 sentence-ngram-mobile.bin 做 Kneser-Ney 打分。
 
 switches:
@@ -22,13 +25,15 @@ switches:
   - name: tiger_sentence_early_commit
     reset: 1
     states: [ 提前上屏关, 提前上屏开 ]
-
+  - name: tiger_sentence_allow_duplicate_single
+    reset: 1
+    states: [ 单字重码组句关, 单字重码组句开 ]
 engine:
   processors:
     - ascii_composer
     - recognizer
-    - key_binder
     - lua_processor@tiger_sentence_processor
+    - key_binder
     - speller
     - punctuator
     - selector
@@ -48,15 +53,15 @@ speller:
   delimiter: " "
   auto_select: false
 
-translator:
-  dictionary: tiger_sentence
-  enable_user_dict: false
-  enable_sentence: false
-  enable_encoder: false
-  enable_completion: false
-
 menu:
   page_size: 5
+
+tiger_sentence:
+  # 提前上屏与空码自动上屏共用的最短保留编码数；0 表示不额外限制。
+  # 概率型提前上屏仍永远不少于 3。
+  min_retained_raw_length: 0
+  # 高频字仅使用最优码组句的字数上限；0 表示全部放开非最优码。
+  high_freq_limit: 1500
 
 key_binder:
   bindings:
@@ -66,7 +71,9 @@ key_binder:
     - { when: has_menu, accept: equal, send: Page_Down }
 
 punctuator:
-  import_preset: default
+  # Use the user's symbols.yaml punctuation table. Scalar/{commit: ...}
+  # entries commit directly; list entries intentionally open a symbol menu.
+  import_preset: symbols
 
 recognizer:
   import_preset: default

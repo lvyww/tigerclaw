@@ -31,6 +31,6 @@ Expected marker:
 ```text
 REAL_ENGINE_SLICE_PASS
 LexiconEntries=36698
-Dictionary=rime/tiger_sentence/tiger_sentence.dict.yaml
+Dictionary=rime/tiger_sentence/tiger_sentence.codes.txt
 Fixture=tests/engine_cases/basic_real_code_commit.json
 ```

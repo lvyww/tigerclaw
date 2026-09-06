@@ -62,6 +62,11 @@ namespace TigerClaw.Overlay
                 changes |= OverlayUiChangeFlags.Position;
             }
 
+            if (_current.CandidateAnchorRevision != next.CandidateAnchorRevision)
+            {
+                changes |= OverlayUiChangeFlags.CandidateAnchor | OverlayUiChangeFlags.Position;
+            }
+
             if (_current.SoundSeq != next.SoundSeq ||
                 _current.SoundVk != next.SoundVk ||
                 _current.SoundVolumePercent != next.SoundVolumePercent)
@@ -89,6 +94,7 @@ namespace TigerClaw.Overlay
                 CaretX = state.CaretX,
                 CaretY = state.CaretY,
                 CaretHeight = state.CaretHeight,
+                CandidateAnchorRevision = state.CandidateAnchorRevision,
                 VerticalCandidates = state.VerticalCandidates,
                 ShowCandidateIndex = state.ShowCandidateIndex,
                 HideCandidateItems = state.HideCandidateItems,

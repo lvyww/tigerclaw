@@ -8,8 +8,8 @@
   "resources": {
     "model_sha256": null,
     "lexicon_file": {
-      "path": "rime/tiger_sentence/tiger_sentence.dict.yaml",
-      "sha256": "195acb1170bbb3907df5636a9fffa47ce2ef38ff3ba60351f434856f21c5e503"
+      "path": "rime/tiger_sentence/tiger_sentence.codes.txt",
+      "sha256": "1d3e9b0ce0e4a603be3f220c71acecad846f020e87a52723ecb3814f6b53ac0e"
     }
   },
   "initial_config": {

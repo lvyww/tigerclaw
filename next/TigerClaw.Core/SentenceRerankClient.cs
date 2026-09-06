@@ -3,9 +3,9 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.IO.Pipes;
-using System.Runtime.Serialization;
-using System.Runtime.Serialization.Json;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using TigerClaw.Shared;
@@ -24,7 +24,7 @@ namespace TigerClaw.Core
         void Request(SentenceRerankRequest request);
     }
 
-    internal sealed class SentenceRerankClient : ISentenceRerankService
+    internal sealed partial class SentenceRerankClient : ISentenceRerankService
     {
         private readonly object _lock = new object();
         private readonly CoreRuntimeState _state;
@@ -160,7 +160,7 @@ namespace TigerClaw.Core
                             return;
                         }
                         string line = readTask.Result;
-                        SentencePipeResponse response = Deserialize<SentencePipeResponse>(line);
+                        SentencePipeResponse response = DeserializeResponse(line);
                         if (response != null && response.Success && response.Seq == seq &&
                             response.Generation == request.Generation && response.Scores != null)
                         {
@@ -221,48 +221,50 @@ namespace TigerClaw.Core
             return "\"" + (value ?? string.Empty).Replace("\"", "\\\"") + "\"";
         }
 
-        private static string Serialize<T>(T value)
+        private static string Serialize(SentencePipeRequest value)
         {
-            var serializer = new DataContractJsonSerializer(typeof(T));
-            using (var stream = new MemoryStream())
-            {
-                serializer.WriteObject(stream, value);
-                return Encoding.UTF8.GetString(stream.ToArray());
-            }
+            return JsonSerializer.Serialize(
+                value,
+                SentencePipeJsonContext.Default.SentencePipeRequest);
         }
 
-        private static T Deserialize<T>(string json) where T : class
+        private static SentencePipeResponse DeserializeResponse(string json)
         {
             if (string.IsNullOrWhiteSpace(json))
             {
                 return null;
             }
 
-            var serializer = new DataContractJsonSerializer(typeof(T));
-            using (var stream = new MemoryStream(Encoding.UTF8.GetBytes(json)))
-            {
-                return serializer.ReadObject(stream) as T;
-            }
+            return JsonSerializer.Deserialize(
+                json,
+                SentencePipeJsonContext.Default.SentencePipeResponse);
         }
 
-        [DataContract]
+        [JsonSourceGenerationOptions(
+            GenerationMode = JsonSourceGenerationMode.Metadata,
+            PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)]
+        [JsonSerializable(typeof(SentencePipeRequest))]
+        [JsonSerializable(typeof(SentencePipeResponse))]
+        private partial class SentencePipeJsonContext : JsonSerializerContext
+        {
+        }
+
         private sealed class SentencePipeRequest
         {
-            [DataMember(Name = "type")] public string Type { get; set; }
-            [DataMember(Name = "seq")] public long Seq { get; set; }
-            [DataMember(Name = "generation")] public long Generation { get; set; }
-            [DataMember(Name = "raw_code")] public string RawCode { get; set; }
-            [DataMember(Name = "candidates")] public string[] Candidates { get; set; }
+            public string Type { get; set; }
+            public long Seq { get; set; }
+            public long Generation { get; set; }
+            public string RawCode { get; set; }
+            public string[] Candidates { get; set; }
         }
 
-        [DataContract]
         private sealed class SentencePipeResponse
         {
-            [DataMember(Name = "seq")] public long Seq { get; set; }
-            [DataMember(Name = "generation")] public long Generation { get; set; }
-            [DataMember(Name = "raw_code")] public string RawCode { get; set; }
-            [DataMember(Name = "success")] public bool Success { get; set; }
-            [DataMember(Name = "scores")] public double[] Scores { get; set; }
+            public long Seq { get; set; }
+            public long Generation { get; set; }
+            public string RawCode { get; set; }
+            public bool Success { get; set; }
+            public double[] Scores { get; set; }
         }
     }
 }

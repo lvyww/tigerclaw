@@ -18,4 +18,4 @@ swiftc "${script_dir}/main.swift" \
   -Xlinker -rpath -Xlinker "${publish_dir}" \
   -o "${output_path}"
 
-"${output_path}" "${repo_dir}/rime/tiger_sentence/tiger_sentence.dict.yaml"
+"${output_path}" "${repo_dir}/rime/tiger_sentence/tiger_sentence.codes.txt"

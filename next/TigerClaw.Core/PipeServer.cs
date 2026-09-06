@@ -96,7 +96,7 @@ namespace TigerClaw.Core
         {
             try
             {
-                return new NamedPipeServerStream(
+                return NamedPipeServerStreamAcl.Create(
                     RuntimeConstants.TsfPipeShortName,
                     PipeDirection.InOut,
                     NamedPipeServerStream.MaxAllowedServerInstances,

@@ -26,7 +26,7 @@ SHA-256 values below are for the exact files available in this checkout.
 | \`config.txt\` | \`c68a5a3d98a1cd01427ea89855dac6b22f434f131029d9b69e6736d79c0aba13\` |
 | \`next/TigerClaw.Core/Data/sentence_common_chars_1500.txt\` | \`e3ccaadda8e856213aac2f5418d4f8cd9f5a206a5593bc3756dc96b187c5b74d\` |
 | \`next/TigerClaw.Core/Data/sentence_char_ranks.txt\` | \`a8be232135cb33ac85f36475d89705f381419b424c3f83422a0e1f0d72aeb101\` |
-| \`rime/tiger_sentence/tiger_sentence.dict.yaml\` | \`195acb1170bbb3907df5636a9fffa47ce2ef38ff3ba60351f434856f21c5e503\` |
+| \`rime/tiger_sentence/tiger_sentence.codes.txt\` | \`1d3e9b0ce0e4a603be3f220c71acecad846f020e87a52723ecb3814f6b53ac0e\` |
 | \`rime/tiger_sentence/tiger_sentence.schema.yaml\` | \`4ea4283670b9bb3ce8547bba9406b3cf0562d2c18abe74b3b580d1cec277e832\` |
 | \`rime/tiger_sentence/tiger_sentence.supplement.txt\` | \`d21a1c3a23f839abbfca9be1622c81afcf8a2555a3db892c7d306118a7d0ea78\` |
 

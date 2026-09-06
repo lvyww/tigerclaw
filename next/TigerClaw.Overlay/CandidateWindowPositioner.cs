@@ -19,6 +19,10 @@ namespace TigerClaw.Overlay
         private int _lastTargetXPx = int.MinValue;
         private int _lastTargetYPx = int.MinValue;
         private bool _placeAboveLocked;
+        private bool _placeBelowLocked;
+        private bool _hasPlacementDecision;
+        private bool _lastPlacedAbove;
+        private bool _forceMoveForAnchorRefresh;
         private bool _hasCaretAnchor;
         private int _anchorXPx;
         private int _anchorYPx;
@@ -30,6 +34,26 @@ namespace TigerClaw.Overlay
             _lastTargetXPx = int.MinValue;
             _lastTargetYPx = int.MinValue;
             _placeAboveLocked = false;
+            _placeBelowLocked = false;
+            _hasPlacementDecision = false;
+            _lastPlacedAbove = false;
+            _forceMoveForAnchorRefresh = false;
+            ClearCaretAnchor();
+        }
+
+        public void RefreshCaretAnchorPreservingPlacement()
+        {
+            if (!_hasCaretAnchor && !_hasPlacementDecision)
+            {
+                return;
+            }
+
+            if (_hasPlacementDecision)
+            {
+                _placeAboveLocked = _lastPlacedAbove;
+                _placeBelowLocked = !_lastPlacedAbove;
+            }
+            _forceMoveForAnchorRefresh = true;
             ClearCaretAnchor();
         }
 
@@ -46,6 +70,10 @@ namespace TigerClaw.Overlay
                 _lastTargetXPx = int.MinValue;
                 _lastTargetYPx = int.MinValue;
                 _placeAboveLocked = false;
+                _placeBelowLocked = false;
+                _hasPlacementDecision = false;
+                _lastPlacedAbove = false;
+                _forceMoveForAnchorRefresh = false;
                 ClearCaretAnchor();
                 return false;
             }
@@ -53,6 +81,10 @@ namespace TigerClaw.Overlay
             if (!_prevComposing)
             {
                 _placeAboveLocked = false;
+                _placeBelowLocked = false;
+                _hasPlacementDecision = false;
+                _lastPlacedAbove = false;
+                _forceMoveForAnchorRefresh = false;
                 ClearCaretAnchor();
             }
 
@@ -115,7 +147,10 @@ namespace TigerClaw.Overlay
             {
                 int caretBottomPx = caretY;
                 int caretTopPx = caretBottomPx - Math.Max(1, caretHeightPx);
-                if (ShouldPlaceAbove(caretTopPx, caretBottomPx, heightPx, workTopPx, workBottomPx))
+                bool placeAbove = ShouldPlaceAbove(caretTopPx, caretBottomPx, heightPx, workTopPx, workBottomPx);
+                _hasPlacementDecision = true;
+                _lastPlacedAbove = placeAbove;
+                if (placeAbove)
                 {
                     _placeAboveLocked = true;
                     targetYPx = caretTopPx - CaretGapPx - heightPx;
@@ -140,7 +175,11 @@ namespace TigerClaw.Overlay
             }
 
             double posDelta = Math.Abs(currentXPx - clampedXPx) + Math.Abs(currentYPx - clampedYPx);
-            bool shouldMove = (!_prevComposing && nowComposing) || posDelta > 50 || outOfBounds || monitorChanged;
+            bool shouldMove = (!_prevComposing && nowComposing) ||
+                              _forceMoveForAnchorRefresh ||
+                              posDelta > 50 ||
+                              outOfBounds ||
+                              monitorChanged;
             if (targetUnchanged && !outOfBounds && !monitorChanged && posDelta < 1)
             {
                 shouldMove = false;
@@ -161,6 +200,7 @@ namespace TigerClaw.Overlay
             _lastTargetXPx = clampedXPx;
             _lastTargetYPx = clampedYPx;
             _prevComposing = nowComposing;
+            _forceMoveForAnchorRefresh = false;
             return true;
         }
 
@@ -177,6 +217,11 @@ namespace TigerClaw.Overlay
             if (_placeAboveLocked)
             {
                 return true;
+            }
+
+            if (_placeBelowLocked)
+            {
+                return false;
             }
 
             bool fitsBelow = caretBottomPx + CaretGapPx + windowHeightPx <= workBottomPx;

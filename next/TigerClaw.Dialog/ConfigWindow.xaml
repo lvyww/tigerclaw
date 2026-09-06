@@ -214,6 +214,10 @@
                             Content="候选窗"
                             Style="{StaticResource NavButtonStyle}"
                             Click="OnSectionNavClick" />
+                    <Button x:Name="SentenceNavButton"
+                            Content="整句"
+                            Style="{StaticResource NavButtonStyle}"
+                            Click="OnSectionNavClick" />
                     <Button x:Name="NativeNavButton"
                             Content="外挂版"
                             Style="{StaticResource NavButtonStyle}"
@@ -280,7 +284,7 @@
                         <StackPanel>
                             <TextBlock Text="码表及输入行为"
                                        Style="{StaticResource SectionTitleStyle}" />
-                            <TextBlock Text="与码表方案强相关的输入规则和自动上屏行为。"
+                            <TextBlock Text="码表方案和常规编码输入行为。"
                                        Style="{StaticResource SectionSubtitleStyle}"
                                        Margin="0,4,0,14" />
 
@@ -431,6 +435,22 @@
                         </Border>
 
                             <StackPanel x:Name="CandidateDynamicPanel" />
+                        </StackPanel>
+                    </Border>
+
+                    <Border x:Name="SentenceSection"
+                            Style="{StaticResource SectionBorderStyle}"
+                            Background="Transparent"
+                            BorderThickness="0"
+                            Padding="0"
+                            Margin="0,0,0,14">
+                        <StackPanel>
+                            <TextBlock Text="整句"
+                                       Style="{StaticResource SectionTitleStyle}" />
+                            <TextBlock Text="整句模式、模型重排和自动提前上屏行为。"
+                                       Style="{StaticResource SectionSubtitleStyle}"
+                                       Margin="0,4,0,14" />
+                            <StackPanel x:Name="SentenceDynamicPanel" />
                         </StackPanel>
                     </Border>
 

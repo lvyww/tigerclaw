@@ -4,7 +4,9 @@
 #include <cstdint>
 
 #if defined(_WIN32)
-#if defined(TIGERCLAW_SENTENCE_NATIVE_EXPORTS)
+#if defined(TIGERCLAW_SENTENCE_NATIVE_STATIC)
+#define TCS_API extern "C"
+#elif defined(TIGERCLAW_SENTENCE_NATIVE_EXPORTS)
 #define TCS_API extern "C" __declspec(dllexport)
 #else
 #define TCS_API extern "C" __declspec(dllimport)

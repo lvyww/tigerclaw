@@ -59,8 +59,9 @@ if errorlevel 1 (
   if /I "%ARCH%"=="ARM64" echo ERROR: ARM64 llama.cpp requires the Visual Studio C++ Clang tools component.
   exit /b 1
 )
-"%CMAKE%" --build "%BUILD_DIR%" --config "%CONFIGURATION%" --target TigerClaw.Sentence.Native -j 8 || exit /b 1
-copy /Y "%BUILD_DIR%\%CONFIGURATION%\TigerClaw.Sentence.Native.dll" "%OUTPUT_DIR%\TigerClaw.Sentence.Native.dll" >nul || exit /b 1
+"%CMAKE%" --build "%BUILD_DIR%" --config "%CONFIGURATION%" --target TigerClaw.Sentence.Host -j 8 || exit /b 1
+copy /Y "%BUILD_DIR%\%CONFIGURATION%\TigerClaw.Sentence.exe" "%OUTPUT_DIR%\TigerClaw.Sentence.exe" >nul || exit /b 1
+for %%F in (TigerClaw.Sentence.exe.config TigerClaw.Sentence.Native.dll TigerClaw.Sentence.pdb TigerClaw.Shared.dll TigerClaw.Shared.pdb) do if exist "%OUTPUT_DIR%\%%F" del /q "%OUTPUT_DIR%\%%F"
 
-echo Sentence native %ARCH%: %OUTPUT_DIR%\TigerClaw.Sentence.Native.dll
+echo Sentence C++ host %ARCH%: %OUTPUT_DIR%\TigerClaw.Sentence.exe
 exit /b 0

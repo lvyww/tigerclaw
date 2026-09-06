@@ -2,7 +2,6 @@ using System;
 using System.Diagnostics;
 using System.Threading;
 using TigerClaw.Shared;
-using Forms = System.Windows.Forms;
 
 namespace TigerClaw.Core
 {
@@ -31,7 +30,7 @@ namespace TigerClaw.Core
                     string message = TsfRegistrationGuard.BuildNotRegisteredMessage(installScript);
                     try
                     {
-                        Forms.MessageBox.Show(message, RuntimeConstants.ProductName, Forms.MessageBoxButtons.OK, Forms.MessageBoxIcon.Warning);
+                        NativeMessageBox.ShowWarning(message, RuntimeConstants.ProductName);
                     }
                     catch
                     {
@@ -89,10 +88,14 @@ namespace TigerClaw.Core
                     }, state, uiStatePublisher);
                     pipeServer.MessageReceived += async (clientId, json) =>
                     {
-                        string response = protocolHandler.Handle(json);
+                        string response = protocolHandler.HandleTransport(json, out bool publishUiAfterResponse);
                         if (!string.IsNullOrEmpty(response))
                         {
                             await pipeServer.SendResponseToClientAsync(clientId, response).ConfigureAwait(false);
+                        }
+                        if (publishUiAfterResponse)
+                        {
+                            protocolHandler.RequestDeferredUiStatePublish();
                         }
                     };
 
@@ -105,7 +108,7 @@ namespace TigerClaw.Core
                         const string message = "未检测到 TSF 注册，已切换为 Native Hook 启动模式，但 TigerClaw.exe 启动失败。";
                         try
                         {
-                            Forms.MessageBox.Show(message, RuntimeConstants.ProductName, Forms.MessageBoxButtons.OK, Forms.MessageBoxIcon.Warning);
+                            NativeMessageBox.ShowWarning(message, RuntimeConstants.ProductName);
                         }
                         catch
                         {

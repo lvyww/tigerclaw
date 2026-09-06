@@ -3,6 +3,10 @@ using System.IO;
 using System.IO.MemoryMappedFiles;
 using System.Runtime.Serialization.Json;
 using System.Text;
+#if NET8_0_OR_GREATER
+using System.Text.Json;
+using System.Text.Json.Serialization;
+#endif
 
 namespace TigerClaw.Shared
 {
@@ -14,7 +18,9 @@ namespace TigerClaw.Shared
         private readonly object _sync = new object();
         private readonly MemoryMappedFile _mmf;
         private readonly MemoryMappedViewAccessor _view;
+#if !NET8_0_OR_GREATER
         private readonly DataContractJsonSerializer _serializer = new DataContractJsonSerializer(typeof(OverlayUiState));
+#endif
         private long _sequence;
 
         public UiStatePublisher()
@@ -60,11 +66,17 @@ namespace TigerClaw.Shared
         {
             try
             {
+#if NET8_0_OR_GREATER
+                return JsonSerializer.SerializeToUtf8Bytes(
+                    state,
+                    OverlayUiStateJsonContext.Default.OverlayUiState);
+#else
                 using (var ms = new MemoryStream())
                 {
                     _serializer.WriteObject(ms, state);
                     return ms.ToArray();
                 }
+#endif
             }
             catch
             {
@@ -84,7 +96,9 @@ namespace TigerClaw.Shared
         private const int HeaderSize = sizeof(long) + sizeof(long) + sizeof(int);
         private const int Capacity = 128 * 1024;
 
+#if !NET8_0_OR_GREATER
         private readonly DataContractJsonSerializer _serializer = new DataContractJsonSerializer(typeof(OverlayUiState));
+#endif
         private MemoryMappedFile _mmf;
         private MemoryMappedViewAccessor _view;
 
@@ -190,11 +204,17 @@ namespace TigerClaw.Shared
 
             try
             {
+#if NET8_0_OR_GREATER
+                return JsonSerializer.Deserialize(
+                    payload,
+                    OverlayUiStateJsonContext.Default.OverlayUiState);
+#else
                 using (var ms = new MemoryStream(payload))
                 {
                     object obj = _serializer.ReadObject(ms);
                     return obj as OverlayUiState;
                 }
+#endif
             }
             catch
             {
@@ -234,4 +254,12 @@ namespace TigerClaw.Shared
             DisposeMap();
         }
     }
+
+#if NET8_0_OR_GREATER
+    [JsonSourceGenerationOptions(GenerationMode = JsonSourceGenerationMode.Metadata)]
+    [JsonSerializable(typeof(OverlayUiState))]
+    internal partial class OverlayUiStateJsonContext : JsonSerializerContext
+    {
+    }
+#endif
 }
