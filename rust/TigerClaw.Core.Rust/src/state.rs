@@ -1,5 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::cell::Cell;
+use std::sync::Arc;
 
 use crate::lexicon::Lexicon;
 use crate::config::Config;
@@ -20,14 +21,14 @@ pub struct CoreState {
     key_response_order: VecDeque<String>,
     pub lexicon: Lexicon,
     pub selected_candidate: usize,
-    pub config: Config,
+    pub config: Arc<Config>,
     pub config_path: Option<String>,
     pub lexicon_path: Option<String>,
     pub mixed_prefix: String,
     pub mixed_segments: Vec<(String, String)>,
     pub raw_input: String,
     pub sentence_candidates: Vec<String>,
-    pub sentence_model: Option<NgramModel>,
+    pub sentence_model: Option<Arc<NgramModel>>,
     pub sentence_exe: Option<String>,
     pub qwen_model: Option<String>,
     pub base_dir: Option<String>,
@@ -51,7 +52,7 @@ impl Default for CoreState {
             key_response_order: VecDeque::new(),
             lexicon: Lexicon::default(),
             selected_candidate: 0,
-            config: Config::default(),
+            config: Arc::new(Config::default()),
             config_path: None,
             lexicon_path: None,
             mixed_prefix: String::new(),
@@ -71,6 +72,24 @@ impl Default for CoreState {
 }
 
 impl CoreState {
+    pub fn with_resources(config: Arc<Config>, lexicon: Lexicon, sentence_model: Option<Arc<NgramModel>>) -> Self {
+        Self {
+            config,
+            lexicon,
+            sentence_model,
+            ..Self::default()
+        }
+    }
+
+    pub fn clear_composition(&mut self) {
+        self.input_buffer.clear();
+        self.mixed_prefix.clear();
+        self.mixed_segments.clear();
+        self.raw_input.clear();
+        self.sentence_candidates.clear();
+        self.selected_candidate = 0;
+    }
+
     pub fn replayed_key_response(
         &self,
         client_session: &str,
@@ -88,8 +107,8 @@ impl CoreState {
         let Some(key) = replay_key(client_session, event_id) else {
             return;
         };
-        if self.key_responses.contains_key(&key) {
-            self.key_responses.insert(key, response.to_owned());
+        if let std::collections::hash_map::Entry::Occupied(mut entry) = self.key_responses.entry(key.clone()) {
+            entry.insert(response.to_owned());
             return;
         }
 

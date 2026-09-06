@@ -1,0 +1,285 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A20000000000000000000001 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000011 /* AppDelegate.swift */; };
+		A20000000000000000000002 /* TigerClawInputController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000012 /* TigerClawInputController.swift */; };
+		A20000000000000000000003 /* InputMethodKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000013 /* InputMethodKit.framework */; };
+		A20000000000000000000004 /* LifecycleTrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000014 /* LifecycleTrace.swift */; };
+		A20000000000000000000005 /* NativeAotBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000015 /* NativeAotBridge.swift */; };
+		A20000000000000000000006 /* NativeAotInputEvent.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000016 /* NativeAotInputEvent.swift */; };
+		A20000000000000000000007 /* NativeAotSmoke.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000017 /* NativeAotSmoke.swift */; };
+		A2000000000000000000001D /* InputSourceInstaller.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000001E /* InputSourceInstaller.swift */; };
+		A20000000000000000000026 /* CandidatePanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000027 /* CandidatePanel.swift */; };
+		A20000000000000000000008 /* TigerClaw.Engine.NativeAot.dylib in Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000018 /* TigerClaw.Engine.NativeAot.dylib */; };
+		A20000000000000000000009 /* TigerClaw.Engine.NativeAot.dylib in Copy Frameworks */ = {isa = PBXBuildFile; fileRef = A20000000000000000000018 /* TigerClaw.Engine.NativeAot.dylib */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		A2000000000000000000000A /* tiger_sentence.dict.yaml in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000019 /* tiger_sentence.dict.yaml */; };
+		A20000000000000000000028 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = A20000000000000000000029 /* InfoPlist.strings */; };
+		A2000000000000000000002E /* English InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000002F /* English InfoPlist.strings */; };
+		A2000000000000000000002A /* TigerClaw.pdf in Resources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000002C /* TigerClaw.pdf */; };
+		A2000000000000000000002B /* TigerClaw.icns in Resources */ = {isa = PBXBuildFile; fileRef = A2000000000000000000002D /* TigerClaw.icns */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		A20000000000000000000020 /* Copy Frameworks */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 10;
+			files = (
+				A20000000000000000000009 /* TigerClaw.Engine.NativeAot.dylib in Copy Frameworks */,
+			);
+			name = "Copy Frameworks";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		A20000000000000000000010 /* TigerClawRealImeNativeAotHost.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = TigerClawRealImeNativeAotHost.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A20000000000000000000011 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/AppDelegate.swift; sourceTree = "<group>"; };
+		A20000000000000000000012 /* TigerClawInputController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/TigerClawInputController.swift; sourceTree = "<group>"; };
+		A20000000000000000000013 /* InputMethodKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = InputMethodKit.framework; path = System/Library/Frameworks/InputMethodKit.framework; sourceTree = SDKROOT; };
+		A20000000000000000000014 /* LifecycleTrace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/LifecycleTrace.swift; sourceTree = "<group>"; };
+		A20000000000000000000015 /* NativeAotBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/NativeAotBridge.swift; sourceTree = "<group>"; };
+		A20000000000000000000016 /* NativeAotInputEvent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/NativeAotInputEvent.swift; sourceTree = "<group>"; };
+		A20000000000000000000017 /* NativeAotSmoke.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/NativeAotSmoke.swift; sourceTree = "<group>"; };
+		A2000000000000000000001E /* InputSourceInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/InputSourceInstaller.swift; sourceTree = "<group>"; };
+		A20000000000000000000027 /* CandidatePanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/CandidatePanel.swift; sourceTree = "<group>"; };
+		A20000000000000000000018 /* TigerClaw.Engine.NativeAot.dylib */ = {isa = PBXFileReference; lastKnownFileType = compiled.mach-o.dylib; path = Vendor/TigerClaw.Engine.NativeAot.dylib; sourceTree = "<group>"; };
+		A20000000000000000000019 /* tiger_sentence.dict.yaml */ = {isa = PBXFileReference; lastKnownFileType = text; path = Resources/tiger_sentence.dict.yaml; sourceTree = "<group>"; };
+		A20000000000000000000029 /* InfoPlist.strings */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; path = Resources/zh-Hans.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A2000000000000000000002F /* English InfoPlist.strings */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; path = Resources/en.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		A2000000000000000000002C /* TigerClaw.pdf */ = {isa = PBXFileReference; lastKnownFileType = image.pdf; path = Resources/TigerClaw.pdf; sourceTree = "<group>"; };
+		A2000000000000000000002D /* TigerClaw.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; path = Resources/TigerClaw.icns; sourceTree = "<group>"; };
+		A2000000000000000000001A /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A2000000000000000000001B /* NativeAotBridgingHeader.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Support/NativeAotBridgingHeader.h; sourceTree = "<group>"; };
+		A2000000000000000000001C /* tigerclaw_engine_nativeaot.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Vendor/tigerclaw_engine_nativeaot.h; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A20000000000000000000021 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A20000000000000000000003 /* InputMethodKit.framework in Frameworks */,
+				A20000000000000000000008 /* TigerClaw.Engine.NativeAot.dylib in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A20000000000000000000030 = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000031 /* TigerClaw */,
+				A20000000000000000000032 /* Frameworks */,
+				A20000000000000000000033 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A20000000000000000000031 /* TigerClaw */ = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000011 /* AppDelegate.swift */,
+				A20000000000000000000012 /* TigerClawInputController.swift */,
+				A20000000000000000000014 /* LifecycleTrace.swift */,
+				A20000000000000000000015 /* NativeAotBridge.swift */,
+				A20000000000000000000016 /* NativeAotInputEvent.swift */,
+				A20000000000000000000017 /* NativeAotSmoke.swift */,
+				A20000000000000000000027 /* CandidatePanel.swift */,
+				A2000000000000000000001E /* InputSourceInstaller.swift */,
+				A2000000000000000000001A /* Info.plist */,
+				A2000000000000000000001B /* NativeAotBridgingHeader.h */,
+				A2000000000000000000001C /* tigerclaw_engine_nativeaot.h */,
+				A20000000000000000000018 /* TigerClaw.Engine.NativeAot.dylib */,
+				A20000000000000000000019 /* tiger_sentence.dict.yaml */,
+				A20000000000000000000029 /* InfoPlist.strings */,
+				A2000000000000000000002F /* English InfoPlist.strings */,
+				A2000000000000000000002C /* TigerClaw.pdf */,
+				A2000000000000000000002D /* TigerClaw.icns */,
+			);
+			path = TigerClaw;
+			sourceTree = "<group>";
+		};
+		A20000000000000000000032 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000013 /* InputMethodKit.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		A20000000000000000000033 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000010 /* TigerClawRealImeNativeAotHost.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A20000000000000000000040 /* TigerClawRealImeNativeAotHost */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A20000000000000000000050 /* Build configuration list for PBXNativeTarget "TigerClawRealImeNativeAotHost" */;
+			buildPhases = (
+				A20000000000000000000022 /* Sources */,
+				A20000000000000000000023 /* Resources */,
+				A20000000000000000000021 /* Frameworks */,
+				A20000000000000000000020 /* Copy Frameworks */,
+			);
+			buildRules = ();
+			dependencies = ();
+			name = TigerClawRealImeNativeAotHost;
+			productName = TigerClawRealImeNativeAotHost;
+			productReference = A20000000000000000000010 /* TigerClawRealImeNativeAotHost.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A20000000000000000000060 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2600;
+				LastUpgradeCheck = 2600;
+			};
+			buildConfigurationList = A20000000000000000000061 /* Build configuration list for PBXProject "TigerClawRealImeNativeAotHost" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (en, "zh-Hans", Base);
+			mainGroup = A20000000000000000000030;
+			productRefGroup = A20000000000000000000033 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A20000000000000000000040 /* TigerClawRealImeNativeAotHost */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A20000000000000000000023 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A2000000000000000000000A /* tiger_sentence.dict.yaml in Resources */,
+				A20000000000000000000028 /* InfoPlist.strings in Resources */,
+				A2000000000000000000002E /* English InfoPlist.strings in Resources */,
+				A2000000000000000000002A /* TigerClaw.pdf in Resources */,
+				A2000000000000000000002B /* TigerClaw.icns in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A20000000000000000000022 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A20000000000000000000001 /* AppDelegate.swift in Sources */,
+				A20000000000000000000002 /* TigerClawInputController.swift in Sources */,
+				A20000000000000000000004 /* LifecycleTrace.swift in Sources */,
+				A20000000000000000000005 /* NativeAotBridge.swift in Sources */,
+				A20000000000000000000006 /* NativeAotInputEvent.swift in Sources */,
+				A20000000000000000000007 /* NativeAotSmoke.swift in Sources */,
+				A2000000000000000000001D /* InputSourceInstaller.swift in Sources */,
+				A20000000000000000000026 /* CandidatePanel.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		A20000000000000000000070 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		A20000000000000000000071 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		A20000000000000000000072 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 24;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/TigerClaw/Vendor";
+				INFOPLIST_FILE = TigerClaw/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = net.tigerclaw.inputmethod.NativeAotImkSpike;
+				PRODUCT_NAME = TigerClawRealImeNativeAotHost;
+				SWIFT_OBJC_BRIDGING_HEADER = TigerClaw/Support/NativeAotBridgingHeader.h;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		A20000000000000000000073 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 24;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				HEADER_SEARCH_PATHS = "$(PROJECT_DIR)/TigerClaw/Vendor";
+				INFOPLIST_FILE = TigerClaw/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/../Frameworks";
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = net.tigerclaw.inputmethod.NativeAotImkSpike;
+				PRODUCT_NAME = TigerClawRealImeNativeAotHost;
+				SWIFT_OBJC_BRIDGING_HEADER = TigerClaw/Support/NativeAotBridgingHeader.h;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A20000000000000000000050 /* Build configuration list for PBXNativeTarget "TigerClawRealImeNativeAotHost" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A20000000000000000000072 /* Debug */,
+				A20000000000000000000073 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		A20000000000000000000061 /* Build configuration list for PBXProject "TigerClawRealImeNativeAotHost" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A20000000000000000000070 /* Debug */,
+				A20000000000000000000071 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A20000000000000000000060 /* Project object */;
+}

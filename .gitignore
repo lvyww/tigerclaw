@@ -30,6 +30,7 @@ next/_run/
 next/_native_build/
 next/**/bin/
 next/**/obj/
+/next/TigerClaw.Sentence.Native/build-macos-arm64/
 .dotnet_home/
 _dotnet_home_tmp/
 _tmp*/
@@ -53,6 +54,9 @@ release/_tmp*
 release/TigerClaw/
 release/Win32/
 release/x64/
+
+# macOS/Rust local build trees
+/rust/TigerClaw.Core.Rust/target/
 BimeTSF2/SampleIME/BimeTSF2/Release/
 BimeTSF2/SampleIME/BimeTSF2/x64/
 reference/SampleIME/x64/
@@ -72,3 +76,7 @@ uninstall.log
 # Windows explorer
 Thumbs.db
 Desktop.ini
+
+# macOS Finder and locally built spike payloads
+.DS_Store
+/spikes/swift-dotnet-bridge/XcodeHost/TigerClaw/Resources/DummyEngine.dylib

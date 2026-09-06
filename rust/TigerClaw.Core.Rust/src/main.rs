@@ -1,4 +1,5 @@
 use std::io::{self, BufRead, Write};
+use std::sync::Arc;
 #[cfg(windows)]
 use std::sync::{Arc, Mutex};
 
@@ -48,11 +49,11 @@ fn main() -> io::Result<()> {
             state.lexicon_path = Some(path);
         }
         if let Some(path) = config_path {
-            state.config = Config::load(&path)?;
+            state.config = Arc::new(Config::load(&path)?);
             state.config_path = Some(path);
         }
         if let Some(path) = ngram_path {
-            state.sentence_model = NgramModel::load(path).ok();
+            state.sentence_model = NgramModel::load(path).ok().map(Arc::new);
         }
         state.sentence_exe = sentence_exe;
         state.qwen_model = qwen_model;
@@ -76,11 +77,11 @@ fn run_stdio(lexicon_path: Option<String>, config_path: Option<String>, ngram_pa
         state.lexicon_path = Some(path);
     }
     if let Some(path) = config_path {
-        state.config = Config::load(&path)?;
+        state.config = Arc::new(Config::load(&path)?);
         state.config_path = Some(path);
     }
     if let Some(path) = ngram_path {
-        state.sentence_model = NgramModel::load(path).ok();
+        state.sentence_model = NgramModel::load(path).ok().map(Arc::new);
     }
     state.sentence_exe = sentence_exe;
     state.qwen_model = qwen_model;

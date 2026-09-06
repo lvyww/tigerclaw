@@ -1,4 +1,5 @@
 use serde_json::{Value, json};
+use std::sync::Arc;
 
 use crate::state::CoreState;
 
@@ -340,7 +341,7 @@ fn reload_config(state: &mut CoreState, message: &Value, seq: i64) -> String {
     }
     match crate::config::Config::load(&path) {
         Ok(config) => {
-            state.config = config;
+            state.config = Arc::new(config);
             state.config_path = Some(path);
             state.config_version = state.config_version.saturating_add(1);
             state.input_buffer.clear();
@@ -384,7 +385,7 @@ fn config_response(state: &CoreState, seq: i64) -> String {
 
 fn set_config(state: &mut CoreState, message: &Value, seq: i64) -> String {
     if let (Some(key), Some(value)) = (message.get("key").and_then(Value::as_str), message.get("value").and_then(Value::as_str)) {
-        let changed = apply_config_text_value(&mut state.config, key, value);
+        let changed = apply_config_text_value(Arc::make_mut(&mut state.config), key, value);
         if !changed { return simple_response(state, seq, false, json!({"changed":false,"config_version":state.config_version,"lexicon_version":state.lexicon_version,"error":"unsupported config key"})); }
         state.config_version = state.config_version.saturating_add(1);
         clear_composition(state);
@@ -394,14 +395,14 @@ fn set_config(state: &mut CoreState, message: &Value, seq: i64) -> String {
     let Some(config) = message.get("config").or_else(|| message.get("values")) else {
         return json!({"type":"response","seq":seq,"success":false,"handled":false,"error":"config object is required"}).to_string();
     };
-    let mut next = state.config.clone();
+    let mut next = (*state.config).clone();
     if let Some(value) = config.get("分号次选").or_else(|| config.get("semicolon_second")) { next.semicolon_second = value.as_bool().unwrap_or(next.semicolon_second); }
     if let Some(value) = config.get("引号三选").or_else(|| config.get("quote_third")) { next.quote_third = value.as_bool().unwrap_or(next.quote_third); }
     if let Some(value) = config.get("TAB清屏").or_else(|| config.get("tab_clear")) { next.tab_clear = value.as_bool().unwrap_or(next.tab_clear); }
-    if let Some(value) = config.get("最大码长").or_else(|| config.get("max_code_length")) { if let Some(n)=value.as_u64() { next.max_code_length=(n as usize).clamp(1,16); } }
+    if let Some(value) = config.get("最大码长").or_else(|| config.get("max_code_length")) && let Some(n)=value.as_u64() { next.max_code_length=(n as usize).clamp(1,16); }
     if let Some(value) = config.get("中英文不限长混合输入").or_else(|| config.get("mixed_input")) { next.mixed_input = value.as_bool().unwrap_or(next.mixed_input); }
     if let Some(value) = config.get("整句输入").or_else(|| config.get("sentence_input")) { next.sentence_input = value.as_bool().unwrap_or(next.sentence_input); }
-    state.config = next;
+    state.config = Arc::new(next);
     state.config_version = state.config_version.saturating_add(1);
     state.input_buffer.clear();
     state.mixed_prefix.clear();
@@ -419,10 +420,8 @@ fn add_ci(state: &mut CoreState, message: &Value, seq: i64) -> String {
     let text = string(message, "text");
     let ok = state.lexicon.add_candidate(code, text);
     if ok { state.lexicon_version = state.lexicon_version.saturating_add(1); }
-    if ok {
-        if let Some(path) = state.lexicon_path.as_deref() {
-            let _ = std::fs::OpenOptions::new().create(true).append(true).open(path).and_then(|mut file| std::io::Write::write_all(&mut file, state.lexicon.export_line(code, text).as_bytes()));
-        }
+    if ok && let Some(path) = state.lexicon_path.as_deref() {
+        let _ = std::fs::OpenOptions::new().create(true).append(true).open(path).and_then(|mut file| std::io::Write::write_all(&mut file, state.lexicon.export_line(code, text).as_bytes()));
     }
     simple_response(state, seq, ok, json!({"lexicon_version":state.lexicon_version}))
 }
@@ -445,7 +444,7 @@ fn launch_ui(state: &CoreState, seq: i64, executable: &str, arg: &str) -> String
     simple_response(state,seq,ok,json!({}))
 }
 
-fn clear_composition(state: &mut CoreState) { state.input_buffer.clear(); state.mixed_prefix.clear(); state.mixed_segments.clear(); state.raw_input.clear(); state.sentence_candidates.clear(); state.selected_candidate=0; }
+fn clear_composition(state: &mut CoreState) { state.clear_composition(); }
 
 fn simple_response(state: &CoreState, seq: i64, success: bool, extra: Value) -> String {
     let mut response: Value = serde_json::from_str(&state_response(state, seq, success)).expect("state response JSON");
@@ -640,7 +639,7 @@ mod tests {
         std::fs::write(&path, "一\tabcd\n二\tabcd\n分号次选\t否\nTAB清屏\t是\n").unwrap();
         let mut state = CoreState::default();
         state.lexicon = crate::lexicon::Lexicon::load(&path).unwrap();
-        state.config = crate::config::Config::load(&path).unwrap();
+        state.config = Arc::new(crate::config::Config::load(&path).unwrap());
         for (seq, vk) in [65_u64, 66, 67, 68].into_iter().enumerate() {
             let line = format!(r#"{{"type":"key","seq":{},"action":"down","vk":{}}}"#, seq + 1, vk);
             handle_line(&mut state, &line);
@@ -689,7 +688,7 @@ mod tests {
         std::fs::write(&path, "你好\tabcd\n").unwrap();
         let mut state = CoreState::default();
         state.lexicon = crate::lexicon::Lexicon::load(&path).unwrap();
-        state.config.mixed_input = true;
+        Arc::make_mut(&mut state.config).mixed_input = true;
         for (seq, vk) in [65_u64, 66, 67, 68, 88].into_iter().enumerate() {
             let line = format!(r#"{{"type":"key","seq":{},"action":"down","vk":{}}}"#, seq + 1, vk);
             handle_line(&mut state, &line);
@@ -709,7 +708,7 @@ mod tests {
         std::fs::write(&path, "你好\tabcd\n").unwrap();
         let mut state = CoreState::default();
         state.lexicon = crate::lexicon::Lexicon::load(&path).unwrap();
-        state.config.mixed_input = true;
+        Arc::make_mut(&mut state.config).mixed_input = true;
         for (seq, vk) in [65_u64, 66, 67, 68, 88].into_iter().enumerate() {
             let line = format!(r#"{{"type":"key","seq":{},"action":"down","vk":{}}}"#, seq + 1, vk);
             handle_line(&mut state, &line);
@@ -728,8 +727,8 @@ mod tests {
         std::fs::write(&path, "我\tab\n爱\tcd\n你\tcd\n").unwrap();
         let mut state = CoreState::default();
         state.lexicon = crate::lexicon::Lexicon::load(&path).unwrap();
-        state.config.sentence_input = true;
-        state.config.max_code_length = 2;
+        Arc::make_mut(&mut state.config).sentence_input = true;
+        Arc::make_mut(&mut state.config).max_code_length = 2;
         for (seq, vk) in [65_u64, 66, 67, 68].into_iter().enumerate() {
             let line = format!(r#"{{"type":"key","seq":{},"action":"down","vk":{}}}"#, seq + 1, vk);
             handle_line(&mut state, &line);

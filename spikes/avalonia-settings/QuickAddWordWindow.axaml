@@ -1,0 +1,28 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="TigerClawSettingsSpike.QuickAddWordWindow"
+        Title="虎爪输入法加词"
+        Width="460"
+        SizeToContent="Height"
+        CanResize="False">
+    <Grid Margin="24" RowDefinitions="Auto,Auto,Auto,Auto" RowSpacing="14">
+        <StackPanel Spacing="4">
+            <TextBlock Text="添加用户词" FontSize="22" FontWeight="SemiBold" />
+            <TextBlock Text="已按当前方案自动带入编码；可在保存前修改。"
+                       Foreground="{DynamicResource TextControlPlaceholderForeground}" />
+        </StackPanel>
+        <Grid Grid.Row="1" ColumnDefinitions="88,*" RowDefinitions="Auto,Auto" RowSpacing="12" ColumnSpacing="12">
+            <TextBlock Text="编码" VerticalAlignment="Center" />
+            <TextBox x:Name="CodeInput" Grid.Column="1" Watermark="例如 abcd" />
+            <TextBlock Grid.Row="1" Text="词条" VerticalAlignment="Center" />
+            <TextBox x:Name="WordInput" Grid.Row="1" Grid.Column="1" Watermark="要加入的字词" />
+        </Grid>
+        <TextBlock x:Name="StatusText" Grid.Row="2" TextWrapping="Wrap"
+                   Foreground="{DynamicResource TextControlPlaceholderForeground}" />
+        <StackPanel Grid.Row="3" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="10">
+            <Button Content="取消" Click="Cancel_Click" />
+            <Button Content="添加并继续" Click="AddAndKeep_Click" />
+            <Button Content="添加并关闭" Click="AddAndClose_Click" IsDefault="True" />
+        </StackPanel>
+    </Grid>
+</Window>

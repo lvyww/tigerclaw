@@ -1,0 +1,197 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d"
+        d:DesignWidth="820" d:DesignHeight="640"
+        Width="820" Height="640"
+        MinWidth="700" MinHeight="540"
+        x:Class="TigerClawSettingsSpike.MainWindow"
+        Title="虎爪输入法设置">
+    <Grid RowDefinitions="Auto,*,Auto" Margin="26" RowSpacing="16">
+        <StackPanel Spacing="4">
+            <TextBlock Text="虎爪输入法设置" FontSize="25" FontWeight="SemiBold" />
+            <TextBlock Text="基础输入功能与 Windows 版对齐。修改后在下一次激活输入法时生效。"
+                       Foreground="{DynamicResource TextControlPlaceholderForeground}" />
+        </StackPanel>
+
+        <TabControl Grid.Row="1">
+            <TabItem Header="输入与方案">
+                <ScrollViewer Margin="4,18,4,4">
+                    <StackPanel Spacing="16">
+                        <TextBlock Text="码表方案" FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock Text="选择当前方案。当前开发包只有已随包安装或导入的方案；不会把两个 macOS 输入法源误当成两个码表。"
+                                   TextWrapping="Wrap" Foreground="{DynamicResource TextControlPlaceholderForeground}" />
+                        <Button Content="导入方案（.zip、.txt 或 Rime .dict.yaml）" Click="ImportSchema_Click" HorizontalAlignment="Left" />
+                        <Grid ColumnDefinitions="190,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" RowSpacing="14" ColumnSpacing="20">
+                            <TextBlock Text="当前输入方案" VerticalAlignment="Center" />
+                            <ComboBox x:Name="SchemaComboBox" Grid.Column="1" HorizontalAlignment="Stretch" SelectionChanged="SchemaSelectionChanged" />
+                            <TextBlock Grid.Row="1" Text="中英文不限长混输" VerticalAlignment="Center" />
+                            <ToggleSwitch x:Name="MixedInputToggle" Grid.Row="1" Grid.Column="1" />
+                            <TextBlock Grid.Row="2" Text="最大码长" VerticalAlignment="Center" />
+                            <NumericUpDown x:Name="MaxCodeLengthInput" Grid.Row="2" Grid.Column="1" Minimum="1" Maximum="16" Increment="1" Width="140" HorizontalAlignment="Left" />
+                            <TextBlock Grid.Row="3" Text="最大码长无重自动上屏" VerticalAlignment="Center" />
+                            <ToggleSwitch x:Name="AutoCommitUniqueToggle" Grid.Row="3" Grid.Column="1" />
+                            <TextBlock Grid.Row="4" Text="候选总数" VerticalAlignment="Center" />
+                            <NumericUpDown x:Name="CandidateCountInput" Grid.Row="4" Grid.Column="1" Minimum="1" Maximum="99" Increment="1" Width="140" HorizontalAlignment="Left" />
+                            <TextBlock Grid.Row="5" Text="默认中文输入" VerticalAlignment="Center" />
+                            <ToggleSwitch x:Name="DefaultChineseToggle" Grid.Row="5" Grid.Column="1" />
+                            <TextBlock Grid.Row="6" Text="整句输入" VerticalAlignment="Center" />
+                            <ToggleSwitch x:Name="SentenceInputToggle" Grid.Row="6" Grid.Column="1" />
+                            <TextBlock Grid.Row="7" Text="方案名含“整句”时自动启用" VerticalAlignment="Center" />
+                            <ToggleSwitch x:Name="AutoSentenceInputToggle" Grid.Row="7" Grid.Column="1" />
+                            <TextBlock Grid.Row="8" Text="Qwen 神经重排" VerticalAlignment="Center" />
+                            <ToggleSwitch x:Name="SentenceNeuralRerankToggle" Grid.Row="8" Grid.Column="1" />
+                            <TextBlock Grid.Row="9" Text="整句自动提前上屏（实验）" VerticalAlignment="Center" />
+                            <ToggleSwitch x:Name="SentenceAutoCommitToggle" Grid.Row="9" Grid.Column="1" />
+                            <TextBlock Grid.Row="10" Text="空码自动清屏" VerticalAlignment="Center" />
+                            <ToggleSwitch x:Name="ClearOnNoCodeToggle" Grid.Row="10" Grid.Column="1" />
+                        </Grid>
+                        <TextBlock Text="空码自动清屏开启后，继续输入导致当前编码完全无命中时，会丢弃无命中的旧编码并从新按键重新起码；关闭后会保留完整编码，供回删或直接上屏原编码。"
+                                   TextWrapping="Wrap" Foreground="{DynamicResource TextControlPlaceholderForeground}" />
+                        <TextBlock Text="整句输入先用 sentence-ngram-v2.bin 立即出候选，再由 Qwen3 0.6B Q8 在后台重排前 5 个候选；首次使用会后台载入模型，不阻塞按键。候选可用 Tab / Shift+Tab 或上下方向键切换，空格或点击候选上屏；分号、单引号和数字作为整句选重后缀。"
+                                   TextWrapping="Wrap" Foreground="{DynamicResource TextControlPlaceholderForeground}" />
+                        <TextBlock Text="已导入方案管理" FontSize="18" FontWeight="SemiBold" Margin="0,8,0,0" />
+                        <TextBlock Text="内置方案受保护。删除只会移除当前选中的已导入方案及其独立词库、快符和方案设置。"
+                                   TextWrapping="Wrap" Foreground="{DynamicResource TextControlPlaceholderForeground}" />
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <TextBox x:Name="SchemaNameInput" Width="210" PlaceholderText="方案显示名称" />
+                            <Button Content="打开方案文件夹" Click="OpenSchemaDirectory_Click" />
+                            <Button Content="重新部署当前方案" Click="RedeploySchema_Click" />
+                            <Button Content="重命名" Click="RenameSchema_Click" />
+                            <Button Content="导出 ZIP" Click="ExportSchema_Click" />
+                            <CheckBox x:Name="DeleteSchemaConfirmationCheckBox" Content="确认删除" VerticalAlignment="Center" />
+                            <Button Content="删除方案" Click="DeleteSchema_Click" />
+                        </StackPanel>
+                        <TextBlock Text="已导入方案和内置“虎整句”可直接在 Finder 中编辑码表、快符和补充语料。保存后，TigerClaw 会在下一次按键前自动重载；“重新部署当前方案”可强制重载。其他内置方案随应用签名保护。"
+                                   TextWrapping="Wrap" Foreground="{DynamicResource TextControlPlaceholderForeground}" />
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <TabItem Header="按键与标点">
+                <ScrollViewer Margin="4,18,4,4">
+                    <StackPanel Spacing="16">
+                        <TextBlock Text="选词和清屏" FontSize="18" FontWeight="SemiBold" />
+                        <Grid ColumnDefinitions="270,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" RowSpacing="14" ColumnSpacing="20">
+                            <TextBlock Text="每页候选数" VerticalAlignment="Center" />
+                            <NumericUpDown x:Name="PageSizeInput" Grid.Column="1" Minimum="1" Maximum="10" Increment="1" Width="140" HorizontalAlignment="Left" />
+                            <TextBlock Grid.Row="1" Text="分号选择第二候选" VerticalAlignment="Center" />
+                            <ToggleSwitch x:Name="SecondCandidateSemicolonToggle" Grid.Row="1" Grid.Column="1" />
+                            <TextBlock Grid.Row="2" Text="单引号选择第三候选" VerticalAlignment="Center" />
+                            <ToggleSwitch x:Name="ThirdCandidateQuoteToggle" Grid.Row="2" Grid.Column="1" />
+                            <TextBlock Grid.Row="3" Text="Tab 清除编码" VerticalAlignment="Center" />
+                            <ToggleSwitch x:Name="TabClearsCompositionToggle" Grid.Row="3" Grid.Column="1" />
+                            <TextBlock Grid.Row="4" Text="回车清除编码（否则上屏原编码）" VerticalAlignment="Center" />
+                            <ToggleSwitch x:Name="EnterClearsCompositionToggle" Grid.Row="4" Grid.Column="1" />
+                            <TextBlock Grid.Row="5" Text="自定义选词键配置" VerticalAlignment="Center" />
+                            <Button Grid.Row="5" Grid.Column="1" Content="编辑自定义选词键" Click="OpenSelectionKeyConfiguration_Click" HorizontalAlignment="Left" />
+                            <TextBlock Grid.Row="6" Text="上一页键" VerticalAlignment="Center" />
+                            <TextBox x:Name="PreviousPageKeysInput" Grid.Row="6" Grid.Column="1" Width="160" HorizontalAlignment="Left" />
+                            <TextBlock Grid.Row="7" Text="下一页键" VerticalAlignment="Center" />
+                            <TextBox x:Name="NextPageKeysInput" Grid.Row="7" Grid.Column="1" Width="160" HorizontalAlignment="Left" />
+                            <TextBlock Grid.Row="8" Text="Ctrl+空格切换中英文" VerticalAlignment="Center" />
+                            <ToggleSwitch x:Name="CtrlSpaceTogglesInputModeToggle" Grid.Row="8" Grid.Column="1" />
+                            <TextBlock Grid.Row="9" Text="Ctrl+= 手动加词" VerticalAlignment="Center" />
+                            <ToggleSwitch x:Name="CtrlEqualAddsWordToggle" Grid.Row="9" Grid.Column="1" />
+                            <TextBlock Grid.Row="10" Text="Caps Lock（英数键）切换中英文" VerticalAlignment="Center" />
+                            <ToggleSwitch x:Name="CapsLockTogglesInputModeToggle" Grid.Row="10" Grid.Column="1" />
+                            <TextBlock Grid.Row="11" Text="开启按键音效" VerticalAlignment="Center" />
+                            <ToggleSwitch x:Name="KeySoundEnabledToggle" Grid.Row="11" Grid.Column="1" />
+                            <TextBlock Grid.Row="12" Text="按键音量（0–100）" VerticalAlignment="Center" />
+                            <NumericUpDown x:Name="KeySoundVolumeInput" Grid.Row="12" Grid.Column="1" Minimum="0" Maximum="100" Increment="1" Width="140" HorizontalAlignment="Left" />
+                            <TextBlock Grid.Row="13" Text="Ctrl+M 切换最近方案" VerticalAlignment="Center" />
+                            <ToggleSwitch x:Name="CtrlMTogglesRecentSchemaToggle" Grid.Row="13" Grid.Column="1" />
+                            <TextBlock Grid.Row="14" Text="` 键拼音反查" VerticalAlignment="Center" />
+                            <ToggleSwitch x:Name="PinyinReverseEnabledToggle" Grid.Row="14" Grid.Column="1" />
+                        </Grid>
+                        <TextBlock Text="选词键由当前方案的 selection-keys.conf 管理：每行写“n选 键值…”。支持普通键、F1–F12、Shift、Ctrl、Option、Command、Caps Lock；十进制及 0x 数值与 Windows Virtual-Key 一致（如 49 / 0x31 为数字 1），macOS 原生键码可写 MAC_18 或 MAC_0x12。文件中的键优先于继续输入编码；修改后切换一次输入法即可生效。Page Up / Page Down 始终可在候选出现时翻页。"
+                                   TextWrapping="Wrap" Foreground="{DynamicResource TextControlPlaceholderForeground}" />
+                        <TextBlock Text="中文标点" FontSize="18" FontWeight="SemiBold" Margin="0,8,0,0" />
+                        <Grid ColumnDefinitions="270,*" RowDefinitions="Auto,Auto" RowSpacing="14" ColumnSpacing="20">
+                            <TextBlock Text="中文状态下使用英文标点" VerticalAlignment="Center" />
+                            <ToggleSwitch x:Name="UseEnglishPunctuationToggle" Grid.Column="1" />
+                            <TextBlock Grid.Row="1" Text="斜杠输出顿号" VerticalAlignment="Center" />
+                            <ToggleSwitch x:Name="SlashOutputsDunhaoToggle" Grid.Row="1" Grid.Column="1" />
+                        </Grid>
+                        <TextBlock Text="快符按码表自动识别：方案存在以 ;、/、[ 开头的唯一编码时，会直接上屏对应符号；否则保留正常标点行为。支持 {日期}、{日期.}、{日期-}、{日期/}、{时分}、{时分秒}、{星期}、{周}、{重复上屏} 和 {甲|乙|丙} 随机快符。"
+                                   TextWrapping="Wrap" Foreground="{DynamicResource TextControlPlaceholderForeground}" />
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <TabItem Header="候选窗">
+                <ScrollViewer Margin="4,18,4,4">
+                    <StackPanel Spacing="16">
+                        <TextBlock Text="候选窗" FontSize="18" FontWeight="SemiBold" />
+                        <Grid ColumnDefinitions="220,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" RowSpacing="14" ColumnSpacing="20">
+                            <TextBlock Text="竖排候选" VerticalAlignment="Center" />
+                            <ToggleSwitch x:Name="VerticalCandidatesToggle" Grid.Column="1" />
+                            <TextBlock Grid.Row="1" Text="显示候选序号" VerticalAlignment="Center" />
+                            <ToggleSwitch x:Name="ShowCandidateIndexToggle" Grid.Row="1" Grid.Column="1" />
+                            <TextBlock Grid.Row="2" Text="候选窗显示编码" VerticalAlignment="Center" />
+                            <ToggleSwitch x:Name="ShowInputCodeToggle" Grid.Row="2" Grid.Column="1" />
+                            <TextBlock Grid.Row="3" Text="隐藏候选窗" VerticalAlignment="Center" />
+                            <ToggleSwitch x:Name="HideCandidatesToggle" Grid.Row="3" Grid.Column="1" />
+                            <TextBlock Grid.Row="4" Text="候选字体大小" VerticalAlignment="Center" />
+                            <NumericUpDown x:Name="CandidateFontSizeInput" Grid.Row="4" Grid.Column="1" Minimum="12" Maximum="32" Increment="1" Width="140" HorizontalAlignment="Left" />
+                            <TextBlock Grid.Row="5" Text="候选字体" VerticalAlignment="Center" />
+                            <TextBox x:Name="CandidateFontNameInput" Grid.Row="5" Grid.Column="1" Width="260" HorizontalAlignment="Left" PlaceholderText="留空使用系统字体，例如 PingFang SC" />
+                            <TextBlock Grid.Row="6" Text="候选窗主题" VerticalAlignment="Center" />
+                            <ComboBox x:Name="CandidateThemeComboBox" Grid.Row="6" Grid.Column="1" Width="180" HorizontalAlignment="Left" />
+                            <TextBlock Grid.Row="7" Text="候选窗动效" VerticalAlignment="Center" />
+                            <ToggleSwitch x:Name="CandidateWindowAnimationToggle" Grid.Row="7" Grid.Column="1" />
+                            <TextBlock Grid.Row="8" Text="编码伪装字符" VerticalAlignment="Center" />
+                            <TextBox x:Name="CodeMaskingInput" Grid.Row="8" Grid.Column="1" Width="260" HorizontalAlignment="Left" PlaceholderText="留空则显示原编码" />
+                            <TextBlock Grid.Row="9" Text="显示候选注释" VerticalAlignment="Center" />
+                            <ToggleSwitch x:Name="ShowCandidateCommentToggle" Grid.Row="9" Grid.Column="1" />
+                            <TextBlock Grid.Row="10" Text="显示字形拆分" VerticalAlignment="Center" />
+                            <ToggleSwitch x:Name="ShowCandidateSplitToggle" Grid.Row="10" Grid.Column="1" />
+                            <TextBlock Grid.Row="11" Text="延时显示候选（毫秒）" VerticalAlignment="Center" />
+                            <NumericUpDown x:Name="CandidateExpandDelayInput" Grid.Row="11" Grid.Column="1" Minimum="0" Maximum="60000" Increment="50" Width="160" HorizontalAlignment="Left" />
+                            <TextBlock Grid.Row="12" Text="延时展开注释和拆分（毫秒）" VerticalAlignment="Center" />
+                            <NumericUpDown x:Name="AnnotationExpandDelayInput" Grid.Row="12" Grid.Column="1" Minimum="0" Maximum="60000" Increment="50" Width="160" HorizontalAlignment="Left" />
+                        </Grid>
+                        <TextBlock Text="延时从本次组合输入开始计时，不会因继续输入而重置。设置后仅改变候选窗和输入中的编码显示，不影响实际编码、选词或上屏内容。"
+                                   TextWrapping="Wrap" Foreground="{DynamicResource TextControlPlaceholderForeground}" />
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <TabItem Header="用户词与换词">
+                <Grid Margin="4,18,4,4" RowDefinitions="Auto,*,Auto" RowSpacing="12">
+                    <StackPanel Spacing="8">
+                        <TextBlock Text="用户词典" FontSize="18" FontWeight="SemiBold" />
+                        <Grid ColumnDefinitions="130,*,Auto" ColumnSpacing="10">
+                            <TextBox x:Name="UserCodeInput" PlaceholderText="编码，例如 a" />
+                            <TextBox x:Name="UserTextInput" Grid.Column="1" PlaceholderText="词条或快符文本" />
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8">
+                                <Button Content="添加" Click="AddUserEntry_Click" />
+                                <Button Content="删除选中项" Click="RemoveUserEntry_Click" />
+                                <Button Content="刷新用户词" Click="RefreshUserDictionary_Click" />
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+                    <ListBox x:Name="UserDictionaryList" Grid.Row="1" />
+                    <TextBlock Grid.Row="2" Text="导入方案会在方案文件夹内使用 Windows 同格式的“用户调整.txt”：添加、置顶、前移、删除均按记录顺序回放。可直接在 Finder 编辑该文件；候选窗中右键候选的调整同样会写入其中。内置方案使用独立的兼容数据文件。"
+                               TextWrapping="Wrap" Foreground="{DynamicResource TextControlPlaceholderForeground}" />
+                </Grid>
+            </TabItem>
+
+            <TabItem Header="诊断">
+                <Grid Margin="4,18,4,4" RowDefinitions="*,Auto" RowSpacing="12">
+                    <TextBox x:Name="DiagnosticsText" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap" ScrollViewer.VerticalScrollBarVisibility="Auto" />
+                    <StackPanel Grid.Row="1" Orientation="Horizontal" Spacing="10" HorizontalAlignment="Right">
+                        <Button Content="修复输入源注册" Click="RepairInputSource_Click" />
+                        <Button Content="刷新" Click="Refresh_Click" />
+                    </StackPanel>
+                </Grid>
+            </TabItem>
+        </TabControl>
+
+        <Grid Grid.Row="2" ColumnDefinitions="*,Auto" ColumnSpacing="16">
+            <TextBlock x:Name="StatusText" TextWrapping="Wrap" VerticalAlignment="Center" Foreground="{DynamicResource TextControlPlaceholderForeground}" />
+            <Button Grid.Column="1" Content="保存全部设置" Click="Save_Click" Padding="22,8" />
+        </Grid>
+    </Grid>
+</Window>

@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "name": "basic-real-code-space-commit",
+  "baseline": {
+    "commit": "59062a6f0142b50d54ec13b0bd30cfdcad0e2c86",
+    "source_test": "Phase1RealEngineSlice"
+  },
+  "resources": {
+    "model_sha256": null,
+    "lexicon_file": {
+      "path": "rime/tiger_sentence/tiger_sentence.dict.yaml",
+      "sha256": "195acb1170bbb3907df5636a9fffa47ce2ef38ff3ba60351f434856f21c5e503"
+    }
+  },
+  "initial_config": {
+    "candidate_count": 9
+  },
+  "events": [
+    {
+      "type": "key",
+      "key": "Character",
+      "value": "a",
+      "action": "KeyDown",
+      "modifiers": [],
+      "physical_key": "KeyA",
+      "physical_scan_code": 0,
+      "is_extended": false,
+      "is_repeat": false
+    },
+    {
+      "type": "key",
+      "key": "Space",
+      "action": "KeyDown",
+      "modifiers": [],
+      "physical_key": "Space",
+      "physical_scan_code": 49,
+      "is_extended": false,
+      "is_repeat": false
+    }
+  ],
+  "expected": {
+    "updates": [
+      {
+        "after_event": 0,
+        "handled": true,
+        "preedit": "a",
+        "candidates": ["来", "那个"],
+        "selected_index": 0,
+        "commit": null
+      },
+      {
+        "after_event": 1,
+        "handled": true,
+        "preedit": "",
+        "candidates": [],
+        "selected_index": 0,
+        "commit": "来",
+        "is_composing": false
+      }
+    ]
+  }
+}

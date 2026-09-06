@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "name": "mixed-input-seals-first-code-only-after-overflow",
+  "baseline": {
+    "commit": "59062a6f0142b50d54ec13b0bd30cfdcad0e2c86",
+    "source_test": "SealsSegmentOnlyAfterOverflow"
+  },
+  "resources": {
+    "model_sha256": null,
+    "lexicon": {
+      "abcd": ["你"]
+    }
+  },
+  "initial_config": {
+    "最大码长": "4",
+    "中英文不限长混合输入": "是"
+  },
+  "events": [
+    { "type": "key", "key": "a", "modifiers": [] },
+    { "type": "key", "key": "b", "modifiers": [] },
+    { "type": "key", "key": "c", "modifiers": [] },
+    { "type": "key", "key": "d", "modifiers": [] },
+    { "type": "key", "key": "e", "modifiers": [] }
+  ],
+  "expected": {
+    "updates": [
+      {
+        "after_event": 3,
+        "resolved_prefix": "",
+        "active_code": "abcd",
+        "preedit": "abcd"
+      },
+      {
+        "after_event": 4,
+        "resolved_prefix": "你",
+        "active_code": "e",
+        "preedit": "你e"
+      }
+    ]
+  }
+}
+

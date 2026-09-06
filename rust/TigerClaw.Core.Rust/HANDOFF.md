@@ -1,6 +1,6 @@
 # TigerClaw Core Rust Handoff
 
-Last updated: 2026-08-19
+Last updated: 2026-08-27
 
 ## Purpose and Status
 
@@ -17,6 +17,12 @@ TSF/Dialog/Native -> \\.\pipe\BimeIPC -> TigerClaw.Core.Rust.exe
                          |-> Local\TigerClaw.Heartbeat.v1
                          |-> TigerClaw.Sentence.v1 (optional sidecar)
 ```
+
+The macOS port also has a separate, non-default engine path. `EngineRuntime`
+owns immutable resource snapshots and `EngineSession` owns composition state.
+It is not wired into the Windows pipe or the C ABI yet; the existing C# Core
+remains the product authority and the existing Rust JSON process remains the
+Windows compatibility candidate.
 
 ## Implemented
 
@@ -36,12 +42,20 @@ TSF/Dialog/Native -> \\.\pipe\BimeIPC -> TigerClaw.Core.Rust.exe
   JSON fields, initial publication and Windows monotonic timestamps.
 - Overlay startup supervision with heartbeat-based restart attempts.
 - `show_menu`, `show_config`, and `show_addci` process launch commands.
+- An ARM64 macOS `staticlib` with an opaque-handle C header, real session
+  snapshots, replay protection and a C smoke test. The release profile is
+  unwind-capable and ABI entry points contain Rust panics as status errors.
+- A multi-session engine boundary with composition isolation, lifecycle
+  clearing, global Chinese/English mode, and atomic resource-epoch replacement.
 
 ## Source Map
 
 - `src/main.rs`: startup, resource discovery and stdio/Windows entry points.
 - `src/protocol.rs`: request dispatch, response shaping and key behavior.
-- `src/state.rs`: process state and idempotent replay cache.
+- `src/state.rs`: per-session composition state and idempotent replay cache.
+- `src/engine.rs`: process-scoped resources and multi-session lifecycle layer.
+- `src/ffi.rs`, `include/tigerclaw_engine.h`: static C ABI scaffolding. It
+  intentionally returns empty snapshots until Phase 3 connects real key logic.
 - `src/config.rs`: supported configuration parsing.
 - `src/lexicon.rs`: code-table loading and candidate storage.
 - `src/sentence.rs`, `src/ngram.rs`, `src/qwen.rs`: sentence decode/model/scorer.
@@ -81,6 +95,12 @@ Dependency-free tests:
 
 ```bash
 cargo test --manifest-path rust/TigerClaw.Core.Rust/Cargo.toml
+```
+
+Apple Silicon static-library verification:
+
+```bash
+cargo build --release --target aarch64-apple-darwin --manifest-path rust/TigerClaw.Core.Rust/Cargo.toml
 ```
 
 The current non-Windows environment has verified GNU cross builds:

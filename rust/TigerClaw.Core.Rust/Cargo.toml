@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[lib]
+crate-type = ["rlib", "staticlib"]
+
 [[bin]]
 name = "tigerclaw_core_rust"
 path = "src/main.rs"
@@ -28,5 +31,5 @@ windows-sys = { version = "0.61", features = [
 [profile.release]
 codegen-units = 1
 lto = "thin"
-panic = "abort"
+panic = "unwind"
 strip = "symbols"

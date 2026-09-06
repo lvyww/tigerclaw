@@ -1,0 +1,5 @@
+**/bin/
+**/obj/
+**/*.app/
+**/*.dSYM/
+swift-dotnet-bridge/SwiftClient/swift-dotnet-bridge-test

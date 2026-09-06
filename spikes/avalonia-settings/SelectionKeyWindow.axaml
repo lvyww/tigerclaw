@@ -1,0 +1,27 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="TigerClawSettingsSpike.SelectionKeyWindow"
+        Title="自定义选词键"
+        Width="720" Height="580"
+        MinWidth="560" MinHeight="420">
+    <Grid Margin="24" RowDefinitions="Auto,Auto,*,Auto,Auto" RowSpacing="12">
+        <TextBlock Text="自定义选词键" FontSize="22" FontWeight="SemiBold" />
+        <TextBlock Grid.Row="1"
+                   Text="每行写“n选 键值…”，例如“2选 F2 SHIFT”或“3选 VK_CONTROL”。支持普通键、F1–F12、Shift、Ctrl、Option、Command、Caps Lock、Windows VK 十进制/十六进制值，以及 MAC_ 原生键码。"
+                   TextWrapping="Wrap"
+                   Foreground="{DynamicResource TextControlPlaceholderForeground}" />
+        <TextBox x:Name="ConfigurationInput" Grid.Row="2"
+                 AcceptsReturn="True" TextWrapping="NoWrap"
+                 FontFamily="Menlo, Monaco, monospace"
+                 ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                 ScrollViewer.VerticalScrollBarVisibility="Auto" />
+        <TextBlock x:Name="StatusText" Grid.Row="3" TextWrapping="Wrap"
+                   Foreground="{DynamicResource TextControlPlaceholderForeground}" />
+        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Spacing="10">
+            <Button Content="在文本编辑器中打开" Click="OpenInTextEditor_Click" />
+            <Button Content="恢复默认" Click="Reset_Click" />
+            <Button Content="取消" Click="Cancel_Click" />
+            <Button Content="保存" Click="Save_Click" IsDefault="True" />
+        </StackPanel>
+    </Grid>
+</Window>

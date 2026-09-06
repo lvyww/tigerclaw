@@ -2,10 +2,11 @@ use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path::Path;
+use std::sync::Arc;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Lexicon {
-    by_code: HashMap<String, Vec<String>>,
+    by_code: Arc<HashMap<String, Vec<String>>>,
 }
 
 impl Lexicon {
@@ -18,7 +19,7 @@ impl Lexicon {
                 continue;
             }
             let fields: Vec<&str> = line
-                .split(|ch: char| ch == '\t' || ch == ' ')
+                .split(['\t', ' '])
                 .filter(|field| !field.is_empty())
                 .collect();
             if fields.len() < 2 {
@@ -32,7 +33,7 @@ impl Lexicon {
                 continue;
             };
             let code = code.to_ascii_lowercase();
-            let values = lexicon.by_code.entry(code).or_default();
+            let values = Arc::make_mut(&mut lexicon.by_code).entry(code).or_default();
             if !values.iter().any(|value| value == text) {
                 values.push(text.to_owned());
             }
@@ -53,7 +54,7 @@ impl Lexicon {
         if code.is_empty() || text.is_empty() {
             return false;
         }
-        let values = self.by_code.entry(code).or_default();
+        let values = Arc::make_mut(&mut self.by_code).entry(code).or_default();
         if !values.iter().any(|value| value == text) {
             values.insert(0, text.to_owned());
         }

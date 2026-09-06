@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <OutputType>Library</OutputType>
+    <PublishAot>true</PublishAot>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>osx-arm64</RuntimeIdentifier>
+    <NativeLib>Shared</NativeLib>
+    <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="tigerclaw_engine_nativeaot.h" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
+    <!-- Reuse the production Windows sentence decoder and model reader so the
+         macOS port keeps exactly the same scoring and segmentation rules. -->
+    <Compile Include="../../../next/TigerClaw.Core/SentenceInputDecoder.cs" Link="Sentence/SentenceInputDecoder.cs" />
+    <Compile Include="../../../next/TigerClaw.Core/SentenceNgramModel.cs" Link="Sentence/SentenceNgramModel.cs" />
+    <Compile Include="../../../next/TigerClaw.Core/SentenceIsolationPenalty.cs" Link="Sentence/SentenceIsolationPenalty.cs" />
+    <Compile Include="../../../next/TigerClaw.Core/SentenceSupplementModel.cs" Link="Sentence/SentenceSupplementModel.cs" />
+    <Compile Include="../../../next/TigerClaw.Core/SentenceCharacterRanks.cs" Link="Sentence/SentenceCharacterRanks.cs" />
+    <Compile Include="../../../next/TigerClaw.Core/SentenceCommonCharacters.cs" Link="Sentence/SentenceCommonCharacters.cs" />
+  </ItemGroup>
+</Project>

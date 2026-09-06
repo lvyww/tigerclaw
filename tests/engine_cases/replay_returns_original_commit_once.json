@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "name": "protocol-replay-returns-original-commit-with-new-sequence",
+  "baseline": {
+    "commit": "59062a6f0142b50d54ec13b0bd30cfdcad0e2c86",
+    "source_test": "KeyReplayCacheReturnsOriginalResultWithCurrentSequence"
+  },
+  "resources": {
+    "model_sha256": null,
+    "lexicon": {}
+  },
+  "initial_config": {},
+  "events": [
+    {
+      "type": "protocol_response_store",
+      "client_session": "frontend-a",
+      "event_id": "17",
+      "sequence": 101,
+      "commit": "一"
+    },
+    {
+      "type": "protocol_response_replay",
+      "client_session": "frontend-a",
+      "event_id": "17",
+      "sequence": 202
+    }
+  ],
+  "expected": {
+    "updates": [
+      {
+        "after_event": 1,
+        "replayed": true,
+        "sequence": 202,
+        "commit": "一",
+        "engine_state_changed": false
+      }
+    ]
+  }
+}
+

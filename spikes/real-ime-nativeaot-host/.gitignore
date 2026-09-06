@@ -1,0 +1,4 @@
+build/
+dist/
+TigerClaw/Vendor/*
+TigerClaw/Resources/tiger_sentence.dict.yaml

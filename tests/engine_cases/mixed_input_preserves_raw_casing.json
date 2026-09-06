@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "name": "mixed-input-preserves-raw-casing-on-enter",
+  "baseline": {
+    "commit": "59062a6f0142b50d54ec13b0bd30cfdcad0e2c86",
+    "source_test": "EnginePreservesShiftedLetterInMixedInput"
+  },
+  "resources": {
+    "model_sha256": null,
+    "lexicon": {}
+  },
+  "initial_config": {
+    "中英文不限长混合输入": "是"
+  },
+  "events": [
+    { "type": "key", "key": "a", "modifiers": [] },
+    { "type": "key", "key": "b", "modifiers": [] },
+    { "type": "key", "key": "c", "modifiers": ["shift"] },
+    { "type": "key", "key": "d", "modifiers": [] },
+    { "type": "key", "key": "e", "modifiers": [] },
+    { "type": "key", "key": "enter", "modifiers": [] }
+  ],
+  "expected": {
+    "updates": [
+      {
+        "after_event": 4,
+        "raw_input": "abCde",
+        "active_code": "e",
+        "commit": null
+      },
+      {
+        "after_event": 5,
+        "commit": "abCde",
+        "is_composing": false
+      }
+    ]
+  }
+}
+

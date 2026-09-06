@@ -1,4 +1,6 @@
 pub mod config;
+pub mod engine;
+pub mod ffi;
 pub mod lexicon;
 pub mod protocol;
 pub mod sentence;

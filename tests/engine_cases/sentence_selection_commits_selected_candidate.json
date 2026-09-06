@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "name": "sentence-selection-suffix-commits-selected-candidate",
+  "baseline": {
+    "commit": "59062a6f0142b50d54ec13b0bd30cfdcad0e2c86",
+    "source_test": "SentenceEngineCommitsDecodedCandidate"
+  },
+  "resources": {
+    "model_sha256": null,
+    "lexicon": {
+      "ot": ["是"],
+      "j": ["人", "什么"]
+    }
+  },
+  "initial_config": {
+    "整句输入": "是"
+  },
+  "events": [
+    { "type": "key", "key": "o", "modifiers": [] },
+    { "type": "key", "key": "t", "modifiers": [] },
+    { "type": "key", "key": "j", "modifiers": [] },
+    { "type": "key", "key": "2", "modifiers": [] },
+    { "type": "key", "key": "space", "modifiers": [] }
+  ],
+  "expected": {
+    "updates": [
+      {
+        "after_event": 3,
+        "preedit": "ot j2",
+        "candidates": ["是什么"],
+        "selected_index": 0,
+        "commit": null
+      },
+      {
+        "after_event": 4,
+        "commit": "是什么",
+        "is_composing": false
+      }
+    ]
+  }
+}
+
