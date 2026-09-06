@@ -167,7 +167,7 @@ internal sealed class BasicEngine : IDisposable
         {
             InputKey.Character => ProcessCharacter(input),
             InputKey.Digit => ProcessDigit(input),
-            InputKey.Semicolon => ProcessSemicolon(),
+            InputKey.Semicolon => ProcessSemicolon(input.Modifiers),
             InputKey.Quote => ProcessQuote(),
             InputKey.PagePrevious => ProcessPageKey(-1),
             InputKey.PageNext => ProcessPageKey(+1),
@@ -446,8 +446,13 @@ internal sealed class BasicEngine : IDisposable
             : Snapshot(handled: false, commit: null);
     }
 
-    private EngineSnapshot ProcessSemicolon()
+    private EngineSnapshot ProcessSemicolon(int modifiers)
     {
+        if ((modifiers & (1 << 0)) != 0)
+        {
+            return CommitSelectedWithSuffix(_config.UseEnglishPunctuationInChinese ? ":" : "：");
+        }
+
         if (IsSentenceComposition && _buffer.Length > 0 && _config.SecondCandidateSemicolon)
         {
             return AppendSentenceInput(';');
@@ -455,11 +460,11 @@ internal sealed class BasicEngine : IDisposable
 
         if (_buffer.Length == 0)
         {
-            EngineSnapshot? quickSymbol = TryProcessQuickSymbolCode(";");
-            if (quickSymbol is not null)
-            {
-                return quickSymbol;
-            }
+            // The active macOS scheme uses [ as its fast-symbol guide.  A
+            // bare semicolon must retain normal Chinese punctuation behavior;
+            // otherwise a legacy 快符 entry (; -> ：) makes full-width ；
+            // impossible to enter.
+            return CommitSelectedWithSuffix(_config.UseEnglishPunctuationInChinese ? ";" : "；");
         }
 
         if (_buffer.Length > 0 && _config.SecondCandidateSemicolon)

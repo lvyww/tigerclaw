@@ -835,6 +835,21 @@ enum NativeAotSmoke {
                 return 1
             }
 
+            let punctuationBridge = try NativeAotBridge(
+                lexiconURL: sentenceLexiconURL,
+                configuration: configuration)
+            try punctuationBridge.activate()
+            let semicolonPunctuation = try punctuationBridge.process(NativeAotInputEvent(
+                key: Int32(TC_INPUT_KEY_SEMICOLON.rawValue), logicalText: ";", modifiers: 0,
+                action: Int32(TC_KEY_ACTION_KEY_DOWN.rawValue), physicalKey: "Semicolon", physicalScanCode: 41))
+            let colonPunctuation = try punctuationBridge.process(NativeAotInputEvent(
+                key: Int32(TC_INPUT_KEY_SEMICOLON.rawValue), logicalText: ":", modifiers: 1 << 0,
+                action: Int32(TC_KEY_ACTION_KEY_DOWN.rawValue), physicalKey: "Semicolon", physicalScanCode: 41))
+            guard semicolonPunctuation.commit == "；", colonPunctuation.commit == "：" else {
+                print("NATIVEAOT_SENTENCE_ASYNC_SMOKE_FAIL punctuation=(semicolonPunctuation), colon=\(colonPunctuation)")
+                return 1
+            }
+
             let (afterT, firstKeyMilliseconds) = try type("t", offset: 0)
             guard afterT.handled,
                   afterT.isComposing,
