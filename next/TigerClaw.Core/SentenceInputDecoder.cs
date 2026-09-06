@@ -37,6 +37,7 @@ namespace TigerClaw.Core
     {
         public string Text { get; set; }
         public int Rank { get; set; }
+        public int[] ExplicitSelectionRanks { get; set; } = Array.Empty<int>();
         public double LogRank { get; set; }
         public string[] TextElements { get; set; }
     }
@@ -74,7 +75,8 @@ namespace TigerClaw.Core
         public static SentenceLexiconIndex Build(
             IDictionary<string, List<string>> source,
             ISet<string> commonCharacters = null,
-            ISet<string> fullCodeWhitelist = null)
+            ISet<string> fullCodeWhitelist = null,
+            IDictionary<string, Dictionary<int, string>> selectionAliases = null)
         {
             ISet<string> common = commonCharacters;
             ISet<string> whitelist = fullCodeWhitelist;
@@ -159,6 +161,11 @@ namespace TigerClaw.Core
                         {
                             Text = text,
                             Rank = index + 1,
+                            ExplicitSelectionRanks = GetExplicitSelectionRanks(
+                                pair.Key,
+                                text,
+                                index + 1,
+                                selectionAliases),
                             LogRank = Math.Log(index + 1.0),
                             TextElements = SplitTextElements(text)
                         });
@@ -184,6 +191,29 @@ namespace TigerClaw.Core
                 filtered,
                 filtered.Keys.Select(code => code.Length).Distinct().OrderBy(length => length).ToArray(),
                 properCodePrefixes);
+        }
+
+        private static int[] GetExplicitSelectionRanks(
+            string code,
+            string text,
+            int rank,
+            IDictionary<string, Dictionary<int, string>> selectionAliases)
+        {
+            var ranks = new List<int> { rank };
+            if (selectionAliases != null &&
+                selectionAliases.TryGetValue(code, out Dictionary<int, string> aliases))
+            {
+                foreach (KeyValuePair<int, string> alias in aliases)
+                {
+                    if (alias.Key > 0 &&
+                        string.Equals(alias.Value, text, StringComparison.Ordinal) &&
+                        !ranks.Contains(alias.Key))
+                    {
+                        ranks.Add(alias.Key);
+                    }
+                }
+            }
+            return ranks.ToArray();
         }
 
         private static string ChoosePrimaryCode(
@@ -753,7 +783,9 @@ namespace TigerClaw.Core
         {
             if (selectedRank > 0)
             {
-                return candidate.Rank == selectedRank;
+                return candidate.ExplicitSelectionRanks != null
+                    ? candidate.ExplicitSelectionRanks.Contains(selectedRank)
+                    : candidate.Rank == selectedRank;
             }
 
             if (candidate.Rank == 1 || wholeInputEdge)

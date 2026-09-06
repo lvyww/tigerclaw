@@ -464,7 +464,8 @@ internal sealed class RuntimeHandle : IDisposable
             _sentenceLexicon = TigerClaw.Core.SentenceLexiconIndex.Build(
                 sentenceLexicon.SentenceSource,
                 TigerClaw.Core.SentenceCharacterRanks.TakeTop(config.SentenceOptimalCodeHighFreqLimit),
-                ParseTextElements(config.SentenceFullCodeWhitelist));
+                ParseTextElements(config.SentenceFullCodeWhitelist),
+                sentenceLexicon.SentenceSelectionAliases);
             _sentenceSupplements = SentenceSupplementLoader.LoadForLexicon(sentenceLexiconPath);
             _sentenceModelPath = sentenceModelPath;
             if (config.SentenceNeuralRerankEnabled &&

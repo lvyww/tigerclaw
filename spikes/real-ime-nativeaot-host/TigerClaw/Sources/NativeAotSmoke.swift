@@ -687,9 +687,8 @@ enum NativeAotSmoke {
             乙 90 j db
             是 100 o ot
             我 100 w tu
-            {重复上屏} 100 r za
-            可以 90 r za
-            在 100 z nq
+            可以 100 r z
+            {重复上屏} 90 r z
             """.write(to: lexiconURL, atomically: true, encoding: .utf8)
 
             func decode(_ code: String, configuration: NativeAotConfiguration) throws -> NativeAotResult {
@@ -700,9 +699,14 @@ enum NativeAotSmoke {
                 try bridge.activate()
                 var result: NativeAotResult?
                 for (offset, letter) in code.enumerated() {
+                    let isSemicolon = letter == ";"
                     result = try bridge.process(NativeAotInputEvent(
-                        key: Int32(TC_INPUT_KEY_CHARACTER.rawValue), logicalText: String(letter), modifiers: 0,
-                        action: Int32(TC_KEY_ACTION_KEY_DOWN.rawValue), physicalKey: "Key\(String(letter).uppercased())", physicalScanCode: Int32(offset)))
+                        key: Int32((isSemicolon ? TC_INPUT_KEY_SEMICOLON : TC_INPUT_KEY_CHARACTER).rawValue),
+                        logicalText: String(letter),
+                        modifiers: 0,
+                        action: Int32(TC_KEY_ACTION_KEY_DOWN.rawValue),
+                        physicalKey: isSemicolon ? "Semicolon" : "Key\(String(letter).uppercased())",
+                        physicalScanCode: Int32(offset)))
                 }
                 let deadline = Date().addingTimeInterval(10)
                 while result?.sentenceRerankPending == true && Date() < deadline {
@@ -723,6 +727,7 @@ enum NativeAotSmoke {
             restricted.sentenceOptimalCodeHighFreqLimit = 1
             restricted.sentenceFullCodeWhitelist = ""
             restricted.sentenceAllowDuplicateSingleCharacters = false
+            restricted.secondCandidateSemicolon = true
 
             let blockedFullCode = try decode("abcot", configuration: restricted)
             guard !blockedFullCode.candidates.contains("的是") else {
@@ -754,9 +759,9 @@ enum NativeAotSmoke {
                 return 1
             }
 
-            let actionFiltered = try decode("tuzanq", configuration: noDuplicates)
+            let actionFiltered = try decode("tuz;", configuration: noDuplicates)
             guard !actionFiltered.candidates.contains(where: { $0.contains("{") || $0.contains("}") }),
-                  actionFiltered.candidates.contains("我可以在") else {
+                  actionFiltered.candidates.contains("我可以") else {
                 print("NATIVEAOT_SENTENCE_RULES_SMOKE_FAIL action-filter=\(actionFiltered)")
                 return 1
             }

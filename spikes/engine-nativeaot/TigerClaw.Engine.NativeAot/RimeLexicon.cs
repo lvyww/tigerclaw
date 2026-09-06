@@ -5,15 +5,18 @@ internal sealed class RimeLexicon
     private static readonly string[] CompanionTableFileNames = ["快符.txt", "常用符号.txt"];
     private readonly Dictionary<string, List<string>> _entries;
     private readonly Dictionary<string, List<string>> _sentenceEntries;
+    private readonly Dictionary<string, Dictionary<int, string>> _sentenceSelectionAliases;
     private readonly HashSet<string> _prefixes;
 
     private RimeLexicon(
         Dictionary<string, List<string>> entries,
         Dictionary<string, List<string>> sentenceEntries,
+        Dictionary<string, Dictionary<int, string>> sentenceSelectionAliases,
         int entryCount)
     {
         _entries = entries;
         _sentenceEntries = sentenceEntries;
+        _sentenceSelectionAliases = sentenceSelectionAliases;
         EntryCount = entryCount;
         _prefixes = [];
         foreach (string code in entries.Keys)
@@ -28,6 +31,8 @@ internal sealed class RimeLexicon
     public int EntryCount { get; }
 
     public IDictionary<string, List<string>> SentenceSource => _sentenceEntries;
+
+    public IDictionary<string, Dictionary<int, string>> SentenceSelectionAliases => _sentenceSelectionAliases;
 
     public static RimeLexicon Load(string path, string? userDictionaryPath = null)
     {
@@ -86,9 +91,10 @@ internal sealed class RimeLexicon
 
         // Apply this last as user dictionaries and Windows-compatible
         // adjustments can also add entries to the sentence source.
-        RemoveSentenceActionEntries(sentenceEntries);
+        Dictionary<string, Dictionary<int, string>> sentenceSelectionAliases =
+            RemoveSentenceActionEntries(sentenceEntries);
 
-        return new RimeLexicon(entries, sentenceEntries, entryCount);
+        return new RimeLexicon(entries, sentenceEntries, sentenceSelectionAliases, entryCount);
     }
 
     private static void InsertUserEntry(Dictionary<string, List<string>> entries, string code, string text)
@@ -115,22 +121,50 @@ internal sealed class RimeLexicon
                 .ToList(),
             StringComparer.OrdinalIgnoreCase);
 
-    private static void RemoveSentenceActionEntries(Dictionary<string, List<string>> entries)
+    private static Dictionary<string, Dictionary<int, string>> RemoveSentenceActionEntries(
+        Dictionary<string, List<string>> entries)
     {
         // 快符 tables intentionally share the ordinary lexicon so that [码 can
         // expand them at commit time. Their {动作名} placeholders, however, are
         // not text and must never become sentence-decoder edges. Apart from
         // showing up literally, an explicit ; rank could otherwise select one
         // in the middle of a sentence (for example 我{重复上屏}在).
+        var selectionAliases = new Dictionary<string, Dictionary<int, string>>(StringComparer.OrdinalIgnoreCase);
         foreach (string code in entries.Keys.ToArray())
         {
             List<string> candidates = entries[code];
-            candidates.RemoveAll(IsSentenceActionEntry);
+            for (int index = candidates.Count - 1; index >= 0; index--)
+            {
+                if (!IsSentenceActionEntry(candidates[index]))
+                {
+                    continue;
+                }
+
+                // The Windows full-sentence table uses z; for 可以.  Rime's
+                // compact table has 可以 at z and the same z; slot is occupied
+                // by {重复上屏}.  Preserve that selection slot by making it an
+                // alias for the preceding real candidate after filtering the
+                // action itself from the sentence source.
+                string? fallback = candidates
+                    .Take(index)
+                    .LastOrDefault(candidate => !IsSentenceActionEntry(candidate));
+                if (!string.IsNullOrEmpty(fallback))
+                {
+                    if (!selectionAliases.TryGetValue(code, out Dictionary<int, string>? aliases))
+                    {
+                        aliases = [];
+                        selectionAliases.Add(code, aliases);
+                    }
+                    aliases[index + 1] = fallback;
+                }
+                candidates.RemoveAt(index);
+            }
             if (candidates.Count == 0)
             {
                 entries.Remove(code);
             }
         }
+        return selectionAliases;
     }
 
     private static bool IsSentenceActionEntry(string text) =>
