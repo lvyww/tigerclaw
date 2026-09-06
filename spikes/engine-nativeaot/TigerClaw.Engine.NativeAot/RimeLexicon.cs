@@ -93,6 +93,7 @@ internal sealed class RimeLexicon
         // adjustments can also add entries to the sentence source.
         Dictionary<string, Dictionary<int, string>> sentenceSelectionAliases =
             RemoveSentenceActionEntries(sentenceEntries);
+        LoadFullSentenceSelectionAliases(path, sentenceEntries, sentenceSelectionAliases);
 
         return new RimeLexicon(entries, sentenceEntries, sentenceSelectionAliases, entryCount);
     }
@@ -171,6 +172,62 @@ internal sealed class RimeLexicon
         text.Length >= 2 &&
         text[0] == '{' &&
         text[^1] == '}';
+
+    private static void LoadFullSentenceSelectionAliases(
+        string primaryPath,
+        Dictionary<string, List<string>> sentenceEntries,
+        Dictionary<string, Dictionary<int, string>> selectionAliases)
+    {
+        foreach (string tablePath in FullSentenceSelectionTablePaths(primaryPath))
+        {
+            foreach (string rawLine in File.ReadLines(tablePath))
+            {
+                string line = rawLine.Trim();
+                if (line.Length == 0 || line.StartsWith('#'))
+                {
+                    continue;
+                }
+
+                string[] parts = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+                if (parts.Length < 2 ||
+                    !TryParseSelectionSuffix(parts[1], out string code, out int rank) ||
+                    !sentenceEntries.TryGetValue(code, out List<string>? candidates) ||
+                    !candidates.Contains(parts[0], StringComparer.Ordinal))
+                {
+                    continue;
+                }
+
+                if (!selectionAliases.TryGetValue(code, out Dictionary<int, string>? aliases))
+                {
+                    aliases = [];
+                    selectionAliases.Add(code, aliases);
+                }
+                aliases[rank] = parts[0];
+            }
+        }
+    }
+
+    private static IEnumerable<string> FullSentenceSelectionTablePaths(string primaryPath)
+    {
+        string fullPrimaryPath = Path.GetFullPath(primaryPath);
+        if (string.Equals(Path.GetFileName(fullPrimaryPath), "虎整句.dict.yaml", StringComparison.OrdinalIgnoreCase))
+        {
+            yield return fullPrimaryPath;
+            yield break;
+        }
+
+        string? directory = Path.GetDirectoryName(fullPrimaryPath);
+        if (string.IsNullOrEmpty(directory))
+        {
+            yield break;
+        }
+
+        string companionPath = Path.Combine(directory, "tiger_sentence_full", "虎整句.dict.yaml");
+        if (File.Exists(companionPath))
+        {
+            yield return companionPath;
+        }
+    }
 
     private static void ApplyAdjustment(
         List<string> candidates,

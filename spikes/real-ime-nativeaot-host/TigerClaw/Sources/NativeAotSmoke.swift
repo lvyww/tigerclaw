@@ -672,6 +672,15 @@ enum NativeAotSmoke {
             try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
             let lexiconURL = temporaryDirectory.appendingPathComponent("rules.dict.yaml")
             let userDictionaryURL = temporaryDirectory.appendingPathComponent("user.tsv")
+            let fullSentenceDirectory = temporaryDirectory.appendingPathComponent("tiger_sentence_full", isDirectory: true)
+            try FileManager.default.createDirectory(at: fullSentenceDirectory, withIntermediateDirectories: true)
+            try """
+            那个 a;
+            没有 k;
+            """.write(
+                to: fullSentenceDirectory.appendingPathComponent("虎整句.dict.yaml"),
+                atomically: true,
+                encoding: .utf8)
             try """
             name: rules
             version: "1"
@@ -689,6 +698,9 @@ enum NativeAotSmoke {
             我 100 w tu
             可以 100 r z
             {重复上屏} 90 r z
+            那 100 a au
+            个 100 j jg
+            没有 100 k k
             """.write(to: lexiconURL, atomically: true, encoding: .utf8)
 
             func decode(_ code: String, configuration: NativeAotConfiguration) throws -> NativeAotResult {
@@ -766,7 +778,13 @@ enum NativeAotSmoke {
                 return 1
             }
 
-            print("NATIVEAOT_SENTENCE_RULES_SMOKE_PASS high-frequency=filtered whitelist=allowed duplicate=toggle action=filtered")
+            let fullTableSelector = try decode("aujgk;", configuration: noDuplicates)
+            guard fullTableSelector.candidates.contains("那个没有") else {
+                print("NATIVEAOT_SENTENCE_RULES_SMOKE_FAIL full-table-selector=\(fullTableSelector)")
+                return 1
+            }
+
+            print("NATIVEAOT_SENTENCE_RULES_SMOKE_PASS high-frequency=filtered whitelist=allowed duplicate=toggle action=filtered full-table-selector=preserved")
             return 0
         } catch {
             print("NATIVEAOT_SENTENCE_RULES_SMOKE_FAIL error=\(error)")
