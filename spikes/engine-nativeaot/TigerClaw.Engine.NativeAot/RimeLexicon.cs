@@ -4,11 +4,16 @@ internal sealed class RimeLexicon
 {
     private static readonly string[] CompanionTableFileNames = ["快符.txt", "常用符号.txt"];
     private readonly Dictionary<string, List<string>> _entries;
+    private readonly Dictionary<string, List<string>> _sentenceEntries;
     private readonly HashSet<string> _prefixes;
 
-    private RimeLexicon(Dictionary<string, List<string>> entries, int entryCount)
+    private RimeLexicon(
+        Dictionary<string, List<string>> entries,
+        Dictionary<string, List<string>> sentenceEntries,
+        int entryCount)
     {
         _entries = entries;
+        _sentenceEntries = sentenceEntries;
         EntryCount = entryCount;
         _prefixes = [];
         foreach (string code in entries.Keys)
@@ -22,7 +27,7 @@ internal sealed class RimeLexicon
 
     public int EntryCount { get; }
 
-    public IDictionary<string, List<string>> SentenceSource => _entries;
+    public IDictionary<string, List<string>> SentenceSource => _sentenceEntries;
 
     public static RimeLexicon Load(string path, string? userDictionaryPath = null)
     {
@@ -32,49 +37,65 @@ internal sealed class RimeLexicon
         }
 
         var rankedEntries = new Dictionary<string, List<LexiconEntry>>(StringComparer.OrdinalIgnoreCase);
+        var sentenceRankedEntries = new Dictionary<string, List<LexiconEntry>>(StringComparer.OrdinalIgnoreCase);
         int entryCount = 0;
         int entryOrder = 0;
-        LoadEntries(path, rankedEntries, ref entryCount, ref entryOrder, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+        LoadEntries(path, rankedEntries, ref entryCount, ref entryOrder, new HashSet<string>(StringComparer.OrdinalIgnoreCase), preferStem: false);
+        int sentenceEntryCount = 0;
+        int sentenceEntryOrder = 0;
+        LoadEntries(path, sentenceRankedEntries, ref sentenceEntryCount, ref sentenceEntryOrder, new HashSet<string>(StringComparer.OrdinalIgnoreCase), preferStem: true);
         foreach (string companionPath in CompanionTablePaths(path))
         {
-            LoadEntries(companionPath, rankedEntries, ref entryCount, ref entryOrder, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+            LoadEntries(companionPath, rankedEntries, ref entryCount, ref entryOrder, new HashSet<string>(StringComparer.OrdinalIgnoreCase), preferStem: false);
+            LoadEntries(companionPath, sentenceRankedEntries, ref sentenceEntryCount, ref sentenceEntryOrder, new HashSet<string>(StringComparer.OrdinalIgnoreCase), preferStem: true);
         }
 
         Dictionary<string, List<string>> entries = BuildStringEntries(rankedEntries);
+        Dictionary<string, List<string>> sentenceEntries = BuildStringEntries(sentenceRankedEntries);
 
         foreach ((string code, string text) in LoadUserEntries(userDictionaryPath))
         {
-            if (!entries.TryGetValue(code, out List<string>? candidates))
-            {
-                candidates = [];
-                entries.Add(code, candidates);
-            }
-            candidates.RemoveAll(candidate => string.Equals(candidate, text, StringComparison.Ordinal));
-            candidates.Insert(0, text);
+            InsertUserEntry(entries, code, text);
+            InsertUserEntry(sentenceEntries, code, text);
             entryCount++;
         }
 
         foreach (CandidateAdjustment adjustment in LoadCandidateAdjustments(userDictionaryPath))
         {
-            if (!entries.TryGetValue(adjustment.Code, out List<string>? candidates))
+            if (entries.TryGetValue(adjustment.Code, out List<string>? candidates))
             {
-                continue;
+                int index = candidates.FindIndex(candidate => string.Equals(candidate, adjustment.Text, StringComparison.Ordinal));
+                ApplyAdjustment(candidates, index, adjustment.Operation);
             }
-
-            int index = candidates.FindIndex(candidate => string.Equals(candidate, adjustment.Text, StringComparison.Ordinal));
-            ApplyAdjustment(candidates, index, adjustment.Operation);
+            if (sentenceEntries.TryGetValue(adjustment.Code, out List<string>? sentenceCandidates))
+            {
+                int sentenceIndex = sentenceCandidates.FindIndex(candidate => string.Equals(candidate, adjustment.Text, StringComparison.Ordinal));
+                ApplyAdjustment(sentenceCandidates, sentenceIndex, adjustment.Operation);
+            }
         }
 
         foreach (WindowsUserAdjustment adjustment in LoadWindowsUserAdjustments(userDictionaryPath))
         {
             ApplyWindowsAdjustment(entries, adjustment);
+            ApplyWindowsAdjustment(sentenceEntries, adjustment);
             if (adjustment.Operation == WindowsUserAdjustmentOperation.Add)
             {
                 entryCount++;
             }
         }
 
-        return new RimeLexicon(entries, entryCount);
+        return new RimeLexicon(entries, sentenceEntries, entryCount);
+    }
+
+    private static void InsertUserEntry(Dictionary<string, List<string>> entries, string code, string text)
+    {
+        if (!entries.TryGetValue(code, out List<string>? candidates))
+        {
+            candidates = [];
+            entries.Add(code, candidates);
+        }
+        candidates.RemoveAll(candidate => string.Equals(candidate, text, StringComparison.Ordinal));
+        candidates.Insert(0, text);
     }
 
     private static Dictionary<string, List<string>> BuildStringEntries(
@@ -154,7 +175,8 @@ internal sealed class RimeLexicon
         Dictionary<string, List<LexiconEntry>> entries,
         ref int entryCount,
         ref int entryOrder,
-        HashSet<string> loadedPaths)
+        HashSet<string> loadedPaths,
+        bool preferStem)
     {
         string fullPath = Path.GetFullPath(path);
         if (!loadedPaths.Add(fullPath))
@@ -227,11 +249,13 @@ internal sealed class RimeLexicon
             int textIndex = 0;
             int codeIndex = 1;
             int weightIndex = -1;
+            int stemIndex = -1;
             if (rimeDictionary && columns.Count > 0)
             {
                 textIndex = columns.FindIndex(column => string.Equals(column, "text", StringComparison.OrdinalIgnoreCase));
                 codeIndex = columns.FindIndex(column => string.Equals(column, "code", StringComparison.OrdinalIgnoreCase));
                 weightIndex = columns.FindIndex(column => string.Equals(column, "weight", StringComparison.OrdinalIgnoreCase));
+                stemIndex = columns.FindIndex(column => string.Equals(column, "stem", StringComparison.OrdinalIgnoreCase));
                 if (textIndex < 0 || codeIndex < 0)
                 {
                     continue;
@@ -245,6 +269,13 @@ internal sealed class RimeLexicon
 
             string text = parts[textIndex];
             string code = parts[codeIndex];
+            if (preferStem && rimeDictionary && stemIndex >= 0 && parts.Length > stemIndex && !string.IsNullOrWhiteSpace(parts[stemIndex]))
+            {
+                // Tiger's Rime dictionary stores a short code for ordinary
+                // lookup and its full input code in `stem`. Sentence
+                // segmentation needs the latter (for example, 的 is `un`).
+                code = parts[stemIndex];
+            }
             long weight = 0;
             if (weightIndex >= 0 && parts.Length > weightIndex)
             {
@@ -287,7 +318,7 @@ internal sealed class RimeLexicon
             {
                 throw new InvalidDataException($"Imported Rime table was not found: {importedPath}");
             }
-            LoadEntries(importedPath, entries, ref entryCount, ref entryOrder, loadedPaths);
+            LoadEntries(importedPath, entries, ref entryCount, ref entryOrder, loadedPaths, preferStem);
         }
     }
 

@@ -670,9 +670,23 @@ enum NativeAotSmoke {
                 .appendingPathComponent("tigerclaw-nativeaot-sentence-rules-\(UUID().uuidString)", isDirectory: true)
             defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
             try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
-            let lexiconURL = temporaryDirectory.appendingPathComponent("rules.codes.txt")
+            let lexiconURL = temporaryDirectory.appendingPathComponent("rules.dict.yaml")
             let userDictionaryURL = temporaryDirectory.appendingPathComponent("user.tsv")
-            try "的\taa\n的\tabc\n甲\tdb\n乙\tdb\n是\tot\n".write(to: lexiconURL, atomically: true, encoding: .utf8)
+            try """
+            name: rules
+            version: "1"
+            columns:
+              - text
+              - weight
+              - code
+              - stem
+            ...
+            的 100 u aa
+            的 90 u abc
+            甲 100 j db
+            乙 90 j db
+            是 100 o ot
+            """.write(to: lexiconURL, atomically: true, encoding: .utf8)
 
             func decode(_ code: String, configuration: NativeAotConfiguration) throws -> NativeAotResult {
                 let bridge = try NativeAotBridge(
