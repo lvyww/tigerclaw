@@ -627,6 +627,16 @@ enum NativeAotSmoke {
                 return 1
             }
 
+            let decimalPoint = try bridge.process(NativeAotInputEvent(
+                key: Int32(TC_INPUT_KEY_CHARACTER.rawValue), logicalText: ".", modifiers: 0,
+                action: Int32(TC_KEY_ACTION_KEY_DOWN.rawValue), physicalKey: "Period", physicalScanCode: Int32(kVK_ANSI_Period)))
+            guard decimalPoint.handled,
+                  decimalPoint.commit == ".",
+                  !decimalPoint.isComposing else {
+                print("NATIVEAOT_SENTENCE_DIGIT_SMOKE_FAIL decimal=\(decimalPoint)")
+                return 1
+            }
+
             for (offset, letter) in "tu".enumerated() {
                 _ = try bridge.process(NativeAotInputEvent(
                     key: Int32(TC_INPUT_KEY_CHARACTER.rawValue), logicalText: String(letter), modifiers: 0,
@@ -643,7 +653,7 @@ enum NativeAotSmoke {
                 return 1
             }
 
-            print("NATIVEAOT_SENTENCE_DIGIT_SMOKE_PASS idle=pass-through composing=selector")
+            print("NATIVEAOT_SENTENCE_DIGIT_SMOKE_PASS idle=pass-through decimal=period composing=selector")
             return 0
         } catch {
             print("NATIVEAOT_SENTENCE_DIGIT_SMOKE_FAIL error=\(error)")
