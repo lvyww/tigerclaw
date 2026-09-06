@@ -84,6 +84,10 @@ internal sealed class RimeLexicon
             }
         }
 
+        // Apply this last as user dictionaries and Windows-compatible
+        // adjustments can also add entries to the sentence source.
+        RemoveSentenceActionEntries(sentenceEntries);
+
         return new RimeLexicon(entries, sentenceEntries, entryCount);
     }
 
@@ -110,6 +114,29 @@ internal sealed class RimeLexicon
                 .Distinct(StringComparer.Ordinal)
                 .ToList(),
             StringComparer.OrdinalIgnoreCase);
+
+    private static void RemoveSentenceActionEntries(Dictionary<string, List<string>> entries)
+    {
+        // 快符 tables intentionally share the ordinary lexicon so that [码 can
+        // expand them at commit time. Their {动作名} placeholders, however, are
+        // not text and must never become sentence-decoder edges. Apart from
+        // showing up literally, an explicit ; rank could otherwise select one
+        // in the middle of a sentence (for example 我{重复上屏}在).
+        foreach (string code in entries.Keys.ToArray())
+        {
+            List<string> candidates = entries[code];
+            candidates.RemoveAll(IsSentenceActionEntry);
+            if (candidates.Count == 0)
+            {
+                entries.Remove(code);
+            }
+        }
+    }
+
+    private static bool IsSentenceActionEntry(string text) =>
+        text.Length >= 2 &&
+        text[0] == '{' &&
+        text[^1] == '}';
 
     private static void ApplyAdjustment(
         List<string> candidates,

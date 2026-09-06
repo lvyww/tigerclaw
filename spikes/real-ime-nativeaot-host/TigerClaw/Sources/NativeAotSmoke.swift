@@ -686,6 +686,10 @@ enum NativeAotSmoke {
             甲 100 j db
             乙 90 j db
             是 100 o ot
+            我 100 w tu
+            {重复上屏} 100 r za
+            可以 90 r za
+            在 100 z nq
             """.write(to: lexiconURL, atomically: true, encoding: .utf8)
 
             func decode(_ code: String, configuration: NativeAotConfiguration) throws -> NativeAotResult {
@@ -750,7 +754,14 @@ enum NativeAotSmoke {
                 return 1
             }
 
-            print("NATIVEAOT_SENTENCE_RULES_SMOKE_PASS high-frequency=filtered whitelist=allowed duplicate=toggle")
+            let actionFiltered = try decode("tuzanq", configuration: noDuplicates)
+            guard !actionFiltered.candidates.contains(where: { $0.contains("{") || $0.contains("}") }),
+                  actionFiltered.candidates.contains("我可以在") else {
+                print("NATIVEAOT_SENTENCE_RULES_SMOKE_FAIL action-filter=\(actionFiltered)")
+                return 1
+            }
+
+            print("NATIVEAOT_SENTENCE_RULES_SMOKE_PASS high-frequency=filtered whitelist=allowed duplicate=toggle action=filtered")
             return 0
         } catch {
             print("NATIVEAOT_SENTENCE_RULES_SMOKE_FAIL error=\(error)")
