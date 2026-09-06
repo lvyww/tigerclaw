@@ -64,6 +64,9 @@ struct NativeAotConfiguration: Hashable {
         static let autoSentenceInput = "TigerClawAutoSentenceInput"
         static let sentenceNeuralRerankEnabled = "TigerClawSentenceNeuralRerankEnabled"
         static let sentenceAutoCommitEnabled = "TigerClawSentenceAutoCommitEnabled"
+        static let sentenceOptimalCodeHighFreqLimit = "TigerClawSentenceOptimalCodeHighFreqLimit"
+        static let sentenceFullCodeWhitelist = "TigerClawSentenceFullCodeWhitelist"
+        static let sentenceAllowDuplicateSingleCharacters = "TigerClawSentenceAllowDuplicateSingleCharacters"
         static let previousPageKeys = "TigerClawPreviousPageKeys"
         static let nextPageKeys = "TigerClawNextPageKeys"
         static let hideCandidates = "TigerClawHideCandidates"
@@ -106,6 +109,9 @@ struct NativeAotConfiguration: Hashable {
         DefaultsKey.autoSentenceInput: "auto-sentence-input",
         DefaultsKey.sentenceNeuralRerankEnabled: "sentence-neural-rerank-enabled",
         DefaultsKey.sentenceAutoCommitEnabled: "sentence-auto-commit-enabled",
+        DefaultsKey.sentenceOptimalCodeHighFreqLimit: "sentence-optimal-code-high-frequency-limit",
+        DefaultsKey.sentenceFullCodeWhitelist: "sentence-full-code-whitelist",
+        DefaultsKey.sentenceAllowDuplicateSingleCharacters: "sentence-allow-duplicate-single-characters",
         DefaultsKey.previousPageKeys: "previous-page-keys",
         DefaultsKey.nextPageKeys: "next-page-keys",
         DefaultsKey.hideCandidates: "hide-candidates",
@@ -148,6 +154,9 @@ struct NativeAotConfiguration: Hashable {
     var autoSentenceInput = true
     var sentenceNeuralRerankEnabled = true
     var sentenceAutoCommitEnabled = false
+    var sentenceOptimalCodeHighFreqLimit = 1500
+    var sentenceFullCodeWhitelist = "便深候整调脸照病增响剑哪微营修愿密脑续假值弹您球激游模静源副座喝富宣呼检救嘴税探脱误释跳睡减蒙镇域洞湾卖暴输缓熟庭俄韩混词授摆诺稳塔潜硬萧侵懂蒋赞赛胸偷烧墙爆操挑撤筑戴植援凭聚凌梁箭圈惨飘旗牌废缩碎挺晓桥赫凝潮掩拔播艘滚兽隆薄愤漫爹撒佩绕"
+    var sentenceAllowDuplicateSingleCharacters = true
     // Selection is intentionally handled by selection-keys.conf in the host,
     // rather than by the core's character-only selection string.  Keeping the
     // engine value empty prevents its fixed digit fallback from bypassing an
@@ -211,6 +220,18 @@ struct NativeAotConfiguration: Hashable {
         value.autoSentenceInput = boolean(DefaultsKey.autoSentenceInput, fallback: value.autoSentenceInput, externalValues: externalValues)
         value.sentenceNeuralRerankEnabled = boolean(DefaultsKey.sentenceNeuralRerankEnabled, fallback: value.sentenceNeuralRerankEnabled, externalValues: externalValues)
         value.sentenceAutoCommitEnabled = boolean(DefaultsKey.sentenceAutoCommitEnabled, fallback: value.sentenceAutoCommitEnabled, externalValues: externalValues)
+        value.sentenceOptimalCodeHighFreqLimit = sentenceHighFrequencyLimit(
+            DefaultsKey.sentenceOptimalCodeHighFreqLimit,
+            fallback: value.sentenceOptimalCodeHighFreqLimit,
+            externalValues: externalValues)
+        value.sentenceFullCodeWhitelist = text(
+            DefaultsKey.sentenceFullCodeWhitelist,
+            fallback: value.sentenceFullCodeWhitelist,
+            externalValues: externalValues)
+        value.sentenceAllowDuplicateSingleCharacters = boolean(
+            DefaultsKey.sentenceAllowDuplicateSingleCharacters,
+            fallback: value.sentenceAllowDuplicateSingleCharacters,
+            externalValues: externalValues)
         value.previousPageKeys = keySequence(DefaultsKey.previousPageKeys, fallback: value.previousPageKeys, externalValues: externalValues)
         value.nextPageKeys = keySequence(DefaultsKey.nextPageKeys, fallback: value.nextPageKeys, externalValues: externalValues)
         value.hideCandidates = boolean(DefaultsKey.hideCandidates, fallback: value.hideCandidates, externalValues: externalValues)
@@ -272,6 +293,12 @@ struct NativeAotConfiguration: Hashable {
         UserDefaults.standard.set(try boolean(value), forKey: scopedKey(DefaultsKey.sentenceNeuralRerankEnabled))
         case "sentence-auto-commit-enabled":
         UserDefaults.standard.set(try boolean(value), forKey: scopedKey(DefaultsKey.sentenceAutoCommitEnabled))
+        case "sentence-optimal-code-high-frequency-limit":
+        UserDefaults.standard.set(try sentenceHighFrequencyLimit(value), forKey: scopedKey(DefaultsKey.sentenceOptimalCodeHighFreqLimit))
+        case "sentence-full-code-whitelist":
+        UserDefaults.standard.set(value, forKey: scopedKey(DefaultsKey.sentenceFullCodeWhitelist))
+        case "sentence-allow-duplicate-single-characters":
+        UserDefaults.standard.set(try boolean(value), forKey: scopedKey(DefaultsKey.sentenceAllowDuplicateSingleCharacters))
         case "previous-page-keys":
         UserDefaults.standard.set(try keySequence(value), forKey: scopedKey(DefaultsKey.previousPageKeys))
         case "next-page-keys":
@@ -343,6 +370,9 @@ struct NativeAotConfiguration: Hashable {
             "auto-sentence-input=\(value.autoSentenceInput ? "on" : "off")",
             "sentence-neural-rerank-enabled=\(value.sentenceNeuralRerankEnabled ? "on" : "off")",
             "sentence-auto-commit-enabled=\(value.sentenceAutoCommitEnabled ? "on" : "off")",
+            "sentence-optimal-code-high-frequency-limit=\(value.sentenceOptimalCodeHighFreqLimit)",
+            "sentence-full-code-whitelist=\(value.sentenceFullCodeWhitelist)",
+            "sentence-allow-duplicate-single-characters=\(value.sentenceAllowDuplicateSingleCharacters ? "on" : "off")",
             "selection-keys-file=\((try? NativeAotSelectionKeyBindings.configURL().path) ?? "unavailable")",
             "previous-page-keys=\(value.previousPageKeys)",
             "next-page-keys=\(value.nextPageKeys)",
@@ -388,6 +418,9 @@ struct NativeAotConfiguration: Hashable {
             DefaultsKey.autoSentenceInput,
             DefaultsKey.sentenceNeuralRerankEnabled,
             DefaultsKey.sentenceAutoCommitEnabled,
+            DefaultsKey.sentenceOptimalCodeHighFreqLimit,
+            DefaultsKey.sentenceFullCodeWhitelist,
+            DefaultsKey.sentenceAllowDuplicateSingleCharacters,
             DefaultsKey.previousPageKeys,
             DefaultsKey.nextPageKeys,
             DefaultsKey.hideCandidates,
@@ -435,6 +468,8 @@ struct NativeAotConfiguration: Hashable {
         value.clear_on_no_code = clearOnNoCode ? 1 : 0
         value.sentence_neural_rerank_enabled = sentenceNeuralRerankEnabled ? 1 : 0
         value.sentence_auto_commit_enabled = sentenceAutoCommitEnabled ? 1 : 0
+        value.sentence_optimal_code_high_freq_limit = Int32(sentenceOptimalCodeHighFreqLimit)
+        value.sentence_allow_duplicate_single_characters = sentenceAllowDuplicateSingleCharacters ? 1 : 0
         return value
     }
 
@@ -461,6 +496,36 @@ struct NativeAotConfiguration: Hashable {
         }
         guard let number else { return fallback }
         return min(max(number, range.lowerBound), range.upperBound)
+    }
+
+    private static func sentenceHighFrequencyLimit(
+        _ key: String,
+        fallback: Int,
+        externalValues: [String: String]
+    ) -> Int {
+        guard let value = persistedValue(for: key, externalValues: externalValues) else {
+            return fallback
+        }
+        if let number = value as? NSNumber {
+            return max(0, number.intValue)
+        }
+        guard let raw = value as? String,
+              !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let number = Int(raw.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            return 0
+        }
+        return max(0, number)
+    }
+
+    private static func sentenceHighFrequencyLimit(_ raw: String) throws -> Int {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            return 0
+        }
+        guard let number = Int(trimmed), number >= 0 else {
+            throw NativeAotConfigurationError.invalidValue(raw)
+        }
+        return number
     }
 
     private static func boolean(
@@ -2299,17 +2364,20 @@ final class NativeAotRuntimeCache: @unchecked Sendable {
                                     withUtf8Slice(key.sentenceLexiconPath) { sentenceLexiconPath in
                                         withUtf8Slice(key.sentenceQwenNativeLibraryPath) { sentenceQwenNativeLibraryPath in
                                             withUtf8Slice(key.sentenceQwenModelPath) { sentenceQwenModelPath in
-                                                abiConfiguration.user_dictionary_path = userDictionaryPath
-                                                abiConfiguration.selection_keys = selectionKeys
-                                                abiConfiguration.previous_page_keys = previousPageKeys
-                                                abiConfiguration.next_page_keys = nextPageKeys
-                                                abiConfiguration.pinyin_lexicon_path = pinyinLexiconPath
-                                                abiConfiguration.sentence_input_enabled = key.sentenceInputActive ? 1 : 0
-                                                abiConfiguration.sentence_model_path = sentenceModelPath
-                                                abiConfiguration.sentence_qwen_native_library_path = sentenceQwenNativeLibraryPath
-                                                abiConfiguration.sentence_qwen_model_path = sentenceQwenModelPath
-                                                abiConfiguration.sentence_lexicon_path = sentenceLexiconPath
-                                                return tc_runtime_create_with_config(lexiconPath, &abiConfiguration, &createdRuntime)
+                                                withUtf8Slice(configuration.sentenceFullCodeWhitelist) { sentenceFullCodeWhitelist in
+                                                    abiConfiguration.user_dictionary_path = userDictionaryPath
+                                                    abiConfiguration.selection_keys = selectionKeys
+                                                    abiConfiguration.previous_page_keys = previousPageKeys
+                                                    abiConfiguration.next_page_keys = nextPageKeys
+                                                    abiConfiguration.pinyin_lexicon_path = pinyinLexiconPath
+                                                    abiConfiguration.sentence_input_enabled = key.sentenceInputActive ? 1 : 0
+                                                    abiConfiguration.sentence_model_path = sentenceModelPath
+                                                    abiConfiguration.sentence_qwen_native_library_path = sentenceQwenNativeLibraryPath
+                                                    abiConfiguration.sentence_qwen_model_path = sentenceQwenModelPath
+                                                    abiConfiguration.sentence_lexicon_path = sentenceLexiconPath
+                                                    abiConfiguration.sentence_full_code_whitelist = sentenceFullCodeWhitelist
+                                                    return tc_runtime_create_with_config(lexiconPath, &abiConfiguration, &createdRuntime)
+                                                }
                                             }
                                         }
                                     }

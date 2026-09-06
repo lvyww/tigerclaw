@@ -23,7 +23,7 @@
                         <TextBlock Text="选择当前方案。当前开发包只有已随包安装或导入的方案；不会把两个 macOS 输入法源误当成两个码表。"
                                    TextWrapping="Wrap" Foreground="{DynamicResource TextControlPlaceholderForeground}" />
                         <Button Content="导入方案（.zip、.txt 或 Rime .dict.yaml）" Click="ImportSchema_Click" HorizontalAlignment="Left" />
-                        <Grid ColumnDefinitions="190,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" RowSpacing="14" ColumnSpacing="20">
+                        <Grid ColumnDefinitions="190,*" RowDefinitions="Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto,Auto" RowSpacing="14" ColumnSpacing="20">
                             <TextBlock Text="当前输入方案" VerticalAlignment="Center" />
                             <ComboBox x:Name="SchemaComboBox" Grid.Column="1" HorizontalAlignment="Stretch" SelectionChanged="SchemaSelectionChanged" />
                             <TextBlock Grid.Row="1" Text="中英文不限长混输" VerticalAlignment="Center" />
@@ -44,12 +44,20 @@
                             <ToggleSwitch x:Name="SentenceNeuralRerankToggle" Grid.Row="8" Grid.Column="1" />
                             <TextBlock Grid.Row="9" Text="整句自动提前上屏（实验）" VerticalAlignment="Center" />
                             <ToggleSwitch x:Name="SentenceAutoCommitToggle" Grid.Row="9" Grid.Column="1" />
-                            <TextBlock Grid.Row="10" Text="空码自动清屏" VerticalAlignment="Center" />
-                            <ToggleSwitch x:Name="ClearOnNoCodeToggle" Grid.Row="10" Grid.Column="1" />
+                            <TextBlock Grid.Row="10" Text="高频字仅使用最优码组句" VerticalAlignment="Center" />
+                            <NumericUpDown x:Name="SentenceHighFrequencyLimitInput" Grid.Row="10" Grid.Column="1" Minimum="0" Maximum="20000" Increment="100" Width="140" HorizontalAlignment="Left" />
+                            <TextBlock Grid.Row="11" Text="整句全码白名单" VerticalAlignment="Center" />
+                            <TextBox x:Name="SentenceFullCodeWhitelistInput" Grid.Row="11" Grid.Column="1" HorizontalAlignment="Stretch" PlaceholderText="连续填写汉字；留空表示无例外" />
+                            <TextBlock Grid.Row="12" Text="允许单字重码组句" VerticalAlignment="Center" />
+                            <ToggleSwitch x:Name="SentenceAllowDuplicateSingleCharactersToggle" Grid.Row="12" Grid.Column="1" />
+                            <TextBlock Grid.Row="13" Text="空码自动清屏" VerticalAlignment="Center" />
+                            <ToggleSwitch x:Name="ClearOnNoCodeToggle" Grid.Row="13" Grid.Column="1" />
                         </Grid>
                         <TextBlock Text="空码自动清屏开启后，继续输入导致当前编码完全无命中时，会丢弃无命中的旧编码并从新按键重新起码；关闭后会保留完整编码，供回删或直接上屏原编码。"
                                    TextWrapping="Wrap" Foreground="{DynamicResource TextControlPlaceholderForeground}" />
                         <TextBlock Text="整句输入先用 sentence-ngram-v2.bin 立即出候选，再由 Qwen3 0.6B Q8 在后台重排前 5 个候选；首次使用会后台载入模型，不阻塞按键。候选可用 Tab / Shift+Tab 或上下方向键切换，空格或点击候选上屏；分号、单引号和数字作为整句选重后缀。"
+                                   TextWrapping="Wrap" Foreground="{DynamicResource TextControlPlaceholderForeground}" />
+                        <TextBlock Text="高频字默认只用最优码参与整句，默认范围为前 1500 字；设为 0 表示不限制。白名单中的字可保留全码参与组句。允许单字重码组句开启后，非首选单字也会由语言模型参与排序；多字词仍需要显式选重。"
                                    TextWrapping="Wrap" Foreground="{DynamicResource TextControlPlaceholderForeground}" />
                         <TextBlock Text="已导入方案管理" FontSize="18" FontWeight="SemiBold" Margin="0,8,0,0" />
                         <TextBlock Text="内置方案受保护。删除只会移除当前选中的已导入方案及其独立词库、快符和方案设置。"

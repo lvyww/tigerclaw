@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Globalization;
 
 namespace TigerClaw.Engine.NativeAot;
 
@@ -24,7 +25,7 @@ public static unsafe class NativeExports
             return StatusInvalidArgument;
         }
 
-        if (!config->UserDictionaryPath.IsValid || !config->SelectionKeys.IsValid || !config->PreviousPageKeys.IsValid || !config->NextPageKeys.IsValid || !config->PinyinLexiconPath.IsValid || !config->SentenceModelPath.IsValid || !config->SentenceQwenNativeLibraryPath.IsValid || !config->SentenceQwenModelPath.IsValid || !config->SentenceLexiconPath.IsValid)
+        if (!config->UserDictionaryPath.IsValid || !config->SelectionKeys.IsValid || !config->PreviousPageKeys.IsValid || !config->NextPageKeys.IsValid || !config->PinyinLexiconPath.IsValid || !config->SentenceModelPath.IsValid || !config->SentenceQwenNativeLibraryPath.IsValid || !config->SentenceQwenModelPath.IsValid || !config->SentenceLexiconPath.IsValid || !config->SentenceFullCodeWhitelist.IsValid)
         {
             return StatusInvalidArgument;
         }
@@ -47,7 +48,10 @@ public static unsafe class NativeExports
         string? sentenceLexiconPath = config->SentenceLexiconPath.Data is null
             ? null
             : Utf8ToString(config->SentenceLexiconPath);
-        BasicEngineConfig engineConfig = BasicEngineConfig.FromAbi(*config).WithConfiguredKeys(
+        string? sentenceFullCodeWhitelist = config->SentenceFullCodeWhitelist.Data is null
+            ? null
+            : Utf8ToString(config->SentenceFullCodeWhitelist);
+        BasicEngineConfig engineConfig = BasicEngineConfig.FromAbi(*config, sentenceFullCodeWhitelist).WithConfiguredKeys(
             Utf8ToNullableString(config->SelectionKeys),
             Utf8ToNullableString(config->PreviousPageKeys),
             Utf8ToNullableString(config->NextPageKeys));
@@ -417,6 +421,8 @@ public unsafe struct TcEngineConfig
     public int SentenceInputEnabled;
     public int SentenceNeuralRerankEnabled;
     public int SentenceAutoCommitEnabled;
+    public int SentenceOptimalCodeHighFreqLimit;
+    public int SentenceAllowDuplicateSingleCharacters;
     public TcUtf8Slice UserDictionaryPath;
     public TcUtf8Slice SelectionKeys;
     public TcUtf8Slice PreviousPageKeys;
@@ -426,6 +432,7 @@ public unsafe struct TcEngineConfig
     public TcUtf8Slice SentenceQwenNativeLibraryPath;
     public TcUtf8Slice SentenceQwenModelPath;
     public TcUtf8Slice SentenceLexiconPath;
+    public TcUtf8Slice SentenceFullCodeWhitelist;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -454,7 +461,10 @@ internal sealed class RuntimeHandle : IDisposable
         _config = config;
         if (config.SentenceInputEnabled && !string.IsNullOrWhiteSpace(sentenceModelPath) && File.Exists(sentenceModelPath))
         {
-            _sentenceLexicon = TigerClaw.Core.SentenceLexiconIndex.Build(sentenceLexicon.SentenceSource);
+            _sentenceLexicon = TigerClaw.Core.SentenceLexiconIndex.Build(
+                sentenceLexicon.SentenceSource,
+                TigerClaw.Core.SentenceCharacterRanks.TakeTop(config.SentenceOptimalCodeHighFreqLimit),
+                ParseTextElements(config.SentenceFullCodeWhitelist));
             _sentenceSupplements = SentenceSupplementLoader.LoadForLexicon(sentenceLexiconPath);
             _sentenceModelPath = sentenceModelPath;
             if (config.SentenceNeuralRerankEnabled &&
@@ -469,6 +479,27 @@ internal sealed class RuntimeHandle : IDisposable
     public BasicEngine CreateEngine() => new(_lexicon, _pinyinLexicon, _config, _sentenceLexicon, _sentenceSupplements, _sentenceModelPath, _sentenceReranker);
 
     public void Dispose() => _sentenceReranker?.Dispose();
+
+    private static ISet<string> ParseTextElements(string raw)
+    {
+        var values = new HashSet<string>(StringComparer.Ordinal);
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return values;
+        }
+
+        TextElementEnumerator enumerator = StringInfo.GetTextElementEnumerator(raw.Trim());
+        while (enumerator.MoveNext())
+        {
+            string text = enumerator.GetTextElement();
+            if (!string.IsNullOrWhiteSpace(text))
+            {
+                values.Add(text);
+            }
+        }
+
+        return values;
+    }
 }
 
 internal sealed class SessionHandle(BasicEngine engine) : IDisposable

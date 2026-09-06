@@ -17,6 +17,9 @@
   <ItemGroup>
     <!-- Reuse the production Windows sentence decoder and model reader so the
          macOS port keeps exactly the same scoring and segmentation rules. -->
+    <EmbeddedResource Include="../../../next/TigerClaw.Core/Data/sentence_char_ranks.txt"
+                      Link="Data/sentence_char_ranks.txt"
+                      LogicalName="TigerClaw.Core.Data.sentence_char_ranks.txt" />
     <Compile Include="../../../next/TigerClaw.Core/SentenceInputDecoder.cs" Link="Sentence/SentenceInputDecoder.cs" />
     <Compile Include="../../../next/TigerClaw.Core/SentenceNgramModel.cs" Link="Sentence/SentenceNgramModel.cs" />
     <Compile Include="../../../next/TigerClaw.Core/SentenceIsolationPenalty.cs" Link="Sentence/SentenceIsolationPenalty.cs" />

@@ -83,11 +83,15 @@ controller next activates:
 "$HOME/Library/Input Methods/TigerClawRealImeNativeAotHost.app/Contents/MacOS/TigerClawRealImeNativeAotHost" --tigerclaw-schema list
 ```
 
-Supported configuration keys are `max-candidates`, `page-size`,
-`max-code-length`, `auto-commit-unique`, `second-candidate-semicolon`,
-`third-candidate-quote`, and `unlimited-mixed-input`. The current bundle has
-one registered real schema, `tiger_sentence`; schema selection is deliberately
-kept as a registry boundary until more portable code tables are available.
+Supported configuration includes the ordinary candidate and key settings, plus
+the sentence controls `sentence-optimal-code-high-frequency-limit`,
+`sentence-full-code-whitelist`, and
+`sentence-allow-duplicate-single-characters`. The defaults mirror Windows:
+the first 1500 high-frequency characters use only their preferred code, the
+Windows full-code whitelist is retained, and duplicate single-character paths
+are allowed. The current bundle has one registered real schema,
+`tiger_sentence`; schema selection is deliberately kept as a registry boundary
+until more portable code tables are available.
 
 ## Development user dictionary
 

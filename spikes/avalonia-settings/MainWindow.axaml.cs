@@ -82,6 +82,7 @@ public partial class MainWindow : Window
             int candidateExpandDelay = NumericValue(CandidateExpandDelayInput, "延时显示候选");
             int annotationExpandDelay = NumericValue(AnnotationExpandDelayInput, "延时展开注释和拆分");
             int keySoundVolume = NumericValue(KeySoundVolumeInput, "按键音量");
+            int sentenceHighFrequencyLimit = NumericValue(SentenceHighFrequencyLimitInput, "高频字最优码范围");
             bool unlimitedMixedInput = MixedInputToggle.IsChecked == true;
             string autoCommitUnique = ToggleValue(AutoCommitUniqueToggle);
             string secondCandidateSemicolon = ToggleValue(SecondCandidateSemicolonToggle);
@@ -113,6 +114,8 @@ public partial class MainWindow : Window
             string autoSentenceInput = ToggleValue(AutoSentenceInputToggle);
             string sentenceNeuralRerank = ToggleValue(SentenceNeuralRerankToggle);
             string sentenceAutoCommit = ToggleValue(SentenceAutoCommitToggle);
+            string sentenceFullCodeWhitelist = SentenceFullCodeWhitelistInput.Text?.Trim() ?? string.Empty;
+            string sentenceAllowDuplicateSingleCharacters = ToggleValue(SentenceAllowDuplicateSingleCharactersToggle);
             string clearOnNoCode = ToggleValue(ClearOnNoCodeToggle);
 
             await Task.Run(() =>
@@ -156,6 +159,9 @@ public partial class MainWindow : Window
                 _host.SetConfiguration("auto-sentence-input", autoSentenceInput);
                 _host.SetConfiguration("sentence-neural-rerank-enabled", sentenceNeuralRerank);
                 _host.SetConfiguration("sentence-auto-commit-enabled", sentenceAutoCommit);
+                _host.SetConfiguration("sentence-optimal-code-high-frequency-limit", sentenceHighFrequencyLimit.ToString());
+                _host.SetConfiguration("sentence-full-code-whitelist", sentenceFullCodeWhitelist);
+                _host.SetConfiguration("sentence-allow-duplicate-single-characters", sentenceAllowDuplicateSingleCharacters);
                 _host.SetConfiguration("clear-on-no-code", clearOnNoCode);
             });
             SetStatus("已保存；输入法会在下一次按键前自动重载新设置。");
@@ -401,6 +407,9 @@ public partial class MainWindow : Window
             AutoSentenceInputToggle.IsChecked = ConfigurationBoolean(snapshot.Configuration, "auto-sentence-input", true);
             SentenceNeuralRerankToggle.IsChecked = ConfigurationBoolean(snapshot.Configuration, "sentence-neural-rerank-enabled", true);
             SentenceAutoCommitToggle.IsChecked = ConfigurationBoolean(snapshot.Configuration, "sentence-auto-commit-enabled", false);
+            SentenceHighFrequencyLimitInput.Value = ConfigurationNumber(snapshot.Configuration, "sentence-optimal-code-high-frequency-limit", 1500);
+            SentenceFullCodeWhitelistInput.Text = ConfigurationValue(snapshot.Configuration, "sentence-full-code-whitelist", "便深候整调脸照病增响剑哪微营修愿密脑续假值弹您球激游模静源副座喝富宣呼检救嘴税探脱误释跳睡减蒙镇域洞湾卖暴输缓熟庭俄韩混词授摆诺稳塔潜硬萧侵懂蒋赞赛胸偷烧墙爆操挑撤筑戴植援凭聚凌梁箭圈惨飘旗牌废缩碎挺晓桥赫凝潮掩拔播艘滚兽隆薄愤漫爹撒佩绕");
+            SentenceAllowDuplicateSingleCharactersToggle.IsChecked = ConfigurationBoolean(snapshot.Configuration, "sentence-allow-duplicate-single-characters", true);
             ClearOnNoCodeToggle.IsChecked = ConfigurationBoolean(snapshot.Configuration, "clear-on-no-code", true);
             AutoCommitUniqueToggle.IsChecked = ConfigurationBoolean(snapshot.Configuration, "auto-commit-unique", true);
             SecondCandidateSemicolonToggle.IsChecked = ConfigurationBoolean(snapshot.Configuration, "second-candidate-semicolon", true);

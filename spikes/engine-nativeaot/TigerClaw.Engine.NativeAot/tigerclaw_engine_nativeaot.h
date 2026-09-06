@@ -84,6 +84,9 @@ typedef struct tc_engine_config {
     int32_t sentence_input_enabled;
     int32_t sentence_neural_rerank_enabled;
     int32_t sentence_auto_commit_enabled;
+    /* 0 disables the high-frequency optimal-code restriction. */
+    int32_t sentence_optimal_code_high_freq_limit;
+    int32_t sentence_allow_duplicate_single_characters;
     /* Optional UTF-8 path to a host-owned tab-separated user dictionary. */
     tc_utf8_slice user_dictionary_path;
     /* Optional candidate selection and previous/next page key sequences. */
@@ -99,6 +102,8 @@ typedef struct tc_engine_config {
     tc_utf8_slice sentence_qwen_model_path;
     /* Optional UTF-8 path to the dedicated sentence-input lexicon. */
     tc_utf8_slice sentence_lexicon_path;
+    /* UTF-8 text elements allowed to retain full codes under the high-frequency restriction. */
+    tc_utf8_slice sentence_full_code_whitelist;
 } tc_engine_config;
 
 TC_API int32_t tc_runtime_create(tc_utf8_slice lexicon_path, tc_runtime_t* out_runtime);

@@ -25,6 +25,9 @@ enum NativeAotSmoke {
         if arguments.contains("--nativeaot-sentence-digit-smoke") {
             return runSentenceDigitSmoke()
         }
+        if arguments.contains("--nativeaot-sentence-rules-smoke") {
+            return runSentenceRulesSmoke()
+        }
         if arguments.contains("--nativeaot-sentence-async-smoke") {
             return runSentenceAsyncSmoke()
         }
@@ -657,6 +660,86 @@ enum NativeAotSmoke {
             return 0
         } catch {
             print("NATIVEAOT_SENTENCE_DIGIT_SMOKE_FAIL error=\(error)")
+            return 1
+        }
+    }
+
+    private static func runSentenceRulesSmoke() -> Int32 {
+        do {
+            let temporaryDirectory = FileManager.default.temporaryDirectory
+                .appendingPathComponent("tigerclaw-nativeaot-sentence-rules-\(UUID().uuidString)", isDirectory: true)
+            defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+            try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+            let lexiconURL = temporaryDirectory.appendingPathComponent("rules.codes.txt")
+            let userDictionaryURL = temporaryDirectory.appendingPathComponent("user.tsv")
+            try "的\taa\n的\tabc\n甲\tdb\n乙\tdb\n是\tot\n".write(to: lexiconURL, atomically: true, encoding: .utf8)
+
+            func decode(_ code: String, configuration: NativeAotConfiguration) throws -> NativeAotResult {
+                let bridge = try NativeAotBridge(
+                    lexiconURL: lexiconURL,
+                    configuration: configuration,
+                    userDictionaryURL: userDictionaryURL)
+                try bridge.activate()
+                var result: NativeAotResult?
+                for (offset, letter) in code.enumerated() {
+                    result = try bridge.process(NativeAotInputEvent(
+                        key: Int32(TC_INPUT_KEY_CHARACTER.rawValue), logicalText: String(letter), modifiers: 0,
+                        action: Int32(TC_KEY_ACTION_KEY_DOWN.rawValue), physicalKey: "Key\(String(letter).uppercased())", physicalScanCode: Int32(offset)))
+                }
+                let deadline = Date().addingTimeInterval(10)
+                while result?.sentenceRerankPending == true && Date() < deadline {
+                    Thread.sleep(forTimeInterval: 0.01)
+                    result = try bridge.currentSnapshot()
+                }
+                guard let result, !result.sentenceRerankPending else {
+                    throw NativeAotBridgeError.runtimeCreateFailed(-1)
+                }
+                return result
+            }
+
+            var restricted = NativeAotConfiguration.current
+            restricted.sentenceInputEnabled = true
+            restricted.autoSentenceInput = false
+            restricted.sentenceNeuralRerankEnabled = false
+            restricted.autoCommitUniqueTerminalCode = false
+            restricted.sentenceOptimalCodeHighFreqLimit = 1
+            restricted.sentenceFullCodeWhitelist = ""
+            restricted.sentenceAllowDuplicateSingleCharacters = false
+
+            let blockedFullCode = try decode("abcot", configuration: restricted)
+            guard !blockedFullCode.candidates.contains("的是") else {
+                print("NATIVEAOT_SENTENCE_RULES_SMOKE_FAIL high-frequency=\(blockedFullCode)")
+                return 1
+            }
+
+            var whitelisted = restricted
+            whitelisted.sentenceFullCodeWhitelist = "的"
+            let allowedFullCode = try decode("abcot", configuration: whitelisted)
+            guard allowedFullCode.candidates.contains("的是") else {
+                print("NATIVEAOT_SENTENCE_RULES_SMOKE_FAIL whitelist=\(allowedFullCode)")
+                return 1
+            }
+
+            var noDuplicates = restricted
+            noDuplicates.sentenceOptimalCodeHighFreqLimit = 0
+            let filteredDuplicate = try decode("dbot", configuration: noDuplicates)
+            guard !filteredDuplicate.candidates.contains("乙是") else {
+                print("NATIVEAOT_SENTENCE_RULES_SMOKE_FAIL duplicate-off=\(filteredDuplicate)")
+                return 1
+            }
+
+            var allowDuplicates = noDuplicates
+            allowDuplicates.sentenceAllowDuplicateSingleCharacters = true
+            let allowedDuplicate = try decode("dbot", configuration: allowDuplicates)
+            guard allowedDuplicate.candidates.contains("乙是") else {
+                print("NATIVEAOT_SENTENCE_RULES_SMOKE_FAIL duplicate-on=\(allowedDuplicate)")
+                return 1
+            }
+
+            print("NATIVEAOT_SENTENCE_RULES_SMOKE_PASS high-frequency=filtered whitelist=allowed duplicate=toggle")
+            return 0
+        } catch {
+            print("NATIVEAOT_SENTENCE_RULES_SMOKE_FAIL error=\(error)")
             return 1
         }
     }

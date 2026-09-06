@@ -75,7 +75,8 @@ internal sealed class BasicEngine : IDisposable
                 sentenceLexicon,
                 _sentenceModel,
                 emittedCharacterReward: 2.0,
-                supplementMatcher: sentenceSupplements);
+                supplementMatcher: sentenceSupplements,
+                allowDuplicateSingleCharacters: config.SentenceAllowDuplicateSingleCharacters);
             _sentenceReranker = sentenceReranker;
             _sentenceDecodeSignal = new AutoResetEvent(false);
             _sentenceDecodeWorker = new Thread(SentenceDecodeWorkerMain)
@@ -1435,13 +1436,18 @@ internal sealed record BasicEngineConfig(
     bool SentenceInputEnabled,
     bool SentenceNeuralRerankEnabled,
     bool SentenceAutoCommitEnabled,
+    int SentenceOptimalCodeHighFreqLimit,
+    bool SentenceAllowDuplicateSingleCharacters,
+    string SentenceFullCodeWhitelist,
     string SelectionKeys,
     string PreviousPageKeys,
     string NextPageKeys)
 {
-    public static BasicEngineConfig Default { get; } = new(9, 5, 4, true, true, true, false, false, true, true, false, true, true, false, true, false, "1234567890", "-", "=");
+    private const string DefaultSentenceFullCodeWhitelist = "便深候整调脸照病增响剑哪微营修愿密脑续假值弹您球激游模静源副座喝富宣呼检救嘴税探脱误释跳睡减蒙镇域洞湾卖暴输缓熟庭俄韩混词授摆诺稳塔潜硬萧侵懂蒋赞赛胸偷烧墙爆操挑撤筑戴植援凭聚凌梁箭圈惨飘旗牌废缩碎挺晓桥赫凝潮掩拔播艘滚兽隆薄愤漫爹撒佩绕";
 
-    public static BasicEngineConfig FromAbi(TcEngineConfig config)
+    public static BasicEngineConfig Default { get; } = new(9, 5, 4, true, true, true, false, false, true, true, false, true, true, false, true, false, 1500, true, DefaultSentenceFullCodeWhitelist, "1234567890", "-", "=");
+
+    public static BasicEngineConfig FromAbi(TcEngineConfig config, string? sentenceFullCodeWhitelist)
     {
         return new BasicEngineConfig(
             Math.Clamp(config.MaxCandidates, 1, 99),
@@ -1460,6 +1466,9 @@ internal sealed record BasicEngineConfig(
             config.SentenceInputEnabled != 0,
             config.SentenceNeuralRerankEnabled != 0,
             config.SentenceAutoCommitEnabled != 0,
+            Math.Max(0, config.SentenceOptimalCodeHighFreqLimit),
+            config.SentenceAllowDuplicateSingleCharacters != 0,
+            sentenceFullCodeWhitelist ?? string.Empty,
             "1234567890",
             "-",
             "=");
