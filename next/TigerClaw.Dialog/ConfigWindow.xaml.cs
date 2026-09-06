@@ -27,6 +27,12 @@ namespace TigerClaw.Dialog
         private const string KeyTheme = "主题";
         private const string KeyCurrentSchema = "当前码表";
         private const string KeyKeySoundVolume = "按键音量0~100";
+        private const string KeyManualAddWordEnabled = "Ctrl+等号手动加词";
+        private const string KeySwitchRecentSchemaEnabled = "Ctrl+m切换最近码表";
+        private const string KeyManualAddWordShortcut = "手动加词快捷键";
+        private const string KeySwitchRecentSchemaShortcut = "切换最近码表快捷键";
+        private const string DefaultManualAddWordShortcut = "Ctrl+VK_OEM_PLUS";
+        private const string DefaultSwitchRecentSchemaShortcut = "Ctrl+VK_M";
         private const string Yes = "是";
         private const string No = "否";
 
@@ -323,6 +329,11 @@ namespace TigerClaw.Dialog
         }
         private FrameworkElement CreateDynamicEditor(string key, string value)
         {
+            if (IsShortcutSetting(key))
+            {
+                return CreateShortcutEditor(key, value);
+            }
+
             if (string.Equals(value, Yes, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(value, No, StringComparison.OrdinalIgnoreCase))
             {
@@ -455,6 +466,74 @@ namespace TigerClaw.Dialog
             return textBox;
         }
 
+        private FrameworkElement CreateShortcutEditor(string key, string value)
+        {
+            string defaultValue = GetDefaultShortcut(key);
+            if (!ShortcutGesture.TryParse(value, out ShortcutGesture gesture))
+            {
+                ShortcutGesture.TryParse(defaultValue, out gesture);
+            }
+
+            var display = new TextBox
+            {
+                IsReadOnly = true,
+                IsReadOnlyCaretVisible = false,
+                Style = (Style)FindResource("FieldTextStyle"),
+                Width = 140,
+                MinWidth = 140,
+                MaxWidth = 140,
+                Text = gesture?.ToDisplayString() ?? string.Empty
+            };
+            var state = new ShortcutEditorState(display, gesture?.ToConfigString() ?? defaultValue);
+
+            var recordButton = new Button
+            {
+                Content = "录制",
+                Width = 72,
+                Height = 28,
+                Margin = new Thickness(8, 0, 0, 0),
+                Style = (Style)FindResource("ActionButtonStyle")
+            };
+            recordButton.Click += (sender, args) =>
+            {
+                var window = new RecordKeyWindow(recordShortcut: true) { Owner = this };
+                if (window.ShowDialog() == true &&
+                    ShortcutGesture.TryParse(window.Result?.Token, out ShortcutGesture recorded))
+                {
+                    state.Set(recorded);
+                    OnAnyEditorChanged(sender, args);
+                }
+            };
+
+            var resetButton = new Button
+            {
+                Content = "恢复默认",
+                Width = 88,
+                Height = 28,
+                Margin = new Thickness(8, 0, 0, 0),
+                Style = (Style)FindResource("ActionButtonStyle")
+            };
+            resetButton.Click += (sender, args) =>
+            {
+                if (ShortcutGesture.TryParse(defaultValue, out ShortcutGesture defaultGesture))
+                {
+                    state.Set(defaultGesture);
+                    OnAnyEditorChanged(sender, args);
+                }
+            };
+
+            var panel = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                VerticalAlignment = VerticalAlignment.Center,
+                Tag = state
+            };
+            panel.Children.Add(display);
+            panel.Children.Add(recordButton);
+            panel.Children.Add(resetButton);
+            return panel;
+        }
+
         private Border CreateDynamicRow(string key, string description, FrameworkElement editor)
         {
             var border = new Border
@@ -472,7 +551,7 @@ namespace TigerClaw.Dialog
             };
             leftPanel.Children.Add(new TextBlock
             {
-                Text = key,
+                Text = GetSettingDisplayName(key),
                 Style = (Style)FindResource("RowTitleStyle")
             });
             leftPanel.Children.Add(new TextBlock
@@ -711,6 +790,12 @@ namespace TigerClaw.Dialog
         private bool TrySaveChanges(bool showNoChangeStatus, bool ignoreEmptyTextChanges, out bool changedAny)
         {
             Dictionary<string, string> current = CollectCurrentValues();
+            changedAny = false;
+            if (!TryValidateShortcutBindings(current, out string shortcutError))
+            {
+                StatusText.Text = "状态：快捷键冲突 - " + shortcutError;
+                return false;
+            }
             List<KeyValuePair<string, string>> changedPairs = new List<KeyValuePair<string, string>>();
 
             foreach (KeyValuePair<string, string> kv in current)
@@ -921,6 +1006,10 @@ namespace TigerClaw.Dialog
                 else if (entry.Editor.Tag is TextBox taggedTextBox)
                 {
                     map[entry.Key] = taggedTextBox.Text ?? string.Empty;
+                }
+                else if (entry.Editor.Tag is ShortcutEditorState shortcutEditor)
+                {
+                    map[entry.Key] = shortcutEditor.ConfigText;
                 }
                 else if (entry.Editor is TextBox tb)
                 {
@@ -1155,9 +1244,13 @@ namespace TigerClaw.Dialog
                 case "Ctrl+空格切换中英文":
                     return "允许使用 Ctrl+空格 切换中英文状态。";
                 case "Ctrl+等号手动加词":
-                    return "快捷触发手动加词流程。";
+                    return "是否启用手动加词快捷键，实际组合可在下一项录制。";
                 case "Ctrl+m切换最近码表":
-                    return "记录最近使用的两个码表，按 Ctrl+m 在这两个码表之间切换。";
+                    return "是否启用最近码表切换快捷键，实际组合可在下一项录制。";
+                case KeyManualAddWordShortcut:
+                    return "设置手动加词组合键；必须包含 Ctrl 或 Alt，可附加 Shift。";
+                case KeySwitchRecentSchemaShortcut:
+                    return "设置切换最近两个码表的组合键；必须包含 Ctrl 或 Alt，可附加 Shift。";
                 case "回车清屏":
                     return "回车键是否立即清掉编码串。";
                 case "中英文不限长混合输入":
@@ -1279,6 +1372,8 @@ namespace TigerClaw.Dialog
                 case "Ctrl+空格切换中英文":
                 case "Ctrl+等号手动加词":
                 case "Ctrl+m切换最近码表":
+                case KeyManualAddWordShortcut:
+                case KeySwitchRecentSchemaShortcut:
                 case "分号次选":
                 case "引号三选":
                 case "回车清屏":
@@ -1722,6 +1817,115 @@ namespace TigerClaw.Dialog
             return -1;
         }
 
+        private static bool IsShortcutSetting(string key)
+        {
+            return string.Equals(key, KeyManualAddWordShortcut, StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(key, KeySwitchRecentSchemaShortcut, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string GetDefaultShortcut(string key)
+        {
+            return string.Equals(key, KeySwitchRecentSchemaShortcut, StringComparison.OrdinalIgnoreCase)
+                ? DefaultSwitchRecentSchemaShortcut
+                : DefaultManualAddWordShortcut;
+        }
+
+        private static string GetSettingDisplayName(string key)
+        {
+            if (string.Equals(key, KeyManualAddWordEnabled, StringComparison.OrdinalIgnoreCase))
+            {
+                return "启用手动加词快捷键";
+            }
+            if (string.Equals(key, KeySwitchRecentSchemaEnabled, StringComparison.OrdinalIgnoreCase))
+            {
+                return "启用切换最近码表快捷键";
+            }
+            return key;
+        }
+
+        private static bool TryValidateShortcutBindings(
+            Dictionary<string, string> values,
+            out string error)
+        {
+            error = string.Empty;
+            if (!TryReadShortcut(values, KeyManualAddWordShortcut, out ShortcutGesture addWord) ||
+                !TryReadShortcut(values, KeySwitchRecentSchemaShortcut, out ShortcutGesture switchSchema))
+            {
+                error = "快捷键格式无效。";
+                return false;
+            }
+
+            bool addEnabled = IsSettingEnabled(values, KeyManualAddWordEnabled, true);
+            bool switchEnabled = IsSettingEnabled(values, KeySwitchRecentSchemaEnabled, false);
+            if (addEnabled && switchEnabled && addWord.Equals(switchSchema))
+            {
+                error = "手动加词与切换最近码表不能使用同一组合键。";
+                return false;
+            }
+
+            if (addEnabled && TryGetReservedShortcutName(addWord, values, out string addConflict))
+            {
+                error = "手动加词与“" + addConflict + "”冲突。";
+                return false;
+            }
+            if (switchEnabled && TryGetReservedShortcutName(switchSchema, values, out string switchConflict))
+            {
+                error = "切换最近码表与“" + switchConflict + "”冲突。";
+                return false;
+            }
+
+            return true;
+        }
+
+        private static bool TryReadShortcut(
+            Dictionary<string, string> values,
+            string key,
+            out ShortcutGesture gesture)
+        {
+            gesture = null;
+            return values.TryGetValue(key, out string value) &&
+                   ShortcutGesture.TryParse(value, out gesture);
+        }
+
+        private static bool IsSettingEnabled(
+            Dictionary<string, string> values,
+            string key,
+            bool defaultValue)
+        {
+            return values.TryGetValue(key, out string value)
+                ? string.Equals(value, Yes, StringComparison.OrdinalIgnoreCase)
+                : defaultValue;
+        }
+
+        private static bool TryGetReservedShortcutName(
+            ShortcutGesture gesture,
+            Dictionary<string, string> values,
+            out string name)
+        {
+            name = string.Empty;
+            ShortcutConflictKind conflict = ShortcutBindingRules.GetReservedConflict(
+                gesture,
+                IsSettingEnabled(values, "Ctrl+空格切换中英文", true),
+                IsSettingEnabled(values, "Alt+\\启用或禁用外挂版", true));
+            switch (conflict)
+            {
+                case ShortcutConflictKind.CtrlSpace:
+                    name = "Ctrl+空格切换中英文";
+                    return true;
+                case ShortcutConflictKind.NativeHookAltBackslash:
+                    name = "Alt+\\启用或禁用外挂版";
+                    return true;
+                case ShortcutConflictKind.CtrlDigitReorder:
+                    name = "Ctrl+数字调序";
+                    return true;
+                case ShortcutConflictKind.AltDigitReorder:
+                    name = "Alt+数字调序";
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
         private sealed class EditorEntry
         {
             public EditorEntry(string key, FrameworkElement editor)
@@ -1732,6 +1936,24 @@ namespace TigerClaw.Dialog
 
             public string Key { get; }
             public FrameworkElement Editor { get; }
+        }
+
+        private sealed class ShortcutEditorState
+        {
+            public ShortcutEditorState(TextBox display, string configText)
+            {
+                Display = display;
+                ConfigText = configText ?? string.Empty;
+            }
+
+            public TextBox Display { get; }
+            public string ConfigText { get; private set; }
+
+            public void Set(ShortcutGesture gesture)
+            {
+                ConfigText = gesture?.ToConfigString() ?? string.Empty;
+                Display.Text = gesture?.ToDisplayString() ?? string.Empty;
+            }
         }
 
         private sealed class FilterEntry

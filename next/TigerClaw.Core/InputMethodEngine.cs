@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using TigerClaw.Shared;
 
 namespace TigerClaw.Core
 {
@@ -60,7 +61,6 @@ namespace TigerClaw.Core
         private const int VK_NUMPAD0 = 0x60;
         private const int VK_NUMPAD9 = 0x69;
         private const int VK_A = 0x41;
-        private const int VK_M = 0x4D;
         private const int VK_Z = 0x5A;
         private const double SentenceEmittedCharacterReward = 2.0;
         private const double SentenceWholeInputSingleCharacterReward = 5.0;
@@ -228,6 +228,12 @@ namespace TigerClaw.Core
         // key-downs and the TSF test+commit double dispatch all carry repeat==1, so this gate (not
         // the repeat count) is what stops a single press from re-firing the action rapidly.
         private int _oneShotActionKey;
+        private int _shortcutConfigVersion = -1;
+        private ShortcutGesture _manualAddWordShortcut;
+        private ShortcutGesture _switchRecentSchemaShortcut;
+        private bool _manualAddWordShortcutAvailable;
+        private bool _switchRecentSchemaShortcutAvailable;
+        private bool _schemaSwitchShortcutAwaitingModifierRelease;
         private DateTime _lastCtrlUpUtc = DateTime.MinValue;
         private static readonly TimeSpan CtrlSpaceGrace = TimeSpan.FromMilliseconds(250);
         private bool _leftSingleQuote = true;
@@ -548,6 +554,7 @@ namespace TigerClaw.Core
         {
             lock (_lock)
             {
+                ResetOneShotActionState();
                 ResetCtrlSpaceState();
                 ResetShiftToggleState();
                 ResetCandidatePageTracker();
@@ -562,6 +569,7 @@ namespace TigerClaw.Core
                 ClearCompositionInput();
                 _compositionState = _isChinese ? CompositionState.CnIdle : CompositionState.En;
                 ResetCandidatePageTracker();
+                ResetOneShotActionState();
                 ResetCtrlSpaceState();
                 ResetShiftToggleState();
                 _dotAfterDigitArmed = false;
@@ -731,6 +739,11 @@ namespace TigerClaw.Core
                     return KeyEngineResult.Pass(_isChinese);
                 }
 
+                if (isUp && IsModifierKey(resolvedVk) && !shift && !ctrl && !alt && !win)
+                {
+                    _schemaSwitchShortcutAwaitingModifierRelease = false;
+                }
+
                 if (isDown && resolvedVk != VK_OEM_7 && resolvedVk != VK_BACK && !IsModifierKey(resolvedVk))
                 {
                     _deletedSingleQuoteArmed = false;
@@ -809,6 +822,71 @@ namespace TigerClaw.Core
                     // no-op here; escape is handled in state processors.
                 }
 
+                RefreshActionShortcuts();
+                bool matchesManualAddWord = _manualAddWordShortcutAvailable &&
+                                            _manualAddWordShortcut.Matches(resolvedVk, shift, ctrl, alt, win);
+                bool matchesSwitchRecentSchema = _switchRecentSchemaShortcutAvailable &&
+                                                 _switchRecentSchemaShortcut.Matches(resolvedVk, shift, ctrl, alt, win);
+                if (_schemaSwitchShortcutAwaitingModifierRelease &&
+                    (matchesManualAddWord || matchesSwitchRecentSchema))
+                {
+                    // Treat one modifier hold as one schema-switch chord. This prevents a fast
+                    // rollover (for example Ctrl+J followed by E before Ctrl-up is observed) from
+                    // being misread as the independently configured Ctrl+E add-word shortcut.
+                    bool composing = HasCompositionInput();
+                    return KeyEngineResult.CreateHandled(
+                        _compositionState != CompositionState.En,
+                        null,
+                        composing ? _inputBuffer.ToString() : null,
+                        composing);
+                }
+
+                if (matchesManualAddWord)
+                {
+                    if (_oneShotActionKey == resolvedVk)
+                    {
+                        return KeyEngineResult.CreateHandled(_compositionState != CompositionState.En, null, null, false);
+                    }
+                    _oneShotActionKey = resolvedVk;
+                    return KeyEngineResult.CreateHandled(
+                        _compositionState != CompositionState.En,
+                        null,
+                        null,
+                        false,
+                        openAddCiWindow: true);
+                }
+
+                if (matchesSwitchRecentSchema)
+                {
+                    bool composing = _inputBuffer.Length > 0 &&
+                                     (_compositionState == CompositionState.CnComposing ||
+                                      _compositionState == CompositionState.CnPinyin ||
+                                      _compositionState == CompositionState.CnUpperCase ||
+                                      _compositionState == CompositionState.CnSentence);
+
+                    if (_oneShotActionKey == resolvedVk)
+                    {
+                        return KeyEngineResult.CreateHandled(
+                            _compositionState != CompositionState.En,
+                            null,
+                            _inputBuffer.ToString(),
+                            composing);
+                    }
+
+                    if (_state.TrySwitchRecentSchema(out _))
+                    {
+                        _oneShotActionKey = resolvedVk;
+                        _schemaSwitchShortcutAwaitingModifierRelease = true;
+                        RefreshCompositionAfterSchemaSwitch();
+                        GetKeyState(out _, out composing);
+                        return KeyEngineResult.CreateHandled(
+                            _compositionState != CompositionState.En,
+                            null,
+                            _inputBuffer.ToString(),
+                            composing);
+                    }
+                }
+
                 if (alt)
                 {
                     bool isBareAltKey = resolvedVk == VK_MENU || resolvedVk == VK_LMENU || resolvedVk == VK_RMENU;
@@ -853,52 +931,6 @@ namespace TigerClaw.Core
 
                 if (ctrl)
                 {
-                    if (resolvedVk == VK_OEM_PLUS && _state.GetCtrlEqualAddCiEnabled())
-                    {
-                        if (_oneShotActionKey == resolvedVk)
-                        {
-                            // Auto-repeat / duplicate dispatch of a held Ctrl+=: consume it without
-                            // reopening the add-word window (matches the post-open empty composition).
-                            return KeyEngineResult.CreateHandled(_compositionState != CompositionState.En, null, null, false);
-                        }
-                        _oneShotActionKey = resolvedVk;
-                        return KeyEngineResult.CreateHandled(_compositionState != CompositionState.En, null, null, false, openAddCiWindow: true);
-                    }
-
-                    if (resolvedVk == VK_M && !alt && !win && !shift && _state.GetCtrlMSwitchSchemaEnabled())
-                    {
-                        bool composing = _inputBuffer.Length > 0 &&
-                                         (_compositionState == CompositionState.CnComposing ||
-                                          _compositionState == CompositionState.CnPinyin ||
-                                          _compositionState == CompositionState.CnUpperCase ||
-                                          _compositionState == CompositionState.CnSentence);
-
-                        // One switch per physical press (see _oneShotActionKey). A single Ctrl+m reaches
-                        // Core through the TSF test phase plus key-down, and a held key auto-repeats many
-                        // key-downs (each repeat==1); without the gate every message would flip the schema
-                        // again, producing the back-and-forth oscillation.
-                        if (_oneShotActionKey == resolvedVk)
-                        {
-                            return KeyEngineResult.CreateHandled(_compositionState != CompositionState.En, null, _inputBuffer.ToString(), composing);
-                        }
-
-                        if (_state.TrySwitchRecentSchema(out _))
-                        {
-                            _oneShotActionKey = resolvedVk;
-                            ReloadSentenceResources();
-                            if (IsMixedInputSession())
-                            {
-                                _mixedInputDecoder.ClearCache();
-                                RebuildMixedInput();
-                            }
-                            // Keep the in-flight code; the new code table re-resolves candidates on the
-                            // next UI snapshot. Reset paging because the candidate list changed.
-                            ResetCandidatePageTracker();
-                            return KeyEngineResult.CreateHandled(_compositionState != CompositionState.En, null, _inputBuffer.ToString(), composing);
-                        }
-                        // Could not switch (fewer than two code tables): fall through to normal Ctrl handling.
-                    }
-
                     if (!alt && !win &&
                         _compositionState == CompositionState.CnComposing &&
                         resolvedVk >= VK_1 && resolvedVk <= VK_9)
@@ -2297,7 +2329,7 @@ namespace TigerClaw.Core
             _sentenceContinuationAfterAutoCommit = continuationAfterAutoCommit;
             _sentenceNeuralAcceptedRaw = string.Empty;
             _sentenceNeuralTopText = string.Empty;
-            _sentenceRawBuffer.Append((rawCode ?? string.Empty).ToLowerInvariant());
+            _sentenceRawBuffer.Append(rawCode ?? string.Empty);
             RebuildSentenceInput();
         }
 
@@ -2999,6 +3031,17 @@ namespace TigerClaw.Core
 
         private void ApplySentenceDecodeResult(long generation, string rawCode, int lexiconVersion, SentenceDecodeResult result)
         {
+            // Decoder lookup normalizes casing; engine identity and literal commits retain raw.
+            if (result != null)
+            {
+                result = new SentenceDecodeResult
+                {
+                    RawCode = rawCode,
+                    Candidates = result.Candidates,
+                    EarlyCommitEvidence = result.EarlyCommitEvidence,
+                    ExpandedStates = result.ExpandedStates
+                };
+            }
             _sentenceDecodeResult = FilterSentenceDecodeResultForImplicitRanks(
                 FilterSentenceDecodeResultForCommittedPrefix(
                     result ?? SentenceDecodeResult.Empty),
@@ -4272,6 +4315,102 @@ namespace TigerClaw.Core
                    vk == VK_CAPITAL;
         }
 
+        private bool IsReservedCustomShortcut(ShortcutGesture gesture)
+        {
+            return gesture == null ||
+                   ShortcutBindingRules.GetReservedConflict(
+                       gesture,
+                       _state.GetCtrlSpaceToggleEnabled(),
+                       _state.GetNativeHookAltBackslashToggleEnabled()) != ShortcutConflictKind.None;
+        }
+
+        public void RefreshCompositionAfterSchemaSwitch()
+        {
+            lock (_lock)
+            {
+                bool convertible = _compositionState == CompositionState.CnSentence ||
+                                   _compositionState == CompositionState.CnComposing;
+                if (!convertible)
+                {
+                    ReloadSentenceResources();
+                    ResetCandidatePageTracker();
+                    return;
+                }
+
+                string rawCode = _compositionState == CompositionState.CnSentence
+                    ? GetUncommittedSentenceRawCode()
+                    : IsMixedInputSession() ? _mixedRawBuffer.ToString() : _inputBuffer.ToString();
+                ClearCompositionInput();
+                ReloadSentenceResources();
+                if (rawCode.Length == 0)
+                {
+                    _compositionState = CompositionState.CnIdle;
+                }
+                else if (_state.IsSentenceInputActive() && _sentenceInputDecoder != null)
+                {
+                    _compositionState = CompositionState.CnSentence;
+                    RestartSentenceInput(rawCode);
+                }
+                else
+                {
+                    _compositionState = CompositionState.CnComposing;
+                    // Long imported compositions need a temporary mixed session to avoid
+                    // discarding raw keys. Short ones obey the target's normal input setting.
+                    if (_state.GetUnlimitedMixedChineseEnglishInput() || rawCode.Length > GetSafeMaxCodeLen())
+                    {
+                        _mixedRawBuffer.Append(rawCode);
+                        _mixedInputDecoder.ClearCache();
+                        RebuildMixedInput();
+                    }
+                    else
+                    {
+                        _inputBuffer.Append(rawCode);
+                    }
+                }
+                ResetCandidatePageTracker();
+            }
+        }
+
+        private void RefreshActionShortcuts()
+        {
+            int configVersion = _state.ConfigVersion;
+            if (_shortcutConfigVersion == configVersion)
+            {
+                return;
+            }
+
+            _manualAddWordShortcut = _state.GetManualAddWordShortcut();
+            _switchRecentSchemaShortcut = _state.GetSwitchRecentSchemaShortcut();
+            _manualAddWordShortcutAvailable =
+                _state.GetCtrlEqualAddCiEnabled() &&
+                !IsReservedCustomShortcut(_manualAddWordShortcut);
+            _switchRecentSchemaShortcutAvailable =
+                _state.GetCtrlMSwitchSchemaEnabled() &&
+                !IsReservedCustomShortcut(_switchRecentSchemaShortcut);
+            if (_manualAddWordShortcutAvailable &&
+                _switchRecentSchemaShortcutAvailable &&
+                _switchRecentSchemaShortcut.Equals(_manualAddWordShortcut))
+            {
+                // The settings UI rejects this, but config.txt is user-editable. Never resolve an
+                // ambiguous action by silently preferring add-word: a key intended for schema
+                // switching must not unexpectedly open a dialog.
+                _manualAddWordShortcutAvailable = false;
+                _switchRecentSchemaShortcutAvailable = false;
+            }
+            _shortcutConfigVersion = configVersion;
+        }
+
+        private void ResetOneShotActionState()
+        {
+            // An action such as opening the add-word dialog can move focus before its physical
+            // key-up reaches this TSF instance. Focus/cancellation is therefore also a release
+            // boundary; otherwise that shortcut remains suppressed indefinitely.
+            _oneShotActionKey = 0;
+            _schemaSwitchShortcutAwaitingModifierRelease = false;
+            _handledModifierSelectionKeys.Clear();
+            _quoteDownSeen = false;
+        }
+
         private bool TryHandleCtrlSpaceChord(int vk, bool isDown, bool isUp, int repeat, bool shift, bool alt, bool win, out KeyEngineResult result)
         {
             result = null;
@@ -4667,6 +4806,15 @@ namespace TigerClaw.Core
             {
                 return rawCode;
             }
+
+            var casedSegmented = new StringBuilder(segmented.Length);
+            int rawIndex = 0;
+            foreach (char mark in segmented)
+            {
+                casedSegmented.Append(mark == ' ' || rawIndex >= fullRawCode.Length
+                    ? mark : fullRawCode[rawIndex++]);
+            }
+            segmented = casedSegmented.ToString();
 
             string decodedRawCode = _sentenceDecodeResult.RawCode ?? string.Empty;
             string fullDisplayCode;

@@ -14,6 +14,8 @@ using System.Text;
 
 using Microsoft.Win32;
 
+using TigerClaw.Shared;
+
 
 
 namespace TigerClaw.Core
@@ -39,6 +41,10 @@ namespace TigerClaw.Core
 
         private const string KeyCtrlEqualAddCi = "Ctrl+\u7b49\u53f7\u624b\u52a8\u52a0\u8bcd";
         private const string KeyCtrlMSwitchSchema = "Ctrl+m\u5207\u6362\u6700\u8fd1\u7801\u8868"; // Ctrl+m switch recent code table
+        private const string KeyManualAddWordShortcut = "\u624b\u52a8\u52a0\u8bcd\u5feb\u6377\u952e"; // 手动加词快捷键
+        private const string KeySwitchRecentSchemaShortcut = "\u5207\u6362\u6700\u8fd1\u7801\u8868\u5feb\u6377\u952e"; // 切换最近码表快捷键
+        private const string DefaultManualAddWordShortcut = "Ctrl+VK_OEM_PLUS";
+        private const string DefaultSwitchRecentSchemaShortcut = "Ctrl+VK_M";
         // Internal/persisted record of the two most-recently-used code tables (for Ctrl+m), stored
         // as "name|name". Persisted so the pair survives a restart; hidden from the settings dialog.
         private const string KeyRecentSchemas = "\u6700\u8fd1\u7801\u8868\u5bf9"; // unicode: \u6700\u8fd1\u7801\u8868\u5bf9
@@ -151,7 +157,11 @@ namespace TigerClaw.Core
 
             new KeyValuePair<string, string>(KeyCtrlEqualAddCi, Yes),
 
+            new KeyValuePair<string, string>(KeyManualAddWordShortcut, DefaultManualAddWordShortcut),
+
             new KeyValuePair<string, string>(KeyCtrlMSwitchSchema, No),
+
+            new KeyValuePair<string, string>(KeySwitchRecentSchemaShortcut, DefaultSwitchRecentSchemaShortcut),
 
             new KeyValuePair<string, string>(KeyRecentSchemas, string.Empty),
 
@@ -874,6 +884,31 @@ namespace TigerClaw.Core
         public bool GetCtrlEqualAddCiEnabled() => GetBool(KeyCtrlEqualAddCi, true);
 
         public bool GetCtrlMSwitchSchemaEnabled() => GetBool(KeyCtrlMSwitchSchema, false);
+
+        public ShortcutGesture GetManualAddWordShortcut() =>
+            GetShortcutGesture(KeyManualAddWordShortcut, DefaultManualAddWordShortcut);
+
+        public ShortcutGesture GetSwitchRecentSchemaShortcut() =>
+            GetShortcutGesture(KeySwitchRecentSchemaShortcut, DefaultSwitchRecentSchemaShortcut);
+
+        private ShortcutGesture GetShortcutGesture(string key, string defaultValue)
+        {
+            string value;
+            lock (_lock)
+            {
+                value = _config.TryGetValue(key, out string configured)
+                    ? configured
+                    : defaultValue;
+            }
+
+            if (ShortcutGesture.TryParse(value, out ShortcutGesture gesture))
+            {
+                return gesture;
+            }
+
+            ShortcutGesture.TryParse(defaultValue, out gesture);
+            return gesture;
+        }
 
 
 

@@ -227,6 +227,10 @@ namespace TigerClaw.Core.Tests
                 SentenceAutoCommitAcceptsProbabilisticAlternatingSegmentation();
                 SentenceAutoCommitReplayPreservesOriginalCommit();
                 KeyReplayCacheReturnsOriginalResultWithCurrentSequence();
+                ShortcutGesturesParseAndMatch();
+                CustomActionShortcutsTriggerAndRearm();
+                CustomRecentSchemaShortcutSwitchesSchemas();
+                SchemaSwitchPreservesOnlyLiveRaw();
                 KeyResponsesDeclareExpectedKeyUp();
                 CtrlSpaceStillTogglesWithExpectedKeyUpResponses();
                 KeyUpExpectationCoversReleaseDependentState();
@@ -5003,6 +5007,33 @@ namespace TigerClaw.Core.Tests
             return result;
         }
 
+        private static KeyEngineResult PressChord(
+            InputMethodEngine engine,
+            int vk,
+            bool shift = false,
+            bool ctrl = false,
+            bool alt = false,
+            bool win = false)
+        {
+            KeyEngineResult result = engine.ProcessKey(
+                vk, 0, "down", shift, ctrl, alt, win, false, false, 1, false);
+            engine.PostProcessKey(vk, "down", result, shift, ctrl, alt, win, false);
+            return result;
+        }
+
+        private static void ReleaseChord(
+            InputMethodEngine engine,
+            int vk,
+            bool shift = false,
+            bool ctrl = false,
+            bool alt = false,
+            bool win = false)
+        {
+            KeyEngineResult result = engine.ProcessKey(
+                vk, 0, "up", shift, ctrl, alt, win, false, false, 1, false);
+            engine.PostProcessKey(vk, "up", result, shift, ctrl, alt, win, false);
+        }
+
         private static KeyEngineResult SendKey(InputMethodEngine engine, int vk, string action, bool shift)
         {
             KeyEngineResult result = engine.ProcessKey(
@@ -5411,6 +5442,211 @@ namespace TigerClaw.Core.Tests
                 True(replayedShift.Contains("\"seq\":3,") &&
                      replayedShift.Contains("\"expect_keyup\":true"),
                     nameof(KeyResponsesDeclareExpectedKeyUp) + ".replay");
+            }
+        }
+
+        private static void ShortcutGesturesParseAndMatch()
+        {
+            True(
+                ShortcutGesture.TryParse("shift+ctrl+alt+vk_oem_plus", out ShortcutGesture gesture),
+                nameof(ShortcutGesturesParseAndMatch) + ".parse");
+            Equal("Ctrl+Alt+Shift+VK_OEM_PLUS", gesture.ToConfigString(),
+                nameof(ShortcutGesturesParseAndMatch) + ".canonical");
+            Equal("Ctrl+Alt+Shift+=", gesture.ToDisplayString(),
+                nameof(ShortcutGesturesParseAndMatch) + ".display");
+            True(gesture.Matches(0xBB, true, true, true, false),
+                nameof(ShortcutGesturesParseAndMatch) + ".match");
+            True(!gesture.Matches(0xBB, false, true, true, false),
+                nameof(ShortcutGesturesParseAndMatch) + ".exact_modifiers");
+            True(!ShortcutGesture.TryParse("VK_K", out _),
+                nameof(ShortcutGesturesParseAndMatch) + ".reject_bare");
+            True(!ShortcutGesture.TryParse("Win+VK_K", out _),
+                nameof(ShortcutGesturesParseAndMatch) + ".reject_win");
+            True(!ShortcutGesture.TryParse("Ctrl+VK_CONTROL", out _),
+                nameof(ShortcutGesturesParseAndMatch) + ".reject_modifier_key");
+
+            ShortcutGesture.TryParse("Ctrl+VK_SPACE", out ShortcutGesture ctrlSpace);
+            True(
+                ShortcutBindingRules.GetReservedConflict(ctrlSpace, true, true) == ShortcutConflictKind.CtrlSpace,
+                nameof(ShortcutGesturesParseAndMatch) + ".ctrl_space_conflict");
+            True(
+                ShortcutBindingRules.GetReservedConflict(ctrlSpace, false, true) == ShortcutConflictKind.None,
+                nameof(ShortcutGesturesParseAndMatch) + ".disabled_ctrl_space_available");
+            ShortcutGesture.TryParse("Alt+VK_OEM_5", out ShortcutGesture altBackslash);
+            True(
+                ShortcutBindingRules.GetReservedConflict(altBackslash, true, true) == ShortcutConflictKind.NativeHookAltBackslash,
+                nameof(ShortcutGesturesParseAndMatch) + ".native_toggle_conflict");
+            ShortcutGesture.TryParse("Ctrl+VK_3", out ShortcutGesture ctrlDigit);
+            True(
+                ShortcutBindingRules.GetReservedConflict(ctrlDigit, true, true) == ShortcutConflictKind.CtrlDigitReorder,
+                nameof(ShortcutGesturesParseAndMatch) + ".ctrl_digit_conflict");
+            ShortcutGesture.TryParse("Ctrl+Shift+VK_3", out ShortcutGesture ctrlShiftDigit);
+            True(
+                ShortcutBindingRules.GetReservedConflict(ctrlShiftDigit, true, true) == ShortcutConflictKind.CtrlDigitReorder,
+                nameof(ShortcutGesturesParseAndMatch) + ".ctrl_shift_digit_conflict");
+        }
+
+        private static void CustomActionShortcutsTriggerAndRearm()
+        {
+            string root = Path.Combine(Path.GetTempPath(), "TigerClaw.Core.Tests", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            try
+            {
+                var state = new CoreRuntimeState(root);
+                state.Initialize();
+                True(state.TrySetConfigValue(
+                    "手动加词快捷键", "Ctrl+Alt+Shift+VK_K", out _, out _),
+                    nameof(CustomActionShortcutsTriggerAndRearm) + ".configure");
+                var engine = new InputMethodEngine(state);
+
+                KeyEngineResult oldDefault = PressChord(engine, 0xBB, ctrl: true);
+                True(!oldDefault.OpenAddCiWindow,
+                    nameof(CustomActionShortcutsTriggerAndRearm) + ".old_default_released");
+                KeyEngineResult wrongModifiers = PressChord(engine, 0x4B, ctrl: true, alt: true);
+                True(!wrongModifiers.OpenAddCiWindow,
+                    nameof(CustomActionShortcutsTriggerAndRearm) + ".exact_modifiers");
+
+                KeyEngineResult first = PressChord(engine, 0x4B, shift: true, ctrl: true, alt: true);
+                True(first.Handled && first.OpenAddCiWindow,
+                    nameof(CustomActionShortcutsTriggerAndRearm) + ".first");
+                KeyEngineResult repeated = PressChord(engine, 0x4B, shift: true, ctrl: true, alt: true);
+                True(repeated.Handled && !repeated.OpenAddCiWindow,
+                    nameof(CustomActionShortcutsTriggerAndRearm) + ".repeat_once");
+                engine.OnFocusChanged();
+                True(PressChord(engine, 0x4B, shift: true, ctrl: true, alt: true).OpenAddCiWindow,
+                    nameof(CustomActionShortcutsTriggerAndRearm) + ".focus_rearms");
+                ReleaseChord(engine, 0x4B, shift: true, ctrl: true, alt: true);
+                True(PressChord(engine, 0x4B, shift: true, ctrl: true, alt: true).OpenAddCiWindow,
+                    nameof(CustomActionShortcutsTriggerAndRearm) + ".rearmed");
+
+                state.TrySetConfigValue("Ctrl+等号手动加词", "否", out _, out _);
+                ReleaseChord(engine, 0x4B, shift: true, ctrl: true, alt: true);
+                True(!PressChord(engine, 0x4B, shift: true, ctrl: true, alt: true).OpenAddCiWindow,
+                    nameof(CustomActionShortcutsTriggerAndRearm) + ".disabled");
+
+                state.TrySetConfigValue("Ctrl+等号手动加词", "是", out _, out _);
+                state.TrySetConfigValue("手动加词快捷键", "invalid", out _, out _);
+                True(PressChord(engine, 0xBB, ctrl: true).OpenAddCiWindow,
+                    nameof(CustomActionShortcutsTriggerAndRearm) + ".invalid_falls_back");
+
+                ReleaseChord(engine, 0xBB, ctrl: true);
+                state.TrySetConfigValue("手动加词快捷键", "Ctrl+VK_J", out _, out _);
+                state.TrySetConfigValue("Ctrl+m切换最近码表", "是", out _, out _);
+                state.TrySetConfigValue("切换最近码表快捷键", "Ctrl+VK_J", out _, out _);
+                KeyEngineResult ambiguous = PressChord(engine, 0x4A, ctrl: true);
+                True(!ambiguous.OpenAddCiWindow,
+                    nameof(CustomActionShortcutsTriggerAndRearm) + ".ambiguous_never_adds");
+            }
+            finally
+            {
+                if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+            }
+        }
+
+        private static void CustomRecentSchemaShortcutSwitchesSchemas()
+        {
+            string root = Path.Combine(Path.GetTempPath(), "TigerClaw.Core.Tests", Guid.NewGuid().ToString("N"));
+            string codeRoot = Path.Combine(root, "码表");
+            Directory.CreateDirectory(Path.Combine(codeRoot, "虎码字词"));
+            Directory.CreateDirectory(Path.Combine(codeRoot, "虎整句"));
+            File.WriteAllText(
+                Path.Combine(codeRoot, "虎码字词", "虎码字词.txt"),
+                "甲\tab\r\n乙\tcd\r\n{加词}\tef\r\n");
+            File.WriteAllText(
+                Path.Combine(codeRoot, "虎整句", "虎整句.txt"),
+                "你\tab\r\n好\tcd\r\n{加词}\tef\r\n");
+            try
+            {
+                var state = new CoreRuntimeState(root);
+                state.Initialize();
+                state.TrySetConfigValue("当前码表", "虎整句", out _, out _);
+                state.ReloadLexicon();
+                state.TrySetConfigValue("当前码表", "虎码字词", out _, out _);
+                state.ReloadLexicon();
+                state.TrySetConfigValue("最大码长", "2", out _, out _);
+                state.TrySetConfigValue("中英文不限长混合输入", "是", out _, out _);
+                state.TrySetConfigValue("最大码长无重自动上屏", "否", out _, out _);
+                state.TrySetConfigValue("手动加词快捷键", "Ctrl+VK_E", out _, out _);
+                state.TrySetConfigValue("Ctrl+m切换最近码表", "是", out _, out _);
+                state.TrySetConfigValue("切换最近码表快捷键", "Ctrl+VK_J", out _, out _);
+                var decoder = new SentenceInputDecoder(
+                    SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
+                    {
+                        ["ab"] = new List<string> { "你" },
+                        ["cd"] = new List<string> { "好" }
+                    }),
+                    NeutralSentenceLanguageModel.Instance,
+                    beamWidth: 20);
+                var engine = new InputMethodEngine(state, decoder, sentenceDecodeSynchronously: true);
+
+                TypeLetters(engine, "ab");
+                EngineUiSnapshot before = engine.GetUiSnapshot(5);
+                Equal("虎码字词", state.GetCurrentSchema(),
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".before");
+                Equal("甲", before.Candidates[0],
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".before_candidate");
+
+                KeyEngineResult switched = PressChord(engine, 0x4A, ctrl: true);
+                True(switched.Handled,
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".handled");
+                True(!switched.OpenAddCiWindow,
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".never_opens_add_word");
+                Equal("虎整句", state.GetCurrentSchema(),
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".sentence_schema");
+                True(engine.IsSentenceCompositionActive,
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".sentence_state");
+                EngineUiSnapshot sentence = engine.GetUiSnapshot(5);
+                Equal("ab", sentence.InputCode,
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".sentence_raw");
+                Equal("你", sentence.Candidates[0],
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".sentence_candidate");
+
+                KeyEngineResult rolledIntoAddWord = PressChord(engine, 0x45, ctrl: true);
+                True(rolledIntoAddWord.Handled && !rolledIntoAddWord.OpenAddCiWindow,
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".modifier_rollover_not_add_word");
+                Equal("虎整句", state.GetCurrentSchema(),
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".modifier_rollover_not_switch");
+
+                ReleaseChord(engine, 0x4A, ctrl: true);
+                ReleaseChord(engine, 0x11);
+                KeyEngineResult switchedBack = PressChord(engine, 0x4A, ctrl: true);
+                True(switchedBack.Handled,
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".back_handled");
+                True(!switchedBack.OpenAddCiWindow,
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".back_never_opens_add_word");
+                Equal("虎码字词", state.GetCurrentSchema(),
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".normal_schema");
+                True(!engine.IsSentenceCompositionActive,
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".normal_state");
+                EngineUiSnapshot normal = engine.GetUiSnapshot(5);
+                Equal("ab", normal.InputCode,
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".normal_raw");
+                Equal("甲", normal.Candidates[0],
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".normal_candidate");
+
+                TypeLetters(engine, "cd");
+                EngineUiSnapshot continued = engine.GetUiSnapshot(5);
+                Equal("abcd", engine.GetDifferentialSnapshot(5).RawInput,
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".continued_raw");
+                Equal("乙", continued.Candidates[0],
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".continued_candidate");
+
+                Press(engine, 0x1B);
+                TypeLetters(engine, "ef");
+                EngineUiSnapshot actionCandidate = engine.GetUiSnapshot(5);
+                True(actionCandidate.Candidates.Length > 0,
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".action_candidate_exists");
+                Equal("{加词}", actionCandidate.Candidates[0],
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".action_candidate_before_switch");
+                ReleaseChord(engine, 0x4A, ctrl: true);
+                ReleaseChord(engine, 0x11);
+                KeyEngineResult switchedWithActionCandidate = PressChord(engine, 0x4A, ctrl: true);
+                True(switchedWithActionCandidate.Handled && !switchedWithActionCandidate.OpenAddCiWindow,
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".action_candidate_not_committed");
+            }
+            finally
+            {
+                if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
             }
         }
 

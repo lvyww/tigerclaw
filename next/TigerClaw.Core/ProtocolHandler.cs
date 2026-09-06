@@ -413,7 +413,14 @@ namespace TigerClaw.Core
                         if (success && changed &&
                             (IsSentenceInputConfigKey(key) || IsLexiconConfigKey(key)))
                         {
-                            _engine.ReloadSentenceResources();
+                            if (IsLexiconConfigKey(key))
+                            {
+                                _engine.RefreshCompositionAfterSchemaSwitch();
+                            }
+                            else
+                            {
+                                _engine.ReloadSentenceResources();
+                            }
                         }
                         string extra = ",\"changed\":" + (changed ? "true" : "false") + ",\"config_version\":" + _state.ConfigVersion + ",\"lexicon_version\":" + _state.LexiconVersion;
                         if (!success && !string.IsNullOrWhiteSpace(reason))

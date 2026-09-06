@@ -74,6 +74,11 @@ UI state:
 - Raw code is authoritative. Mixed input keeps the complete raw composition,
   decodes it again after every edit, performs case-insensitive lookup, and
   preserves casing for display and literal commits. Code masking is display-only.
+- Schema switching through shortcuts or `set_config` migrates only uncommitted
+  raw code, clears old candidate preferences and sentence prefix constraints,
+  and rebuilds for the target schema. Preserve raw casing across sentence mode.
+  With mixed input disabled, short codes use ordinary composition; an imported
+  code longer than maximum code length uses a temporary mixed composition.
 - Sentence segmentation spaces are display-only. The raw code never contains
   them. Up/Down and Tab/Shift+Tab traverse visible sentence candidates; sentence
   mode leaves Ctrl+number to the target application.
@@ -168,10 +173,17 @@ UI state:
   received these 2026-09-01 independent-prefix, dropped-tail comparison and
   closed-boundary rules. The Rime Lua port received the same tracker rules,
   the duplicate-single-character switch (default on) and the empty-code
-  continuation split on 2026-09-04.
+  continuation split on 2026-09-04. Fcitx5 Android received the duplicate-single
+  switch, continuation split, full-code whitelist and minimum-retained-code
+  setting on 2026-09-05. Its native decoder keeps Beam 2000 through raw position
+  24 and uses 48 thereafter; host benchmarks and real-device acceptance remain
+  separate because the runtime and UI scheduling differ from Rime.
 - TSF key requests carry stable `client_session` + `event_id`; timeout retries
   reuse them and Core returns the cached first response without executing a
   physical key twice.
+- Manual add-word and recent-schema switching keep their existing enable flags
+  and use configurable exact modifier chords. Defaults remain `Ctrl+=` and
+  `Ctrl+M`; TSF and Native Hook both route these actions through Core.
 - Overlay owns candidate display. It pins the first caret anchor for a composition
   and flips above the caret when needed. TSF legacy candidate UI is not active.
 

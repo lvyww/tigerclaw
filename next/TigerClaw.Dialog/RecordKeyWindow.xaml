@@ -67,10 +67,12 @@
                 BorderBrush="{StaticResource BorderBrushSoft}"
                 Background="{StaticResource PanelBrush}">
             <StackPanel>
-                <TextBlock Text="请按下一个按键"
+                <TextBlock x:Name="PromptText"
+                           Text="请按下一个按键"
                            FontSize="22"
                            FontWeight="Bold" />
-                <TextBlock Margin="0,8,0,0"
+                <TextBlock x:Name="InstructionText"
+                           Margin="0,8,0,0"
                            FontSize="13"
                            Foreground="{StaticResource MutedBrush}"
                            TextWrapping="Wrap"
