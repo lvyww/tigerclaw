@@ -32,6 +32,7 @@ internal sealed class BasicEngine : IDisposable
     private long _sentenceGeneration;
     private bool _sentenceDecodePending;
     private bool _sentenceNeuralPending;
+    private string[] _sentencePendingCandidates = [];
     private string _sentenceCommittedText = string.Empty;
     private int _sentenceCommittedRawLength;
     private int _sentenceLastAutoCommitRawLength;
@@ -97,7 +98,11 @@ internal sealed class BasicEngine : IDisposable
     // candidate and commit paths.
     private bool IsQuickSymbolComposition => _buffer.Length > 0 && _buffer[0] is ';' or '/' or '[';
 
-    private bool IsSentenceComposition => IsSentenceMode && !IsQuickSymbolComposition;
+    // A sentence can only begin after the first code key. Keep one-key input
+    // on the ordinary table so short-code characters retain their established
+    // candidate order; an imported Tiger table may otherwise expose a word
+    // from its full-code (`stem`) index ahead of that character.
+    private bool IsSentenceComposition => IsSentenceMode && _buffer.Length >= 2 && !IsQuickSymbolComposition;
 
     // In a sentence, `[` begins the table's normal bracket fast-symbols.  A
     // following slash is an explicit escape into the table's slash commands,
@@ -207,6 +212,7 @@ internal sealed class BasicEngine : IDisposable
         _sentenceGeneration++;
         _sentenceDecodePending = false;
         _sentenceNeuralPending = false;
+        _sentencePendingCandidates = [];
         ResetSentenceAutoCommitState();
         return EngineSnapshot.Empty(handled);
     }
@@ -281,7 +287,7 @@ internal sealed class BasicEngine : IDisposable
         // TryProcessQuickSymbolCode, then subsequent letters arrive here.
         // Do not hand that continuation to the sentence decoder.
         bool continuingQuickSymbol = IsQuickSymbolComposition;
-        if (IsSentenceComposition)
+        if (IsSentenceMode && !continuingQuickSymbol && _buffer.Length > 0)
         {
             return AppendSentenceInput(char.ToLowerInvariant(text[0]));
         }
@@ -361,7 +367,7 @@ internal sealed class BasicEngine : IDisposable
         // When it follows an in-progress sentence, hold that sentence's chosen
         // output until the quick code finishes instead of committing it with a
         // literal full-width bracket on the first key.
-        if (input.Text == "[" && IsSentenceComposition && _buffer.Length > 0 && _lexicon.HasPrefix("["))
+        if (input.Text == "[" && IsSentenceMode && !IsQuickSymbolComposition && _buffer.Length > 0 && _lexicon.HasPrefix("["))
         {
             return StartQuickSymbolAfterSentence();
         }
@@ -677,6 +683,10 @@ internal sealed class BasicEngine : IDisposable
 
         if (IsSentenceComposition)
         {
+            if (_sentenceResult.Candidates.Length == 0 && _sentenceDecodePending && _sentencePendingCandidates.Length > 0)
+            {
+                return _sentencePendingCandidates;
+            }
             return _sentenceResult.Candidates
                 .Take(_config.MaxCandidates)
                 .Select(candidate => candidate.Text)
@@ -741,6 +751,7 @@ internal sealed class BasicEngine : IDisposable
             return Snapshot(handled: true, commit: null);
         }
 
+        _sentencePendingCandidates = CandidatesForCurrentBuffer().ToArray();
         _buffer += value;
         _sentenceSelectedIndex = 0;
         _pageIndex = 0;
@@ -862,6 +873,7 @@ internal sealed class BasicEngine : IDisposable
     {
         _sentenceResult = FilterSentenceDecodeResultForCommittedPrefix(result);
         _sentenceResultRawCode = rawCode;
+        _sentencePendingCandidates = [];
         if (_sentenceResult.Candidates.Length == 0)
         {
             _sentenceSelectedIndex = 0;
@@ -1285,6 +1297,7 @@ internal sealed class BasicEngine : IDisposable
         _sentenceGeneration++;
         _sentenceDecodePending = false;
         _sentenceNeuralPending = false;
+        _sentencePendingCandidates = [];
         ResetSentenceAutoCommitState();
         _quickSymbolDeferredSentenceCommit = string.Empty;
         _quickSymbolDeferredSentence = null;

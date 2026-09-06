@@ -765,6 +765,7 @@ enum NativeAotSmoke {
             configuration.autoSentenceInput = false
             configuration.sentenceNeuralRerankEnabled = false
             configuration.autoCommitUniqueTerminalCode = false
+            configuration.unlimitedMixedInput = false
             configuration.maxCandidates = 20
             // Keep this latency smoke deterministic. Product input now uses
             // the active schema (like Windows); this fixture explicitly uses
@@ -787,32 +788,35 @@ enum NativeAotSmoke {
                 return (result, Int(Date().timeIntervalSince(started) * 1_000))
             }
 
-            let (afterT, firstKeyMilliseconds) = try type("t", offset: 0)
-            guard afterT.handled,
-                  afterT.isComposing,
-                  afterT.sentenceRerankPending,
-                  firstKeyMilliseconds < 100 else {
-                print("NATIVEAOT_SENTENCE_ASYNC_SMOKE_FAIL first=\(afterT) key-ms=\(firstKeyMilliseconds)")
+            let (singleA, _) = try type("a", offset: 0)
+            guard singleA.candidates.first == "来", !singleA.sentenceRerankPending else {
+                print("NATIVEAOT_SENTENCE_ASYNC_SMOKE_FAIL single-code=\(singleA)")
+                return 1
+            }
+            let semicolonSelection = try bridge.process(NativeAotInputEvent(
+                key: Int32(TC_INPUT_KEY_SEMICOLON.rawValue), logicalText: ";", modifiers: 0,
+                action: Int32(TC_KEY_ACTION_KEY_DOWN.rawValue), physicalKey: "Semicolon", physicalScanCode: 41))
+            guard semicolonSelection.commit == "那个", !semicolonSelection.isComposing else {
+                print("NATIVEAOT_SENTENCE_ASYNC_SMOKE_FAIL single-code-semicolon=\(semicolonSelection)")
                 return 1
             }
 
-            var readyT = afterT
-            let firstDeadline = Date().addingTimeInterval(10)
-            while readyT.sentenceRerankPending && Date() < firstDeadline {
-                Thread.sleep(forTimeInterval: 0.01)
-                readyT = try bridge.currentSnapshot()
-            }
-            guard !readyT.sentenceRerankPending, !readyT.candidates.isEmpty else {
-                print("NATIVEAOT_SENTENCE_ASYNC_SMOKE_FAIL initial decode timed out result=\(readyT)")
+            let (afterT, firstKeyMilliseconds) = try type("t", offset: 0)
+            guard afterT.handled,
+                  afterT.isComposing,
+                  !afterT.sentenceRerankPending,
+                  afterT.candidates == ["我", "我们"],
+                  firstKeyMilliseconds < 100 else {
+                print("NATIVEAOT_SENTENCE_ASYNC_SMOKE_FAIL first=\(afterT) key-ms=\(firstKeyMilliseconds)")
                 return 1
             }
 
             let (afterU, secondKeyMilliseconds) = try type("u", offset: 1)
             guard afterU.sentenceRerankPending,
                   secondKeyMilliseconds < 100,
-                  afterU.candidates == readyT.candidates,
+                  afterU.candidates == afterT.candidates,
                   afterU.activeInputCode.replacingOccurrences(of: " ", with: "") == "tu" else {
-                print("NATIVEAOT_SENTENCE_ASYNC_SMOKE_FAIL retained=\(afterU) previous=\(readyT.candidates) key-ms=\(secondKeyMilliseconds)")
+                print("NATIVEAOT_SENTENCE_ASYNC_SMOKE_FAIL retained=\(afterU) previous=\(afterT.candidates) key-ms=\(secondKeyMilliseconds)")
                 return 1
             }
 
