@@ -335,6 +335,20 @@ local function build_lexicon_index(entries, character_ranks, high_freq_limit, wh
         end
     end
 
+    local optimal_input = {}
+    for character, codes in pairs(codes_by_character) do
+        local chosen
+        for index = 1, #codes do
+            local code = codes[index]
+            if not chosen or #code < #chosen then
+                chosen = code
+            end
+        end
+        if chosen then
+            optimal_input[character] = chosen
+        end
+    end
+
     local filtered = {}
     local length_values = {}
     local max_len = 1
@@ -350,7 +364,11 @@ local function build_lexicon_index(entries, character_ranks, high_freq_limit, wh
                 or not common[text]
                 or whitelist[text] == true
             if allow_non_primary or primary[text] == code then
-                allowed[#allowed + 1] = { t = text, r = index }
+                allowed[#allowed + 1] = {
+                    t = text,
+                    r = index,
+                    optimal_single = optimal_input[text] == code
+                }
             end
         end
         if #allowed > 0 then
@@ -1113,6 +1131,7 @@ local candidate_limit = 20
 local max_raw_length = 128
 local rank_penalty = 0.03
 local emitted_character_reward = 2.0
+local whole_input_single_character_reward = 5.0
 local isolation_threshold = 3000
 local isolation_lambda = 2.0
 local early_commit_minimum_share = 0.995
@@ -1882,11 +1901,19 @@ local function expand_range(raw, states, from_pos, length, minimum_consumed_end)
                                         end
                                         score = score - rank_penalty * candidate._log_rank
                                     end
+                                    local whole_input_single_character_reward_added = 0.0
+                                    if whole_input_edge and selected_rank == 0 and
+                                        candidate.optimal_single and candidate_is_single(candidate) then
+                                        whole_input_single_character_reward_added =
+                                            whole_input_single_character_reward
+                                        score = score + whole_input_single_character_reward_added
+                                    end
                                     local text = item.text .. candidate.t
                                     add_state(states[consumed_end], {
                                         score = score,
                                         mass_score = (item.mass_score or item.score) +
-                                            score - item.score - supplement_added,
+                                            score - item.score - supplement_added -
+                                            whole_input_single_character_reward_added,
                                         text = text,
                                         prev2 = prev2,
                                         prev1 = prev1,

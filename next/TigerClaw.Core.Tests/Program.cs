@@ -11,6 +11,8 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using TigerClaw.Core;
+using TigerClaw.Overlay;
+using TigerClaw.Shared;
 
 namespace TigerClaw.Core.Tests
 {
@@ -144,6 +146,7 @@ namespace TigerClaw.Core.Tests
                 UsesCurrentPageCandidateAsSoftHint();
                 BackspaceRebuildsFromRawCode();
                 InvalidatesLookupCacheByLexiconVersion();
+                LexiconFilesPrioritizeSchemaAndUseCurrentCulture();
                 ComposesChineseAndRawCommitTextSeparately();
                 EngineKeepsRawCodeSeparateFromSurface();
                 EngineCommitsRawCodeWhenSwitchingToEnglish();
@@ -159,6 +162,7 @@ namespace TigerClaw.Core.Tests
                 SentenceDecoderAllowsSegmentedSingleDuplicatesWhenEnabled();
                 SentenceDecoderLetsSegmentedSingleDuplicatesCompeteWhenEnabled();
                 SentenceDecoderAppliesCharacterRewardInsideBeam();
+                SentenceDecoderRewardsOptimalWholeInputSingleCharacter();
                 SentenceSupplementParsesPerSchemaFile();
                 SentenceSupplementMatchesOverlapsAndRepeatedSingleCharacters();
                 SentenceSupplementRewardsInsideBeamWithoutChangingConfidence();
@@ -227,6 +231,7 @@ namespace TigerClaw.Core.Tests
                 CtrlSpaceStillTogglesWithExpectedKeyUpResponses();
                 KeyUpExpectationCoversReleaseDependentState();
                 TransportDefersOnlyKeyUiPublication();
+                NativeHookAlwaysShowsInputCodeInCandidateWindow();
                 SentenceEngineDecodesLongWorkOffTheKeyPath();
                 SentenceAutoCommitStaysOffTheKeyPath();
                 SentenceEngineHoldsPreviousCandidatesWhileDecodeIsPending();
@@ -248,6 +253,86 @@ namespace TigerClaw.Core.Tests
                 }
 
                 return 1;
+            }
+        }
+
+        private static void NativeHookAlwaysShowsInputCodeInCandidateWindow()
+        {
+            var formatter = new CandidateTextFormatter();
+            var nativeState = new OverlayUiState
+            {
+                IsNativeHook = true,
+                CandidateVisible = true,
+                InputCode = "abcd",
+                Candidates = new[] { "candidate" },
+                ShowInputCodeInCandidateWindow = false
+            };
+
+            CandidateWindowViewModel nativeView = formatter.BuildViewModel(nativeState, showCandidates: true, includeAnnotations: false);
+            True(nativeView.Mode == CandidateDisplayMode.CodeAndCandidates,
+                nameof(NativeHookAlwaysShowsInputCodeInCandidateWindow) + ".native_mode");
+            True(nativeView.DisplayText.StartsWith("abcd", StringComparison.Ordinal),
+                nameof(NativeHookAlwaysShowsInputCodeInCandidateWindow) + ".native_text");
+
+            nativeState.HideCandidateItems = true;
+            CandidateWindowViewModel nativeCodeOnlyView = formatter.BuildViewModel(nativeState, showCandidates: false, includeAnnotations: false);
+            True(nativeCodeOnlyView.Mode == CandidateDisplayMode.CodeOnly,
+                nameof(NativeHookAlwaysShowsInputCodeInCandidateWindow) + ".native_code_only");
+            Equal("abcd", nativeCodeOnlyView.DisplayText,
+                nameof(NativeHookAlwaysShowsInputCodeInCandidateWindow) + ".native_code_only_text");
+
+            nativeState.IsNativeHook = false;
+            nativeState.HideCandidateItems = false;
+            CandidateWindowViewModel tsfView = formatter.BuildViewModel(nativeState, showCandidates: true, includeAnnotations: false);
+            True(tsfView.Mode == CandidateDisplayMode.CandidatesOnly,
+                nameof(NativeHookAlwaysShowsInputCodeInCandidateWindow) + ".tsf_mode");
+            True(!tsfView.DisplayText.Contains("abcd", StringComparison.Ordinal),
+                nameof(NativeHookAlwaysShowsInputCodeInCandidateWindow) + ".tsf_text");
+        }
+
+        private static void LexiconFilesPrioritizeSchemaAndUseCurrentCulture()
+        {
+            string root = Path.Combine(Path.GetTempPath(), "TigerClaw.Core.Tests", Guid.NewGuid().ToString("N"));
+            string schemaDir = Path.Combine(root, "虎整句");
+            CultureInfo previousCulture = CultureInfo.CurrentCulture;
+            try
+            {
+                Directory.CreateDirectory(schemaDir);
+                File.WriteAllText(Path.Combine(schemaDir, "快符.txt"), string.Empty);
+                File.WriteAllText(Path.Combine(schemaDir, "虎补充.txt"), string.Empty);
+                File.WriteAllText(Path.Combine(schemaDir, "虎整句.txt"), string.Empty);
+
+                CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("zh-CN");
+                string[] ordered = CoreRuntimeState.GetOrderedLexiconFiles(schemaDir)
+                    .Select(Path.GetFileName)
+                    .ToArray();
+
+                True(ordered.Length == 3,
+                    nameof(LexiconFilesPrioritizeSchemaAndUseCurrentCulture) + ".count");
+                Equal("虎整句.txt", ordered[0],
+                    nameof(LexiconFilesPrioritizeSchemaAndUseCurrentCulture) + ".schema_first");
+                Equal("虎补充.txt", ordered[1],
+                    nameof(LexiconFilesPrioritizeSchemaAndUseCurrentCulture) + ".culture_first");
+                Equal("快符.txt", ordered[2],
+                    nameof(LexiconFilesPrioritizeSchemaAndUseCurrentCulture) + ".culture_second");
+
+                string yamlSchemaDir = Path.Combine(root, "yaml方案");
+                Directory.CreateDirectory(yamlSchemaDir);
+                File.WriteAllText(Path.Combine(yamlSchemaDir, "普通.txt"), string.Empty);
+                File.WriteAllText(Path.Combine(yamlSchemaDir, "yaml方案.dict.yaml"), string.Empty);
+                string[] yamlOrdered = CoreRuntimeState.GetOrderedLexiconFiles(yamlSchemaDir)
+                    .Select(Path.GetFileName)
+                    .ToArray();
+                Equal("yaml方案.dict.yaml", yamlOrdered[0],
+                    nameof(LexiconFilesPrioritizeSchemaAndUseCurrentCulture) + ".yaml_schema_first");
+            }
+            finally
+            {
+                CultureInfo.CurrentCulture = previousCulture;
+                if (Directory.Exists(root))
+                {
+                    Directory.Delete(root, recursive: true);
+                }
             }
         }
 
@@ -3796,6 +3881,57 @@ namespace TigerClaw.Core.Tests
                 "甲乙丁",
                 rewarded.Decode("abcdef").Candidates[0].Text,
                 nameof(SentenceDecoderAppliesCharacterRewardInsideBeam) + ".rewarded");
+        }
+
+        private static void SentenceDecoderRewardsOptimalWholeInputSingleCharacter()
+        {
+            SentenceLexiconIndex lexicon = SentenceLexiconIndex.Build(
+                new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["ab"] = new List<string> { "甲" },
+                    ["cd"] = new List<string> { "乙" },
+                    ["abcd"] = new List<string> { "词语", "丙" },
+                    ["x"] = new List<string> { "丁" },
+                    ["ef"] = new List<string> { "戊" },
+                    ["gh"] = new List<string> { "己" },
+                    ["efgh"] = new List<string> { "丁" }
+                });
+            var baseline = new SentenceInputDecoder(
+                lexicon,
+                NeutralSentenceLanguageModel.Instance,
+                emittedCharacterReward: 2.0,
+                isolationPenalty: SentenceIsolationPenalty.None,
+                allowDuplicateSingleCharacters: true);
+            var rewarded = new SentenceInputDecoder(
+                lexicon,
+                NeutralSentenceLanguageModel.Instance,
+                emittedCharacterReward: 2.0,
+                wholeInputSingleCharacterReward: 5.0,
+                isolationPenalty: SentenceIsolationPenalty.None,
+                allowDuplicateSingleCharacters: true);
+
+            SentenceDecodeResult baselineResult = baseline.DecodeFull("abcd");
+            SentenceDecodeResult rewardedResult = rewarded.DecodeFull("abcd");
+            SentenceCandidate baselineSingle = baselineResult.Candidates.Single(candidate => candidate.Text == "丙");
+            SentenceCandidate rewardedSingle = rewardedResult.Candidates.Single(candidate => candidate.Text == "丙");
+            True(baselineResult.Candidates[0].Text != "丙",
+                nameof(SentenceDecoderRewardsOptimalWholeInputSingleCharacter) + ".baseline_loses");
+            Equal("丙", rewardedResult.Candidates[0].Text,
+                nameof(SentenceDecoderRewardsOptimalWholeInputSingleCharacter) + ".later_rank_rewarded");
+            True(Math.Abs((rewardedSingle.FinalScore - baselineSingle.FinalScore) - 5.0) < 1e-9,
+                nameof(SentenceDecoderRewardsOptimalWholeInputSingleCharacter) + ".reward_value");
+            True(Math.Abs(rewardedSingle.ConfidenceScore - baselineSingle.ConfidenceScore) < 1e-9,
+                nameof(SentenceDecoderRewardsOptimalWholeInputSingleCharacter) + ".confidence_unchanged");
+
+            SentenceDecodeResult nonOptimal = rewarded.DecodeFull("efgh");
+            Equal("戊己", nonOptimal.Candidates[0].Text,
+                nameof(SentenceDecoderRewardsOptimalWholeInputSingleCharacter) + ".non_optimal_not_rewarded");
+
+            rewarded.Decode("abcd");
+            AssertSentenceResultsEqual(
+                rewarded.Decode("abcdef"),
+                rewarded.DecodeFull("abcdef"),
+                nameof(SentenceDecoderRewardsOptimalWholeInputSingleCharacter) + ".incremental_append");
         }
 
         private static void SentenceSupplementParsesPerSchemaFile()

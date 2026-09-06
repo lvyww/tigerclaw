@@ -183,8 +183,9 @@ lua tools/test_tiger_sentence_incremental.lua . --require-model
 测试输出必须明确显示实际模型。LuaJIT 2.1 缺少这里使用的标准 `string.unpack` 和
 `utf8` API，只适合无模型测试；无模型路径也可以在 Lua 5.4 下用
 `sentence.set_model_enabled(false)` 显式模拟。无模型时按“码表名次 → 更少码表
-边 → 分数”排序，整码单字（如 `ldac` 的“燕”）不会被等名次多段拼接靠每字
-+2.0 奖励压过。候选顺序、增量/全量一致性、补充语料和提前上屏
+边 → 分数”排序。未分割的整段输入如果是某单字的最短可用编码（等长时按码表
+来源顺序），该单字无论在同码中排第几都获得仅影响排序的 +5.0；显式选重不加，
+也不计入置信度。候选顺序、增量/全量一致性、补充语料和提前上屏
 证据应与 C# golden 分开核对。测试已包含与 Windows Core 相同的回归组：
 `awmenamcunta`（买 + 椟还珠）、`uriczwxmjou`（不得瞬态提交“可佛”）、
 `nuusvbbhoi`（左手匕首）和 `iejryfenahbmsp`（新人上午来面试）；另含明文数据

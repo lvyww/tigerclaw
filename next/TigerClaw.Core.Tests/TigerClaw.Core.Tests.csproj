@@ -12,4 +12,9 @@
   <ItemGroup>
     <ProjectReference Include="..\TigerClaw.Core\TigerClaw.Core.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <Compile Include="..\TigerClaw.Overlay\CandidateDisplayMode.cs" Link="Overlay\CandidateDisplayMode.cs" />
+    <Compile Include="..\TigerClaw.Overlay\CandidateTextFormatter.cs" Link="Overlay\CandidateTextFormatter.cs" />
+    <Compile Include="..\TigerClaw.Overlay\CandidateWindowViewModel.cs" Link="Overlay\CandidateWindowViewModel.cs" />
+  </ItemGroup>
 </Project>

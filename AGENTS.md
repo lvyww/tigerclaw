@@ -100,6 +100,10 @@ UI state:
 - Modified Kneser-Ney V2 uses `sentence-ngram-v2.bin`, mapped read-only. Beam
   expansion adds `2.0` per emitted Unicode character. Supplemental entries use
   `clamp(9 + 2 * ln(weight / 1000), 0, 16)` and affect sentence ranking only.
+  A whole-input single-character candidate gets a ranking-only `5.0` reward
+  when the unsplit input is that character's shortest available code (source
+  order breaks equal-length ties), regardless of its rank under that code. The
+  reward does not enter confidence mass or apply to an explicitly selected rank.
 - Qwen3 0.6B Q8 reranks exactly the first five n-gram candidates with weight
   `0.84`. Its GGUF is mapped directly and is not encrypted.
 - Known limitation: isolated Qwen scoring can worsen very short candidate sets,

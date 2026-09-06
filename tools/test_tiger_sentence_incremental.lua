@@ -101,6 +101,23 @@ if not captured_rl or captured_rl.candidate_text ~= "了" then
 end
 print("OK  implicit non-first ranks do not block empty-code auto commit")
 
+sentence.reset_decode_cache()
+local lets = sentence.decode_full("lets")
+local lets_single = nil
+for i = 1, #lets do
+    if lets[i].text == "旋" then
+        lets_single = lets[i]
+        break
+    end
+end
+if not lets_single or not lets[1] or lets[1].text ~= "旋" then
+    fail("optimal whole-input single-character reward did not restore 旋 for lets")
+end
+if math.abs((lets_single.score - lets_single.confidence_score) - 5.0) > 1e-9 then
+    fail("whole-input single-character reward was not exactly 5.0 or leaked into confidence")
+end
+print("OK  optimal whole-input single-character reward is +5.0 and ranking-only")
+
 local function check_equal(label, incremental, full)
     if not sentence.results_equal(incremental, full) then
         fail(string.format(

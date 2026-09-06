@@ -15,7 +15,7 @@ namespace TigerClaw.Overlay
             }
 
             bool hasCandidates = HasCandidates(state);
-            bool showInputCode = state.ShowInputCodeInCandidateWindow;
+            bool showInputCode = ShouldShowInputCode(state);
             bool hasInputCode = HasInputCode(state);
             bool useHiddenCandidateMode = !showCandidates || (state.HideCandidateItems && state.CandidateExpandDelayMs <= 0);
 
@@ -105,6 +105,12 @@ namespace TigerClaw.Overlay
         private static bool HasInputCode(OverlayUiState state)
         {
             return !string.IsNullOrEmpty(state.InputCode);
+        }
+
+        internal static bool ShouldShowInputCode(OverlayUiState state)
+        {
+            return state != null &&
+                   (state.IsNativeHook || state.ShowInputCodeInCandidateWindow);
         }
 
         private static string BuildDisplayText(

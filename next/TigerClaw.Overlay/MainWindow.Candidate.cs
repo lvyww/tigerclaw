@@ -531,7 +531,7 @@ namespace TigerClaw.Overlay
 
         private CandidateCycleMode GetNextCandidateCycleMode()
         {
-            if (_state.HideCandidateItems && _state.ShowInputCodeInCandidateWindow)
+            if (_state.HideCandidateItems && CandidateTextFormatter.ShouldShowInputCode(_state))
             {
                 return CandidateCycleMode.Horizontal;
             }

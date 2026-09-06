@@ -2654,7 +2654,7 @@ namespace TigerClaw.Core
 
         {
 
-            foreach (string file in Directory.GetFiles(dir, "*.txt", SearchOption.TopDirectoryOnly))
+            foreach (string file in GetOrderedLexiconFiles(dir))
 
             {
 
@@ -2682,14 +2682,22 @@ namespace TigerClaw.Core
 
             }
 
-            foreach (string file in Directory.GetFiles(dir, "*.dict.yaml", SearchOption.TopDirectoryOnly))
+        }
+        internal static string[] GetOrderedLexiconFiles(string dir)
+        {
+            string schemaName = new DirectoryInfo(dir).Name;
+            return Directory.GetFiles(dir, "*.txt", SearchOption.TopDirectoryOnly)
+                .Concat(Directory.GetFiles(dir, "*.dict.yaml", SearchOption.TopDirectoryOnly))
+                .OrderBy(file => IsSchemaNamedLexiconFile(file, schemaName) ? 0 : 1)
+                .ThenBy(file => Path.GetFileName(file), StringComparer.CurrentCulture)
+                .ToArray();
+        }
 
-            {
-
-                ParseMbFile(file, codedRows, noCodeRows);
-
-            }
-
+        private static bool IsSchemaNamedLexiconFile(string path, string schemaName)
+        {
+            string fileName = Path.GetFileName(path);
+            return string.Equals(fileName, schemaName + ".txt", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(fileName, schemaName + ".dict.yaml", StringComparison.OrdinalIgnoreCase);
         }
 
         internal static bool IsSentenceSupplementFile(string path)

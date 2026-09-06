@@ -30,6 +30,7 @@ namespace TigerClaw.Overlay
             }
 
             if (_current.CandidateVisible != next.CandidateVisible ||
+                _current.IsNativeHook != next.IsNativeHook ||
                 !StringEquals(_current.InputCode, next.InputCode) ||
                 _current.HideCandidateItems != next.HideCandidateItems ||
                 _current.ShowInputCodeInCandidateWindow != next.ShowInputCodeInCandidateWindow ||
@@ -54,6 +55,7 @@ namespace TigerClaw.Overlay
 
             if (_current.CaretX != next.CaretX ||
                 _current.CaretY != next.CaretY ||
+                _current.IsNativeHook != next.IsNativeHook ||
                 _current.CandidateVisible != next.CandidateVisible ||
                 _current.HideCandidateItems != next.HideCandidateItems ||
                 _current.ShowInputCodeInCandidateWindow != next.ShowInputCodeInCandidateWindow ||

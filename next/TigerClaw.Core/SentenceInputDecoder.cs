@@ -39,6 +39,7 @@ namespace TigerClaw.Core
         public int Rank { get; set; }
         public double LogRank { get; set; }
         public string[] TextElements { get; set; }
+        public bool IsOptimalSingleCharacterCode { get; set; }
     }
 
     internal sealed class SentenceLexiconIndex
@@ -139,6 +140,20 @@ namespace TigerClaw.Core
                 }
             }
 
+            var optimalInputCodeByCharacter = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (KeyValuePair<string, List<string>> pair in codesByCharacter)
+            {
+                string chosen = null;
+                foreach (string code in pair.Value)
+                {
+                    chosen = ChooseShorter(chosen, code);
+                }
+                if (!string.IsNullOrEmpty(chosen))
+                {
+                    optimalInputCodeByCharacter[pair.Key] = chosen;
+                }
+            }
+
             var filtered = new Dictionary<string, SentenceLexiconCandidate[]>(StringComparer.OrdinalIgnoreCase);
             foreach (KeyValuePair<string, List<string>> pair in exact)
             {
@@ -160,7 +175,10 @@ namespace TigerClaw.Core
                             Text = text,
                             Rank = index + 1,
                             LogRank = Math.Log(index + 1.0),
-                            TextElements = SplitTextElements(text)
+                            TextElements = SplitTextElements(text),
+                            IsOptimalSingleCharacterCode =
+                                optimalInputCodeByCharacter.TryGetValue(text, out string optimalCode) &&
+                                string.Equals(optimalCode, pair.Key, StringComparison.OrdinalIgnoreCase)
                         });
                     }
                 }
@@ -381,6 +399,7 @@ namespace TigerClaw.Core
         private readonly SentenceIsolationPenalty _isolationPenalty;
         private readonly bool _scoreSentenceBoundaries;
         private readonly double _emittedCharacterReward;
+        private readonly double _wholeInputSingleCharacterReward;
         private readonly SentenceSupplementMatcher _supplementMatcher;
         private readonly bool _hasSupplements;
         private readonly bool _allowDuplicateSingleCharacters;
@@ -552,6 +571,7 @@ namespace TigerClaw.Core
             SentenceIsolationPenalty isolationPenalty = null,
             bool scoreSentenceBoundaries = true,
             double emittedCharacterReward = 0.0,
+            double wholeInputSingleCharacterReward = 0.0,
             SentenceSupplementMatcher supplementMatcher = null,
             bool allowDuplicateSingleCharacters = false)
         {
@@ -570,6 +590,7 @@ namespace TigerClaw.Core
             }
             _scoreSentenceBoundaries = scoreSentenceBoundaries;
             _emittedCharacterReward = Math.Max(0.0, emittedCharacterReward);
+            _wholeInputSingleCharacterReward = Math.Max(0.0, wholeInputSingleCharacterReward);
             _supplementMatcher = supplementMatcher ?? SentenceSupplementMatcher.Empty;
             _hasSupplements = !_supplementMatcher.IsEmpty;
             int maxCodeLength = 1;
@@ -1074,10 +1095,21 @@ namespace TigerClaw.Core
                                 score -= _rankPenalty * candidate.LogRank;
                             }
 
+                            double wholeInputSingleCharacterRewardAdded = 0.0;
+                            if (wholeInputEdge &&
+                                selectedRank == 0 &&
+                                candidate.IsOptimalSingleCharacterCode &&
+                                candidate.TextElements.Length == 1)
+                            {
+                                wholeInputSingleCharacterRewardAdded = _wholeInputSingleCharacterReward;
+                                score += wholeInputSingleCharacterRewardAdded;
+                            }
+
                             states[consumedEnd].Add(new BeamState
                             {
                                 Score = score,
-                                LogMass = item.LogMass + (score - item.Score - supplementAdded),
+                                LogMass = item.LogMass +
+                                    (score - item.Score - supplementAdded - wholeInputSingleCharacterRewardAdded),
                                 Text = item.Text + candidate.Text,
                                 Previous2 = previous2,
                                 Previous1 = previous1,

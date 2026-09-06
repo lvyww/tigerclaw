@@ -63,6 +63,7 @@ namespace TigerClaw.Core
         private const int VK_M = 0x4D;
         private const int VK_Z = 0x5A;
         private const double SentenceEmittedCharacterReward = 2.0;
+        private const double SentenceWholeInputSingleCharacterReward = 5.0;
         private const double SentenceNeuralWeight = 0.84;
         private const double SentenceShortNeuralWeight = 0.30;
         private const int SentenceShortNeuralMaximumLength = 2;
@@ -312,6 +313,7 @@ namespace TigerClaw.Core
                     lexicon,
                     _sentenceLanguageModel,
                     emittedCharacterReward: SentenceEmittedCharacterReward,
+                    wholeInputSingleCharacterReward: SentenceWholeInputSingleCharacterReward,
                     supplementMatcher: supplementMatcher,
                     allowDuplicateSingleCharacters: allowDuplicateSingleCharacters);
                 _sentenceDecodedLexiconVersion = _state.LexiconVersion;
