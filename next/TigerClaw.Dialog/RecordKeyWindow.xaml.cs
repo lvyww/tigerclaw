@@ -8,6 +8,8 @@ namespace TigerClaw.Dialog
     public partial class RecordKeyWindow : Window
     {
         private readonly bool _recordShortcut;
+        private readonly string _defaultShortcut;
+        public bool ShortcutCleared { get; private set; }
 
         public RecordedKeyResult Result { get; private set; }
 
@@ -16,16 +18,21 @@ namespace TigerClaw.Dialog
         {
         }
 
-        public RecordKeyWindow(bool recordShortcut)
+        public RecordKeyWindow(bool recordShortcut, string defaultShortcut = null)
         {
             _recordShortcut = recordShortcut;
+            _defaultShortcut = defaultShortcut;
             InitializeComponent();
             if (_recordShortcut)
             {
-                Title = "录制快捷键";
+                Title = "修改快捷键";
+                MinWidth = 460;
                 PromptText.Text = "请按下组合快捷键";
                 InstructionText.Text = "必须包含 Ctrl 或 Alt，可同时按 Shift；不支持 Win 和裸键。";
                 AddButton.Content = "确定";
+                ClearShortcutButton.Visibility = Visibility.Visible;
+                ResetShortcutButton.Visibility = Visibility.Visible;
+                ResetShortcutButton.IsEnabled = ShortcutGesture.TryParse(_defaultShortcut, out _);
             }
         }
 
@@ -126,6 +133,28 @@ namespace TigerClaw.Dialog
         private void OnCancelClick(object sender, RoutedEventArgs e)
         {
             DialogResult = false;
+            Close();
+        }
+
+        private void OnClearShortcutClick(object sender, RoutedEventArgs e)
+        {
+            ShortcutCleared = true;
+            DialogResult = true;
+            Close();
+        }
+
+        private void OnResetShortcutClick(object sender, RoutedEventArgs e)
+        {
+            if (!ShortcutGesture.TryParse(_defaultShortcut, out ShortcutGesture gesture))
+            {
+                return;
+            }
+            Result = new RecordedKeyResult
+            {
+                Token = gesture.ToConfigString(),
+                DisplayName = gesture.ToDisplayString()
+            };
+            DialogResult = true;
             Close();
         }
     }

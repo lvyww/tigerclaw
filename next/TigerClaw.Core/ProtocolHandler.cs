@@ -869,7 +869,9 @@ namespace TigerClaw.Core
                         HideCandidateItems = _state.GetHideCandidateItems(),
                         ShowInputCodeInCandidateWindow = _state.GetShowInputCodeInCandidateWindow(),
                         CandidateExpandDelayMs = _state.GetCandidateExpandDelayMs(),
-                        AnnotationExpandDelayMs = _state.GetAnnotationExpandDelayMs(),
+                        // Temporary pinyin is a reverse lookup: show its hints immediately.
+                        AnnotationExpandDelayMs = engineState.CompositionState == 4
+                            ? 0 : _state.GetAnnotationExpandDelayMs(),
                         // Native Hook owns its status visibility; TSF mode still follows ime_active.
                         HideStatusBar = hideStatusBar,
                         CodeMasking = _state.GetCodeMasking(),

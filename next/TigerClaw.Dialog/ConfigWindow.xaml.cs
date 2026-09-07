@@ -148,6 +148,28 @@ namespace TigerClaw.Dialog
             SetupSchemaEditor(config);
             RegisterFixedRows();
             SetupDynamicEditors(config);
+            SortSettingRows();
+        }
+
+        private void SortSettingRows()
+        {
+            // Fixed XAML rows join the dynamic rows without recreating their controls
+            // or event handlers. On reload the panels are cleared before registration.
+            foreach (var section in _filterEntries.Where(entry => entry.Section != SectionAbout)
+                .GroupBy(entry => entry.Section))
+            {
+                Panel panel = GetSectionPanel(section.Key);
+                foreach (FilterEntry entry in section
+                    .OrderBy(item => ConfigSettingOrder.GetRank(item.Key))
+                    .ThenBy(item => item.Key, StringComparer.OrdinalIgnoreCase))
+                {
+                    if (entry.Container.Parent is Panel parent)
+                    {
+                        parent.Children.Remove(entry.Container);
+                    }
+                    panel.Children.Add(entry.Container);
+                }
+            }
         }
 
         private void RegisterFixedRows()
@@ -311,6 +333,8 @@ namespace TigerClaw.Dialog
                     string.Equals(kv.Key, KeyPageKey, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(kv.Key, KeyTheme, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(kv.Key, KeyCurrentSchema, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(kv.Key, KeyManualAddWordEnabled, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(kv.Key, KeySwitchRecentSchemaEnabled, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(kv.Key, "任务栏显示", StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(kv.Key, "最近码表对", StringComparison.OrdinalIgnoreCase))
                 {
@@ -484,11 +508,17 @@ namespace TigerClaw.Dialog
                 MaxWidth = 140,
                 Text = gesture?.ToDisplayString() ?? string.Empty
             };
+            bool enabled = IsSettingEnabled(_original, GetShortcutEnabledKey(key),
+                string.Equals(key, KeyManualAddWordShortcut, StringComparison.OrdinalIgnoreCase));
             var state = new ShortcutEditorState(display, gesture?.ToConfigString() ?? defaultValue);
+            if (!enabled)
+            {
+                state.Clear();
+            }
 
             var recordButton = new Button
             {
-                Content = "录制",
+                Content = "修改",
                 Width = 72,
                 Height = 28,
                 Margin = new Thickness(8, 0, 0, 0),
@@ -496,30 +526,20 @@ namespace TigerClaw.Dialog
             };
             recordButton.Click += (sender, args) =>
             {
-                var window = new RecordKeyWindow(recordShortcut: true) { Owner = this };
-                if (window.ShowDialog() == true &&
-                    ShortcutGesture.TryParse(window.Result?.Token, out ShortcutGesture recorded))
+                var window = new RecordKeyWindow(recordShortcut: true, defaultShortcut: defaultValue) { Owner = this };
+                if (window.ShowDialog() != true)
+                {
+                    return;
+                }
+                if (window.ShortcutCleared)
+                {
+                    state.Clear();
+                }
+                else if (ShortcutGesture.TryParse(window.Result?.Token, out ShortcutGesture recorded))
                 {
                     state.Set(recorded);
-                    OnAnyEditorChanged(sender, args);
                 }
-            };
-
-            var resetButton = new Button
-            {
-                Content = "恢复默认",
-                Width = 88,
-                Height = 28,
-                Margin = new Thickness(8, 0, 0, 0),
-                Style = (Style)FindResource("ActionButtonStyle")
-            };
-            resetButton.Click += (sender, args) =>
-            {
-                if (ShortcutGesture.TryParse(defaultValue, out ShortcutGesture defaultGesture))
-                {
-                    state.Set(defaultGesture);
-                    OnAnyEditorChanged(sender, args);
-                }
+                OnAnyEditorChanged(sender, args);
             };
 
             var panel = new StackPanel
@@ -530,7 +550,6 @@ namespace TigerClaw.Dialog
             };
             panel.Children.Add(display);
             panel.Children.Add(recordButton);
-            panel.Children.Add(resetButton);
             return panel;
         }
 
@@ -594,7 +613,7 @@ namespace TigerClaw.Dialog
         private void RegisterFilterEntry(string section, string key, FrameworkElement container, string description)
         {
             string searchText = NormalizeText(key + " " + (description ?? string.Empty));
-            _filterEntries.Add(new FilterEntry(section, container, searchText));
+            _filterEntries.Add(new FilterEntry(section, key, container, searchText));
         }
 
         private void ApplySearchFilter()
@@ -1010,6 +1029,7 @@ namespace TigerClaw.Dialog
                 else if (entry.Editor.Tag is ShortcutEditorState shortcutEditor)
                 {
                     map[entry.Key] = shortcutEditor.ConfigText;
+                    map[GetShortcutEnabledKey(entry.Key)] = shortcutEditor.Enabled ? Yes : No;
                 }
                 else if (entry.Editor is TextBox tb)
                 {
@@ -1248,9 +1268,9 @@ namespace TigerClaw.Dialog
                 case "Ctrl+m切换最近码表":
                     return "是否启用最近码表切换快捷键，实际组合可在下一项录制。";
                 case KeyManualAddWordShortcut:
-                    return "设置手动加词组合键；必须包含 Ctrl 或 Alt，可附加 Shift。";
+                    return "修改手动加词组合键；清空可停用，弹窗内可恢复默认。";
                 case KeySwitchRecentSchemaShortcut:
-                    return "设置切换最近两个码表的组合键；必须包含 Ctrl 或 Alt，可附加 Shift。";
+                    return "修改切换最近两个码表的组合键；清空可停用，弹窗内可恢复默认。";
                 case "回车清屏":
                     return "回车键是否立即清掉编码串。";
                 case "中英文不限长混合输入":
@@ -1830,6 +1850,12 @@ namespace TigerClaw.Dialog
                 : DefaultManualAddWordShortcut;
         }
 
+        private static string GetShortcutEnabledKey(string key)
+        {
+            return string.Equals(key, KeySwitchRecentSchemaShortcut, StringComparison.OrdinalIgnoreCase)
+                ? KeySwitchRecentSchemaEnabled : KeyManualAddWordEnabled;
+        }
+
         private static string GetSettingDisplayName(string key)
         {
             if (string.Equals(key, KeyManualAddWordEnabled, StringComparison.OrdinalIgnoreCase))
@@ -1948,9 +1974,17 @@ namespace TigerClaw.Dialog
 
             public TextBox Display { get; }
             public string ConfigText { get; private set; }
+            public bool Enabled { get; private set; } = true;
+
+            public void Clear()
+            {
+                Enabled = false;
+                Display.Text = "清空";
+            }
 
             public void Set(ShortcutGesture gesture)
             {
+                Enabled = true;
                 ConfigText = gesture?.ToConfigString() ?? string.Empty;
                 Display.Text = gesture?.ToDisplayString() ?? string.Empty;
             }
@@ -1958,14 +1992,16 @@ namespace TigerClaw.Dialog
 
         private sealed class FilterEntry
         {
-            public FilterEntry(string section, FrameworkElement container, string searchText)
+            public FilterEntry(string section, string key, FrameworkElement container, string searchText)
             {
                 Section = section;
+                Key = key;
                 Container = container;
                 SearchText = searchText;
             }
 
             public string Section { get; }
+            public string Key { get; }
             public FrameworkElement Container { get; }
             public string SearchText { get; }
         }

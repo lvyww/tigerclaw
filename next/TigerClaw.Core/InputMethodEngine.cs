@@ -1489,13 +1489,6 @@ namespace TigerClaw.Core
                     _sentenceRawBuffer.Length -= 1;
                 }
 
-                if (_sentenceCommittedRawLength > _sentenceRawBuffer.Length)
-                {
-                    // The host cannot retract committed text. Keep it excluded
-                    // from the remaining composition and stop proposing more.
-                    _sentenceCommittedRawLength = _sentenceRawBuffer.Length;
-                }
-
                 if (_sentenceRawBuffer.Length == 0)
                 {
                     ClearCompositionInput();
@@ -1516,11 +1509,7 @@ namespace TigerClaw.Core
 
             if (vk == VK_RETURN)
             {
-                string remainingRaw = _sentenceRawBuffer.ToString();
-                if (_sentenceCommittedRawLength > 0 && _sentenceCommittedRawLength <= remainingRaw.Length)
-                {
-                    remainingRaw = remainingRaw.Substring(_sentenceCommittedRawLength);
-                }
+                string remainingRaw = GetUncommittedSentenceRawCode();
                 string output = _state.GetEnterClear() ? string.Empty : remainingRaw;
                 ClearCompositionInput();
                 _compositionState = CompositionState.CnIdle;
@@ -2296,7 +2285,7 @@ namespace TigerClaw.Core
         {
             if (_sentenceRawBuffer.Length > 0)
             {
-                return _sentenceRawBuffer.ToString();
+                return GetUncommittedSentenceRawCode();
             }
 
             if (_mixedRawBuffer.Length > 0)
@@ -2326,13 +2315,7 @@ namespace TigerClaw.Core
         private void RestartSentenceInput(string rawCode, bool continuationAfterAutoCommit = false)
         {
             ClearCompositionInput();
-            _sentenceCommittedText = string.Empty;
-            _sentenceCommittedRawLength = 0;
-            _sentenceLastAutoCommitRawLength = 0;
-            _sentenceAutoCommitSuspended = false;
             _sentenceContinuationAfterAutoCommit = continuationAfterAutoCommit;
-            _sentenceNeuralAcceptedRaw = string.Empty;
-            _sentenceNeuralTopText = string.Empty;
             _sentenceRawBuffer.Append(rawCode ?? string.Empty);
             RebuildSentenceInput();
         }
@@ -3220,9 +3203,9 @@ namespace TigerClaw.Core
             return KeyEngineResult.CreateHandled(true, output, string.Empty, false);
         }
 
-        private string GetUncommittedSentenceRawCode()
+        private string GetUncommittedSentenceRawCode(string raw = null)
         {
-            string raw = _sentenceRawBuffer.ToString();
+            raw ??= _sentenceRawBuffer.ToString();
             return _sentenceCommittedRawLength > 0 &&
                    _sentenceCommittedRawLength <= raw.Length
                 ? raw.Substring(_sentenceCommittedRawLength)
@@ -4829,11 +4812,7 @@ namespace TigerClaw.Core
         private string GetSentenceDisplayCode()
         {
             string fullRawCode = _sentenceRawBuffer.ToString();
-            string rawCode = fullRawCode;
-            if (_sentenceCommittedRawLength > 0 && _sentenceCommittedRawLength <= fullRawCode.Length)
-            {
-                rawCode = fullRawCode.Substring(_sentenceCommittedRawLength);
-            }
+            string rawCode = GetUncommittedSentenceRawCode(fullRawCode);
             if (_sentenceResultLexiconVersion != _state.LexiconVersion)
             {
                 return rawCode;

@@ -1646,23 +1646,16 @@ namespace TigerClaw.Core
 
                 {
 
-                    if (TryCollectByTextElements(word, _splitMap, splitList) &&
-
-                        TryCollectByTextElements(word, _fullCodeMap, codeList))
-
-                    {
-
-                        return string.Join("\u00B7", splitList) + " | " + string.Join("\u00B7", codeList); // unicode: 路
-
-                    }
-
-
-
+                    // Reverse lookup must not depend on display preferences or on
+                    // the presence of the other annotation resource.
+                    _ = TryCollectByTextElements(word, _splitMap, splitList);
+                    _ = TryCollectByTextElements(word, _fullCodeMap, codeList);
+                    var parts = new List<string>();
                     if (splitList.Count > 0)
 
                     {
 
-                        return string.Join("\u00B7", splitList); // unicode: 路
+                        parts.Add(string.Join("\u00B7", splitList));
 
                     }
 
@@ -1672,13 +1665,24 @@ namespace TigerClaw.Core
 
                     {
 
-                        return string.Join("\u00B7", codeList); // unicode: 路
+                        parts.Add(string.Join("\u00B7", codeList));
 
                     }
 
 
 
-                    return string.Empty;
+                    if (_commentMap.TryGetValue(word, out string reverseComment) &&
+                        !string.IsNullOrEmpty(reverseComment))
+
+                    {
+
+                        parts.Add(reverseComment);
+
+                    }
+
+
+
+                    return string.Join(" | ", parts);
 
                 }
 

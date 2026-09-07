@@ -104,6 +104,16 @@
                     Margin="0,14,0,0"
                     Orientation="Horizontal"
                     HorizontalAlignment="Right">
+            <Button x:Name="ClearShortcutButton"
+                    Content="清空"
+                    Visibility="Collapsed"
+                    Style="{StaticResource ActionButtonStyle}"
+                    Click="OnClearShortcutClick" />
+            <Button x:Name="ResetShortcutButton"
+                    Content="恢复默认"
+                    Visibility="Collapsed"
+                    Style="{StaticResource ActionButtonStyle}"
+                    Click="OnResetShortcutClick" />
             <Button x:Name="AddButton"
                     Content="添加"
                     Style="{StaticResource PrimaryActionButtonStyle}"

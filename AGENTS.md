@@ -74,6 +74,8 @@ UI state:
 - Raw code is authoritative. Mixed input keeps the complete raw composition,
   decodes it again after every edit, performs case-insensitive lookup, and
   preserves casing for display and literal commits. Code masking is display-only.
+  After sentence auto commit, literal-code exits (Enter, CN/EN switching and
+  CapsLock) emit only the uncommitted raw suffix, never the retained decoder context.
 - Schema switching through shortcuts or `set_config` migrates only uncommitted
   raw code, clears old candidate preferences and sentence prefix constraints,
   and rebuilds for the target schema. Preserve raw casing across sentence mode.
@@ -193,8 +195,13 @@ UI state:
 - Manual add-word and recent-schema switching keep their existing enable flags
   and use configurable exact modifier chords. Defaults remain `Ctrl+=` and
   `Ctrl+M`; TSF and Native Hook both route these actions through Core.
+  Settings show only the two shortcut rows. Disabled bindings display `清空`;
+  the `修改` dialog clears or restores defaults immediately into the unsaved
+  settings page. Legacy enable flags remain internal compatibility data.
 - Overlay owns candidate display. It pins the first caret anchor for a composition
   and flips above the caret when needed. TSF legacy candidate UI is not active.
+  Temporary pinyin reverse lookup always shows available splits, full codes and
+  comments without annotation delay, irrespective of normal annotation settings.
 
 When changing sentence behavior, update tests and the standalone Rime/C++ ports
 only where they intentionally share that invariant. The implementation and tests
@@ -361,6 +368,9 @@ Settings change:
 1. Dialog UI in `ConfigWindow.xaml(.cs)`.
 2. persistence/defaults in `CoreRuntimeState.cs` and `dist_config.txt`.
 3. Preserve grouped layout, search, dirty-state feedback and empty values.
+   Category-internal display order is defined by Dialog `ConfigSettingOrder.cs`;
+   fixed and dynamic rows share this order. Unknown keys sort last within their
+   existing category, using ordinal case-insensitive key order.
 
 Release change:
 

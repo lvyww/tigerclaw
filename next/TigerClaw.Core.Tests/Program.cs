@@ -207,6 +207,9 @@ namespace TigerClaw.Core.Tests
                 SentenceManualSelectionRejectsLateRerank();
                 SentencePathCheckMatchesFullDecode();
                 SentenceEmptyCodeDoesNotTreatPrunedCandidateAsUnique();
+                SentenceAutoCommitExitKeepsOnlyLiveTail();
+                TemporaryPinyinAlwaysShowsReverseLookupAnnotations();
+                SettingsOrderIsIndependentOfConfigurationOrder();
                 SentenceNeuralWeightPreservesShortNgramWinner();
                 SentenceEngineReranksOnlyTopFive();
                 SentenceNeuralRerankLetsSegmentedSingleDuplicatesCompete();

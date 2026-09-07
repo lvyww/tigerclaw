@@ -7,6 +7,48 @@ namespace TigerClaw.Core.Tests
 {
     internal static partial class Program
     {
+        private static void SentenceAutoCommitExitKeepsOnlyLiveTail()
+        {
+            foreach (string action in new[] { "english", "caps", "enter", "escape", "backspace", "select" })
+            {
+                var state = new CoreRuntimeState();
+                EnableSentenceEarlyCommit(state);
+                using (var engine = new InputMethodEngine(state, CreateSentenceDecoder(new Dictionary<string, List<string>>
+                {
+                    ["ab"] = new List<string> { "甲" },
+                    ["cd"] = new List<string> { "乙" }
+                })))
+                {
+                    TypeLetters(engine, "ab");
+                    Equal("甲", Press(engine, 0x43).TextToOutput, "exit_tail.initial_commit:" + action);
+                    string output;
+                    if (action == "english")
+                    {
+                        engine.SetChinese(false, out output);
+                        engine.SetChinese(true, out _);
+                    }
+                    else if (action == "select")
+                    {
+                        Press(engine, 0x44);
+                        Press(engine, 0x09);
+                        output = Press(engine, 0x20).TextToOutput;
+                    }
+                    else
+                    {
+                        int key = action == "caps" ? 0x14 : action == "enter" ? 0x0D :
+                            action == "escape" ? 0x1B : 0x08;
+                        output = Press(engine, key).TextToOutput;
+                    }
+                    string expected = action == "select" ? "乙" :
+                        action == "escape" || action == "backspace" ? null : "c";
+                    Equal(expected, output, "exit_tail.output:" + action);
+                    Equal("", engine.GetUiSnapshot(5).ActiveInputCode, "exit_tail.cleared:" + action);
+                    TypeLetters(engine, "ab");
+                    Equal("甲", Press(engine, 0x43).TextToOutput, "exit_tail.new_composition:" + action);
+                }
+            }
+        }
+
         private static void SentenceEmptyCodeDoesNotTreatPrunedCandidateAsUnique()
         {
             var state = new CoreRuntimeState();
