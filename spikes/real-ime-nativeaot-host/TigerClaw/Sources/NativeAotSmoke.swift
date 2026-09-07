@@ -126,6 +126,33 @@ enum NativeAotSmoke {
                 return 1
             }
 
+            // A physical Backspace must remove one raw code letter only.  In
+            // particular, returning from the full code ah to a must preserve
+            // its original candidates instead of clearing the composition.
+            _ = try bridge.process(NativeAotInputEvent(
+                key: Int32(TC_INPUT_KEY_CHARACTER.rawValue),
+                logicalText: "h",
+                modifiers: 0,
+                action: Int32(TC_KEY_ACTION_KEY_DOWN.rawValue),
+                physicalKey: "KeyH",
+                physicalScanCode: 4
+            ))
+            let afterSingleBackspace = try bridge.process(NativeAotInputEvent(
+                key: Int32(TC_INPUT_KEY_BACKSPACE.rawValue),
+                logicalText: "\u{08}",
+                modifiers: 0,
+                action: Int32(TC_KEY_ACTION_KEY_DOWN.rawValue),
+                physicalKey: "Backspace",
+                physicalScanCode: Int32(kVK_Delete)
+            ))
+            guard afterSingleBackspace.handled,
+                  afterSingleBackspace.isComposing,
+                  afterSingleBackspace.preedit == "a",
+                  afterSingleBackspace.candidates == ["来", "那个"] else {
+                print("NATIVEAOT_IMK_SMOKE_FAIL single backspace=\(afterSingleBackspace)")
+                return 1
+            }
+
             let afterSpace = try bridge.process(NativeAotInputEvent(
                 key: Int32(TC_INPUT_KEY_SPACE.rawValue),
                 logicalText: " ",
