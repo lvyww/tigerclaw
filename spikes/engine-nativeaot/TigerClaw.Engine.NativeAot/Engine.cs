@@ -289,6 +289,14 @@ internal sealed class BasicEngine : IDisposable
         bool continuingQuickSymbol = IsQuickSymbolComposition;
         if (IsSentenceMode && !continuingQuickSymbol && _buffer.Length > 0)
         {
+            // The first letter can have passed through unlimited mixed input
+            // before sentence mode begins on the second letter.  Sentence
+            // input owns the complete raw buffer from this point on; leaving
+            // that one-letter mixed cache alive makes its first Backspace
+            // rebuild the composition from an empty mixed tail.
+            _mixedRaw = string.Empty;
+            _mixedPrefix = string.Empty;
+            _mixedPreferredCandidateText.Clear();
             return AppendSentenceInput(char.ToLowerInvariant(text[0]));
         }
 
@@ -601,14 +609,6 @@ internal sealed class BasicEngine : IDisposable
         if (IsSentenceComposition)
         {
             ResetSentenceAutoCommitEvidence();
-            // This is only meaningful after sentence early commit has placed
-            // a prefix in the target application.  With early commit disabled
-            // every Backspace must remove exactly one still-visible raw code.
-            if (_config.SentenceAutoCommitEnabled &&
-                _sentenceCommittedRawLength > 0 && _buffer.Length <= _sentenceCommittedRawLength + 1)
-            {
-                return ClearCore(handled: true);
-            }
         }
 
         // Quick phrases bypass mixed-input decoding, so their visible buffer can be

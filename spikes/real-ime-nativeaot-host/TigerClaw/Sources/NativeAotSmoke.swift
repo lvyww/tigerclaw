@@ -826,7 +826,9 @@ enum NativeAotSmoke {
             configuration.autoSentenceInput = false
             configuration.sentenceNeuralRerankEnabled = false
             configuration.autoCommitUniqueTerminalCode = false
-            configuration.unlimitedMixedInput = false
+            // Sentence input starts on the second letter, so this must mirror
+            // the normal mixed-input setting that owns the first letter.
+            configuration.unlimitedMixedInput = true
             configuration.maxCandidates = 20
             // Keep this latency smoke deterministic. Product input now uses
             // the active schema (like Windows); this fixture explicitly uses
@@ -977,6 +979,7 @@ enum NativeAotSmoke {
         do {
             var configuration = NativeAotConfiguration()
             configuration.sentenceInputEnabled = true
+            configuration.unlimitedMixedInput = true
             configuration.maxCandidates = 20
             let temporaryUserDictionaryURL = FileManager.default.temporaryDirectory
                 .appendingPathComponent("tigerclaw-sentence-smoke-\(UUID().uuidString).tsv")
