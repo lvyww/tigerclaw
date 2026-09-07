@@ -601,7 +601,11 @@ internal sealed class BasicEngine : IDisposable
         if (IsSentenceComposition)
         {
             ResetSentenceAutoCommitEvidence();
-            if (_sentenceCommittedRawLength > 0 && _buffer.Length <= _sentenceCommittedRawLength + 1)
+            // This is only meaningful after sentence early commit has placed
+            // a prefix in the target application.  With early commit disabled
+            // every Backspace must remove exactly one still-visible raw code.
+            if (_config.SentenceAutoCommitEnabled &&
+                _sentenceCommittedRawLength > 0 && _buffer.Length <= _sentenceCommittedRawLength + 1)
             {
                 return ClearCore(handled: true);
             }

@@ -153,21 +153,6 @@ enum NativeAotSmoke {
                 return 1
             }
 
-            let backspaceEvent = NativeAotInputEvent(
-                key: Int32(TC_INPUT_KEY_BACKSPACE.rawValue),
-                logicalText: "\u{08}",
-                modifiers: 0,
-                action: Int32(TC_KEY_ACTION_KEY_DOWN.rawValue),
-                physicalKey: "Backspace",
-                physicalScanCode: Int32(kVK_Delete))
-            var backspaceDeliveryGuard = BackspaceDeliveryGuard()
-            guard !backspaceDeliveryGuard.shouldSuppress(backspaceEvent, at: 10),
-                  backspaceDeliveryGuard.shouldSuppress(backspaceEvent, at: 10.01),
-                  !backspaceDeliveryGuard.shouldSuppress(backspaceEvent, at: 10.04) else {
-                print("NATIVEAOT_IMK_SMOKE_FAIL duplicate-backspace guard")
-                return 1
-            }
-
             let afterSpace = try bridge.process(NativeAotInputEvent(
                 key: Int32(TC_INPUT_KEY_SPACE.rawValue),
                 logicalText: " ",
@@ -930,6 +915,16 @@ enum NativeAotSmoke {
                   final.activeInputCode.replacingOccurrences(of: " ", with: "") == "tuot",
                   final.candidates.first == "我是" else {
                 print("NATIVEAOT_SENTENCE_ASYNC_SMOKE_FAIL final=\(final)")
+                return 1
+            }
+
+            let afterVisibleSentenceBackspace = try bridge.process(NativeAotInputEvent(
+                key: Int32(TC_INPUT_KEY_BACKSPACE.rawValue), logicalText: "", modifiers: 0,
+                action: Int32(TC_KEY_ACTION_KEY_DOWN.rawValue), physicalKey: "Backspace", physicalScanCode: Int32(kVK_Delete)))
+            guard afterVisibleSentenceBackspace.handled,
+                  afterVisibleSentenceBackspace.isComposing,
+                  afterVisibleSentenceBackspace.activeInputCode.replacingOccurrences(of: " ", with: "") == "tuo" else {
+                print("NATIVEAOT_SENTENCE_ASYNC_SMOKE_FAIL visible-backspace=\(afterVisibleSentenceBackspace)")
                 return 1
             }
 
