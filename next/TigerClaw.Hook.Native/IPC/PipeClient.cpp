@@ -11,11 +11,70 @@
 namespace
 {
     const wchar_t* PipeName = L"\\\\.\\pipe\\BimeIPC";
+
+    bool Transfer(HANDLE pipe, void* buffer, DWORD length, DWORD& transferred, bool write, DWORD timeout)
+    {
+        OVERLAPPED operation = {};
+        operation.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+        if (!operation.hEvent) return false;
+        BOOL ok = write ? WriteFile(pipe, buffer, length, &transferred, &operation)
+                        : ReadFile(pipe, buffer, length, &transferred, &operation);
+        DWORD failure = ok ? ERROR_SUCCESS : GetLastError();
+        if (!ok && failure == ERROR_IO_PENDING)
+        {
+            DWORD wait = WaitForSingleObject(operation.hEvent, timeout);
+            if (wait == WAIT_OBJECT_0)
+            {
+                ok = GetOverlappedResult(pipe, &operation, &transferred, FALSE);
+                failure = ok ? ERROR_SUCCESS : GetLastError();
+            }
+            else
+            {
+                CancelIoEx(pipe, &operation);
+                GetOverlappedResult(pipe, &operation, &transferred, TRUE);
+                failure = wait == WAIT_TIMEOUT ? ERROR_TIMEOUT : ERROR_GEN_FAILURE;
+            }
+        }
+        CloseHandle(operation.hEvent);
+        SetLastError(failure);
+        return ok != FALSE;
+    }
 }
 
 namespace TigerClawHookNative
 {
-    PipeClient::PipeClient() = default;
+    PipeClient::PipeClient()
+    {
+        _clientSession = "hook-" + std::to_string(GetCurrentProcessId()) + "-" + std::to_string(GetTickCount64());
+    }
+
+    std::string PipeClient::PrepareKey(const KeyboardHookEvent& keyEvent, const HookState& state, const CaretSnapshot& caret)
+    {
+        return BuildKeyJson(keyEvent, state, caret);
+    }
+
+    bool PipeClient::TrySendPreparedKey(const std::string& request, const FocusSnapshot& focus, CoreResponse& response, std::wstring& error)
+    {
+        if (!EnsureRequestPipe(error)) return false;
+        // Order focus before this key on the same stream, including reconnects.
+        if ((!_requestFocusKnown || !_requestFocus.Equals(focus)) &&
+            !TryWriteLine(_requestPipe, BuildFocusJson(focus), error))
+        {
+            DisconnectRequestPipe();
+            return false;
+        }
+        _requestFocus = focus;
+        _requestFocusKnown = true;
+        return TrySendRequest(request, response, error);
+    }
+
+    bool PipeClient::TryCancelForRecovery(std::wstring& error)
+    {
+        if (!EnsureRequestPipe(error)) return false;
+        if (TryWriteLine(_requestPipe, BuildCompositionCanceledJson(), error)) return true;
+        DisconnectRequestPipe();
+        return false;
+    }
 
     PipeClient::~PipeClient()
     {
@@ -35,13 +94,14 @@ namespace TigerClawHookNative
 
     bool PipeClient::TrySendKey(const KeyboardHookEvent& keyEvent, const HookState& state, const FocusSnapshot& focus, const CaretSnapshot& caret, CoreResponse& response, std::wstring& error)
     {
-        (void)focus;
-        return TrySendRequest(BuildKeyJson(keyEvent, state, caret), response, error);
+        return TrySendPreparedKey(PrepareKey(keyEvent, state, caret), focus, response, error);
     }
 
     bool PipeClient::TrySendFocus(const FocusSnapshot& focus, std::wstring& error)
     {
-        return TrySendNotification(BuildFocusJson(focus), error);
+        bool sent = TrySendNotification(BuildFocusJson(focus), error);
+        _focusSyncRequired = !sent;
+        return sent;
     }
 
     bool PipeClient::TrySendCaret(const CaretSnapshot& caret, std::wstring& error)
@@ -83,7 +143,7 @@ namespace TigerClawHookNative
             return false;
         }
 
-        _requestPipe = CreateFileW(PipeName, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+        _requestPipe = CreateFileW(PipeName, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
         if (_requestPipe == INVALID_HANDLE_VALUE)
         {
             error = L"Request pipe connect failed: " + GetLastErrorMessage(GetLastError());
@@ -121,7 +181,7 @@ namespace TigerClawHookNative
             return false;
         }
 
-        _notifyPipe = CreateFileW(PipeName, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+        _notifyPipe = CreateFileW(PipeName, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
         if (_notifyPipe == INVALID_HANDLE_VALUE)
         {
             error = L"Notify pipe connect failed: " + GetLastErrorMessage(GetLastError());
@@ -142,6 +202,8 @@ namespace TigerClawHookNative
 
     void PipeClient::DisconnectRequestPipe()
     {
+        _requestFocusKnown = false;
+        _focusSyncRequired = true;
         if (_requestPipe != INVALID_HANDLE_VALUE)
         {
             CloseHandle(_requestPipe);
@@ -151,6 +213,7 @@ namespace TigerClawHookNative
 
     void PipeClient::DisconnectNotifyPipe()
     {
+        _focusSyncRequired = true;
         if (_notifyPipe != INVALID_HANDLE_VALUE)
         {
             CloseHandle(_notifyPipe);
@@ -162,7 +225,7 @@ namespace TigerClawHookNative
     {
         std::string payload = line + "\n";
         DWORD written = 0;
-        if (!WriteFile(pipe, payload.data(), static_cast<DWORD>(payload.size()), &written, nullptr))
+        if (!Transfer(pipe, &payload[0], static_cast<DWORD>(payload.size()), written, true, ResponseTimeoutMs))
         {
             error = L"Pipe write failed: " + GetLastErrorMessage(GetLastError());
             return false;
@@ -175,10 +238,15 @@ namespace TigerClawHookNative
     {
         line.clear();
         std::string pending;
-        const long long deadline = static_cast<unsigned long>(GetTickCount()) + timeoutMs;
+        const ULONGLONG deadline = GetTickCount64() + timeoutMs;
 
         while (true)
         {
+            if (GetTickCount64() >= deadline)
+            {
+                error = L"Core response timeout.";
+                return false;
+            }
             DWORD available = 0;
             if (!PeekNamedPipe(pipe, nullptr, 0, nullptr, &available, nullptr))
             {
@@ -188,7 +256,7 @@ namespace TigerClawHookNative
 
             if (available == 0)
             {
-                if (static_cast<unsigned long>(GetTickCount()) >= deadline)
+                if (GetTickCount64() >= deadline)
                 {
                     error = L"Core response timeout.";
                     return false;
@@ -201,7 +269,7 @@ namespace TigerClawHookNative
             char buffer[256] = {};
             DWORD toRead = std::min<DWORD>(available, static_cast<DWORD>(sizeof(buffer)));
             DWORD read = 0;
-            if (!ReadFile(pipe, buffer, toRead, &read, nullptr))
+            if (!Transfer(pipe, buffer, toRead, read, false, timeoutMs))
             {
                 error = L"Pipe read failed: " + GetLastErrorMessage(GetLastError());
                 return false;
@@ -243,6 +311,16 @@ namespace TigerClawHookNative
         }
 
         response = ParseResponse(responseLine);
+        const auto requestSeq = line.find("\"seq\":");
+        const auto responseSeq = responseLine.find("\"seq\":");
+        if (requestSeq == std::string::npos || responseSeq == std::string::npos ||
+            strtol(line.c_str() + requestSeq + 6, nullptr, 10) !=
+            strtol(responseLine.c_str() + responseSeq + 6, nullptr, 10) || !response.Success)
+        {
+            error = L"Invalid Core response.";
+            DisconnectRequestPipe();
+            return false;
+        }
         return true;
     }
 
@@ -267,6 +345,8 @@ namespace TigerClawHookNative
         std::ostringstream stream;
         const long seq = InterlockedIncrement(&_nextSeq);
         stream << "{\"type\":\"key\",\"seq\":" << seq
+               << ",\"client_session\":\"" << _clientSession << "\""
+               << ",\"event_id\":\"" << ++_nextEventId << "\""
                << ",\"vk\":" << keyEvent.VirtualKey
                << ",\"scan\":" << keyEvent.ScanCode
                << ",\"action\":\"" << (keyEvent.IsKeyDown ? "down" : "up") << "\""

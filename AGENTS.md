@@ -198,6 +198,15 @@ UI state:
   Failed-key replay keeps event IDs and FIFO order, yields after 8 events or a
   60 ms batch budget, and resumes on a 30 ms timer under the existing queue TTL.
   Standalone Windows pipe fault tests: `tools/test_tsf_pipe.bat` (isolated pipe).
+- Native Hook also snapshots each physical key with stable replay identities.
+  Uncertain requests are held and retried FIFO (128 events, 5 s TTL; batches of
+  at most 8 events / 60 ms, resumed by the 200 ms state pump). Expiry, overflow
+  or focus changes discard pending events and order composition cancellation
+  before subsequent keys; never pass through a key whose result is unknown.
+  Focus publication remains pending until sent and reconnects resynchronize it.
+  Left/right modifiers are tracked independently. Diagnostics are opt-in via
+  `TIGERCLAW_HOOK_DIAGNOSTICS=1` and omit input/commit text and window titles.
+  Isolated frontend tests: `tools/test_hook_native.bat` (no global hook).
 - Manual add-word and recent-schema switching keep their existing enable flags
   and use configurable exact modifier chords. Defaults remain `Ctrl+=` and
   `Ctrl+M`; TSF and Native Hook both route these actions through Core.

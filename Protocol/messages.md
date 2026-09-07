@@ -11,7 +11,7 @@
 - 通知不返回内容
 - Core 是中英文状态、composition 和候选的唯一权威
 
-TSF `key` 请求可携带 `client_session` + `event_id`。同一次物理按键超时重试必须
+TSF 与 Native Hook 的 `key` 请求可携带 `client_session` + `event_id`。同一次物理按键超时重试必须
 复用这两个值；Core 返回首次缓存响应，不再次执行按键。
 
 ## 消息清单
