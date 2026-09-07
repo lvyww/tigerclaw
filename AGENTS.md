@@ -192,6 +192,12 @@ UI state:
 - TSF key requests carry stable `client_session` + `event_id`; timeout retries
   reuse them and Core returns the cached first response without executing a
   physical key twice.
+  Pipe requests reject reentry; TSF timers defer pipe work while a request is
+  active. Read/write share one request deadline, with cancellation completion
+  drained before releasing I/O storage (cleanup may exceed that deadline).
+  Failed-key replay keeps event IDs and FIFO order, yields after 8 events or a
+  60 ms batch budget, and resumes on a 30 ms timer under the existing queue TTL.
+  Standalone Windows pipe fault tests: `tools/test_tsf_pipe.bat` (isolated pipe).
 - Manual add-word and recent-schema switching keep their existing enable flags
   and use configurable exact modifier chords. Defaults remain `Ctrl+=` and
   `Ctrl+M`; TSF and Native Hook both route these actions through Core.

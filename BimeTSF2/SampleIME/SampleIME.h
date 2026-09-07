@@ -47,6 +47,7 @@ struct FailedKeyMessage
 
 const DWORD WM_CheckGlobalCompartment = WM_USER;
 const DWORD WM_DeferredReopenCaretAnchorComposition = WM_USER + 1;
+const UINT_PTR kFailedKeyFlushTimerId = 5;
 const DWORD WM_PrimeCaretTrackingFromAnchor = WM_USER + 2;
 LRESULT CALLBACK CSampleIME_WindowProc(HWND wndHandle, UINT uMsg, WPARAM wParam, LPARAM lParam);
 
@@ -220,6 +221,8 @@ private:
                                   _In_z_ const char *reason,
                                   ULONGLONG eventId = 0);
     BOOL _FlushFailedKeyQueue(_In_opt_ ITfContext *pContext, _In_z_ const char *stageTag);
+    void _ScheduleFailedKeyFlush();
+    void _HandleFailedKeyFlush();
     BOOL _ApplyResponseAndSyncState(_In_opt_ ITfContext *pContext, _Inout_ BimeResponse *pResponse, _In_z_ const char *stageTag, _Out_opt_ BOOL *pCommittedViaAnchor = nullptr);
     void _AdjustKeySinkModeForForegroundWindow(_In_opt_ HWND hwndForeground);
     void _RefreshImmersiveState(_In_opt_ const char *source, _In_opt_ HWND hwndForeground);
@@ -361,6 +364,7 @@ private:
     ITfContext *_pDeferredReopenContext = nullptr;
     std::wstring _deferredReopenInputBuffer;
     std::deque<FailedKeyMessage> _failedKeyQueue;
+    bool _failedKeyFlushActive = false;
     BOOL _pendingKeyEventValid = FALSE;
     BOOL _pendingKeyEventIsKeyDown = FALSE;
     WPARAM _pendingKeyEventWParam = 0;

@@ -800,6 +800,17 @@ LRESULT CALLBACK CSampleIME_WindowProc(HWND wndHandle, UINT uMsg, WPARAM wParam,
     case WM_TIMER:
         if (pTextService != nullptr)
         {
+            // ReadResponse pumps timers. Keep our timers armed, but defer their
+            // pipe work until the active request has returned.
+            if (pTextService->_pPipeClient != nullptr && pTextService->_pPipeClient->IsBusy())
+            {
+                return 0;
+            }
+            if (wParam == kFailedKeyFlushTimerId)
+            {
+                pTextService->_HandleFailedKeyFlush();
+                return 0;
+            }
             if (wParam == kCaretCoalesceTimerId)
             {
                 pTextService->_FlushPendingCaretMessage(FALSE);
@@ -851,6 +862,7 @@ LRESULT CALLBACK CSampleIME_WindowProc(HWND wndHandle, UINT uMsg, WPARAM wParam,
             KillTimer(wndHandle, kFocusQueryStateTimerId);
             KillTimer(wndHandle, kImeActivePublishRetryTimerId);
             KillTimer(wndHandle, kCompositionRefreshTimerId);
+            KillTimer(wndHandle, kFailedKeyFlushTimerId);
             pTextService->_ClearDeferredCaretAnchorReopen();
             pTextService->_caretTrackingPrimePending = FALSE;
             pTextService->_msgWndHandle = nullptr;
@@ -3008,6 +3020,7 @@ void CSampleIME::_UninitCaretCoalesceWindow()
         KillTimer(_msgWndHandle, kFocusQueryStateTimerId);
         KillTimer(_msgWndHandle, kImeActivePublishRetryTimerId);
         KillTimer(_msgWndHandle, kCompositionRefreshTimerId);
+        KillTimer(_msgWndHandle, kFailedKeyFlushTimerId);
         DestroyWindow(_msgWndHandle);
         _msgWndHandle = nullptr;
     }
@@ -3317,7 +3330,7 @@ void CSampleIME::_ScheduleCoreLaunch()
 
 BOOL CSampleIME::_EnsurePipeConnected()
 {
-    if (_pPipeClient == nullptr)
+    if (_pPipeClient == nullptr || _pPipeClient->IsBusy())
     {
         return FALSE;
     }

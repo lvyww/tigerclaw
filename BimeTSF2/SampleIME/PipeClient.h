@@ -54,6 +54,7 @@ public:
     BOOL Connect();
     void Disconnect();
     BOOL IsConnected() const;
+    BOOL IsBusy() const { return _requestActive != 0; }
     BOOL GetConnectedServerProcessPath(_Out_writes_(pathCount) WCHAR *path, size_t pathCount) const;
 
     BOOL SendMessage(const char *jsonMessage);
@@ -98,6 +99,7 @@ private:
     LONGLONG _keyEventSeq;
     char _clientSession[64];
     BOOL _helloDone;
+    volatile LONG _requestActive = 0;
 
     BOOL TryConnect();
     BOOL WriteMessageOverlapped(const char *data, size_t len, DWORD timeoutMs);

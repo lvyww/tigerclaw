@@ -90,27 +90,67 @@ static void CaptureDifferentialMessage(const char *jsonMessage)
     CloseHandle(file);
 }
 
-static void PumpCurrentThreadNonInputMessages()
+// Cancellation is asynchronous. Keep both the OVERLAPPED and its buffer alive
+// until the kernel has completed the operation, including the cancellation race.
+static void CancelAndDrainPipeIo(HANDLE pipe, OVERLAPPED *operation)
+{
+    CancelIoEx(pipe, operation);
+    DWORD transferred = 0;
+    GetOverlappedResult(pipe, operation, &transferred, TRUE);
+}
+
+class PipeRequestScope
+{
+public:
+    explicit PipeRequestScope(volatile LONG *active) : _active(active),
+        _acquired(InterlockedCompareExchange(active, 1, 0) == 0) {}
+    ~PipeRequestScope() { if (_acquired) InterlockedExchange(_active, 0); }
+    bool Acquired() const { return _acquired; }
+private:
+    volatile LONG *_active;
+    bool _acquired;
+};
+
+static DWORD RemainingPipeBudget(ULONGLONG started, DWORD budget)
+{
+    if (budget == INFINITE) return INFINITE;
+    ULONGLONG elapsed = GetTickCount64() - started;
+    return elapsed >= budget ? 0 : static_cast<DWORD>(budget - elapsed);
+}
+
+static BOOL PumpCurrentThreadNonInputMessages()
 {
     MSG msg = {};
 
     // Keep the wait loop responsive without dispatching keyboard/mouse input.
     while (PeekMessage(&msg, nullptr, WM_PAINT, WM_PAINT, PM_REMOVE))
     {
+        if (msg.message == WM_QUIT)
+        {
+            PostQuitMessage(static_cast<int>(msg.wParam));
+            return FALSE;
+        }
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
 
     while (PeekMessage(&msg, nullptr, WM_TIMER, WM_TIMER, PM_REMOVE))
     {
+        if (msg.message == WM_QUIT)
+        {
+            PostQuitMessage(static_cast<int>(msg.wParam));
+            return FALSE;
+        }
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
 
-    while (PeekMessage(&msg, nullptr, WM_QUIT, WM_QUIT, PM_REMOVE))
+    if (PeekMessage(&msg, nullptr, WM_QUIT, WM_QUIT, PM_REMOVE))
     {
         PostQuitMessage(static_cast<int>(msg.wParam));
+        return FALSE;
     }
+    return TRUE;
 }
 
 CPipeClient::CPipeClient() : _hPipe(INVALID_HANDLE_VALUE), _isConnected(FALSE), _seq(0), _keyEventSeq(0), _helloDone(FALSE)
@@ -239,6 +279,11 @@ BOOL CPipeClient::TryConnect()
 // still pending, causing false failures. Mirrors ReadResponse but uses WaitForSingleObject (no msg pump).
 BOOL CPipeClient::WriteMessageOverlapped(const char *data, size_t len, DWORD timeoutMs)
 {
+    if (timeoutMs == 0)
+    {
+        SetLastError(ERROR_TIMEOUT);
+        return FALSE;
+    }
     if (data == nullptr || _hPipe == INVALID_HANDLE_VALUE)
     {
         return FALSE;
@@ -262,7 +307,7 @@ BOOL CPipeClient::WriteMessageOverlapped(const char *data, size_t len, DWORD tim
             DWORD waitResult = WaitForSingleObject(ov.hEvent, timeoutMs);
             if (waitResult != WAIT_OBJECT_0)
             {
-                CancelIo(_hPipe);
+                CancelAndDrainPipeIo(_hPipe, &ov);
                 SetLastError(waitResult == WAIT_TIMEOUT ? ERROR_TIMEOUT : ERROR_GEN_FAILURE);
                 CloseHandle(ov.hEvent);
                 return FALSE;
@@ -290,6 +335,12 @@ BOOL CPipeClient::WriteMessageOverlapped(const char *data, size_t len, DWORD tim
 
 BOOL CPipeClient::SendMessage(const char *jsonMessage)
 {
+    PipeRequestScope request(&_requestActive);
+    if (!request.Acquired())
+    {
+        SetLastError(ERROR_BUSY);
+        return FALSE;
+    }
     if (jsonMessage == nullptr)
     {
         return FALSE;
@@ -315,6 +366,9 @@ BOOL CPipeClient::SendMessage(const char *jsonMessage)
 
 HRESULT CPipeClient::SendMessageAndWait(const char *jsonMessage, _Out_ BimeResponse *pResponse, DWORD timeoutMs)
 {
+    const ULONGLONG started = GetTickCount64();
+    PipeRequestScope request(&_requestActive);
+    if (!request.Acquired()) return HRESULT_FROM_WIN32(ERROR_BUSY);
     if (jsonMessage == nullptr || pResponse == nullptr)
     {
         return E_INVALIDARG;
@@ -348,7 +402,8 @@ HRESULT CPipeClient::SendMessageAndWait(const char *jsonMessage, _Out_ BimeRespo
     }
 
     size_t len = strlen(jsonMessage);
-    BOOL writeOk = WriteMessageOverlapped(jsonMessage, len, BIME_PIPE_WRITE_TIMEOUT_MS);
+    BOOL writeOk = WriteMessageOverlapped(jsonMessage, len,
+        RemainingPipeBudget(started, timeoutMs));
     if (!writeOk)
     {
         DWORD writeError = GetLastError();
@@ -363,7 +418,8 @@ HRESULT CPipeClient::SendMessageAndWait(const char *jsonMessage, _Out_ BimeRespo
             Disconnect();
             if (Connect())
             {
-                writeOk = WriteMessageOverlapped(jsonMessage, len, BIME_PIPE_WRITE_TIMEOUT_MS);
+                writeOk = WriteMessageOverlapped(jsonMessage, len,
+                    RemainingPipeBudget(started, timeoutMs));
                 if (!writeOk)
                 {
                     writeError = GetLastError();
@@ -379,7 +435,7 @@ HRESULT CPipeClient::SendMessageAndWait(const char *jsonMessage, _Out_ BimeRespo
         }
     }
 
-    ULONGLONG deadline = GetTickCount64() + timeoutMs;
+    ULONGLONG deadline = started + timeoutMs;
 
     while (true)
     {
@@ -757,9 +813,10 @@ BOOL CPipeClient::ReadResponse(_Out_writes_bytes_(bufferSize) char *buffer, DWOR
             for (;;)
             {
                 ULONGLONG elapsed = GetTickCount64() - start;
-                DWORD remaining = (elapsed >= timeoutMs) ? 0 : static_cast<DWORD>(timeoutMs - elapsed);
+                DWORD remaining = timeoutMs == INFINITE ? INFINITE :
+                    ((elapsed >= timeoutMs) ? 0 : static_cast<DWORD>(timeoutMs - elapsed));
 
-                const DWORD waitMask = QS_POSTMESSAGE | QS_SENDMESSAGE | QS_TIMER | QS_PAINT;
+                const DWORD waitMask = QS_SENDMESSAGE | QS_TIMER | QS_PAINT;
                 DWORD waitResult = MsgWaitForMultipleObjects(1, &overlapped.hEvent, FALSE, remaining, waitMask);
                 if (waitResult == WAIT_OBJECT_0)
                 {
@@ -768,11 +825,17 @@ BOOL CPipeClient::ReadResponse(_Out_writes_bytes_(bufferSize) char *buffer, DWOR
 
                 if (waitResult == WAIT_OBJECT_0 + 1)
                 {
-                    PumpCurrentThreadNonInputMessages();
+                    if (!PumpCurrentThreadNonInputMessages())
+                    {
+                        CancelAndDrainPipeIo(_hPipe, &overlapped);
+                        CloseHandle(overlapped.hEvent);
+                        SetLastError(ERROR_OPERATION_ABORTED);
+                        return FALSE;
+                    }
                     continue;
                 }
 
-                CancelIo(_hPipe);
+                CancelAndDrainPipeIo(_hPipe, &overlapped);
                 if (waitResult == WAIT_TIMEOUT)
                 {
                     SetLastError(ERROR_TIMEOUT);
