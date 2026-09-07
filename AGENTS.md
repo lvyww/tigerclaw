@@ -102,6 +102,9 @@ UI state:
 - Sentence decoding is latest-generation-only and asynchronous. A stale Beam or
   Qwen result must never replace newer composition state. Pending UI keeps the
   previous candidate list and stitched live raw suffix.
+  Manual sentence navigation freezes Qwen ordering for that generation; editing
+  raw code re-enables reranking. Apply a Beam generation only once, including
+  when a synchronous key-path completion races the asynchronous worker.
 - Modified Kneser-Ney V2 uses `sentence-ngram-v2.bin`, mapped read-only. Beam
   expansion adds `2.0` per emitted Unicode character. Supplemental entries use
   `clamp(9 + 2 * ln(weight / 1000), 0, 16)` and affect sentence ranking only.
@@ -163,6 +166,12 @@ UI state:
   evidence while this setting is enabled may inspect the existing visible list,
   but its key-path check must stay a lightweight lexicon-path test rather than a
   synchronous n-gram/Beam decode.
+  A single visible group-eligible candidate is not proof of uniqueness after
+  Beam pruning. Immediately before committing through the unique-candidate
+  branch, check the base raw code for another group-eligible output using an
+  exact lexicon-path query independent of Beam. Different segmentations of the
+  same text do not count as different outputs. The strong-confidence branch
+  keeps its existing acceptance rule. Windows, Rime and Fcitx5 share this check.
 - Windows early-commit confidence/mass aggregation must run over the already
   narrowed visible/top-candidate list, not the full beam pool. Incomplete-code
   tails may merge the already computed `states[consumedLength]` lattice into the

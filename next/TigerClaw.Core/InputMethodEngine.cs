@@ -97,6 +97,7 @@ namespace TigerClaw.Core
             public string CommittedText { get; set; }
             public int BaseRawLength { get; set; }
             public int LastSegmentStart { get; set; }
+            public bool RequiresUniquenessCheck { get; set; }
         }
 
         private readonly object _lock = new object();
@@ -132,6 +133,8 @@ namespace TigerClaw.Core
         private string _sentenceNeuralAcceptedRaw = string.Empty;
         private string _sentenceNeuralTopText = string.Empty;
         private long _sentenceGeneration;
+        private long _sentenceManualSelectionGeneration = -1;
+        private long _sentenceAppliedGeneration = -1;
         private ISentenceRerankService _sentenceRerankService;
         private Action _sentenceDecodeCompletedCallback;
         private bool _sentenceDecodeWorkerRunning;
@@ -371,6 +374,7 @@ namespace TigerClaw.Core
                 int rerankCount = Math.Min(5, candidates.Length);
                 if (_compositionState != CompositionState.CnSentence ||
                     generation != _sentenceGeneration ||
+                    generation == _sentenceManualSelectionGeneration ||
                     !string.Equals(rawCode, _sentenceRawBuffer.ToString(), StringComparison.Ordinal) ||
                     scores == null || scores.Length != rerankCount)
                 {
@@ -2341,9 +2345,26 @@ namespace TigerClaw.Core
             }
 
             char normalizedValue = char.ToLowerInvariant(value);
+            if (!_state.GetSentenceAutoCommitEnabled() && !IsSentenceEmptyCodeAutoCommitActive())
+            {
+                // Keep disabled-mode edits off both automatic-commit paths. Reset once when
+                // necessary so a live setting change cannot leave evidence for a later re-enable.
+                if (_sentenceEmptyCodePending != null)
+                {
+                    ResetSentenceEmptyCodePending();
+                }
+                if (_sentenceAutoCommitLastSeenRaw.Length > 0 || _sentenceAutoCommitTrackers.Count > 0)
+                {
+                    ResetSentenceAutoCommitEvidence();
+                }
+                _sentenceRawBuffer.Append(normalizedValue);
+                RebuildSentenceInput();
+                return null;
+            }
             bool isLetter = normalizedValue >= 'a' && normalizedValue <= 'z';
+            bool requiresUniquenessCheck = false;
             SentenceCandidate emptyCodeCommitCandidate = isLetter && _sentenceEmptyCodePending == null
-                ? GetEmptyCodeAutoCommitCandidate()
+                ? GetEmptyCodeAutoCommitCandidate(out requiresUniquenessCheck)
                 : null;
             if (!isLetter)
             {
@@ -2352,7 +2373,7 @@ namespace TigerClaw.Core
             _sentenceRawBuffer.Append(normalizedValue);
             if (isLetter)
             {
-                string emptyCodeCommit = ResolveEmptyCodeAutoCommit(emptyCodeCommitCandidate);
+                string emptyCodeCommit = ResolveEmptyCodeAutoCommit(emptyCodeCommitCandidate, requiresUniquenessCheck);
                 if (emptyCodeCommit != null)
                 {
                     return emptyCodeCommit;
@@ -2372,8 +2393,9 @@ namespace TigerClaw.Core
             return TryAutoCommitSentencePrefix();
         }
 
-        private SentenceCandidate GetEmptyCodeAutoCommitCandidate()
+        private SentenceCandidate GetEmptyCodeAutoCommitCandidate(out bool requiresUniquenessCheck)
         {
+            requiresUniquenessCheck = false;
             if (!IsSentenceEmptyCodeAutoCommitActive() ||
                 _sentenceAutoCommitSuspended ||
                 _sentenceResultLexiconVersion != _state.LexiconVersion ||
@@ -2412,6 +2434,7 @@ namespace TigerClaw.Core
                 return null;
             }
 
+            requiresUniquenessCheck = candidates.Length == 1;
             return candidates[0];
         }
 
@@ -2445,7 +2468,7 @@ namespace TigerClaw.Core
                 candidateMass / total >= SentenceEarlyCommitStrongShare;
         }
 
-        private string ResolveEmptyCodeAutoCommit(SentenceCandidate capturedCandidate)
+        private string ResolveEmptyCodeAutoCommit(SentenceCandidate capturedCandidate, bool requiresUniquenessCheck)
         {
             if (_sentenceEmptyCodePending == null && capturedCandidate == null)
             {
@@ -2474,7 +2497,8 @@ namespace TigerClaw.Core
                     CandidateText = capturedCandidate.Text,
                     CommittedText = _sentenceCommittedText,
                     BaseRawLength = fullRaw.Length - 1,
-                    LastSegmentStart = lastSegmentStart
+                    LastSegmentStart = lastSegmentStart,
+                    RequiresUniquenessCheck = requiresUniquenessCheck
                 };
             }
 
@@ -2498,6 +2522,14 @@ namespace TigerClaw.Core
             if (requiredRetain > 0 &&
                 fullRaw.Length - pending.BaseRawLength < requiredRetain)
             {
+                return null;
+            }
+
+            if (pending.RequiresUniquenessCheck && _sentenceInputDecoder.HasCompleteCandidate(
+                    fullRaw.Substring(0, pending.BaseRawLength), pending.CommittedText,
+                    excludedText: pending.CandidateText, groupEligibleOnly: true))
+            {
+                ResetSentenceEmptyCodePending();
                 return null;
             }
 
@@ -3031,6 +3063,15 @@ namespace TigerClaw.Core
 
         private void ApplySentenceDecodeResult(long generation, string rawCode, int lexiconVersion, SentenceDecodeResult result)
         {
+            // A key-path completion may have already published the worker's generation.
+            // Reapplying it would reset manual selection and enqueue Qwen a second time.
+            if (_sentenceAppliedGeneration == generation &&
+                _sentenceResultLexiconVersion == lexiconVersion &&
+                string.Equals(_sentenceDecodeResult.RawCode, rawCode, StringComparison.Ordinal))
+            {
+                return;
+            }
+            _sentenceAppliedGeneration = generation;
             // Decoder lookup normalizes casing; engine identity and literal commits retain raw.
             if (result != null)
             {
@@ -3121,6 +3162,7 @@ namespace TigerClaw.Core
             int visibleCount = Math.Min(count, Math.Min(Math.Max(_state.GetPageSize(), 1), 10));
             if (visibleCount > 0)
             {
+                _sentenceManualSelectionGeneration = _sentenceGeneration;
                 _sentenceSelectedIndex = (_sentenceSelectedIndex + delta + visibleCount) % visibleCount;
             }
         }

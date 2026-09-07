@@ -1541,14 +1541,14 @@ local function advance_required_prefix(required, matched_length, candidate_text)
     return math.min(#required, matched_length + #candidate_text)
 end
 
-local function has_complete_candidate(raw_code, required_text_prefix)
+local function has_complete_candidate(raw_code, required_text_prefix, excluded_text, group_eligible_only)
     local raw = normalize(raw_code)
     if raw == "" or not has_letter(raw) then
         return false
     end
 
     local required = required_text_prefix or ""
-    if required == "" then
+    if required == "" and not excluded_text and not group_eligible_only then
         local reachable = { [0] = true }
         for position = 0, #raw - 1 do
             if reachable[position] then
@@ -1572,6 +1572,8 @@ local function has_complete_candidate(raw_code, required_text_prefix)
         return reachable[#raw] or false
     end
 
+    local first_ranks_only = group_eligible_only and not raw:find("[;'0-9]")
+    local stride = excluded_text and (#excluded_text + 2) or 1
     local states = {}
     for index = 0, #raw do states[index] = {} end
     states[0][0] = true
@@ -1589,14 +1591,29 @@ local function has_complete_candidate(raw_code, required_text_prefix)
                             local selected = eligible_candidates(
                                 candidates, selected_rank, whole_input_edge,
                                 active_allow_duplicate_single)
-                            for matched_length in pairs(states[position]) do
+                            for packed in pairs(states[position]) do
+                                local matched_length = math.floor(packed / stride)
                                 for candidate_index = 1, #selected do
+                                    local candidate = selected[candidate_index]
                                     local next_matched = advance_required_prefix(
                                         required,
                                         matched_length,
-                                        selected[candidate_index].t)
-                                    if next_matched then
-                                        states[consumed_end][next_matched] = true
+                                        candidate.t)
+                                    if next_matched and (not first_ranks_only or candidate.r == 1) then
+                                        local next_excluded = packed % stride
+                                        if excluded_text and next_excluded <= #excluded_text then
+                                            if excluded_text:sub(next_excluded + 1,
+                                                next_excluded + #candidate.t) == candidate.t then
+                                                next_excluded = next_excluded + #candidate.t
+                                            else
+                                                next_excluded = #excluded_text + 1
+                                            end
+                                        end
+                                        if consumed_end == #raw and next_matched == #required and
+                                            (not excluded_text or next_excluded ~= #excluded_text) then
+                                            return true
+                                        end
+                                        states[consumed_end][next_matched * stride + next_excluded] = true
                                     end
                                 end
                             end
@@ -1606,7 +1623,7 @@ local function has_complete_candidate(raw_code, required_text_prefix)
             end
         end
     end
-    return states[#raw][#required] or false
+    return false
 end
 
 local function state_better_rank_first(left, right)
@@ -2651,6 +2668,7 @@ local function capture_empty_code_candidate(full_before, committed_text)
     local previous = first.path and first.path.previous
     return {
         candidate_text = first.text,
+        requires_uniqueness_check = #eligible == 1,
         committed_text = committed_text,
         base_raw_length = #full_before,
         last_segment_start = previous and previous.raw_length or 0
@@ -2812,6 +2830,13 @@ local function try_empty_code_commit(env, state, full_before, appended_letter)
         return false
     end
 
+    if pending.requires_uniqueness_check and has_complete_candidate(
+        full_raw:sub(1, pending.base_raw_length), pending.committed_text,
+        pending.candidate_text, true) then
+        state.empty_code_pending = nil
+        save_transient_state(context, state, env)
+        return false
+    end
     local commit = pending.candidate_text:sub(#pending.committed_text + 1)
     local retained_raw = full_raw:sub(pending.base_raw_length + 1)
     -- Preserve the committed prefix as decoder context. Restarting from only
@@ -3212,6 +3237,7 @@ M.lexicon_data_view = function()
     }
 end
 M.capture_empty_code_candidate = capture_empty_code_candidate
+M.has_complete_candidate = has_complete_candidate
 M.set_allow_duplicate_single = set_allow_duplicate_single
 M.build_prefix_evidence = build_prefix_evidence
 M.find_prefix_evidence = find_prefix_evidence

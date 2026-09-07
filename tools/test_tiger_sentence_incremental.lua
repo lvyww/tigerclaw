@@ -395,6 +395,19 @@ if sentence.strong_empty_code_candidate(
 end
 print("OK  strong empty-code accept refuses truncated candidate pools")
 
+local unique_probe = sentence.lexicon_probe("vp")
+if not unique_probe or not unique_probe[1] then fail("missing uniqueness fixture vp") end
+if sentence.has_complete_candidate("vp", "", unique_probe[1].t, true) then
+    fail("non-first whole-code candidates must not create group ambiguity")
+end
+if not sentence.has_complete_candidate("vp", "", "not-the-candidate", true) then
+    fail("alternative group output was not found")
+end
+if sentence.has_complete_candidate("vp", "not-a-prefix", "not-the-candidate", true) then
+    fail("alternative group query ignored the committed prefix")
+end
+print("OK  empty-code uniqueness query excludes output text, not code paths")
+
 local function fake_environment(early_commit, duplicate_single)
     local properties = {}
     local commits = {}

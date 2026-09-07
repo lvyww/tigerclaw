@@ -697,7 +697,8 @@ namespace TigerClaw.Core
             }
         }
 
-        internal bool HasCompleteCandidate(string rawCode, string requiredTextPrefix = null)
+        internal bool HasCompleteCandidate(string rawCode, string requiredTextPrefix = null,
+            string excludedText = null, bool groupEligibleOnly = false)
         {
             string normalized = NormalizeRawCode(rawCode);
             if (normalized.Length == 0 || !normalized.Any(char.IsLetter))
@@ -706,16 +707,14 @@ namespace TigerClaw.Core
             }
 
             string required = requiredTextPrefix ?? string.Empty;
-            var states = new HashSet<int>[normalized.Length + 1];
-            for (int index = 0; index < states.Length; index++)
-            {
-                states[index] = new HashSet<int>();
-            }
-            states[0].Add(0);
+            bool firstRanksOnly = groupEligibleOnly && !normalized.Any(mark =>
+                char.IsDigit(mark) || mark == ';' || mark == '\'');
+            var states = new HashSet<(int Required, int Excluded)>[normalized.Length + 1];
+            states[0] = new HashSet<(int, int)> { (0, 0) };
 
             for (int position = 0; position < normalized.Length; position++)
             {
-                if (states[position].Count == 0)
+                if (states[position] == null)
                 {
                     continue;
                 }
@@ -743,26 +742,47 @@ namespace TigerClaw.Core
                         continue;
                     }
 
-                    foreach (int matchedPrefixLength in states[position])
+                    foreach (var matched in states[position])
                     {
                         foreach (SentenceLexiconCandidate candidate in candidates)
                         {
-                            if (!RankMatches(candidate, selectedRank, wholeInputEdge) || !TryAdvanceRequiredPrefix(
+                            if ((firstRanksOnly && candidate.Rank > 1) ||
+                                !RankMatches(candidate, selectedRank, wholeInputEdge) || !TryAdvanceRequiredPrefix(
                                 required,
-                                matchedPrefixLength,
+                                matched.Required,
                                 candidate.Text,
                                 out int nextMatchedPrefixLength))
                             {
                                 continue;
                             }
 
-                            states[consumedEnd].Add(nextMatchedPrefixLength);
+                            int nextExcluded = 0;
+                            if (excludedText != null)
+                            {
+                                nextExcluded = matched.Excluded;
+                                if (nextExcluded >= 0)
+                                {
+                                    nextExcluded = nextExcluded + candidate.Text.Length <= excludedText.Length &&
+                                        string.CompareOrdinal(excludedText, nextExcluded, candidate.Text, 0, candidate.Text.Length) == 0
+                                        ? nextExcluded + candidate.Text.Length : -1;
+                                }
+                            }
+                            // Excluding a surface text proves uniqueness independently of Beam
+                            // pruning; alternate segmentations of the same text do not count.
+                            // This query only asks whether a complete path exists. Allocate
+                            // reachable positions lazily and stop at the first valid answer.
+                            if (consumedEnd == normalized.Length && nextMatchedPrefixLength == required.Length &&
+                                (excludedText == null || nextExcluded != excludedText.Length))
+                            {
+                                return true;
+                            }
+                            (states[consumedEnd] ??= new HashSet<(int, int)>()).Add((nextMatchedPrefixLength, nextExcluded));
                         }
                     }
                 }
             }
 
-            return states[normalized.Length].Contains(required.Length);
+            return false;
         }
 
         internal bool IsProperCodePrefix(string code)
