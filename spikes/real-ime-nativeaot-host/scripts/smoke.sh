@@ -17,3 +17,8 @@ trap cleanup EXIT
 host_path="${app_path}/Contents/MacOS/TigerClawRealImeNativeAotHost"
 "${host_path}" --nativeaot-smoke
 "${host_path}" --nativeaot-windows-parity-smoke
+"${host_path}" --nativeaot-sentence-digit-smoke
+"${host_path}" --nativeaot-sentence-rules-smoke
+"${host_path}" --nativeaot-sentence-async-smoke
+"${host_path}" --nativeaot-perf-smoke
+"${host_path}" --nativeaot-revision-perf-smoke
