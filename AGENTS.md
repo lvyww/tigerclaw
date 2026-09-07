@@ -81,10 +81,10 @@ UI state:
   and rebuilds for the target schema. Preserve raw casing across sentence mode.
   With mixed input disabled, short codes use ordinary composition; an imported
   code longer than maximum code length uses a temporary mixed composition.
-- Sentence segmentation spaces are display-only. The raw code never contains
+- In ordinary sentence mode, segmentation spaces are display-only. The raw code never contains
   them. Up/Down and Tab/Shift+Tab traverse visible sentence candidates; sentence
   mode leaves Ctrl+number to the target application.
-- A one-key sentence segment is legal only when the whole input is one key.
+- In ordinary sentence mode, a one-key segment is legal only when the whole input is one key.
   Other segments consume at least two keys. `;`, `'` and digits select explicit
   lexicon ranks. An implicit non-first rank is legal only when the whole input is
   consumed by one lexicon edge; segmented paths use first ranks unless selection
@@ -99,8 +99,35 @@ UI state:
   `高频字仅使用最优码组句` or the full-code whitelist, and explicit digit/`;`/`'`
   rank selection still works when it is on. Multi-character words still need an
   explicit selector on segmented paths.
-- Sentence mode is controlled only by `自动启用整句模式` (default on). It
-  activates when the current schema name contains `整句`.
+- Sentence mode is controlled only by `自动启用整句模式` (default on). Schema
+  names containing `智能` activate experimental Windows fixed-segmentation
+  word/sentence mode, taking precedence over the ordinary `整句` name match.
+  `SmartSentenceSegmentation.cs` and the `SentenceInputDecoder.Smart.cs` partial
+  keep its search separate. Actual raw spaces and single-key rank selectors
+  close segments; otherwise only overflow beyond configured maximum letter
+  count splits input. Every segment requires an exact code; eligible lexicon
+  ranks compete by existing model/reward scoring without optimal-code filters.
+  Below the configured maximum code length, non-first multi-character entries
+  require an explicit rank selector. First-rank words, all single characters and
+  full-length words remain eligible implicitly. Apply this before Beam expansion
+  and in the lightweight key-path validity check, so Qwen and confidence evidence
+  cannot reintroduce excluded words. Only code letters count toward this length.
+  Digits 1–9/0 select ranks 1–10; enabled semicolon/quote select 2/3. Orphan or
+  repeated selectors are invalid, not multi-digit ranks. One space separates;
+  two consecutive unmodified spaces commit. Invalid input never commits stale
+  candidates on punctuation or double-space. Backspace removes actual raw keys.
+  Closed segments in Overlay/composition display the current model-best path's
+  words, while open tails retain raw code. A display-only last-ranked path may
+  survive incomplete tails/pending work only at matching raw prefixes and ranks;
+  clear it on composition/schema reset and reject different lexicon versions.
+  Code masking applies only to raw display spans, never substituted words.
+  Early commit uses existing confidence trackers only at closed fixed boundaries,
+  consumes their separators and retains at least three letters (also respecting
+  the configured retained-code floor). A merely full-length tail remains open.
+  No empty-code implicit splitting is used. Leaving this mode removes raw spaces
+  from the uncommitted suffix before target-schema migration. Max-code/selector
+  setting changes preserve that suffix and rebuild the generation. These new
+  rules are Windows-only; the ordinary sentence rules and ports below are unchanged.
 - Sentence decoding is latest-generation-only and asynchronous. A stale Beam or
   Qwen result must never replace newer composition state. Pending UI keeps the
   previous candidate list and stitched live raw suffix.

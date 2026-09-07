@@ -1373,8 +1373,12 @@ namespace TigerClaw.Core
 
             string schema = GetCurrentSchema();
             return !string.IsNullOrEmpty(schema) &&
-                   schema.IndexOf("\u6574\u53e5", StringComparison.Ordinal) >= 0; // 整句
+                   (schema.IndexOf("\u6574\u53e5", StringComparison.Ordinal) >= 0 ||
+                    schema.IndexOf("\u667a\u80fd", StringComparison.Ordinal) >= 0); // 整句 / 智能
         }
+
+        public bool IsSmartSentenceInputActive() => GetAutoEnableSentenceBySchema() &&
+            (GetCurrentSchema() ?? string.Empty).IndexOf("\u667a\u80fd", StringComparison.Ordinal) >= 0;
 
         public bool GetSentenceNeuralRerankEnabled() => GetBool(KeySentenceNeuralRerank, true);
 

@@ -208,6 +208,10 @@ namespace TigerClaw.Core.Tests
                 SentencePathCheckMatchesFullDecode();
                 SentenceEmptyCodeDoesNotTreatPrunedCandidateAsUnique();
                 SentenceAutoCommitExitKeepsOnlyLiveTail();
+                SmartSentenceFixedSegmentation();
+                SmartSentenceClosedSegmentDisplay();
+                SmartSentenceKeysAndExits();
+                SmartSentenceEarlyCommitConsumesSeparators();
                 TemporaryPinyinAlwaysShowsReverseLookupAnnotations();
                 SettingsOrderIsIndependentOfConfigurationOrder();
                 SentenceNeuralWeightPreservesShortNgramWinner();

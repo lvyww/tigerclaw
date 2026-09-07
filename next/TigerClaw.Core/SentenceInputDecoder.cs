@@ -385,7 +385,7 @@ namespace TigerClaw.Core
         public long IsolationCacheMisses { get; set; }
     }
 
-    internal sealed class SentenceInputDecoder
+    internal sealed partial class SentenceInputDecoder
     {
         private const string Bos = "\x02";
         private const string Eos = "\x03";
@@ -573,9 +573,13 @@ namespace TigerClaw.Core
             double emittedCharacterReward = 0.0,
             double wholeInputSingleCharacterReward = 0.0,
             SentenceSupplementMatcher supplementMatcher = null,
-            bool allowDuplicateSingleCharacters = false)
+            bool allowDuplicateSingleCharacters = false,
+            int smartMaxCodeLength = 0,
+            int smartSelectionMask = 3)
         {
             _lexicon = lexicon ?? throw new ArgumentNullException(nameof(lexicon));
+            SmartMaxCodeLength = Math.Max(0, smartMaxCodeLength);
+            SmartSelectionMask = smartSelectionMask;
             _languageModel = languageModel ?? NeutralSentenceLanguageModel.Instance;
             _beamWidth = Math.Max(1, beamWidth);
             _rankPenalty = Math.Max(0.0, rankPenalty);
@@ -616,7 +620,9 @@ namespace TigerClaw.Core
                 long started = Stopwatch.GetTimestamp();
                 long isolationHitsBefore = _isolationPenaltyCacheHits;
                 long isolationMissesBefore = _isolationPenaltyCacheMisses;
-                SentenceDecodeResult result = DecodeIncrementalLocked(
+                SentenceDecodeResult result = SmartMaxCodeLength > 0
+                    ? DecodeSmart(rawCode, candidateLimit, includeEarlyCommitEvidence, requiredTextPrefix)
+                    : DecodeIncrementalLocked(
                     rawCode,
                     candidateLimit,
                     includeEarlyCommitEvidence,
@@ -635,6 +641,10 @@ namespace TigerClaw.Core
             bool includeEarlyCommitEvidence = false,
             string requiredTextPrefix = null)
         {
+            if (SmartMaxCodeLength > 0)
+            {
+                lock (_decodeLock) return DecodeSmart(rawCode, candidateLimit, includeEarlyCommitEvidence, requiredTextPrefix);
+            }
             string normalized = NormalizeRawCode(rawCode);
             if (normalized.Length == 0 || !normalized.Any(char.IsLetter))
             {
