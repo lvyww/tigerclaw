@@ -48,6 +48,22 @@ struct QuickAddWordPrefillResult: Equatable {
     let text: String
 }
 
+struct BackspaceDeliveryGuard {
+    private static let duplicateWindow: TimeInterval = 0.025
+    private var lastDeliveryUptime: TimeInterval?
+
+    mutating func shouldSuppress(_ event: NativeAotInputEvent, at uptime: TimeInterval) -> Bool {
+        guard event.key == Int32(TC_INPUT_KEY_BACKSPACE.rawValue), event.isRepeat == 0 else {
+            return false
+        }
+        defer { lastDeliveryUptime = uptime }
+        guard let lastDeliveryUptime else {
+            return false
+        }
+        return uptime >= lastDeliveryUptime && uptime - lastDeliveryUptime < Self.duplicateWindow
+    }
+}
+
 final class TigerClawInputController: IMKInputController {
     private var engine: NativeAotBridge?
     private var engineConfiguration: NativeAotConfiguration?
@@ -69,6 +85,7 @@ final class TigerClawInputController: IMKInputController {
     private var sentenceRefreshClient: IMKTextInput?
     private var sentenceRefreshDeadline = Date.distantPast
     private var inputMode = TigerClawInputMode()
+    private var backspaceDeliveryGuard = BackspaceDeliveryGuard()
     private let normalTypingSound = NSSound(named: NSSound.Name("Tink"))
     private let spaceTypingSound = NSSound(named: NSSound.Name("Pop"))
     private let functionTypingSound = NSSound(named: NSSound.Name("Basso"))
@@ -337,6 +354,11 @@ final class TigerClawInputController: IMKInputController {
     @objc(didCommandBySelector:client:)
     override func didCommand(by selector: Selector!, client sender: Any!) -> Bool {
         let selectorName = selector.map(NSStringFromSelector) ?? ""
+        if let mappedEvent = NativeAotCommand.inputEvent(forSelectorName: selectorName),
+           !isComposing,
+           shouldSuppressDuplicateBackspace(mappedEvent) {
+            return true
+        }
         guard isComposing,
               let mappedEvent = NativeAotCommand.inputEvent(forSelectorName: selectorName) else {
             return false
@@ -350,6 +372,11 @@ final class TigerClawInputController: IMKInputController {
 
     override func doCommand(by selector: Selector!, command commandDictionary: [AnyHashable: Any]!) {
         let selectorName = selector.map(NSStringFromSelector) ?? ""
+        if let mappedEvent = NativeAotCommand.inputEvent(forSelectorName: selectorName),
+           !isComposing,
+           shouldSuppressDuplicateBackspace(mappedEvent) {
+            return
+        }
         if let mappedEvent = NativeAotCommand.inputEvent(forSelectorName: selectorName),
            isComposing,
            let client = commandDictionary.values.first(where: { $0 is IMKTextInput }) as? IMKTextInput,
@@ -473,6 +500,10 @@ final class TigerClawInputController: IMKInputController {
             LifecycleTrace.record("shortcut pass-through \(mappedEvent.traceDescription)")
             return false
         }
+        if shouldSuppressDuplicateBackspace(mappedEvent) {
+            LifecycleTrace.record("suppressed duplicate Backspace \(mappedEvent.traceDescription)")
+            return true
+        }
 
         guard let client = sender as? IMKTextInput,
               let engine else {
@@ -501,6 +532,10 @@ final class TigerClawInputController: IMKInputController {
             LifecycleTrace.record("process failed \(mappedEvent.traceDescription) error=\(error)")
             return false
         }
+    }
+
+    private func shouldSuppressDuplicateBackspace(_ event: NativeAotInputEvent) -> Bool {
+        backspaceDeliveryGuard.shouldSuppress(event, at: ProcessInfo.processInfo.systemUptime)
     }
 
     private func apply(_ result: NativeAotResult, to client: IMKTextInput, scheduleSentenceRefresh: Bool = true) {
