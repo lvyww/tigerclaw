@@ -4756,33 +4756,11 @@ namespace TigerClaw.Core
                 return Array.Empty<SentenceCandidate>();
             }
 
-            if (string.Equals(_sentenceDecodeResult.RawCode, sentenceRawCode, StringComparison.Ordinal))
-            {
-                if (_sentenceCommittedText.Length == 0)
-                {
-                    return current;
-                }
-
-                return current
-                    .Where(candidate => candidate.Text.StartsWith(_sentenceCommittedText, StringComparison.Ordinal))
-                    .Select(candidate => new SentenceCandidate
-                    {
-                        Text = candidate.Text.Substring(_sentenceCommittedText.Length),
-                        SegmentedCode = candidate.SegmentedCode,
-                        BaseScore = candidate.BaseScore,
-                        FinalScore = candidate.FinalScore,
-                        ConfidenceScore = candidate.ConfidenceScore,
-                        SupplementScore = candidate.SupplementScore,
-                        Boundary = candidate.Boundary,
-                        MaxLexiconRank = candidate.MaxLexiconRank
-                    })
-                    .Where(candidate => candidate.Text.Length > 0)
-                    .ToArray();
-            }
-
             // Decode is still catching up. Keep the last list so Overlay does not
-            // collapse to a one-row code window between keys.
-            if (sentenceRawCode.Length > 0 && current.Length > 0)
+            // collapse to a one-row code window between keys. Both current and
+            // pending results use the same committed-prefix projection below.
+            if (string.Equals(_sentenceDecodeResult.RawCode, sentenceRawCode, StringComparison.Ordinal) ||
+                (sentenceRawCode.Length > 0 && current.Length > 0))
             {
                 if (_sentenceCommittedText.Length == 0)
                 {
