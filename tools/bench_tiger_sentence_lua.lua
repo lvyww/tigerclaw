@@ -114,9 +114,8 @@ local function run_incremental(raw, evidence)
     end
 end
 
--- Match the real frontend order: the translator caches ordinary candidates;
--- before the following key, the processor requests confidence metadata for
--- that same composition, then the translator decodes the appended key.
+-- Exercise ordinary-candidate -> evidence cache upgrades. This is a cache
+-- workload, not a full processor/translator or UI latency measurement.
 local function run_frontend(raw)
     return function()
         sentence.reset_decode_cache()
@@ -126,6 +125,22 @@ local function run_frontend(raw)
                 sentence.decode(raw:sub(1, length - 1), true, "")
             end
             result = sentence.decode(raw:sub(1, length), false, "")
+        end
+        return result
+    end
+end
+
+-- Include display materialization: otherwise lazy segmentation would make a
+-- decoder-only improvement look like the same improvement in actual rendering.
+local function run_display(raw)
+    return function()
+        sentence.reset_decode_cache()
+        local result = {}
+        for length = 1, #raw do
+            result = sentence.decode(raw:sub(1, length), true, "")
+            for i = 1, #result do
+                assert(type(result[i].segmented) == "string")
+            end
         end
         return result
     end
@@ -211,6 +226,7 @@ for _, case in ipairs(cases) do
     local incremental = benchmark(case, "incremental", run_incremental(case.raw, false))
     local evidence = benchmark(case, "evidence", run_incremental(case.raw, true))
     local frontend = benchmark(case, "frontend", run_frontend(case.raw))
+    benchmark(case, "display", run_display(case.raw))
 
     if not sentence.results_equal(incremental, sentence.decode_full(case.raw, false, "")) or
         not sentence.results_equal(evidence, sentence.decode_full(case.raw, true, "")) or

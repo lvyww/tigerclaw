@@ -48,6 +48,31 @@ local function fail(message)
     os.exit(1)
 end
 
+local function check_lazy_scoring(raw)
+    sentence.reset_decode_cache()
+    for length = 1, #raw do
+        local prefix = raw:sub(1, length)
+        local result = sentence.decode(prefix, false, "")
+        for i = 1, #result do
+            local candidate = result[i]
+            if sentence.path_isolation_penalty(candidate.path) ~=
+                sentence.reference_isolation_penalty(candidate.text) then
+                fail("incremental isolation differs from full-text oracle: " .. candidate.text)
+            end
+            if rawget(candidate, "segmented") ~= nil then
+                fail("decode eagerly constructed display segmentation")
+            end
+        end
+        local with_evidence = sentence.decode(prefix, true, "")
+        if result ~= with_evidence then
+            fail("same-generation evidence did not reuse candidate results")
+        end
+        if not sentence.results_equal(with_evidence, sentence.decode_full(prefix, true, "")) then
+            fail("lazy output/evidence differs from full rebuild: " .. prefix)
+        end
+    end
+end
+
 sentence.ensure_lexicon(nil)
 local status = sentence.data_status()
 if not status.built then
@@ -77,6 +102,22 @@ end
 print(string.format(
     "OK  plain-text data files loaded (%d codes, %d ranks, %d whitelist)",
     status.codes_count, status.ranks_count, status.whitelist_count))
+
+for _, raw in ipairs({ "awmenamcunta", "iejryfenahbmsp", "jqtusotuqiueottu",
+        "nnczggqrrjrrltwwbwkedmkswgjgiuapnphbszbp" }) do
+    check_lazy_scoring(raw)
+end
+-- A local PRNG leaves other tests' random state untouched.
+local seed = 20260907
+for _ = 1, 20 do
+    local chars = {}
+    for i = 1, 40 do
+        seed = seed * 48271 % 2147483647
+        chars[i] = string.char(97 + seed % 26)
+    end
+    check_lazy_scoring(table.concat(chars))
+end
+print("OK  lazy path isolation, display and evidence match full-text/full-decode oracles")
 
 sentence.reset_decode_cache()
 local standalone_rl = sentence.decode("rl")
@@ -490,6 +531,9 @@ punctuation_schema:close()
 if not punctuation_schema_content:find("import_preset: symbols", 1, true) then
     fail("schema does not import the editable symbols.yaml punctuation table")
 end
+if not punctuation_schema_content:match('\npunctuator:%s*\n.-\n  digit_separators: ""') then
+    fail("schema must disable Rime's pending ASCII digit-separator candidates")
+end
 local symbols_file = assert(io.open(
     repo .. "/rime/tiger_sentence/symbols.yaml", "rb"))
 local symbols_content = symbols_file:read("*a")
@@ -589,6 +633,8 @@ if #commits_dig ~= 4 or commits_dig[4] ~= "7" then
     fail("digits stopped committing after a decimal point")
 end
 -- A comma passes through to the punctuator instead of being intercepted.
+-- The schema check above is essential: the Lua-only mock cannot exercise
+-- librime's punct_number branch, which otherwise opens an ASCII comma menu.
 sentence.processor(fake_key(","), env_dig)
 if #commits_dig ~= 4 or context_dig.input ~= "" then
     fail("comma after digits should pass through to the punctuator")

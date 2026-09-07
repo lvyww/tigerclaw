@@ -318,6 +318,12 @@ release tree. Keep `.bat` files CRLF.
   plain-text data files with `python3 tools/export_tiger_sentence_rime.py`.
   The pack includes `symbols.yaml` as its directly-committing punctuation
   default; the schema imports that preset instead of Rime's `default` preset.
+  The schema disables built-in `digit_separators` so punctuation after digits
+  follows that table without a pending ASCII separator candidate. Lua retains
+  the immediate decimal point after a digit.
+  Lua predecodes mobile-model unigrams, lazily scores isolation from path
+  prefixes without changing Beam pruning, materializes segmentation on display
+  access, and reuses final candidates when adding same-generation evidence.
   The code table, character ranks and full-code whitelist are runtime-loaded
   txt files (`tiger_sentence.codes.txt` and siblings) so users can edit or
   import other shape-code tables without re-running the exporter; the
