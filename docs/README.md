@@ -14,6 +14,7 @@
 | `../整句虎使用说明.md` | Windows/Rime 整句输入操作 |
 | `../更新日志.txt` | 面向用户的版本变化 |
 | `../BimeTSF2/SampleIME/BRIDGE_ONLY_NOTES.md` | TSF bridge-only 边界 |
+| `../next/TigerClaw.Overlay.Native/README.md` | C++ Overlay 替换实现、隔离构建与待验收项 |
 | `../rime/tiger_sentence/README.md` | 独立 Rime 方案部署与开发 |
 | `FCITX5_ANDROID_PORTING_PLAN.md` | Fcitx5 Android 当前完成度和剩余验收 |
 | `FCITX5_ANDROID_BASELINE.md` | Android 移植冻结的仓库/模型身份 |

@@ -5,6 +5,8 @@
 
 ## 传输
 
+Overlay 的共享内存发布协议见 [ui_state.md](ui_state.md)，独立于此命名管道。
+
 - 命名管道：`\\.\pipe\BimeIPC`
 - UTF-8 JSON，每行一个对象
 - 需要响应的请求携带 `seq`；响应使用相同 `seq`

@@ -22,6 +22,17 @@ namespace TigerClaw.Core.Tests
         {
             try
             {
+                if (args.Length == 2 && args[0] == "--ui-publish-stdio")
+                    return RunUiPublisherProbe(args[1]);
+                if (args.Length == 1 && args[0] == "--ui-snapshot-tests")
+                {
+                    RunUiSnapshotTests();
+                    return 0;
+                }
+                if (args.Length == 1 && args[0] == "--overlay-format-stdio")
+                {
+                    return RunOverlayFormatProbe();
+                }
                 if (args.Length == 2 &&
                     string.Equals(args[0], "--core-diff-stdio", StringComparison.OrdinalIgnoreCase))
                 {
@@ -253,6 +264,7 @@ namespace TigerClaw.Core.Tests
                 SentenceAutoEnableUsesSchemaNameWithoutChangingSwitch();
                 SentenceGoldenExportIsDeterministic();
                 SentenceGoldenCasesIncrementalMatchesFull();
+                RunUiSnapshotTests();
                 Console.WriteLine("TigerClaw.Core.Tests: all tests passed.");
                 return 0;
             }

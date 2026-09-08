@@ -35,6 +35,10 @@ Active components:
   sentence decoding, IPC and process lifecycle. It is a .NET 10 Native AOT
   executable; there is no maintained .NET Framework Core configuration.
 - `next/TigerClaw.Overlay/`: WPF status/candidate UI and typing sounds.
+- `next/TigerClaw.Overlay.Native/`: C++ Win32/Direct2D/DirectWrite replacement
+  under development. WPF remains the published default. Its CMake build is
+  isolated; `--demo` does not connect to production IPC. See its README for
+  build, rollback and outstanding Windows runtime/visual acceptance checks.
 - `next/TigerClaw.Dialog/`: settings, add-word and selection-key UI.
 - `next/TigerClaw.Shared/`: shared constants, build identity, MMF and guards.
 - `next/TigerClaw.Sentence.Native/`: optional native C++ Qwen reranking sidecar,
@@ -68,6 +72,12 @@ UI state:
 - `Local\TigerClaw.Heartbeat.v1`: Core heartbeat
 - `Local\TigerClaw.OverlayHeartbeat.v1`: Overlay heartbeat
 - `Local\TigerClaw.ShowMenu.v1`: status-window menu trigger
+
+Native Overlay's low-latency path adds `Local\TigerClaw.UiState.v1.Snapshot.v2`
+with a `.Lock` mutex and `.Changed` event. Core retains v1 for WPF, then publishes
+a mutex-protected complete snapshot and signals after unlock. Native reads it
+without a second polling interval; old Core retains the legacy fallback. Never
+block Core on a paused reader. Contract: `Protocol/ui_state.md`.
 
 ## Behavior That Must Stay Aligned
 
