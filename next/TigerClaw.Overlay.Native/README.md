@@ -7,10 +7,30 @@ a protocol or settings migration. WPF remains the default published frontend.
 
 ## Build
 
+Context menus temporarily activate their visible owner, as required by
+[TrackPopupMenuEx](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-trackpopupmenuex)
+for outside-click dismissal. If focus has moved to another application when the
+menu closes, it is left there; otherwise the previous foreground is restored.
+Normal candidate/status updates remain non-activating. If Windows denies menu
+activation, no background popup is left open. A hidden status window uses the
+visible candidate window as menu owner.
+
+`overlay_menu_tests.exe` is an explicit opt-in interactive test: it launches only
+the synthetic preview, moves the pointer and clicks its own two test windows,
+checks outside-click dismissal and cancel/reopen, then restores the pointer.
+It is not in CTest. The current remote session failed its foreground/hit-test
+preconditions before exercising the menu; automated real-desktop execution
+remains needed. After deploying the ARM64 build, the user confirmed normal
+outside-click dismissal on 2026-09-08.
+
 Renderer reuse measurements and the isolated pixel/cache regression procedure
 are documented in [OverlayRenderBench](../../tools/OverlayRenderBench/README.md).
 Text format/layout caching is bounded to the current display; window resizing
 retains the drawing target but still allocates an exactly-sized bitmap.
+Status startup positioning uses the rendered physical-pixel size and the
+monitor work area, with a two-pixel inset. DPI, display and work-area changes
+clamp the status window back inside that area without resetting a valid dragged
+position. This avoids mixing the 26-by-50 DIP status size with pixel coordinates.
 
 From a Visual Studio developer terminal with CMake and the Windows 10/11 SDK:
 

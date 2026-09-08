@@ -17,6 +17,7 @@ namespace tiger::overlay
     class Application
     {
         HWND candidate_ = nullptr, status_ = nullptr;
+        bool statusPlaced_ = false;
         State state_;
         Endpoints endpoints_;
         bool isolated_ = false;
@@ -73,6 +74,7 @@ namespace tiger::overlay
         }
         void Refresh(bool force)
         {
+            if (!candidate_ || !status_) return;
             auto now = GetTickCount64();
             bool reformat = force || !SameDisplayContent(state_, renderedState_) || reveal_.NextDelay(state_, now) != 0;
             Display formatted;
@@ -114,7 +116,18 @@ namespace tiger::overlay
             if (force || !statusDrawn_ || state_.isOff != renderedState_.isOff || state_.isChinese != renderedState_.isChinese ||
                 state_.nativeHook != renderedState_.nativeHook || state_.status != renderedState_.status || state_.hideStatus != renderedState_.hideStatus)
             {
-                statusRenderer_.Render(status_, state_, {}, GetDpiForWindow(status_), true);
+                auto size = statusRenderer_.Render(status_, state_, {}, GetDpiForWindow(status_), true);
+                MONITORINFO monitor{}; monitor.cbSize = sizeof(monitor);
+                if (GetMonitorInfoW(MonitorFromWindow(status_, MONITOR_DEFAULTTONEAREST), &monitor))
+                {
+                    RECT current{}; GetWindowRect(status_, &current);
+                    const auto& work = monitor.rcWork;
+                    auto position = StatusPosition({current.left, current.top}, size.cx, size.cy,
+                        {work.left, work.top, work.right, work.bottom}, !statusPlaced_);
+                    statusPlaced_ = true;
+                    SetWindowPos(status_, nullptr, position.x, position.y, 0, 0,
+                        SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER);
+                }
                 ShowWindow(status_, state_.hideStatus ? SW_HIDE : SW_SHOWNOACTIVATE);
                 statusDrawn_ = true;
             }
@@ -159,9 +172,25 @@ namespace tiger::overlay
             AppendMenuW(menu, MF_STRING, 7, L"\u9000\u51fa");
             POINT cursor{}; GetCursorPos(&cursor);
             menuOpen_ = true;
-            int choice = TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON, cursor.x, cursor.y, status_, nullptr);
+            // TrackPopupMenu requires a foreground owner to dismiss on outside
+            // clicks. Normal candidate/status updates remain non-activating.
+            HWND previousForeground = GetForegroundWindow();
+            HWND owner = IsWindowVisible(status_) ? status_ : candidate_;
+            SetForegroundWindow(owner);
+            if (GetForegroundWindow() != owner)
+            {
+                menuOpen_ = false;
+                DestroyMenu(menu);
+                return; // Do not leave an undismissable background menu.
+            }
+            int choice = TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON, cursor.x, cursor.y, owner, nullptr);
             menuOpen_ = false;
+            PostMessageW(owner, WM_NULL, 0, 0);
             DestroyMenu(menu);
+            // Escape/selection may leave our owner active; an outside click must
+            // keep its newly selected application, never reactivate the old one.
+            if (GetForegroundWindow() == owner && IsWindow(previousForeground))
+                SetForegroundWindow(previousForeground);
             if (demo_)
             {
                 if (choice >= 2000 && choice < 2009) { state_.theme = themeNames[choice - 2000]; Refresh(true); }
@@ -282,6 +311,9 @@ namespace tiger::overlay
             case WM_LBUTTONUP: if (dragging_) { dragging_ = false; ReleaseCapture(); } return 0;
             case WM_CAPTURECHANGED: dragging_ = false; return 0;
             case WM_DPICHANGED: case WM_DISPLAYCHANGE: Refresh(true); return 0;
+            case WM_SETTINGCHANGE:
+                if (wp == SPI_SETWORKAREA) { Refresh(true); return 0; }
+                break;
             case WM_CLOSE: PostQuitMessage(0); return 0;
             }
             return DefWindowProcW(hwnd, message, wp, lp);

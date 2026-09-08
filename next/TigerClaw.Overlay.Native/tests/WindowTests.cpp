@@ -104,6 +104,14 @@ int main()
         Check(Until([&] { candidate = Find(child.Pid(), L"TigerClaw.Native.Candidate.v1");
             status = Find(child.Pid(), L"TigerClaw.Native.Status.v1"); return candidate && status; }), "both real windows created");
         Check(!child.Exited(), "GUI stays alive before state");
+        Check(Until([&] {
+            if (!IsWindowVisible(status)) return false;
+            MONITORINFO monitor{}; monitor.cbSize = sizeof(monitor);
+            RECT rect{}; GetWindowRect(status, &rect);
+            if (!GetMonitorInfoW(MonitorFromWindow(status, MONITOR_DEFAULTTONEAREST), &monitor)) return false;
+            return rect.left >= monitor.rcWork.left && rect.top >= monitor.rcWork.top &&
+                rect.right <= monitor.rcWork.right - 2 && rect.bottom <= monitor.rcWork.bottom - 2;
+        }), "scaled startup status stays inside monitor work area");
         RECT area{}; SystemParametersInfoW(SPI_GETWORKAREA, 0, &area, 0);
         int x = area.left + 100, y = area.top + 150;
         nlohmann::json state{{"CandidateVisible", true}, {"IsChinese", true}, {"InputCode", "ab"},

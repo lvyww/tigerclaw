@@ -5,6 +5,13 @@ namespace tiger::overlay
 {
     struct Point { int x = 0, y = 0; };
     struct WorkArea { int left, top, right, bottom; };
+    inline Point StatusPosition(Point current, int width, int height, WorkArea work, bool initial)
+    {
+        const int right = std::max(work.left, work.right - width - 2);
+        const int bottom = std::max(work.top, work.bottom - height - 2);
+        return initial ? Point{right, bottom} : Point{
+            std::clamp(current.x, work.left, right), std::clamp(current.y, work.top, bottom)};
+    }
     inline bool UsableCaret(int x, int y)
     {
         return (x || y) && x > -30000 && x < 300000 && y > -30000 && y < 300000;

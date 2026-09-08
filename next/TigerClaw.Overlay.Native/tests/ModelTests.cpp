@@ -12,6 +12,21 @@ int main()
     try
     {
         State state;
+        for (int dpi : {96, 120, 144, 192})
+        {
+            int width = (26 * dpi + 95) / 96, height = (50 * dpi + 95) / 96;
+            for (WorkArea work : {WorkArea{0, 0, 1920, 1040}, WorkArea{-1920, -1080, 0, -40},
+                WorkArea{60, 40, 1920, 1080}})
+            {
+                auto start = StatusPosition({}, width, height, work, true);
+                Check(start.x + width == work.right - 2 && start.y + height == work.bottom - 2,
+                    "status uses actual scaled size within work area");
+                auto clamp = StatusPosition({work.right, work.bottom}, width, height, work, false);
+                Check(clamp.x == start.x && clamp.y == start.y, "work area change clamps status");
+                auto keep = StatusPosition({work.left + 10, work.top + 10}, width, height, work, false);
+                Check(keep.x == work.left + 10 && keep.y == work.top + 10, "valid dragged position retained");
+            }
+        }
         Placement position;
         WorkArea area{0, 0, 1920, 1080};
         Check(!position.Acquire(0, 0, 20), "unknown caret rejected");
