@@ -94,6 +94,16 @@ block Core on a paused reader. Contract: `Protocol/ui_state.md`.
 - In ordinary sentence mode, segmentation spaces are display-only. The raw code never contains
   them. Up/Down and Tab/Shift+Tab traverse visible sentence candidates; sentence
   mode leaves Ctrl+number to the target application.
+- Windows sentence input: Tab/Shift+Tab highlights without submitting. The next
+  code letter locks that candidate's text and consumed raw boundary, retaining
+  language-model context and preventing later resegmentation across the boundary.
+  With early commit enabled, this manual confirmation immediately submits only
+  the uncommitted selected text; confidence and retained-code floors do not delay
+  it. Otherwise Backspace unlocks when it reaches the noncommitted boundary.
+  Rank selectors still edit the current segment rather than confirm a Tab lock.
+  Up/Down alone does not arm locking. Clear/schema migration discards locks;
+  literal exits still emit only live raw code. Rime/Android do not yet implement
+  this Tab-confirmation interaction.
 - In ordinary sentence mode, a one-key segment is legal only when the whole input is one key.
   Other segments consume at least two keys. `;`, `'` and digits select explicit
   lexicon ranks. An implicit non-first rank is legal only when the whole input is

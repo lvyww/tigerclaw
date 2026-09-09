@@ -134,6 +134,10 @@ namespace TigerClaw.Core
         private string _sentenceNeuralTopText = string.Empty;
         private long _sentenceGeneration;
         private long _sentenceManualSelectionGeneration = -1;
+        private bool _sentenceTabSelectionPending;
+        private readonly List<SentenceLockedPrefix> _sentenceLockedPrefixes = new List<SentenceLockedPrefix>();
+        private SentenceLockedPrefix ActiveSentenceLockedPrefix =>
+            _sentenceLockedPrefixes.Count == 0 ? null : _sentenceLockedPrefixes[_sentenceLockedPrefixes.Count - 1];
         private long _sentenceAppliedGeneration = -1;
         private ISentenceRerankService _sentenceRerankService;
         private Action _sentenceDecodeCompletedCallback;
@@ -1495,6 +1499,7 @@ namespace TigerClaw.Core
             {
                 ResetSentenceAutoCommitEvidence();
                 ResetSentenceEmptyCodePending();
+                _sentenceTabSelectionPending = false;
                 // The raw buffer retains the committed prefix so the decoder
                 // can keep its full context, but that prefix no longer belongs
                 // to the active TSF composition. Backspace must consume only
@@ -1512,6 +1517,13 @@ namespace TigerClaw.Core
                 if (_sentenceRawBuffer.Length > 0)
                 {
                     _sentenceRawBuffer.Length -= 1;
+                }
+
+                while (ActiveSentenceLockedPrefix != null &&
+                    ActiveSentenceLockedPrefix.RawCode.Length > _sentenceCommittedRawLength &&
+                    _sentenceRawBuffer.Length <= ActiveSentenceLockedPrefix.RawCode.Length)
+                {
+                    _sentenceLockedPrefixes.RemoveAt(_sentenceLockedPrefixes.Count - 1);
                 }
 
                 if (_sentenceRawBuffer.Length == 0)
@@ -1549,6 +1561,7 @@ namespace TigerClaw.Core
                 {
                     _sentenceAutoCommitSuspended = true;
                     MoveSentenceSelection(shift ? -1 : 1);
+                    _sentenceTabSelectionPending = true;
                     return KeyEngineResult.CreateHandled(true, null, GetSentenceDisplayCode(), true);
                 }
 
@@ -2361,6 +2374,45 @@ namespace TigerClaw.Core
             }
 
             char normalizedValue = IsSmartSentence ? value : char.ToLowerInvariant(value);
+            bool isLetter = normalizedValue >= 'a' && normalizedValue <= 'z';
+            // Rank selectors still edit the current segment; only a new code
+            // letter confirms the Tab-highlighted candidate as a fixed prefix.
+            bool confirmTabSelection = _sentenceTabSelectionPending && isLetter;
+            _sentenceTabSelectionPending = false;
+            if (confirmTabSelection)
+            {
+                EnsureSentenceDecodeCurrent();
+                SentenceCandidate selected = (_sentenceDecodeResult.Candidates ?? Array.Empty<SentenceCandidate>())
+                    .ElementAtOrDefault(_sentenceSelectedIndex);
+                if (selected?.Boundary != null && selected.Boundary.RawLength > _sentenceCommittedRawLength &&
+                    selected.Boundary.RawLength <= _sentenceRawBuffer.Length)
+                {
+                    var prefix = new SentenceLockedPrefix(
+                        _sentenceRawBuffer.ToString(0, selected.Boundary.RawLength), selected.Text, selected.Boundary);
+                    _sentenceLockedPrefixes.Add(prefix);
+                    string commit = null;
+                    if (_state.GetSentenceAutoCommitEnabled())
+                    {
+                        commit = selected.Text.Substring(_sentenceCommittedText.Length);
+                        _sentenceCommittedText = selected.Text;
+                        _sentenceCommittedRawLength = selected.Boundary.RawLength;
+                        _sentenceLastAutoCommitRawLength = selected.Boundary.RawLength;
+                    }
+                    _sentenceContinuationAfterAutoCommit = false;
+                    _sentenceAutoCommitSuspended = false;
+                    ResetSentenceAutoCommitEvidence();
+                    ResetSentenceEmptyCodePending();
+                    _sentenceDecodeResult = new SentenceDecodeResult
+                    {
+                        RawCode = _sentenceDecodeResult.RawCode,
+                        Candidates = new[] { selected },
+                        EarlyCommitEvidence = SentenceEarlyCommitEvidence.Empty
+                    };
+                    _sentenceRawBuffer.Append(normalizedValue);
+                    RebuildSentenceInput();
+                    return commit;
+                }
+            }
             if (!_state.GetSentenceAutoCommitEnabled() && !IsSentenceEmptyCodeAutoCommitActive())
             {
                 // Keep disabled-mode edits off both automatic-commit paths. Reset once when
@@ -2377,7 +2429,6 @@ namespace TigerClaw.Core
                 RebuildSentenceInput();
                 return null;
             }
-            bool isLetter = normalizedValue >= 'a' && normalizedValue <= 'z';
             bool requiresUniquenessCheck = false;
             SentenceCandidate emptyCodeCommitCandidate = !IsSmartSentence && isLetter && _sentenceEmptyCodePending == null
                 ? GetEmptyCodeAutoCommitCandidate(out requiresUniquenessCheck)
@@ -2498,7 +2549,7 @@ namespace TigerClaw.Core
             }
 
             string fullRaw = _sentenceRawBuffer.ToString();
-            if (_sentenceInputDecoder.HasCompleteCandidate(fullRaw, _sentenceCommittedText))
+            if (_sentenceInputDecoder.HasCompleteCandidate(fullRaw, _sentenceCommittedText, lockedPrefix: ActiveSentenceLockedPrefix))
             {
                 ResetSentenceEmptyCodePending();
                 return null;
@@ -2543,7 +2594,7 @@ namespace TigerClaw.Core
 
             if (pending.RequiresUniquenessCheck && _sentenceInputDecoder.HasCompleteCandidate(
                     fullRaw.Substring(0, pending.BaseRawLength), pending.CommittedText,
-                    excludedText: pending.CandidateText, groupEligibleOnly: true))
+                    excludedText: pending.CandidateText, groupEligibleOnly: true, lockedPrefix: ActiveSentenceLockedPrefix))
             {
                 ResetSentenceEmptyCodePending();
                 return null;
@@ -2989,7 +3040,7 @@ namespace TigerClaw.Core
                         _sentenceRawBuffer.ToString(),
                         20,
                         ShouldCollectSentenceCommitEvidence(),
-                        _sentenceCommittedText) ?? SentenceDecodeResult.Empty);
+                        _sentenceCommittedText, ActiveSentenceLockedPrefix) ?? SentenceDecodeResult.Empty);
                 return;
             }
 
@@ -3017,6 +3068,7 @@ namespace TigerClaw.Core
                 SentenceInputDecoder decoder;
                 bool includeEarlyCommitEvidence;
                 string requiredTextPrefix;
+                SentenceLockedPrefix lockedPrefix;
 
                 lock (_lock)
                 {
@@ -3032,6 +3084,7 @@ namespace TigerClaw.Core
                     decoder = _sentenceInputDecoder;
                     includeEarlyCommitEvidence = ShouldCollectSentenceCommitEvidence();
                     requiredTextPrefix = _sentenceCommittedText;
+                    lockedPrefix = ActiveSentenceLockedPrefix;
                 }
 
                 SentenceDecodeResult result;
@@ -3041,7 +3094,7 @@ namespace TigerClaw.Core
                         rawCode,
                         20,
                         includeEarlyCommitEvidence,
-                        requiredTextPrefix) ?? SentenceDecodeResult.Empty;
+                        requiredTextPrefix, lockedPrefix) ?? SentenceDecodeResult.Empty;
                 }
                 catch
                 {
@@ -3156,7 +3209,7 @@ namespace TigerClaw.Core
                     rawCode,
                     20,
                     ShouldCollectSentenceCommitEvidence(),
-                    _sentenceCommittedText) ?? SentenceDecodeResult.Empty);
+                    _sentenceCommittedText, ActiveSentenceLockedPrefix) ?? SentenceDecodeResult.Empty);
         }
 
         private bool ShouldCollectSentenceCommitEvidence()
@@ -3353,6 +3406,8 @@ namespace TigerClaw.Core
             _mixedDecodedLexiconVersion = -1;
             _mixedDecodedMaxCodeLength = -1;
             _sentenceRawBuffer.Clear();
+            _sentenceTabSelectionPending = false;
+            _sentenceLockedPrefixes.Clear();
             _smartSpaceArmed = false;
             _smartSpaceSelectedText = null;
             _smartDisplayResult = null;
