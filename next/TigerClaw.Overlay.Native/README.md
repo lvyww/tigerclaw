@@ -1,9 +1,42 @@
-# Native Overlay (in development)
+# Native Overlay (mainline)
 
 C++17 / Win32 / Direct2D / DirectWrite replacement for the WPF Overlay only.
 Core, TSF, Native Hook and Dialog remain unchanged. The resulting executable is
 named `TigerClaw.Overlay.exe`, so the existing Core launcher can use it without
-a protocol or settings migration. WPF remains the default published frontend.
+a protocol or settings migration. Native is the default published frontend as
+of the user's mainline decision on 2026-09-09; WPF remains an explicit fallback
+and display-parity reference. This promotion does not claim completion of every
+multi-monitor/private-font acceptance scenario listed below.
+
+`publish.bat`, `publish_arm64.bat` and `next/build_next.bat` all use
+`next/build_overlay.bat ARCH OUTPUT_DIR [CONFIGURATION] [JOBS]`. It builds the
+native executable by default and copies sounds plus the third-party notice.
+The helper never stops running processes or deploys to a release directory by
+itself; provide an isolated build output path. The release scripts retain their
+usual explicit deployment behavior.
+
+For a WPF fallback build in a Windows command prompt:
+
+```batch
+set TIGERCLAW_OVERLAY_BACKEND=wpf
+call next\build_overlay.bat ARM64 next\_run\OverlayFallback\ARM64 Release
+set TIGERCLAW_OVERLAY_BACKEND=
+```
+
+The same environment variable selects WPF when invoking the full publish or
+debug scripts. An unset value (or `native`) selects C++; invalid values fail
+the build rather than silently selecting another backend. WPF source and the
+legacy v1 UI protocol remain maintained for rollback; Dialog still uses WPF.
+
+Build-entry regressions (including architecture, payload, paths with spaces,
+WPF fallback, stale config removal and invalid backend rejection):
+
+```powershell
+powershell -NoProfile -File tools/test_overlay_build.ps1 -Build
+```
+
+This writes only isolated build outputs under `next/_run/OverlayMainlineCheck/`
+and `next/_native_build/`; it does not deploy or launch the Overlay.
 
 ## Build
 
@@ -199,11 +232,13 @@ Before declaring the replacement complete:
   the same font/theme/sound/input workload as WPF. Executable size is not a
   runtime-memory measurement.
 
-Do not enable native Overlay in the main publish scripts until these checks
-pass. Keep protocol/display changes aligned with WPF tests.
+Native is now enabled in the main publish scripts by explicit user decision.
+Keep the outstanding checks above as regression/acceptance work, and keep
+protocol/display changes aligned with WPF tests.
 
 The isolated [2026-09-08 latency experiment](../../tools/OverlayLatencyBench/RESULTS-20260908.md)
 reproduced a pre-render regression: matched-input read P50 24.4 ms native versus
 8.5 ms WPF. An unsafe diagnostic copy without the second matching-snapshot poll
-measured 9.8 ms. This is not a deployed fix or a photon-latency measurement;
-prioritize reliable publication/notification without the extra polling wait.
+measured 9.8 ms. These are historical diagnostic results, not photon-latency
+measurements. The production fix is the mutex-protected snapshot/change-event
+path described above; the unsafe diagnostic reader is not used.

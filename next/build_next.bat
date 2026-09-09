@@ -42,7 +42,7 @@ echo [2/6] Publish TigerClaw.Core Native AOT (win-x64)
 "%DOTNET%" publish "%~dp0TigerClaw.Core\TigerClaw.Core.csproj" -c Debug -r win-x64 --self-contained true -o "%UNIFIED_OUT%" /p:PublishAot=true || exit /b 1
 
 echo [3/6] Build TigerClaw.Overlay (OutDir: Core)
-"%DOTNET%" msbuild "%~dp0TigerClaw.Overlay\TigerClaw.Overlay.csproj" /restore /p:Configuration=Debug /p:OutDir="%UNIFIED_OUT%\\" /m || exit /b 1
+call "%~dp0build_overlay.bat" x64 "%UNIFIED_OUT%" Debug || exit /b 1
 
 echo [4/6] Build TigerClaw.Dialog (OutDir: Core)
 "%DOTNET%" msbuild "%~dp0TigerClaw.Dialog\TigerClaw.Dialog.csproj" /restore /p:Configuration=Debug /p:OutDir="%UNIFIED_OUT%\\" /m || exit /b 1

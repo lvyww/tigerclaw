@@ -34,11 +34,13 @@ Active components:
 - `next/TigerClaw.Core/`: configuration, lexicons, input state, candidates,
   sentence decoding, IPC and process lifecycle. It is a .NET 10 Native AOT
   executable; there is no maintained .NET Framework Core configuration.
-- `next/TigerClaw.Overlay/`: WPF status/candidate UI and typing sounds.
-- `next/TigerClaw.Overlay.Native/`: C++ Win32/Direct2D/DirectWrite replacement
-  under development. WPF remains the published default. Its CMake build is
-  isolated; `--demo` does not connect to production IPC. See its README for
-  build, rollback and outstanding Windows runtime/visual acceptance checks.
+- `next/TigerClaw.Overlay.Native/`: mainline C++ Win32/Direct2D/DirectWrite
+  status/candidate UI and typing sounds, promoted at the user's request on
+  2026-09-09. Release x64/ARM64 and debug builds default to this implementation.
+  `next/build_overlay.bat` is the shared build entry; it does not deploy.
+  `--demo` remains isolated from production IPC. See its README for validation.
+- `next/TigerClaw.Overlay/`: retained WPF fallback and display-parity reference.
+  Set `TIGERCLAW_OVERLAY_BACKEND=wpf` before building to explicitly use it.
 - `next/TigerClaw.Dialog/`: settings, add-word and selection-key UI.
 - `next/TigerClaw.Shared/`: shared constants, build identity, MMF and guards.
 - `next/TigerClaw.Sentence.Native/`: optional native C++ Qwen reranking sidecar,
@@ -209,9 +211,14 @@ block Core on a paused reader. Contract: `Protocol/ui_state.md`.
   or a group-eligible candidate that is also the visible first candidate and has
   untruncated confidence share at least `0.99999`. Appending an ordinary letter
   must then leave no complete lexicon path; first check whether the selected last
-  lexicon segment is still a proper code prefix. Whole-input non-first ranks shown
-  for manual selection do not create implicit group ambiguity unless a rank
-  selector is present. Defer
+  lexicon segment is still a proper code prefix. Non-first multi-character words
+  shown for manual selection do not create implicit group ambiguity without a
+  rank selector. With duplicate-single grouping enabled, eligible non-first
+  single characters (including whole-input edges) and decoder-approved segmented
+  paths participate in both uniqueness and strong-confidence comparisons.
+  The exact precommit query must apply the same eligibility, independently of
+  Beam pruning: `ot` = `是/题`, `qm` = `目` must not falsely commit `是` at `otq`.
+  Defer
   while the segment can grow; if the actual extension goes dead, commit the saved
   candidate's uncommitted suffix, preserve the committed sentence context, and
   retain every appended letter as the next composition. Collecting confidence
@@ -292,6 +299,9 @@ Input behavior and data:
 TSF/UI:
 
 - `BimeTSF2/SampleIME/KeyEventSink.cpp`
+- `next/TigerClaw.Overlay.Native/main.cpp`
+- `next/TigerClaw.Overlay.Native/Renderer.cpp`
+- `next/TigerClaw.Overlay.Native/Transport.cpp`
 - `next/TigerClaw.Overlay/MainWindow.xaml.cs`
 - `next/TigerClaw.Overlay/MainWindow.Candidate.cs`
 - `next/TigerClaw.Overlay/OverlayStateSource.cs`

@@ -1628,7 +1628,8 @@ local function has_complete_candidate(raw_code, required_text_prefix, excluded_t
                                         required,
                                         matched_length,
                                         candidate.t)
-                                    if next_matched and (not first_ranks_only or candidate.r == 1) then
+                                    if next_matched and (not first_ranks_only or candidate.r == 1 or
+                                        (active_allow_duplicate_single and candidate_is_single(candidate))) then
                                         local next_excluded = packed % stride
                                         if excluded_text and next_excluded <= #excluded_text then
                                             if excluded_text:sub(next_excluded + 1,
@@ -2700,10 +2701,12 @@ local function capture_empty_code_candidate(full_before, committed_text)
     local eligible = {}
     local restrict = not has_selection_suffix(full_before)
     for i = 1, #decoded do
-        -- Whole-input non-first ranks are visible for explicit selection, but
-        -- are not legal implicit segments after the appended key makes the
-        -- edge dead, so they never join the empty-code eligible group.
-        if not restrict or (decoded[i].max_rank or 1) <= 1 then
+        -- Include duplicate singles in uniqueness and confidence, even when
+        -- the current whole-input winner is still ordered by lexicon rank.
+        local previous = decoded[i].path and decoded[i].path.previous
+        if not restrict or (decoded[i].max_rank or 1) <= 1 or
+            (active_allow_duplicate_single and
+             ((previous and (previous.text or "") ~= "") or utf_length(decoded[i].text) == 1)) then
             eligible[#eligible + 1] = decoded[i]
         end
     end

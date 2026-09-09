@@ -2480,11 +2480,15 @@ namespace TigerClaw.Core
             if (!_sentenceRawBuffer.ToString().Any(character =>
                     char.IsDigit(character) || character == ';' || character == '\''))
             {
-                // Whole-input non-first ranks are visible for explicit
-                // selection, but are not legal implicit sentence segments
-                // after the appended letter makes that edge dead.
+                // Non-first words need explicit selection. Duplicate singles
+                // remain possible next-sentence prefixes and must contribute
+                // to both uniqueness and strong-confidence comparisons.
                 candidates = candidates
-                    .Where(candidate => candidate != null && candidate.MaxLexiconRank <= 1)
+                    .Where(candidate => candidate != null &&
+                        (candidate.MaxLexiconRank <= 1 ||
+                         (_state.GetSentenceAllowDuplicateSingleCharacters() &&
+                          (candidate.Boundary?.Previous != null ||
+                           new StringInfo(candidate.Text ?? string.Empty).LengthInTextElements == 1))))
                     .ToArray();
             }
             if (candidates.Length == 0 ||

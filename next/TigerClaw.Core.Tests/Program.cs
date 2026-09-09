@@ -205,6 +205,7 @@ namespace TigerClaw.Core.Tests
                 SentenceEngineUsesTabToTraverseCandidates();
                 SentenceTabSelectionLocksOnContinuedInput();
                 SentenceTabLocksStackAndPreserveSelectors();
+                SentenceEmptyCodeCountsDuplicateSingles();
                 SentenceEnginePassesCtrlNumberShortcut();
                 SentenceEngineCommitsSmartQuoteAfterCandidate();
                 SentenceMinRetainedRawLengthDefaultsToZeroAndClamps();
@@ -3698,6 +3699,38 @@ namespace TigerClaw.Core.Tests
                 "tab_lock.decoder_fixed_text_and_boundary");
         }
 
+        private static void SentenceEmptyCodeCountsDuplicateSingles()
+        {
+            foreach (bool duplicates in new[] { false, true })
+            foreach (int beam in new[] { 1, 100 })
+            {
+                var state = new CoreRuntimeState();
+                EnableSentenceEarlyCommit(state);
+                state.TrySetConfigValue("高频字仅使用最优码组句", "0", out _, out _);
+                state.TrySetConfigValue("允许单字重码组句", duplicates ? "是" : "否", out _, out _);
+                var decoder = new SentenceInputDecoder(SentenceLexiconIndex.Build(
+                    new Dictionary<string, List<string>>
+                    {
+                        ["ot"] = new List<string> { "是", "题", "多字词" },
+                        ["qm"] = new List<string> { "目" }
+                    }), new PrefersCharactersLanguageModel("题", "目"), beamWidth: beam,
+                    allowDuplicateSingleCharacters: duplicates);
+                True(decoder.HasCompleteCandidate("ot", excludedText: "是", groupEligibleOnly: true) == duplicates,
+                    "empty_code.duplicate_exact_ambiguity");
+                using (var engine = new InputMethodEngine(state, decoder))
+                {
+                    TypeLetters(engine, "ot");
+                    Equal(duplicates ? null : "是", Press(engine, 0x51).TextToOutput,
+                        "empty_code.otq_does_not_discard_ti");
+                    Press(engine, 0x4d);
+                    if (duplicates && beam == 100)
+                    {
+                        Equal("题目", engine.GetUiSnapshot(5).Candidates[0], "empty_code.otqm");
+                    }
+                }
+            }
+        }
+
         private static void SentenceEngineUsesTabToTraverseCandidates()
         {
             var state = new CoreRuntimeState();
@@ -5303,6 +5336,7 @@ namespace TigerClaw.Core.Tests
 
             var multipleState = new CoreRuntimeState();
             EnableSentenceEarlyCommit(multipleState);
+            multipleState.TrySetConfigValue("允许单字重码组句", "否", out _, out _);
             var multiple = new InputMethodEngine(multipleState, CreateSentenceDecoder(
                 new Dictionary<string, List<string>>
                 {

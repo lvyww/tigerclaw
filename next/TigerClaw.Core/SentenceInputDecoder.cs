@@ -793,7 +793,8 @@ namespace TigerClaw.Core
                     {
                         foreach (SentenceLexiconCandidate candidate in candidates)
                         {
-                            if ((firstRanksOnly && candidate.Rank > 1) ||
+                            if ((firstRanksOnly && candidate.Rank > 1 &&
+                                 !(_allowDuplicateSingleCharacters && candidate.TextElements.Length == 1)) ||
                                 !RankMatches(candidate, selectedRank, wholeInputEdge) || !TryAdvanceRequiredPrefix(
                                 required,
                                 matched.Required,

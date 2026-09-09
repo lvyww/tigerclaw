@@ -1069,6 +1069,19 @@ local ja = sentence.decode("ja")
 if not ja[1] or ja[1].text ~= "甲" or not ja[2] or ja[2].text ~= "乙" then
     fail("imported table lost line-order ranks for shared code ja")
 end
+sentence.set_allow_duplicate_single(nil)
+if sentence.capture_empty_code_candidate("ja", "") then
+    fail("duplicate single was excluded from empty-code confidence")
+end
+if not sentence.has_complete_candidate("ja", "", "甲", true) then
+    fail("exact empty-code query lost the duplicate single")
+end
+sentence.set_allow_duplicate_single({ get_option = function() return false end })
+if not sentence.capture_empty_code_candidate("ja", "") or
+    sentence.has_complete_candidate("ja", "", "甲", true) then
+    fail("disabled duplicate-single switch did not restore first-rank grouping")
+end
+sentence.set_allow_duplicate_single(nil)
 rime_api.get_user_data_dir = original_user_dir
 os.execute("rm -rf '" .. import_dir .. "'")
 sentence.apply_high_freq_limit(1500)
