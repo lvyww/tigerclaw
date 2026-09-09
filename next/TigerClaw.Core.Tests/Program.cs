@@ -241,6 +241,7 @@ namespace TigerClaw.Core.Tests
                 SentenceAutoCommitStopsBeforeExtendableSegment();
                 SentenceAutoCommitUsesTwoStrongGenerationCommonPrefix();
                 SentenceAutoCommitKeepsThreeGenerationWindowForWeakEvidence();
+                SentenceEmptyCodeContinuationPreservesDuplicateSingles();
                 SentenceAutoCommitTracksPrefixesIndependently();
                 SentencePrefixEvidenceWeightsBoundaryDisagreement();
                 SentencePrefixEvidenceKeepsRawBoundariesDistinct();
@@ -5397,6 +5398,36 @@ namespace TigerClaw.Core.Tests
                 {
                     ["ab"] = new List<string> { "甲" },
                     ["abcd"] = new List<string> { "乙" }
+        private static void SentenceEmptyCodeContinuationPreservesDuplicateSingles()
+        {
+            foreach (string prefixCode in new[] { "xr", "xry" })
+            foreach (bool autoCommit in new[] { false, true })
+            foreach (bool duplicates in new[] { false, true })
+            {
+                var state = new CoreRuntimeState();
+                EnableSentenceMode(state);
+                state.TrySetConfigValue("整句自动提前上屏", autoCommit ? "是" : "否", out _, out _);
+                state.TrySetConfigValue("允许单字重码组句", duplicates ? "是" : "否", out _, out _);
+                var decoder = new SentenceInputDecoder(
+                    SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
+                    {
+                        ["xr"] = new List<string> { "反" },
+                        ["xry"] = new List<string> { "反" },
+                        ["xbj"] = new List<string> { "秉", "刍", "多字词" }
+                    }), new PrefersCharactersLanguageModel("刍", "多", "字", "词"),
+                    beamWidth: 100, allowDuplicateSingleCharacters: duplicates);
+                var engine = new InputMethodEngine(state, decoder);
+                TypeLetters(engine, prefixCode);
+                string prefix = Press(engine, 0x58).TextToOutput ?? string.Empty;
+                Equal(autoCommit ? "反" : string.Empty, prefix, "rumination.prefix");
+                TypeLetters(engine, "bj");
+                var view = engine.GetUiSnapshot(5);
+                Equal(duplicates ? "反刍" : "反秉", prefix + view.Candidates[0], "rumination.first");
+                True(!view.Candidates.Any(text => text.Contains("多字词")), "rumination.implicit_word_hidden");
+                Equal(duplicates ? "反刍" : "反秉", prefix + Press(engine, 0x20).TextToOutput, "rumination.commit");
+            }
+        }
+
                 }));
             TypeLetters(dead, "ab");
             Equal(null, Press(dead, 0x43).TextToOutput,

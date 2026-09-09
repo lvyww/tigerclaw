@@ -2937,9 +2937,8 @@ namespace TigerClaw.Core
             // model. Keep those paths eligible after committing their common
             // prefix; otherwise a valid non-first single-character segment in
             // the retained suffix disappears on the next decode. The stricter
-            // first-rank-only continuation rule is only for empty-code commit,
-            // where a standalone whole-input non-first candidate must not turn
-            // into an implicit segmented choice.
+            // whole-input non-first continuation restriction is only for empty-code
+            // commit. Decoder-approved segmented duplicate singles remain legal.
             _sentenceContinuationAfterAutoCommit = false;
             ResetSentenceAutoCommitEvidence();
             _sentenceDecodeResult = FilterSentenceDecodeResultForCommittedPrefix(_sentenceDecodeResult);
@@ -4996,7 +4995,13 @@ namespace TigerClaw.Core
 
             SentenceCandidate[] candidates = result.Candidates ?? Array.Empty<SentenceCandidate>();
             SentenceCandidate[] filtered = candidates
-                .Where(candidate => candidate != null && candidate.MaxLexiconRank <= 1)
+                .Where(candidate => candidate != null &&
+                    // Segmented paths already passed the decoder's single-character,
+                    // optimal-code and word-rank eligibility checks. Keep them after
+                    // empty-code commit; only whole-input non-first edges need hiding.
+                    (candidate.MaxLexiconRank <= 1 ||
+                     (_state.GetSentenceAllowDuplicateSingleCharacters() &&
+                      candidate.Boundary?.Previous != null && candidate.Boundary.Previous.TextLength > 0)))
                 .ToArray();
             if (filtered.Length == candidates.Length)
             {

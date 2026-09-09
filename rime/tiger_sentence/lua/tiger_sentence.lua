@@ -2652,9 +2652,11 @@ local function implicit_rank_allowed(candidate, raw, continuation_after_auto_com
     if not continuation_after_auto_commit then
         return true
     end
-    -- Continuations after empty-code auto commit keep implicit first ranks
-    -- only; an explicit selector suffix still unlocks any rank.
-    return has_selection_suffix(raw) or (candidate.max_rank or 1) <= 1
+    -- Segmented paths already passed decoder eligibility. Do not discard
+    -- legal duplicate singles when empty-code commit fixes an earlier prefix.
+    local previous = candidate.path and candidate.path.previous
+    return has_selection_suffix(raw) or (candidate.max_rank or 1) <= 1 or
+        (active_allow_duplicate_single and previous and (previous.text or "") ~= "")
 end
 
 local function strong_empty_code_candidate(candidate, eligible, visible_top, pool_truncated)

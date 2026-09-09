@@ -706,6 +706,20 @@ if #yielded ~= 1 or yielded[1] ~= "了" then
 end
 print("OK  automatic-commit continuation uses first ranks only")
 
+-- A segmented decoder-approved duplicate single remains legal in continuation.
+context_empty.input = "xrxbj"
+yielded = {}
+Candidate = function(_, _, _, text, _) return { text = text } end
+yield = function(candidate) yielded[#yielded + 1] = candidate.text end
+sentence.translator("xrxbj", { start = 0, _end = 5 }, env_empty)
+Candidate, yield = old_candidate, old_yield
+local has_rumination = false
+for _, text in ipairs(yielded) do
+    if text == "反刍" then has_rumination = true end
+end
+if not has_rumination then fail("empty-code continuation filtered legal 反刍") end
+print("OK  empty-code continuation retains duplicate single characters")
+
 -- 保留最少编码数量 also gates empty-code auto commit. Every two-letter
 -- combination is a valid code in this table, so a retained floor of two can
 -- only defer; a floor of one commits on the first appended letter.

@@ -98,8 +98,11 @@ block Core on a paused reader. Contract: `Protocol/ui_state.md`.
   Other segments consume at least two keys. `;`, `'` and digits select explicit
   lexicon ranks. An implicit non-first rank is legal only when the whole input is
   consumed by one lexicon edge; segmented paths use first ranks unless selection
-  is explicit. Empty-code automatic-commit continuations also use first ranks;
-  probabilistic early commit must preserve the already-ranked full-sentence paths,
+  is explicit. Empty-code automatic-commit continuations hide whole-input
+  non-first edges, but retain decoder-approved segmented duplicate-single paths
+  when `允许单字重码组句` is on (for example `xrxbj` must retain `反刍` after
+  committing `反`); non-first multi-character words still need a selector.
+  Probabilistic early commit must preserve the already-ranked full-sentence paths,
   including eligible non-first single-character segments.
   Multi-character lexicon entries are legal edges. `允许单字重码组句` (default
   on) additionally allows non-first single characters without a selector on
