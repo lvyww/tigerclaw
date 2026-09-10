@@ -18,6 +18,15 @@ TSF 与 Native Hook 的 `key` 请求可携带 `client_session` + `event_id`。�
 
 ## 消息清单
 
+`show_menu` 不增加 JSON 字段。TSF 在发送前通过连接的管道取得 Core PID，
+调用 `AllowSetForegroundWindow` 传递本次点击的前台权限；Core 在触发菜单事件前
+只向路径匹配的同套 Overlay 传递权限，不使用 `ASFW_ANY`。
+Native Overlay 尝试取得前台，但菜单显示不以授权成功为前提；菜单存续期间
+使用独立的外部点击／Esc 检测补齐后台菜单的关闭行为，关闭后停止检测。
+所有菜单使用独立的临时透明宿主，避免状态更新隐藏浮窗时中断菜单。
+收到菜单事件后立即显示，不等待 `get_schema_list`；方案列表后台刷新，
+展开方案子菜单时固定本次显示列表与命令 ID 的对应关系。
+
 | 类型 | 主要调用方 | 响应 | 用途 |
 |---|---|---:|---|
 | `hello` | TSF/Hook | 是 | 协议、构建和前端配置握手 |

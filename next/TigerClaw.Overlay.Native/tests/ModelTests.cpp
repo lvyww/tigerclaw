@@ -1,5 +1,6 @@
 #include "Model.h"
 #include "Placement.h"
+#include "MenuDismiss.h"
 #include <iostream>
 #include <stdexcept>
 using namespace tiger::overlay;
@@ -11,6 +12,17 @@ int main()
 {
     try
     {
+        MenuDismiss dismiss{false, true, false};
+        Check(!dismiss.Update(false, false, true, false), "opening right-button hold does not dismiss");
+        Check(!dismiss.Update(false, false, false, false), "button release does not dismiss");
+        Check(!dismiss.Update(true, true, false, false), "menu or submenu click stays open");
+        Check(!dismiss.Update(false, true, false, false), "dragging a held button outside is not a new click");
+        Check(!dismiss.Update(false, false, false, false), "outside release stays open");
+        Check(dismiss.Update(false, true, false, false), "outside left click dismisses without foreground ownership");
+        dismiss = {};
+        Check(dismiss.Update(false, false, true, false), "outside right click dismisses");
+        dismiss = {};
+        Check(dismiss.Update(true, false, false, true), "escape dismisses even over a menu");
         State state;
         for (int dpi : {96, 120, 144, 192})
         {

@@ -625,6 +625,15 @@ HRESULT CPipeClient::SendShowMenuAndWait(_Out_ BimeResponse *pResponse, DWORD ti
         return E_INVALIDARG;
     }
 
+    // Transfer the language-bar click's foreground permission to the connected
+    // Core before it authorizes the out-of-process menu owner.
+    ULONG serverProcessId = 0;
+    if (GetNamedPipeServerProcessId(_hPipe, &serverProcessId) && serverProcessId != 0)
+    {
+        BOOL granted = AllowSetForegroundWindow(serverProcessId);
+        Global::LogToFileVerbose("SendShowMenuAndWait foreground grant=%d", granted);
+    }
+
     LONG currentSeq = InterlockedIncrement(&_seq);
     char message[128];
     int length = sprintf_s(message, sizeof(message), "{\"type\":\"show_menu\",\"seq\":%ld}\n", currentSeq);

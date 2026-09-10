@@ -272,6 +272,11 @@ block Core on a paused reader. Contract: `Protocol/ui_state.md`.
   settings page. Legacy enable flags remain internal compatibility data.
 - Overlay owns candidate display. It pins the first caret anchor for a composition
   and flips above the caret when needed. TSF legacy candidate UI is not active.
+  Native menus open without waiting for Core schema queries and use a dedicated
+  temporary host independent of candidate/status visibility. Foreground permission
+  is best-effort, not a display prerequisite; menu-lifetime outside-click/Escape
+  monitoring provides fallback dismissal. Schema submenu command IDs are fixed
+  to the list shown at expansion, never remapped by a later Core reply.
   Temporary pinyin reverse lookup always shows available splits, full codes and
   comments without annotation delay, irrespective of normal annotation settings.
 

@@ -56,6 +56,21 @@ static void CALLBACK Quit(HWND, UINT, UINT_PTR id, DWORD)
 
 int main()
 {
+    {
+        TestPipe pipe;
+        Check(pipe.client.SendShowMenuAndWait(nullptr, 100) == E_INVALIDARG, "menu null response rejected");
+        std::thread server([&] {
+            char request[256]{}; DWORD count = 0;
+            Check(ReadFile(pipe.server, request, sizeof(request) - 1, &count, nullptr), "menu request read");
+            Check(std::string(request, count) == "{\"type\":\"show_menu\",\"seq\":1}\n", "menu wire contract unchanged");
+            const char reply[] = "{\"seq\":1,\"success\":true,\"handled\":true}\n";
+            WriteFile(pipe.server, reply, sizeof(reply) - 1, &count, nullptr);
+        });
+        BimeResponse response;
+        Check(SUCCEEDED(pipe.client.SendShowMenuAndWait(&response, 1000)), "menu response after foreground grant attempt");
+        server.join();
+        Check(response.seq == 1 && !pipe.client.IsBusy(), "menu response sequence and guard");
+    }
     for (int i = 0; i < 20; ++i)
     {
         TestPipe pipe;

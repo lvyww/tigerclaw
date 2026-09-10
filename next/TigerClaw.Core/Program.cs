@@ -74,6 +74,7 @@ namespace TigerClaw.Core
                                 break;
                             case CoreUiCommand.ShowMenu:
                                 overlaySupervisor.RequestLaunch();
+                                launcher.AllowOverlayForeground();
                                 OverlayMenuSignal.Trigger();
                                 break;
                             case CoreUiCommand.ShowConfig:

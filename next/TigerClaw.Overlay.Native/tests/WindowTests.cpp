@@ -158,6 +158,24 @@ int main()
             return rect.right - rect.left > beforeAnnotation.right - beforeAnnotation.left; }, 1500),
             "annotation timer updates real window layout");
         Check(GetForegroundWindow() == foreground, "IPC updates never activate windows");
+        // No pipe server exists in this isolated session. The worker spends up
+        // to three seconds reconnecting, but the menu must appear immediately.
+        Handle menuEvent(CreateEventW(nullptr, FALSE, FALSE, (root + L".Menu").c_str()));
+        Check(menuEvent.Get() != nullptr, "isolated menu event created");
+        heartbeat();
+        auto menuStart = GetTickCount64();
+        Check(SetEvent(menuEvent.Get()) != FALSE, "signal menu without Core pipe");
+        HWND menuHost = nullptr;
+        Check(Until([&] {
+            menuHost = Find(child.Pid(), L"TigerClaw.Native.MenuHost.v1");
+            return menuHost && IsWindowVisible(menuHost) && Find(child.Pid(), L"#32768");
+        }, 800), "menu opens without waiting for schema request timeout");
+        Check(GetTickCount64() - menuStart < 800, "offline menu latency below reconnect timeout");
+        state["CandidateVisible"] = false; state["HideStatusBar"] = true; publish(state);
+        Check(Until([&] { return !IsWindowVisible(candidate) && !IsWindowVisible(status); }), "UI can hide during menu");
+        Check(Find(child.Pid(), L"#32768") != nullptr, "menu survives display-state hide");
+        PostMessageW(menuHost, WM_CANCELMODE, 0, 0);
+        Check(Until([&] { return !Find(child.Pid(), L"#32768") && !IsWindowVisible(menuHost); }), "menu host cleans up");
         Check(Until([&] { return overlay.Open((root + L".Overlay").c_str(), 16); }), "isolated overlay heartbeat published");
         Check(GetTickCount64() > 11000, "heartbeat stale test requires 11 seconds OS uptime");
         auto stale = GetTickCount64() - 10001;

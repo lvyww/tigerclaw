@@ -40,21 +40,24 @@ and `next/_native_build/`; it does not deploy or launch the Overlay.
 
 ## Build
 
-Context menus temporarily activate their visible owner, as required by
+Context menus try to temporarily activate their owner, as described by
 [TrackPopupMenuEx](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-trackpopupmenuex)
 for outside-click dismissal. If focus has moved to another application when the
 menu closes, it is left there; otherwise the previous foreground is restored.
 Normal candidate/status updates remain non-activating. If Windows denies menu
-activation, no background popup is left open. A hidden status window uses the
-visible candidate window as menu owner.
+activation, the menu still opens with an independent outside-click/Escape monitor
+instead of relying on foreground-owner dismissal. Every menu uses a dedicated
+transparent host, independent of candidate/status visibility changes from Core.
 
 `overlay_menu_tests.exe` is an explicit opt-in interactive test: it launches only
 the synthetic preview, moves the pointer and clicks its own two test windows,
 checks outside-click dismissal and cancel/reopen, then restores the pointer.
-It is not in CTest. The current remote session failed its foreground/hit-test
-preconditions before exercising the menu; automated real-desktop execution
-remains needed. After deploying the ARM64 build, the user confirmed normal
-outside-click dismissal on 2026-09-08.
+It is not in CTest. On 2026-09-10 the ARM64 and x64 interactive tests passed, including
+forced foreground denial, outside-click dismissal, cancellation and reopening.
+The earlier hit-test failure came from using STATIC text controls as mouse
+targets; the fixture now uses ordinary registered top-level windows. The passive
+real-popup and isolated IPC/offline-menu tests passed too. The user subsequently
+confirmed the taskbar right-click fix passed live testing on 2026-09-10.
 
 Renderer reuse measurements and the isolated pixel/cache regression procedure
 are documented in [OverlayRenderBench](../../tools/OverlayRenderBench/README.md).
@@ -221,9 +224,10 @@ Before declaring the replacement complete:
   The runner records executable SHA256 and OS identity, retains native stderr,
   and limits each test process to 45 seconds. The earlier `Exec format error`
   environment blocker is resolved; visual/live acceptance remains outstanding.
-- Review native menu dismissal on Windows.
-  Menu opening now waits asynchronously for a fresh schema query (falls back
-  to cached entries on failure); command IDs use an immutable open-menu snapshot.
+- Keep native menu behavior in live taskbar TSF regression checks.
+  Root menu opening no longer waits for a schema query; command IDs are frozen
+  to the list shown when the schema submenu opens. Isolated foreground-denial
+  and offline-menu tests pass; the user also confirmed this taskbar fix.
 - Finish Windows rendering acceptance for private fonts and multi-monitor DPI;
   test actual menu actions and typing sounds, plus live Core/TSF/Native Hook
   replacement and rollback. The isolated window/heartbeat tests above cover
@@ -233,6 +237,25 @@ Before declaring the replacement complete:
   runtime-memory measurement.
 
 Native is now enabled in the main publish scripts by explicit user decision.
+Taskbar right-click uses targeted foreground permission transfer from TSF through
+Core to the sibling Overlay before the menu event. All menus use a separate
+transparent menu owner, hidden again after dismissal.
+The root menu opens immediately; schema refresh runs in the background. Expanding
+the schema submenu snapshots the latest cached list and its command IDs; later
+replies never change an already displayed submenu or remap the user's choice.
+Foreground activation is best-effort,
+not a prerequisite for showing the menu: taskbar TSF callbacks can lack permission
+even after delegation. A 20 ms menu-lifetime timer detects new outside clicks
+(including right clicks) and Escape, matching WPF's independent dismissal policy.
+Submenu rectangles count as inside; opening button holds are ignored. Timer work
+stops when the menu closes. Transient taskbar foreground changes during schema
+refresh no longer silently discard the request.
+`overlay_menu_tests` includes denied-foreground, hidden-window cancellation and outside-click cases;
+it requires an interactive desktop and is not an unattended CTest target.
+Its `--passive` option tests real popup open/hide/cancel/reopen without injecting
+input or moving the pointer. `overlay_window_tests` additionally exercises the
+isolated menu event with no Core pipe (below 800 ms, without the 3 s pipe timeout)
+and candidate/status hiding while that menu remains open.
 Keep the outstanding checks above as regression/acceptance work, and keep
 protocol/display changes aligned with WPF tests.
 
