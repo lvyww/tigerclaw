@@ -98,6 +98,14 @@ namespace tiger::overlay
     }
     SIZE Renderer::Render(HWND window, const State& state, const Display& display, UINT dpi, bool status)
     {
+        auto size = Prepare(state, display, dpi, status);
+        Present(window);
+        return size;
+    }
+    SIZE Renderer::Prepare(const State& state, const Display& display, UINT dpi, bool status)
+    try
+    {
+        frameReady_ = false;
         auto metrics = MeasureStyle(state, display.mode);
         auto palette = Theme(state.theme);
         Text text = display.text;
@@ -245,10 +253,24 @@ namespace tiger::overlay
         HRESULT drawn = target_->EndDraw();
         if (drawn == D2DERR_RECREATE_TARGET) target_.Reset();
         CheckHr(drawn);
-        POINT source{};
-        BLENDFUNCTION blend{AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
-        if (!UpdateLayeredWindow(window, nullptr, nullptr, &size_, dc_, &source, 0, &blend, ULW_ALPHA))
-            throw std::runtime_error("UpdateLayeredWindow failed");
+        frameReady_ = true;
         return size_;
+    }
+    catch (...)
+    {
+        // A failure between BeginDraw and EndDraw must not leave a poisoned
+        // target for the next attempt. This never changes the published HWND.
+        frameReady_ = false;
+        target_.Reset();
+        throw;
+    }
+    void Renderer::Present(HWND window, const POINT* destination)
+    {
+        if (!frameReady_) throw std::runtime_error("No complete frame to present");
+        POINT source{};
+        POINT position = destination ? *destination : POINT{};
+        BLENDFUNCTION blend{AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+        if (!UpdateLayeredWindow(window, nullptr, destination ? &position : nullptr, &size_, dc_, &source, 0, &blend, ULW_ALPHA))
+            throw std::runtime_error("UpdateLayeredWindow failed");
     }
 }

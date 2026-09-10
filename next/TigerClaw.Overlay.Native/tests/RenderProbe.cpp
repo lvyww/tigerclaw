@@ -15,6 +15,7 @@ namespace tiger::overlay
             return {{"formats", r.creations_[0]}, {"layouts", r.creations_[1]}, {"dibs", r.creations_[2]}, {"targets", r.creations_[3]}};
         }
         static void LoseTarget(Renderer& r) { r.target_.Reset(); }
+        static void IncompleteFrame(Renderer& r) { r.frameReady_ = false; }
         static std::uint64_t Pixels(const Renderer& r)
         {
             DIBSECTION dib{};
@@ -53,7 +54,33 @@ int main(int argc, char** argv)
         LARGE_INTEGER frequency{}; QueryPerformanceFrequency(&frequency);
         nlohmann::json result;
         bool verify = argc > 1 && std::string(argv[1]) == "--verify";
-        if (argc > 1 && std::string(argv[1]) == "--cache-check")
+        if (argc > 1 && std::string(argv[1]) == "--present-check")
+        {
+            Renderer renderer(L".");
+            auto state = Base();
+            renderer.Render(window, state, Format(state), 144);
+            RECT before{}; GetWindowRect(window, &before);
+            state.input.append(40, u'a');
+            auto size = renderer.Prepare(state, Format(state), 144);
+            RECT prepared{}; GetWindowRect(window, &prepared);
+            if (!EqualRect(&before, &prepared)) throw std::runtime_error("Prepare changed live geometry");
+            RendererProbe::IncompleteFrame(renderer);
+            bool rejected = false;
+            try { renderer.Present(window); } catch (...) { rejected = true; }
+            if (!rejected) throw std::runtime_error("Incomplete frame was published");
+            GetWindowRect(window, &prepared);
+            if (!EqualRect(&before, &prepared)) throw std::runtime_error("Failed frame changed live geometry");
+            size = renderer.Prepare(state, Format(state), 144);
+            POINT destination{137, 219};
+            renderer.Present(window, &destination);
+            RECT after{}; GetWindowRect(window, &after);
+            if (after.left != destination.x || after.top != destination.y ||
+                after.right - after.left != size.cx || after.bottom - after.top != size.cy)
+                throw std::runtime_error("Combined frame/size/position publication failed");
+            if (IsWindowVisible(window)) throw std::runtime_error("Prepare/Present unexpectedly showed hidden window");
+            result["present_checks"] = "passed";
+        }
+        else if (argc > 1 && std::string(argv[1]) == "--cache-check")
         {
             Renderer renderer(L".");
             auto state = Base();

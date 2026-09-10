@@ -37,6 +37,7 @@ namespace tiger::overlay
         POINT dragPoint_{}, dragOrigin_{};
         UINT candidateDpi_ = 96;
         SIZE candidateSize_{};
+        unsigned candidateRetryCount_ = 0;
         bool statusDrawn_ = false;
         State renderedState_;
         std::vector<Text> schemas_;
@@ -78,24 +79,30 @@ namespace tiger::overlay
             GetDpiForMonitor(MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST), MDT_EFFECTIVE_DPI, &x, &y);
             return x;
         }
-        void Position()
+        bool ResolvePosition(Placement& placement, SIZE size, POINT& result)
         {
-            if (!validCaret_) return;
-            auto anchor = placement_.Anchor();
+            if (!validCaret_) return false;
+            auto anchor = placement.Anchor();
             auto monitor = MonitorFromPoint({anchor.x, anchor.y}, MONITOR_DEFAULTTONEAREST);
             MONITORINFO info{sizeof(info)};
-            if (!GetMonitorInfoW(monitor, &info)) return;
+            if (!GetMonitorInfoW(monitor, &info)) return false;
             auto work = info.rcWork;
             wchar_t className[128]{}, title[128]{};
             HWND foreground = GetForegroundWindow();
             GetClassNameW(foreground, className, 128); GetWindowTextW(foreground, title, 128);
             bool startMenu = !wcscmp(className, L"Windows.UI.Core.CoreWindow") && !wcscmp(title, L"\u641c\u7d22");
-            auto position = placement_.Resolve(candidateSize_.cx, candidateSize_.cy,
+            auto position = placement.Resolve(size.cx, size.cy,
                 {static_cast<int>(work.left), static_cast<int>(work.top), static_cast<int>(work.right), static_cast<int>(work.bottom)}, startMenu);
-            int x = position.x, y = position.y;
+            result = {position.x, position.y};
+            return true;
+        }
+        void Position()
+        {
+            POINT position{};
+            if (!ResolvePosition(placement_, candidateSize_, position)) return;
             RECT current{}; GetWindowRect(candidate_, &current);
-            if (current.left != x || current.top != y || !IsWindowVisible(candidate_))
-                SetWindowPos(candidate_, HWND_TOPMOST, x, y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            if (current.left != position.x || current.top != position.y || !IsWindowVisible(candidate_))
+                SetWindowPos(candidate_, HWND_TOPMOST, position.x, position.y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
         }
         void Refresh(bool force)
         {
@@ -127,16 +134,41 @@ namespace tiger::overlay
             {
                 ShowWindow(candidate_, SW_HIDE);
                 candidateDrawn_ = false;
+                KillTimer(candidate_, 3);
+                candidateRetryCount_ = 0;
             }
             else
             {
                 if (changed)
                 {
                     candidateDrawn_ = false;
-                    candidateSize_ = candidateRenderer_.Render(candidate_, state_, display_, dpi);
-                    candidateDrawn_ = true;
+                    try
+                    {
+                        auto size = candidateRenderer_.Prepare(state_, display_, dpi);
+                        auto placement = placement_;
+                        POINT destination{};
+                        if (!ResolvePosition(placement, size, destination))
+                            throw std::runtime_error("Candidate monitor unavailable");
+                        // Publish pixels, dimensions and final location together.
+                        // The OS retains the previous frame throughout Prepare.
+                        candidateRenderer_.Present(candidate_, &destination);
+                        candidateSize_ = size;
+                        placement_ = placement;
+                        candidateDrawn_ = true;
+                        candidateRetryCount_ = 0;
+                        KillTimer(candidate_, 3);
+                        if (!IsWindowVisible(candidate_))
+                            SetWindowPos(candidate_, HWND_TOPMOST, 0, 0, 0, 0,
+                                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                    }
+                    catch (...)
+                    {
+                        // Keep the last published frame, retry without routing
+                        // this recoverable failure to Procedure's hide fallback.
+                        if (candidateRetryCount_++ < 3) SetTimer(candidate_, 3, 100, nullptr);
+                    }
                 }
-                Position();
+                else Position();
             }
             if (force || !statusDrawn_ || state_.isOff != renderedState_.isOff || state_.isChinese != renderedState_.isChinese ||
                 state_.nativeHook != renderedState_.nativeHook || state_.status != renderedState_.status || state_.hideStatus != renderedState_.hideStatus)
@@ -288,11 +320,12 @@ namespace tiger::overlay
             case WM_PAINT: { PAINTSTRUCT paint{}; BeginPaint(hwnd, &paint); EndPaint(hwnd, &paint); return 0; }
             case WM_TIMER:
                 if (wp == 2) CheckMenuDismiss();
-                else Refresh(false);
+                else { if (wp == 3) KillTimer(candidate_, 3); Refresh(false); }
                 return 0;
             case StateMessage:
                 if (source_ && source_->Take(state_))
                 {
+                    candidateRetryCount_ = 0;
                     if (!layoutPending_ && !state_.hideCandidates)
                     { if (state_.vertical) verticalCode_ = state_.showCode; else horizontalCode_ = state_.showCode; }
                     if (state_.soundSequence > 0 && state_.soundSequence != soundSeq_)

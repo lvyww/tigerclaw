@@ -29,6 +29,7 @@ namespace tiger::overlay
         HBITMAP bitmap_ = nullptr;
         HGDIOBJ original_ = nullptr;
         SIZE size_{};
+        bool frameReady_ = false;
         void Surface(int width, int height);
         void ReleaseSurface();
         void LoadLocalFonts(const std::wstring& directory);
@@ -38,5 +39,7 @@ namespace tiger::overlay
         Renderer(const Renderer&) = delete;
         Renderer& operator=(const Renderer&) = delete;
         SIZE Render(HWND window, const State& state, const Display& display, UINT dpi, bool status = false);
+        SIZE Prepare(const State& state, const Display& display, UINT dpi, bool status = false);
+        void Present(HWND window, const POINT* destination = nullptr);
     };
 }

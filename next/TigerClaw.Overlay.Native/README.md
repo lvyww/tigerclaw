@@ -40,6 +40,16 @@ and `next/_native_build/`; it does not deploy or launch the Overlay.
 
 ## Build
 
+Candidate redraws prepare the complete offscreen frame before publishing pixels,
+size and final caret-relative position in one `UpdateLayeredWindow` call. A failed
+prepare/present retains the last published window frame; up to three 100 ms
+retries are allowed, with fresh state permitting another attempt. Explicit hidden
+states and invalid carets still hide immediately. This does not delay shrinking,
+add animations or guarantee that real candidate-count changes are imperceptible.
+`overlay_render_probe --present-check` verifies preparation leaves window geometry
+unchanged, incomplete frames are rejected, and successful publication combines
+size and position without showing an intentionally hidden window.
+
 Context menus try to temporarily activate their owner, as described by
 [TrackPopupMenuEx](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-trackpopupmenuex)
 for outside-click dismissal. If focus has moved to another application when the
