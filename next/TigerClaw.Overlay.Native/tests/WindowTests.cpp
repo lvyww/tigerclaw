@@ -158,6 +158,21 @@ int main()
             return rect.right - rect.left > beforeAnnotation.right - beforeAnnotation.left; }, 1500),
             "annotation timer updates real window layout");
         Check(GetForegroundWindow() == foreground, "IPC updates never activate windows");
+        // Exercise motion plus resizing, then cancel midway. Late animation
+        // timers must never resurrect a committed/hidden composition.
+        state["CandidateExpandDelayMs"] = 0; state["AnnotationExpandDelayMs"] = 0;
+        state["CandidateAnchorRevision"] = 2; state["CaretX"] = x + 240;
+        state["InputCode"] = "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz";
+        publish(state);
+        Check(Until([&] { RECT rect{}; GetWindowRect(candidate, &rect);
+            return rect.left == x + 240; }), "animated movement reaches latest anchor");
+        state["CandidateAnchorRevision"] = 3; state["CaretX"] = x;
+        state["InputCode"] = "ab"; publish(state);
+        Sleep(5);
+        state["CandidateVisible"] = false; publish(state);
+        Check(Until([&] { return !IsWindowVisible(candidate); }), "hide interrupts transition immediately");
+        Sleep(180);
+        Check(!IsWindowVisible(candidate), "expired transition never resurrects hidden candidate");
         // No pipe server exists in this isolated session. The worker spends up
         // to three seconds reconnecting, but the menu must appear immediately.
         Handle menuEvent(CreateEventW(nullptr, FALSE, FALSE, (root + L".Menu").c_str()));

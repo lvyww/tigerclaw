@@ -1,6 +1,7 @@
 #include "Model.h"
 #include "Placement.h"
 #include "MenuDismiss.h"
+#include "FrameTransition.h"
 #include <iostream>
 #include <stdexcept>
 using namespace tiger::overlay;
@@ -12,6 +13,28 @@ int main()
 {
     try
     {
+        FrameTransition transition;
+        FrameRect from{100, 200, 400, 200}, to{160, 120, 240, 100};
+        transition.Start(from, to, 1000, 60);
+        Check(transition.Sample(1000) == from, "transition starts at current rectangle");
+        Check(transition.Duration() == 100 && transition.Interval() == 4, "shrink keeps cadence and uses 100 ms");
+        auto middle = transition.Sample(1050);
+        Check(middle.x > from.x && middle.x < to.x && middle.height < from.height && middle.height > to.height,
+            "move and shrink interpolate together");
+        transition.Sample(1099);
+        Check(transition.Active(), "shrink remains active before 100 ms");
+        Check(transition.Sample(1100) == to && !transition.Active(), "100 ms deadline lands directly on final frame");
+        transition.Start(middle, from, 2000, 144);
+        Check(transition.Sample(2000) == middle && transition.Interval() == 2, "high refresh retains ten nominal steps");
+        Check(transition.Duration() == 20, "growth remains 20 ms");
+        Check(transition.Sample(2100) == from && !transition.Active(), "late callbacks do not extend animation");
+        transition.Cancel();
+        Check(!transition.Active(), "hide cancels transition");
+        transition.Start(from, {120, 160, 400, 200}, 3000, 60);
+        Check(transition.Duration() == 20 && transition.Interval() == 4, "pure motion remains 20 ms at same cadence");
+        Check(transition.Sample(3020) == transition.Target() && !transition.Active(), "motion completes at 20 ms");
+        transition.Start(from, {100, 200, 500, 100}, 4000, 144);
+        Check(transition.Duration() == 100 && transition.Interval() == 2, "mixed grow/shrink uses 100 ms without reducing cadence");
         MenuDismiss dismiss{false, true, false};
         Check(!dismiss.Update(false, false, true, false), "opening right-button hold does not dismiss");
         Check(!dismiss.Update(false, false, false, false), "button release does not dismiss");

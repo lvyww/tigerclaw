@@ -3,6 +3,7 @@
 #include "Sound.h"
 #include "Placement.h"
 #include "MenuDismiss.h"
+#include "FrameTransition.h"
 #include <shellapi.h>
 #include <shellscalingapi.h>
 #include <windowsx.h>
@@ -26,7 +27,59 @@ namespace tiger::overlay
         Reveal reveal_;
         Display display_;
         std::wstring directory_;
-        Renderer candidateRenderer_, statusRenderer_;
+        Renderer candidateRenderer_, statusRenderer_, transitionRenderer_;
+        FrameTransition transition_;
+        bool transitionsEnabled_ = true;
+        void StopTransition() { transition_.Cancel(); KillTimer(candidate_, 4); }
+        void TransitionTick()
+        {
+            if (!transition_.Active()) return;
+            auto rect = transition_.Sample(GetTickCount64());
+            POINT point{rect.x, rect.y}; SIZE size{rect.width, rect.height};
+            try
+            {
+                if (transition_.Active())
+                {
+                    transitionRenderer_.Prepare(state_, display_, candidateDpi_, false, &size);
+                    transitionRenderer_.Present(candidate_, &point);
+                }
+                else
+                {
+                    KillTimer(candidate_, 4);
+                    candidateRenderer_.Present(candidate_, &point);
+                }
+            }
+            catch (...)
+            {
+                StopTransition();
+                candidateDrawn_ = false;
+                SetTimer(candidate_, 3, 100, nullptr);
+            }
+        }
+        void PublishCandidate(SIZE size, POINT destination)
+        {
+            FrameRect target{destination.x, destination.y, size.cx, size.cy};
+            RECT current{}; GetWindowRect(candidate_, &current);
+            FrameRect from{current.left, current.top, current.right - current.left, current.bottom - current.top};
+            if (transitionsEnabled_ && IsWindowVisible(candidate_) && from != target)
+            {
+                if (!transition_.Active() || transition_.Target() != target)
+                {
+                    MONITORINFOEXW monitor{}; monitor.cbSize = sizeof(monitor);
+                    DEVMODEW mode{}; mode.dmSize = sizeof(mode);
+                    unsigned hz = 60;
+                    if (GetMonitorInfoW(MonitorFromPoint(destination, MONITOR_DEFAULTTONEAREST), &monitor) &&
+                        EnumDisplaySettingsW(monitor.szDevice, ENUM_CURRENT_SETTINGS, &mode) && mode.dmDisplayFrequency > 1)
+                        hz = mode.dmDisplayFrequency;
+                    transition_.Start(from, target, GetTickCount64(), hz);
+                    if (!SetTimer(candidate_, 4, transition_.Interval(), nullptr))
+                    { StopTransition(); candidateRenderer_.Present(candidate_, &destination); }
+                }
+                return;
+            }
+            StopTransition();
+            candidateRenderer_.Present(candidate_, &destination);
+        }
         Sound sound_;
         std::unique_ptr<StateSource> source_;
         std::unique_ptr<CommandQueue> commands_;
@@ -100,9 +153,17 @@ namespace tiger::overlay
         {
             POINT position{};
             if (!ResolvePosition(placement_, candidateSize_, position)) return;
+            if (transition_.Active())
+            {
+                PublishCandidate(candidateSize_, position);
+                return;
+            }
             RECT current{}; GetWindowRect(candidate_, &current);
             if (current.left != position.x || current.top != position.y || !IsWindowVisible(candidate_))
-                SetWindowPos(candidate_, HWND_TOPMOST, position.x, position.y, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            {
+                PublishCandidate(candidateSize_, position);
+                if (!IsWindowVisible(candidate_)) ShowWindow(candidate_, SW_SHOWNOACTIVATE);
+            }
         }
         void Refresh(bool force)
         {
@@ -132,6 +193,7 @@ namespace tiger::overlay
             candidateDpi_ = dpi;
             if (display_.mode == DisplayMode::Hidden || !validCaret_)
             {
+                StopTransition();
                 ShowWindow(candidate_, SW_HIDE);
                 candidateDrawn_ = false;
                 KillTimer(candidate_, 3);
@@ -151,7 +213,7 @@ namespace tiger::overlay
                             throw std::runtime_error("Candidate monitor unavailable");
                         // Publish pixels, dimensions and final location together.
                         // The OS retains the previous frame throughout Prepare.
-                        candidateRenderer_.Present(candidate_, &destination);
+                        PublishCandidate(size, destination);
                         candidateSize_ = size;
                         placement_ = placement;
                         candidateDrawn_ = true;
@@ -163,6 +225,7 @@ namespace tiger::overlay
                     }
                     catch (...)
                     {
+                        StopTransition();
                         // Keep the last published frame, retry without routing
                         // this recoverable failure to Procedure's hide fallback.
                         if (candidateRetryCount_++ < 3) SetTimer(candidate_, 3, 100, nullptr);
@@ -319,7 +382,8 @@ namespace tiger::overlay
             case WM_ERASEBKGND: return 1;
             case WM_PAINT: { PAINTSTRUCT paint{}; BeginPaint(hwnd, &paint); EndPaint(hwnd, &paint); return 0; }
             case WM_TIMER:
-                if (wp == 2) CheckMenuDismiss();
+                if (wp == 4) TransitionTick();
+                else if (wp == 2) CheckMenuDismiss();
                 else { if (wp == 3) KillTimer(candidate_, 3); Refresh(false); }
                 return 0;
             case StateMessage:
@@ -414,7 +478,12 @@ namespace tiger::overlay
     public:
         explicit Application(bool demo, Endpoints endpoints = {}, bool isolated = false) :
             endpoints_(std::move(endpoints)), isolated_(isolated), directory_(Directory()),
-            candidateRenderer_(directory_), statusRenderer_(directory_), sound_(directory_), demo_(demo) {}
+            candidateRenderer_(directory_), statusRenderer_(directory_), transitionRenderer_(directory_), sound_(directory_), demo_(demo)
+        {
+            wchar_t setting[8]{};
+            GetEnvironmentVariableW(L"TIGERCLAW_OVERLAY_TRANSITION", setting, 8);
+            transitionsEnabled_ = wcscmp(setting, L"0") != 0;
+        }
         ~Application()
         {
             source_.reset(); commands_.reset();

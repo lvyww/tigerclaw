@@ -78,6 +78,18 @@ int main(int argc, char** argv)
                 after.right - after.left != size.cx || after.bottom - after.top != size.cy)
                 throw std::runtime_error("Combined frame/size/position publication failed");
             if (IsWindowVisible(window)) throw std::runtime_error("Prepare/Present unexpectedly showed hidden window");
+            SIZE frameSize{320, 160};
+            renderer.Prepare(state, Format(state), 144, false, &frameSize);
+            auto framePixels = RendererProbe::Pixels(renderer);
+            state.input = u"different text"; state.selected = 2;
+            renderer.Prepare(state, Format(state), 144, false, &frameSize);
+            if (framePixels == RendererProbe::Pixels(renderer))
+                throw std::runtime_error("Transition frame failed to update candidate text");
+            auto textPixels = RendererProbe::Pixels(renderer);
+            state.selected = 0;
+            renderer.Prepare(state, Format(state), 144, false, &frameSize);
+            if (textPixels == RendererProbe::Pixels(renderer))
+                throw std::runtime_error("Transition frame failed to update selection");
             result["present_checks"] = "passed";
         }
         else if (argc > 1 && std::string(argv[1]) == "--cache-check")

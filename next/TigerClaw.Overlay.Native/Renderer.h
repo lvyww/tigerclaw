@@ -39,7 +39,7 @@ namespace tiger::overlay
         Renderer(const Renderer&) = delete;
         Renderer& operator=(const Renderer&) = delete;
         SIZE Render(HWND window, const State& state, const Display& display, UINT dpi, bool status = false);
-        SIZE Prepare(const State& state, const Display& display, UINT dpi, bool status = false);
+        SIZE Prepare(const State& state, const Display& display, UINT dpi, bool status = false, const SIZE* frameSize = nullptr);
         void Present(HWND window, const POINT* destination = nullptr);
     };
 }

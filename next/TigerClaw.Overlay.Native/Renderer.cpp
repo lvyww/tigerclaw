@@ -102,7 +102,7 @@ namespace tiger::overlay
         Present(window);
         return size;
     }
-    SIZE Renderer::Prepare(const State& state, const Display& display, UINT dpi, bool status)
+    SIZE Renderer::Prepare(const State& state, const Display& display, UINT dpi, bool status, const SIZE* frameSize)
     try
     {
         frameReady_ = false;
@@ -165,6 +165,7 @@ namespace tiger::overlay
             measured.widthIncludingTrailingWhitespace + metrics.left + metrics.right) + 2 * palette.borderWidth) + 2 * inset;
         float height = status ? 50.0f : static_cast<float>(measured.height + metrics.top + metrics.bottom + 2 * palette.borderWidth) + 2 * inset;
         float scale = std::max(1u, dpi) / 96.0f;
+        if (frameSize) { width = frameSize->cx / scale; height = frameSize->cy / scale; }
         // Bound surfaces to the virtual desktop; untrusted/corrupt MMF cannot allocate unbounded bitmaps.
         int maxWidth = std::max(1, GetSystemMetrics(SM_CXVIRTUALSCREEN));
         int maxHeight = std::max(1, GetSystemMetrics(SM_CYVIRTUALSCREEN));

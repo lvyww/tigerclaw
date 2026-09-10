@@ -40,12 +40,32 @@ and `next/_native_build/`; it does not deploy or launch the Overlay.
 
 ## Build
 
+Experimental frame transitions are enabled in this build. Set environment variable
+`TIGERCLAW_OVERLAY_TRANSITION=0` before launching to compare the immediate path.
+For an already visible candidate window, geometry changes interpolate position
+and size on a 20 ms growth/pure-motion timeline (6 nominal steps at 60 Hz, at most
+10 at high refresh rates). If either dimension shrinks, the whole transition uses
+100 ms, including mixed grow/shrink changes. Cadence is unchanged: shrinking uses
+five times the nominal steps (30..50), not slower frame intervals.
+Intermediate frames include the latest text and selection at normal font size;
+text extending outside a growing intermediate surface is clipped, not scaled.
+The last frame publishes the complete prepared text. Plain text changes at unchanged
+geometry, first show and hide are immediate. New geometry replaces the active
+path from the currently displayed rectangle, never queues old frames. Cadence is
+estimated from the destination monitor; WM_TIMER is not vertical synchronization
+and late callbacks skip expired steps. WM_TIMER has a minimum 10 ms interval, so
+the 2..4 ms requested cadence does not guarantee 6..10 rendered or visible frames
+within 20 ms; completion happens on the first tick at/after the deadline. No global
+timer-resolution change, busy wait or queued playback is used. This remains an
+experiment, not a proven flicker fix.
+
 Candidate redraws prepare the complete offscreen frame before publishing pixels,
 size and final caret-relative position in one `UpdateLayeredWindow` call. A failed
 prepare/present retains the last published window frame; up to three 100 ms
 retries are allowed, with fresh state permitting another attempt. Explicit hidden
-states and invalid carets still hide immediately. This does not delay shrinking,
-add animations or guarantee that real candidate-count changes are imperceptible.
+states and invalid carets still hide immediately. With the experiment disabled,
+this does not delay shrinking or animate; neither path guarantees that real
+candidate-count changes are imperceptible.
 `overlay_render_probe --present-check` verifies preparation leaves window geometry
 unchanged, incomplete frames are rejected, and successful publication combines
 size and position without showing an intentionally hidden window.
