@@ -226,6 +226,10 @@
                             Content="关于"
                             Style="{StaticResource NavButtonStyle}"
                             Click="OnSectionNavClick" />
+                    <Button x:Name="DonateNavButton"
+                            Content="赞赏支持"
+                            Style="{StaticResource NavButtonStyle}"
+                            Click="OnSectionNavClick" />
                 </StackPanel>
             </Border>
 
@@ -479,7 +483,7 @@
                         <StackPanel>
                             <TextBlock Text="关于"
                                        Style="{StaticResource SectionTitleStyle}" />
-                            <TextBlock Text="版本、构建信息和支持入口。"
+                            <TextBlock Text="版本、构建信息和项目主页。"
                                        Style="{StaticResource SectionSubtitleStyle}"
                                        Margin="0,4,0,14" />
 
@@ -574,6 +578,15 @@
                                         Click="OnAboutOfficialClick" />
                             </StackPanel>
 
+                        </StackPanel>
+                    </Border>
+
+                    <Border x:Name="DonateSection"
+                            Style="{StaticResource SectionBorderStyle}"
+                            Padding="12"
+                            Visibility="Collapsed">
+                        <StackPanel>
+                            <TextBlock Text="赞赏支持" Style="{StaticResource SectionTitleStyle}" />
                             <Border x:Name="DonateCard"
                                     Style="{StaticResource SettingRowStyle}"
                                     Padding="14,12"

@@ -12,8 +12,8 @@ namespace tiger::overlay
         { return x == other.x && y == other.y && width == other.width && height == other.height; }
         bool operator!=(const FrameRect& other) const { return !(*this == other); }
     };
-    // Keep the same cadence for 20 ms growth/motion and 100 ms shrinkage.
-    // Shrinkage uses five times as many steps. Late ticks skip steps
+    // Keep the same cadence for motion, growth, shrinkage and hide.
+    // Longer timelines use proportionally more steps. Late ticks skip steps
     // rather than extending the animation to play every nominal frame.
     class FrameTransition
     {
@@ -23,14 +23,14 @@ namespace tiger::overlay
         unsigned duration_ = 20;
         bool active_ = false;
     public:
-        void Start(FrameRect from, FrameRect to, std::uint64_t now, unsigned hz)
+        void Start(FrameRect from, FrameRect to, std::uint64_t now, unsigned hz, unsigned showMs = 20, unsigned hideMs = 200)
         {
             from_ = from; to_ = to; started_ = now;
             frames_ = std::clamp((hz + 5) / 10, 6u, 10u);
             interval_ = (20 + frames_ - 1) / frames_;
-            duration_ = to.width < from.width || to.height < from.height ? 100 : 20;
-            frames_ *= duration_ / 20;
-            active_ = from != to;
+            duration_ = to.width < from.width || to.height < from.height ? hideMs : showMs;
+            frames_ = (frames_ * duration_ + 19) / 20;
+            active_ = from != to && duration_ != 0;
         }
         bool Active() const { return active_; }
         FrameRect Target() const { return to_; }
@@ -39,6 +39,7 @@ namespace tiger::overlay
         void Cancel() { active_ = false; }
         FrameRect Sample(std::uint64_t now)
         {
+            if (!duration_) return to_;
             auto elapsed = std::min<std::uint64_t>(now >= started_ ? now - started_ : 0, duration_);
             auto frame = elapsed * frames_ / duration_;
             if (frame == frames_) { active_ = false; return to_; }

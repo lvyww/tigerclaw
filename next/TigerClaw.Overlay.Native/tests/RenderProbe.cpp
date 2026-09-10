@@ -1,6 +1,7 @@
 #include "Renderer.h"
 #include <nlohmann/json.hpp>
 #include <algorithm>
+#include <cmath>
 #include <iostream>
 #include <vector>
 
@@ -90,6 +91,11 @@ int main(int argc, char** argv)
             renderer.Prepare(state, Format(state), 144, false, &frameSize);
             if (textPixels == RendererProbe::Pixels(renderer))
                 throw std::runtime_error("Transition frame failed to update selection");
+            for (SIZE thin : {SIZE{1, 100}, SIZE{100, 1}})
+            {
+                renderer.Prepare(state, Format(state), 144, false, &thin);
+                renderer.Present(window);
+            }
             result["present_checks"] = "passed";
         }
         else if (argc > 1 && std::string(argv[1]) == "--cache-check")

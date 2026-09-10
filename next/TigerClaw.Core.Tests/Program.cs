@@ -256,6 +256,7 @@ namespace TigerClaw.Core.Tests
                 CustomActionShortcutsTriggerAndRearm();
                 CustomRecentSchemaShortcutSwitchesSchemas();
                 SchemaSwitchPreservesOnlyLiveRaw();
+                CandidateAnimationSettings();
                 KeyResponsesDeclareExpectedKeyUp();
                 CtrlSpaceStillTogglesWithExpectedKeyUpResponses();
                 KeyUpExpectationCoversReleaseDependentState();
@@ -363,6 +364,34 @@ namespace TigerClaw.Core.Tests
                 {
                     Directory.Delete(root, recursive: true);
                 }
+            }
+        }
+
+        private static void CandidateAnimationSettings()
+        {
+            string root = Path.Combine(Path.GetTempPath(), "TigerClaw-AnimationTest-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            try
+            {
+                var state = new CoreRuntimeState(root);
+                state.Initialize();
+                True(state.GetCandidateAnimationEnabled(), "animation enabled default");
+                True(state.GetCandidateAnimationShowMs() == 20, "animation show default");
+                True(state.GetCandidateAnimationHideMs() == 200, "animation hide default");
+                state.TrySetConfigValue("候选窗动效", "否", out _, out _);
+                state.TrySetConfigValue("候选窗出现时间(毫秒)", "75", out _, out _);
+                state.TrySetConfigValue("候选窗消失时间(毫秒)", "420", out _, out _);
+                True(!state.GetCandidateAnimationEnabled(), "animation disabled");
+                True(state.GetCandidateAnimationShowMs() == 75, "animation custom show");
+                True(state.GetCandidateAnimationHideMs() == 420, "animation custom hide");
+                state.TrySetConfigValue("候选窗出现时间(毫秒)", "", out _, out _);
+                True(state.GetCandidateAnimationShowMs() == 20, "animation empty uses default");
+                state.TrySetConfigValue("候选窗消失时间(毫秒)", "0", out _, out _);
+                True(state.GetCandidateAnimationHideMs() == 0, "animation zero means immediate");
+            }
+            finally
+            {
+                Directory.Delete(root, recursive: true);
             }
         }
 

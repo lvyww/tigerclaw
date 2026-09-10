@@ -1,6 +1,7 @@
 #include "WinResources.h"
 #include <nlohmann/json.hpp>
 #include <cstring>
+#include <cmath>
 #include <iostream>
 
 using namespace tiger::overlay;
@@ -158,6 +159,58 @@ int main()
             return rect.right - rect.left > beforeAnnotation.right - beforeAnnotation.left; }, 1500),
             "annotation timer updates real window layout");
         Check(GetForegroundWindow() == foreground, "IPC updates never activate windows");
+        auto savedState = state;
+        for (bool vertical : {false, true})
+        {
+            for (int composition : {2, 3, 4})
+            {
+                state = savedState;
+                state["CandidateExpandDelayMs"] = 0; state["AnnotationExpandDelayMs"] = 0;
+                state["VerticalCandidates"] = vertical; state["CompositionState"] = composition;
+                publish(state); Sleep(260);
+                RECT full{}; GetWindowRect(candidate, &full);
+                auto start = GetTickCount64();
+                state["CandidateVisible"] = false;
+                state["CandidateBackgroundUntil"] = start + 2000; // Legacy deadline is ignored.
+                publish(state);
+                Check(Until([&] { return GetWindowLongPtrW(candidate, GWL_EXSTYLE) & WS_EX_TRANSPARENT; }, 150),
+                    "hide animation starts in every mode");
+                Sleep(70);
+                RECT shrinking{}; GetWindowRect(candidate, &shrinking);
+                Check(IsWindowVisible(candidate), "hide retains pixels during 200 ms animation");
+                Check(vertical ?
+                    shrinking.right - shrinking.left == full.right - full.left && shrinking.bottom - shrinking.top < full.bottom - full.top :
+                    shrinking.bottom - shrinking.top == full.bottom - full.top && shrinking.right - shrinking.left < full.right - full.left,
+                    "hide shrinks only the layout axis");
+                // A repeated hidden update must not reset the deadline.
+                publish(state);
+                Check(Until([&] { return !IsWindowVisible(candidate); }, 500), "hide completes without square dwell");
+                Check(GetTickCount64() - start >= 190 && GetTickCount64() - start < 650, "hide uses 200 ms deadline");
+                state["CandidateVisible"] = true; publish(state); Sleep(100);
+                state["CandidateVisible"] = false; publish(state); Sleep(70);
+                state["CandidateVisible"] = true; publish(state);
+                Check(Until([&] { RECT rect{}; GetWindowRect(candidate, &rect);
+                    return IsWindowVisible(candidate) && !(GetWindowLongPtrW(candidate, GWL_EXSTYLE) & WS_EX_TRANSPARENT) &&
+                        rect.right - rect.left == full.right - full.left && rect.bottom - rect.top == full.bottom - full.top;
+                }, 300), "new input interrupts hide and expands to full size");
+                Sleep(160);
+                Check(IsWindowVisible(candidate), "old hide timer cannot hide new candidates");
+            }
+        }
+        state = savedState; state["CandidateExpandDelayMs"] = 0; state["AnnotationExpandDelayMs"] = 0;
+        publish(state); Sleep(120);
+        state["CandidateAnimationEnabled"] = false;
+        publish(state); Sleep(100);
+        state["CandidateVisible"] = false; publish(state);
+        Check(Until([&] { return !IsWindowVisible(candidate); }, 150), "disabled animation hides immediately");
+        state["CandidateVisible"] = true; publish(state); Sleep(100);
+        state["CandidateAnimationEnabled"] = true;
+        state["CandidateAnimationHideMs"] = 400;
+        state["CandidateVisible"] = false; publish(state); Sleep(250);
+        Check(IsWindowVisible(candidate), "custom hide duration stays visible beyond default");
+        Check(Until([&] { return !IsWindowVisible(candidate); }, 400), "custom hide completes");
+        state["CandidateAnimationHideMs"] = 200;
+        state["CandidateVisible"] = true; publish(state); Sleep(100);
         // Exercise motion plus resizing, then cancel midway. Late animation
         // timers must never resurrect a committed/hidden composition.
         state["CandidateExpandDelayMs"] = 0; state["AnnotationExpandDelayMs"] = 0;

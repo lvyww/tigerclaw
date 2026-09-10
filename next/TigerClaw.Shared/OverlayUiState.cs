@@ -88,6 +88,14 @@ namespace TigerClaw.Shared
 
         [DataMember(Order = 28)]
         public long CandidateAnchorRevision { get; set; }
+        [DataMember(Order = 29)]
+        public long CandidateBackgroundUntil { get; set; }
+        [DataMember(Order = 30)]
+        public bool CandidateAnimationEnabled { get; set; } = true;
+        [DataMember(Order = 31)]
+        public int CandidateAnimationShowMs { get; set; } = 20;
+        [DataMember(Order = 32)]
+        public int CandidateAnimationHideMs { get; set; } = 200;
     }
 }
 

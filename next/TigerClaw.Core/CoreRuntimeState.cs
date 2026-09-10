@@ -180,6 +180,9 @@ namespace TigerClaw.Core
             new KeyValuePair<string, string>(KeyShowSplit, No),
 
             new KeyValuePair<string, string>(KeyCandidateExpandDelayMs, string.Empty),
+            new KeyValuePair<string, string>("候选窗动效", Yes),
+            new KeyValuePair<string, string>("候选窗出现时间(毫秒)", "20"),
+            new KeyValuePair<string, string>("候选窗消失时间(毫秒)", "200"),
 
             new KeyValuePair<string, string>(KeyAnnotationExpandDelayMs, string.Empty),
 
@@ -1494,6 +1497,19 @@ namespace TigerClaw.Core
         public bool GetShowComment() => GetBool(KeyShowComment, true);
 
         public bool GetShowSplit() => GetBool(KeyShowSplit, false);
+
+        public bool GetCandidateAnimationEnabled() => GetBool("候选窗动效", true);
+        public int GetCandidateAnimationShowMs() => GetAnimationDuration("候选窗出现时间(毫秒)", 20);
+        public int GetCandidateAnimationHideMs() => GetAnimationDuration("候选窗消失时间(毫秒)", 200);
+
+        private int GetAnimationDuration(string key, int fallback)
+        {
+            lock (_lock)
+            {
+                return _config.TryGetValue(key, out string raw) && int.TryParse(raw, out int value)
+                    ? Math.Clamp(value, 0, 60000) : fallback;
+            }
+        }
 
         public int GetCandidateExpandDelayMs()
         {

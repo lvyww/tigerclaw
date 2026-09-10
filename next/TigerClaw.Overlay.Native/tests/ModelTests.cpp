@@ -14,19 +14,30 @@ int main()
     try
     {
         FrameTransition transition;
+        State animated;
+        Check(ParseState(R"({})", animated) && animated.animationEnabled &&
+            animated.animationShowMs == 20 && animated.animationHideMs == 200, "animation defaults for old Core");
+        Check(ParseState(R"({"CandidateAnimationEnabled":false,"CandidateAnimationShowMs":65,"CandidateAnimationHideMs":350})", animated) &&
+            !animated.animationEnabled && animated.animationShowMs == 65 && animated.animationHideMs == 350, "animation settings parse");
+        transition.Start({0,0,10,10}, {0,0,20,20}, 0, 60, 65, 350);
+        Check(transition.Duration() == 65 && transition.Sample(65).width == 20, "custom growth duration");
+        transition.Start({0,0,20,20}, {0,0,10,10}, 0, 60, 65, 350);
+        Check(transition.Duration() == 350 && transition.Sample(350).width == 10, "custom shrink duration");
+        transition.Start({0,0,20,20}, {0,0,10,10}, 0, 60, 0, 0);
+        Check(!transition.Active() && transition.Sample(0).width == 10, "zero duration is immediate");
         FrameRect from{100, 200, 400, 200}, to{160, 120, 240, 100};
         transition.Start(from, to, 1000, 60);
         Check(transition.Sample(1000) == from, "transition starts at current rectangle");
-        Check(transition.Duration() == 100 && transition.Interval() == 4, "shrink keeps cadence and uses 100 ms");
+        Check(transition.Duration() == 200 && transition.Interval() == 4, "shrink keeps cadence and uses 200 ms");
         auto middle = transition.Sample(1050);
         Check(middle.x > from.x && middle.x < to.x && middle.height < from.height && middle.height > to.height,
             "move and shrink interpolate together");
         transition.Sample(1099);
         Check(transition.Active(), "shrink remains active before 100 ms");
-        Check(transition.Sample(1100) == to && !transition.Active(), "100 ms deadline lands directly on final frame");
+        Check(transition.Sample(1200) == to && !transition.Active(), "200 ms deadline lands directly on final frame");
         transition.Start(middle, from, 2000, 144);
         Check(transition.Sample(2000) == middle && transition.Interval() == 2, "high refresh retains ten nominal steps");
-        Check(transition.Duration() == 20, "growth remains 20 ms");
+        Check(transition.Duration() == 20, "growth uses 20 ms");
         Check(transition.Sample(2100) == from && !transition.Active(), "late callbacks do not extend animation");
         transition.Cancel();
         Check(!transition.Active(), "hide cancels transition");
@@ -34,7 +45,19 @@ int main()
         Check(transition.Duration() == 20 && transition.Interval() == 4, "pure motion remains 20 ms at same cadence");
         Check(transition.Sample(3020) == transition.Target() && !transition.Active(), "motion completes at 20 ms");
         transition.Start(from, {100, 200, 500, 100}, 4000, 144);
-        Check(transition.Duration() == 100 && transition.Interval() == 2, "mixed grow/shrink uses 100 ms without reducing cadence");
+        Check(transition.Duration() == 200 && transition.Interval() == 2, "mixed grow/shrink uses 200 ms without reducing cadence");
+        transition.Start(from, {100, 200, 0, 200}, 5000, 60, 200);
+        auto hiding = transition.Sample(5100);
+        Check(transition.Duration() == 200 && hiding.width > 0 && hiding.width < from.width && hiding.height == from.height,
+            "horizontal hide preserves height over 200 ms");
+        transition.Start(hiding, from, 5100, 60, 20, 200);
+        Check(transition.Sample(5100) == hiding && transition.Sample(5120) == from,
+            "show interrupts hide at current rectangle and completes in 20 ms");
+        transition.Start(from, {100, 400, 400, 0}, 6000, 144, 200);
+        auto verticalHide = transition.Sample(6100);
+        Check(verticalHide.width == from.width && verticalHide.y + verticalHide.height == 400,
+            "above-caret vertical hide preserves width and lower edge");
+        Check(transition.Sample(6200).height == 0 && !transition.Active(), "hide reaches zero at deadline");
         MenuDismiss dismiss{false, true, false};
         Check(!dismiss.Update(false, false, true, false), "opening right-button hold does not dismiss");
         Check(!dismiss.Update(false, false, false, false), "button release does not dismiss");

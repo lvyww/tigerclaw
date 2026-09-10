@@ -109,8 +109,14 @@ namespace tiger::overlay
             scalar("CaretX", next.caretX); scalar("CaretY", next.caretY); scalar("CaretHeight", next.caretHeight);
             scalar("SoundVk", next.soundVk); scalar("SoundVolumePercent", next.soundVolume);
             scalar("CandidateExpandDelayMs", next.candidateDelay); scalar("AnnotationExpandDelayMs", next.annotationDelay);
+            scalar("CandidateAnimationEnabled", next.animationEnabled);
+            scalar("CandidateAnimationShowMs", next.animationShowMs);
+            scalar("CandidateAnimationHideMs", next.animationHideMs);
+            next.animationShowMs = std::clamp(next.animationShowMs, 0, 60000);
+            next.animationHideMs = std::clamp(next.animationHideMs, 0, 60000);
             scalar("SelectedCandidateIndex", next.selected); scalar("FontSize", next.fontSize);
             scalar("SoundSeq", next.soundSequence); scalar("CandidateAnchorRevision", next.anchorRevision);
+            scalar("CandidateBackgroundUntil", next.backgroundUntil);
             text("StatusText", next.status); text("InputCode", next.input); text("CodeMasking", next.codeMask);
             text("ThemeName", next.theme); text("FontName", next.font);
             array("Candidates", next.candidates); array("CandidateAnnotations", next.annotations);

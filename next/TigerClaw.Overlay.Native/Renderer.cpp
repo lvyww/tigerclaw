@@ -165,7 +165,11 @@ namespace tiger::overlay
             measured.widthIncludingTrailingWhitespace + metrics.left + metrics.right) + 2 * palette.borderWidth) + 2 * inset;
         float height = status ? 50.0f : static_cast<float>(measured.height + metrics.top + metrics.bottom + 2 * palette.borderWidth) + 2 * inset;
         float scale = std::max(1u, dpi) / 96.0f;
-        if (frameSize) { width = frameSize->cx / scale; height = frameSize->cy / scale; }
+        if (frameSize)
+        {
+            width = frameSize->cx / scale; height = frameSize->cy / scale;
+            inset = std::min(inset, std::min(width, height) / 4);
+        }
         // Bound surfaces to the virtual desktop; untrusted/corrupt MMF cannot allocate unbounded bitmaps.
         int maxWidth = std::max(1, GetSystemMetrics(SM_CXVIRTUALSCREEN));
         int maxHeight = std::max(1, GetSystemMetrics(SM_CYVIRTUALSCREEN));
@@ -179,7 +183,9 @@ namespace tiger::overlay
         target_->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
         ComPtr<ID2D1SolidColorBrush> brush;
         CheckHr(target_->CreateSolidColorBrush(Rgba(palette.background), brush.GetAddressOf()));
-        float half = static_cast<float>(palette.borderWidth / 2);
+        float border = std::min(static_cast<float>(palette.borderWidth),
+            std::max(0.0f, std::min(width, height) - 2 * inset));
+        float half = border / 2;
         auto rect = D2D1::RectF(inset + half, inset + half, width - inset - half, height - inset - half);
         auto rounded = D2D1::RoundedRect(rect, status ? 10.0f : 5.0f, status ? 10.0f : 5.0f);
         ComPtr<ID2D1PathGeometry> outline;
@@ -226,7 +232,7 @@ namespace tiger::overlay
         brush->SetColor(Rgba(palette.background));
         fill();
         brush->SetColor(Rgba(palette.border));
-        stroke(static_cast<float>(palette.borderWidth));
+        stroke(border);
         D2D1_POINT_2F origin = status ? D2D1::Point2F((width - measured.width) / 2, 12 + (34 - measured.height) / 2) :
             D2D1::Point2F(inset + static_cast<float>(metrics.left + palette.borderWidth), inset + static_cast<float>(metrics.top + palette.borderWidth));
         if (status) target_->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(9, 9, 17, 12), 2, 2), brush.Get());

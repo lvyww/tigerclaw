@@ -18,8 +18,11 @@ namespace tiger::overlay
         int composition = 0, caretX = 0, caretY = 0, caretHeight = 0;
         int soundVk = 0, soundVolume = 0, candidateDelay = 0, annotationDelay = 0;
         int selected = -1;
+        bool animationEnabled = true;
+        int animationShowMs = 20, animationHideMs = 200;
         double fontSize = 0;
         std::int64_t soundSequence = 0, anchorRevision = 0;
+        std::int64_t backgroundUntil = 0;
     };
     Text FromUtf8(std::string_view value);
     std::string ToUtf8(std::u16string_view value);
