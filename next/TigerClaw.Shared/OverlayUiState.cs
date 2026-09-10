@@ -92,10 +92,8 @@ namespace TigerClaw.Shared
         public long CandidateBackgroundUntil { get; set; }
         [DataMember(Order = 30)]
         public bool CandidateAnimationEnabled { get; set; } = true;
-        [DataMember(Order = 31)]
-        public int CandidateAnimationShowMs { get; set; } = 20;
-        [DataMember(Order = 32)]
-        public int CandidateAnimationHideMs { get; set; } = 200;
+        [DataMember(Order = 33)]
+        public int CandidateAnimationDurationMs { get; set; } = 200;
     }
 }
 

@@ -879,8 +879,7 @@ namespace TigerClaw.Core
                         ShowInputCodeInCandidateWindow = _state.GetShowInputCodeInCandidateWindow(),
                         CandidateExpandDelayMs = _state.GetCandidateExpandDelayMs(),
                         CandidateAnimationEnabled = _state.GetCandidateAnimationEnabled(),
-                        CandidateAnimationShowMs = _state.GetCandidateAnimationShowMs(),
-                        CandidateAnimationHideMs = _state.GetCandidateAnimationHideMs(),
+                        CandidateAnimationDurationMs = _state.GetCandidateAnimationDurationMs(),
                         // Temporary pinyin is a reverse lookup: show its hints immediately.
                         AnnotationExpandDelayMs = engineState.CompositionState == 4
                             ? 0 : _state.GetAnnotationExpandDelayMs(),

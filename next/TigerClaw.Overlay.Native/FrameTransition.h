@@ -12,7 +12,7 @@ namespace tiger::overlay
         { return x == other.x && y == other.y && width == other.width && height == other.height; }
         bool operator!=(const FrameRect& other) const { return !(*this == other); }
     };
-    // Keep the same cadence for motion, growth, shrinkage and hide.
+    // Keep the same cadence for motion, growth and shrinkage.
     // Longer timelines use proportionally more steps. Late ticks skip steps
     // rather than extending the animation to play every nominal frame.
     class FrameTransition
@@ -20,15 +20,15 @@ namespace tiger::overlay
         FrameRect from_{}, to_{};
         std::uint64_t started_ = 0;
         unsigned frames_ = 6, interval_ = 4;
-        unsigned duration_ = 20;
+        unsigned duration_ = 200;
         bool active_ = false;
     public:
-        void Start(FrameRect from, FrameRect to, std::uint64_t now, unsigned hz, unsigned showMs = 20, unsigned hideMs = 200)
+        void Start(FrameRect from, FrameRect to, std::uint64_t now, unsigned hz, unsigned durationMs = 200)
         {
             from_ = from; to_ = to; started_ = now;
             frames_ = std::clamp((hz + 5) / 10, 6u, 10u);
             interval_ = (20 + frames_ - 1) / frames_;
-            duration_ = to.width < from.width || to.height < from.height ? hideMs : showMs;
+            duration_ = durationMs;
             frames_ = (frames_ * duration_ + 19) / 20;
             active_ = from != to && duration_ != 0;
         }

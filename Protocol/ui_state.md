@@ -5,22 +5,15 @@ JSON `OverlayUiState`. Integers below are little-endian; map capacity is 128 KiB
 
 ## Legacy v1
 
-Optional `CandidateBackgroundUntil` is a Windows uptime-millisecond deadline
-(`Environment.TickCount64` / `GetTickCount64`), default zero. Core sets it to
-now + 2000 when any active composition commits and becomes Chinese idle, including
-ordinary, sentence and temporary-pinyin modes. Partial commits with live remaining
-composition continue showing candidates instead of entering background hold.
-New key-downs and non-caret/state-query actions clear it; key-up never extends it.
-This is a superseded experiment: current Native Overlay ignores this deadline
-and independently animates every candidate hide over 200 ms and show over 20 ms,
-regardless of input mode. There is no background dwell. WPF also ignores the
-field. It remains optional for compatibility with previously built Core binaries;
-current Native animations do not require a Core update.
+Optional `CandidateBackgroundUntil` is a superseded background-dwell experiment
+and is ignored by current Native Overlay and WPF.
 
-Optional `CandidateAnimationEnabled` (default true), `CandidateAnimationShowMs`
-(default 20), and `CandidateAnimationHideMs` (default 200) control Native animation.
-Show/growth/movement share the first duration; hide/shrink share the second.
-Durations are bounded to 0..60000 ms; zero or disabled means immediate.
+Optional `CandidateAnimationEnabled` (default true) and
+`CandidateAnimationDurationMs` (default 200) control Native geometry animation.
+Movement, growth and shrinkage of a visible candidate window share this duration.
+Show and hide are always immediate. Duration is bounded to 0..60000 ms; zero or
+disabled means immediate geometry updates. Missing fields use defaults. Former
+`CandidateAnimationShowMs` and `CandidateAnimationHideMs` fields are ignored.
 WPF ignores these additive fields.
 
 Name: `Local\TigerClaw.UiState.v1`.

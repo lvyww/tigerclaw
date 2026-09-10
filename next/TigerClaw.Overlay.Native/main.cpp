@@ -30,16 +30,10 @@ namespace tiger::overlay
         Renderer candidateRenderer_, statusRenderer_, transitionRenderer_;
         FrameTransition transition_;
         bool transitionsEnabled_ = true;
-        bool hiding_ = false;
-        State shownState_;
-        Display shownDisplay_;
-        bool lastCandidateAbove_ = false;
         void HideImmediately()
         {
             StopTransition();
             ShowWindow(candidate_, SW_HIDE);
-            hiding_ = false;
-            SetWindowLongPtrW(candidate_, GWL_EXSTYLE, GetWindowLongPtrW(candidate_, GWL_EXSTYLE) & ~WS_EX_TRANSPARENT);
         }
         unsigned RefreshRate(POINT point)
         {
@@ -50,35 +44,18 @@ namespace tiger::overlay
                 return mode.dmDisplayFrequency;
             return 60;
         }
-        void BeginHide()
-        {
-            if (!transitionsEnabled_ || !state_.animationEnabled || !state_.animationHideMs || !IsWindowVisible(candidate_)) { HideImmediately(); return; }
-            if (hiding_) return; // Repeated hidden snapshots must not restart it.
-            RECT rect{}; GetWindowRect(candidate_, &rect);
-            FrameRect from{rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top};
-            auto target = from;
-            if (shownState_.vertical)
-            { if (lastCandidateAbove_) target.y += target.height; target.height = 0; }
-            else target.width = 0;
-            hiding_ = true;
-            SetWindowLongPtrW(candidate_, GWL_EXSTYLE, GetWindowLongPtrW(candidate_, GWL_EXSTYLE) | WS_EX_TRANSPARENT);
-            transition_.Start(from, target, GetTickCount64(), RefreshRate({rect.left, rect.top}), state_.animationHideMs, state_.animationHideMs);
-            if (!SetTimer(candidate_, 4, transition_.Interval(), nullptr)) HideImmediately();
-        }
+
         void StopTransition() { transition_.Cancel(); KillTimer(candidate_, 4); }
         void TransitionTick()
         {
             if (!transition_.Active()) return;
             auto rect = transition_.Sample(GetTickCount64());
-            if (hiding_ && !transition_.Active())
-            { HideImmediately(); return; }
             POINT point{rect.x, rect.y}; SIZE size{std::max(1, rect.width), std::max(1, rect.height)};
             try
             {
                 if (transition_.Active())
                 {
-                    transitionRenderer_.Prepare(hiding_ ? shownState_ : state_,
-                        hiding_ ? shownDisplay_ : display_, candidateDpi_, false, &size);
+                    transitionRenderer_.Prepare(state_, display_, candidateDpi_, false, &size);
                     transitionRenderer_.Present(candidate_, &point);
                 }
                 else
@@ -89,7 +66,6 @@ namespace tiger::overlay
             }
             catch (...)
             {
-                if (hiding_) { HideImmediately(); return; }
                 StopTransition();
                 candidateDrawn_ = false;
                 SetTimer(candidate_, 3, 100, nullptr);
@@ -101,34 +77,16 @@ namespace tiger::overlay
             RECT current{}; GetWindowRect(candidate_, &current);
             FrameRect from{current.left, current.top, current.right - current.left, current.bottom - current.top};
             bool appearing = !IsWindowVisible(candidate_);
-            bool interruptedHide = hiding_;
-            if (hiding_)
+            if (!appearing && transitionsEnabled_ && state_.animationEnabled && from != target)
             {
-                StopTransition(); hiding_ = false;
-                SetWindowLongPtrW(candidate_, GWL_EXSTYLE, GetWindowLongPtrW(candidate_, GWL_EXSTYLE) & ~WS_EX_TRANSPARENT);
-            }
-            if (appearing)
-            {
-                from = target;
-                if (state_.vertical)
-                { if (lastCandidateAbove_) from.y += from.height; from.height = 0; }
-                else from.width = 0;
-            }
-            if (transitionsEnabled_ && state_.animationEnabled && from != target)
-            {
-                if (!transition_.Active() || transition_.Target() != target)
+                if (!transition_.Active() || transition_.Target() != target ||
+                    transition_.Duration() != static_cast<unsigned>(state_.animationDurationMs))
                 {
                     transition_.Start(from, target, GetTickCount64(), RefreshRate(destination),
-                        state_.animationShowMs, appearing || interruptedHide ? state_.animationShowMs : state_.animationHideMs);
+                        state_.animationDurationMs);
                     if (!transition_.Active())
                     { StopTransition(); candidateRenderer_.Present(candidate_, &destination); return; }
-                    if (appearing)
-                    {
-                        SIZE initial{std::max(1, from.width), std::max(1, from.height)};
-                        POINT point{from.x, from.y};
-                        transitionRenderer_.Prepare(state_, display_, candidateDpi_, false, &initial);
-                        transitionRenderer_.Present(candidate_, &point);
-                    }
+
                     if (!SetTimer(candidate_, 4, transition_.Interval(), nullptr))
                     { StopTransition(); candidateRenderer_.Present(candidate_, &destination); }
                 }
@@ -243,7 +201,7 @@ namespace tiger::overlay
             auto anchor = placement_.Anchor();
             UINT dpi = validCaret_ ? DpiAt({anchor.x, anchor.y}) : 96;
             bool changed = force || !candidateDrawn_ || state_.animationEnabled != renderedState_.animationEnabled ||
-                state_.animationShowMs != renderedState_.animationShowMs || state_.animationHideMs != renderedState_.animationHideMs || state_.theme != renderedState_.theme || state_.font != renderedState_.font ||
+                state_.animationDurationMs != renderedState_.animationDurationMs || state_.theme != renderedState_.theme || state_.font != renderedState_.font ||
                 state_.fontSize != renderedState_.fontSize || state_.vertical != renderedState_.vertical ||
                 next.mode != display_.mode || next.text != display_.text ||
                 next.selectionStart != display_.selectionStart || next.selectionLength != display_.selectionLength || dpi != candidateDpi_;
@@ -251,7 +209,7 @@ namespace tiger::overlay
             if (validCaret_) candidateDpi_ = dpi;
             if (display_.mode == DisplayMode::Hidden || !validCaret_)
             {
-                BeginHide();
+                HideImmediately();
                 candidateDrawn_ = false;
                 KillTimer(candidate_, 3);
                 candidateRetryCount_ = 0;
@@ -270,13 +228,10 @@ namespace tiger::overlay
                             throw std::runtime_error("Candidate monitor unavailable");
                         // Publish pixels, dimensions and final location together.
                         // The OS retains the previous frame throughout Prepare.
-                        lastCandidateAbove_ = placement.IsAbove();
                         PublishCandidate(size, destination);
-                        shownState_ = state_;
-                        shownDisplay_ = display_;
                         candidateSize_ = size;
                         placement_ = placement;
-                        lastCandidateAbove_ = placement.IsAbove();
+
                         candidateDrawn_ = true;
                         candidateRetryCount_ = 0;
                         KillTimer(candidate_, 3);

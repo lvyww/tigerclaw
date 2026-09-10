@@ -376,18 +376,15 @@ namespace TigerClaw.Core.Tests
                 var state = new CoreRuntimeState(root);
                 state.Initialize();
                 True(state.GetCandidateAnimationEnabled(), "animation enabled default");
-                True(state.GetCandidateAnimationShowMs() == 20, "animation show default");
-                True(state.GetCandidateAnimationHideMs() == 200, "animation hide default");
+                True(state.GetCandidateAnimationDurationMs() == 200, "animation duration default");
                 state.TrySetConfigValue("候选窗动效", "否", out _, out _);
-                state.TrySetConfigValue("候选窗出现时间(毫秒)", "75", out _, out _);
-                state.TrySetConfigValue("候选窗消失时间(毫秒)", "420", out _, out _);
+                state.TrySetConfigValue("候选窗动效时间(毫秒)", "420", out _, out _);
                 True(!state.GetCandidateAnimationEnabled(), "animation disabled");
-                True(state.GetCandidateAnimationShowMs() == 75, "animation custom show");
-                True(state.GetCandidateAnimationHideMs() == 420, "animation custom hide");
-                state.TrySetConfigValue("候选窗出现时间(毫秒)", "", out _, out _);
-                True(state.GetCandidateAnimationShowMs() == 20, "animation empty uses default");
-                state.TrySetConfigValue("候选窗消失时间(毫秒)", "0", out _, out _);
-                True(state.GetCandidateAnimationHideMs() == 0, "animation zero means immediate");
+                True(state.GetCandidateAnimationDurationMs() == 420, "animation custom duration");
+                state.TrySetConfigValue("候选窗动效时间(毫秒)", "", out _, out _);
+                True(state.GetCandidateAnimationDurationMs() == 200, "animation empty uses default");
+                state.TrySetConfigValue("候选窗动效时间(毫秒)", "0", out _, out _);
+                True(state.GetCandidateAnimationDurationMs() == 0, "animation zero means immediate");
             }
             finally
             {

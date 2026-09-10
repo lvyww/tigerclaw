@@ -19,7 +19,7 @@ namespace tiger::overlay
         int soundVk = 0, soundVolume = 0, candidateDelay = 0, annotationDelay = 0;
         int selected = -1;
         bool animationEnabled = true;
-        int animationShowMs = 20, animationHideMs = 200;
+        int animationDurationMs = 200;
         double fontSize = 0;
         std::int64_t soundSequence = 0, anchorRevision = 0;
         std::int64_t backgroundUntil = 0;

@@ -30,8 +30,7 @@ namespace TigerClaw.Dialog
         private const string KeyManualAddWordEnabled = "Ctrl+等号手动加词";
         private const string KeySwitchRecentSchemaEnabled = "Ctrl+m切换最近码表";
         private const string KeyAnimation = "候选窗动效";
-        private const string KeyAnimationShow = "候选窗出现时间(毫秒)";
-        private const string KeyAnimationHide = "候选窗消失时间(毫秒)";
+        private const string KeyAnimationDuration = "候选窗动效时间(毫秒)";
         private const string KeyManualAddWordShortcut = "手动加词快捷键";
         private const string KeySwitchRecentSchemaShortcut = "切换最近码表快捷键";
         private const string DefaultManualAddWordShortcut = "Ctrl+VK_OEM_PLUS";
@@ -335,11 +334,10 @@ namespace TigerClaw.Dialog
             if (!config.ContainsKey("开启打字音效(娱乐)")) config["开启打字音效(娱乐)"] = No;
             if (!config.ContainsKey(KeyKeySoundVolume)) config[KeyKeySoundVolume] = "30";
             if (!config.ContainsKey(KeyAnimation)) config[KeyAnimation] = Yes;
-            if (!config.ContainsKey(KeyAnimationShow)) config[KeyAnimationShow] = "20";
-            if (!config.ContainsKey(KeyAnimationHide)) config[KeyAnimationHide] = "200";
+            if (!config.ContainsKey(KeyAnimationDuration)) config[KeyAnimationDuration] = "200";
             foreach (KeyValuePair<string, string> kv in config)
             {
-                if (kv.Key == KeyAnimationShow || kv.Key == KeyAnimationHide || kv.Key == KeyKeySoundVolume) continue;
+                if (kv.Key == KeyAnimationDuration || kv.Key == "候选窗出现时间(毫秒)" || kv.Key == "候选窗消失时间(毫秒)" || kv.Key == KeyKeySoundVolume) continue;
                 if (string.Equals(kv.Key, KeyFont, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(kv.Key, KeyPageKey, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(kv.Key, KeyTheme, StringComparison.OrdinalIgnoreCase) ||
@@ -369,7 +367,7 @@ namespace TigerClaw.Dialog
         private sealed class AnimationEditorState
         {
             public CheckBox Enabled;
-            public TextBox Show, Hide;
+            public TextBox Duration;
         }
 
         private sealed class SoundEditorState
@@ -408,29 +406,24 @@ namespace TigerClaw.Dialog
             {
                 Enabled = new CheckBox { IsChecked = IsSettingEnabled(config, KeyAnimation, true),
                     Foreground = Foreground, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) },
-                Show = new TextBox { Text = config[KeyAnimationShow], Style = (Style)FindResource("FieldTextStyle"), MinWidth = 0, Width = 55 },
-                Hide = new TextBox { Text = config[KeyAnimationHide], Style = (Style)FindResource("FieldTextStyle"), MinWidth = 0, Width = 55 }
+                Duration = new TextBox { Text = config[KeyAnimationDuration], Style = (Style)FindResource("FieldTextStyle"), MinWidth = 0, Width = 65 }
             };
             var row = new Grid { Tag = controls, MinHeight = 32,
-                ToolTip = "时间单位：毫秒（0～60000）。出现时间控制出现和扩大，消失时间控制消失和收缩；0 为立即变化。" };
+                ToolTip = "时间单位：毫秒（0～60000）。候选窗移动、扩大和收缩共用此时长，出现和消失立即完成；0 为立即变化。" };
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(210) });
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             row.Children.Add(new TextBlock { Text = "动效", Style = (Style)FindResource("RowTitleStyle"),
                 VerticalAlignment = VerticalAlignment.Center });
             var panel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
             panel.Children.Add(controls.Enabled);
-            panel.Children.Add(new TextBlock { Text = "出现时间", FontSize = 13,
-                Foreground = controls.Show.Foreground, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) });
-            panel.Children.Add(controls.Show);
-            panel.Children.Add(new TextBlock { Text = "消失时间", FontSize = 13,
-                Foreground = controls.Hide.Foreground, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(12, 0, 6, 0) });
-            panel.Children.Add(controls.Hide);
+            panel.Children.Add(new TextBlock { Text = "时间（毫秒）", FontSize = 13,
+                Foreground = controls.Duration.Foreground, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) });
+            panel.Children.Add(controls.Duration);
             Grid.SetColumn(panel, 1);
             row.Children.Add(panel);
             controls.Enabled.Checked += OnAnyEditorChanged;
             controls.Enabled.Unchecked += OnAnyEditorChanged;
-            controls.Show.TextChanged += OnAnyEditorChanged;
-            controls.Hide.TextChanged += OnAnyEditorChanged;
+            controls.Duration.TextChanged += OnAnyEditorChanged;
             return row;
         }
 
@@ -907,7 +900,7 @@ namespace TigerClaw.Dialog
         {
             Dictionary<string, string> current = CollectCurrentValues();
             changedAny = false;
-            foreach (string key in new[] { KeyAnimationShow, KeyAnimationHide })
+            foreach (string key in new[] { KeyAnimationDuration })
             {
                 if (current.TryGetValue(key, out string duration) && !string.IsNullOrWhiteSpace(duration) &&
                     (!int.TryParse(duration, out int milliseconds) || milliseconds < 0 || milliseconds > 60000))
@@ -1123,8 +1116,7 @@ namespace TigerClaw.Dialog
                 if (entry.Editor.Tag is AnimationEditorState animation)
                 {
                     map[KeyAnimation] = animation.Enabled.IsChecked == true ? Yes : No;
-                    map[KeyAnimationShow] = animation.Show.Text ?? string.Empty;
-                    map[KeyAnimationHide] = animation.Hide.Text ?? string.Empty;
+                    map[KeyAnimationDuration] = animation.Duration.Text ?? string.Empty;
                 }
                 else if (entry.Editor is CheckBox cb)
                 {
@@ -1431,7 +1423,7 @@ namespace TigerClaw.Dialog
                 case "隐藏候选":
                     return "隐藏候选窗口，只保留输入中的文字变化。";
                 case "候选窗动效":
-                    return "动效出现时间控制出现和扩大，消失时间控制消失和收缩，单位毫秒。";
+                    return "动效时间控制候选窗移动、扩大和收缩，出现和消失立即完成，单位毫秒。";
                 case "编码伪装":
                     return "对展示编码做轻度伪装处理。";
                 case "空码自动清屏":

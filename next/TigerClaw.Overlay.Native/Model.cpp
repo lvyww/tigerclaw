@@ -110,10 +110,8 @@ namespace tiger::overlay
             scalar("SoundVk", next.soundVk); scalar("SoundVolumePercent", next.soundVolume);
             scalar("CandidateExpandDelayMs", next.candidateDelay); scalar("AnnotationExpandDelayMs", next.annotationDelay);
             scalar("CandidateAnimationEnabled", next.animationEnabled);
-            scalar("CandidateAnimationShowMs", next.animationShowMs);
-            scalar("CandidateAnimationHideMs", next.animationHideMs);
-            next.animationShowMs = std::clamp(next.animationShowMs, 0, 60000);
-            next.animationHideMs = std::clamp(next.animationHideMs, 0, 60000);
+            scalar("CandidateAnimationDurationMs", next.animationDurationMs);
+            next.animationDurationMs = std::clamp(next.animationDurationMs, 0, 60000);
             scalar("SelectedCandidateIndex", next.selected); scalar("FontSize", next.fontSize);
             scalar("SoundSeq", next.soundSequence); scalar("CandidateAnchorRevision", next.anchorRevision);
             scalar("CandidateBackgroundUntil", next.backgroundUntil);

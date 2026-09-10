@@ -167,49 +167,39 @@ int main()
                 state = savedState;
                 state["CandidateExpandDelayMs"] = 0; state["AnnotationExpandDelayMs"] = 0;
                 state["VerticalCandidates"] = vertical; state["CompositionState"] = composition;
-                publish(state); Sleep(260);
+                state["CandidateAnimationDurationMs"] = 600;
+                publish(state); Sleep(700);
                 RECT full{}; GetWindowRect(candidate, &full);
-                auto start = GetTickCount64();
                 state["CandidateVisible"] = false;
-                state["CandidateBackgroundUntil"] = start + 2000; // Legacy deadline is ignored.
+                state["CandidateBackgroundUntil"] = GetTickCount64() + 2000;
                 publish(state);
-                Check(Until([&] { return GetWindowLongPtrW(candidate, GWL_EXSTYLE) & WS_EX_TRANSPARENT; }, 150),
-                    "hide animation starts in every mode");
-                Sleep(70);
-                RECT shrinking{}; GetWindowRect(candidate, &shrinking);
-                Check(IsWindowVisible(candidate), "hide retains pixels during 200 ms animation");
-                Check(vertical ?
-                    shrinking.right - shrinking.left == full.right - full.left && shrinking.bottom - shrinking.top < full.bottom - full.top :
-                    shrinking.bottom - shrinking.top == full.bottom - full.top && shrinking.right - shrinking.left < full.right - full.left,
-                    "hide shrinks only the layout axis");
-                // A repeated hidden update must not reset the deadline.
-                publish(state);
-                Check(Until([&] { return !IsWindowVisible(candidate); }, 500), "hide completes without square dwell");
-                Check(GetTickCount64() - start >= 190 && GetTickCount64() - start < 650, "hide uses 200 ms deadline");
-                state["CandidateVisible"] = true; publish(state); Sleep(100);
-                state["CandidateVisible"] = false; publish(state); Sleep(70);
+                Check(Until([&] { return !IsWindowVisible(candidate); }, 150), "hide is immediate in every mode");
                 state["CandidateVisible"] = true; publish(state);
                 Check(Until([&] { RECT rect{}; GetWindowRect(candidate, &rect);
-                    return IsWindowVisible(candidate) && !(GetWindowLongPtrW(candidate, GWL_EXSTYLE) & WS_EX_TRANSPARENT) &&
-                        rect.right - rect.left == full.right - full.left && rect.bottom - rect.top == full.bottom - full.top;
-                }, 300), "new input interrupts hide and expands to full size");
-                Sleep(160);
-                Check(IsWindowVisible(candidate), "old hide timer cannot hide new candidates");
+                    return IsWindowVisible(candidate) && rect.right - rect.left == full.right - full.left &&
+                        rect.bottom - rect.top == full.bottom - full.top;
+                }, 150), "show publishes full geometry immediately");
             }
         }
         state = savedState; state["CandidateExpandDelayMs"] = 0; state["AnnotationExpandDelayMs"] = 0;
-        publish(state); Sleep(120);
         state["CandidateAnimationEnabled"] = false;
+        state["ShowInputCodeInCandidateWindow"] = true;
         publish(state); Sleep(100);
-        state["CandidateVisible"] = false; publish(state);
-        Check(Until([&] { return !IsWindowVisible(candidate); }, 150), "disabled animation hides immediately");
-        state["CandidateVisible"] = true; publish(state); Sleep(100);
+        state["InputCode"] = "abcdefghijklmnopqrstuv";
+        publish(state); Sleep(100);
+        RECT full{}; GetWindowRect(candidate, &full);
         state["CandidateAnimationEnabled"] = true;
-        state["CandidateAnimationHideMs"] = 400;
-        state["CandidateVisible"] = false; publish(state); Sleep(250);
-        Check(IsWindowVisible(candidate), "custom hide duration stays visible beyond default");
-        Check(Until([&] { return !IsWindowVisible(candidate); }, 400), "custom hide completes");
-        state["CandidateAnimationHideMs"] = 200;
+        state["CandidateAnimationDurationMs"] = 400;
+        state["InputCode"] = "ab";
+        publish(state); Sleep(150);
+        RECT middle{}; GetWindowRect(candidate, &middle);
+        Check(IsWindowVisible(candidate) && middle.right - middle.left < full.right - full.left,
+            "visible resizing animates with custom duration");
+        state["CandidateVisible"] = false; publish(state);
+        Check(Until([&] { return !IsWindowVisible(candidate); }, 150), "hide interrupts active resizing immediately");
+        Sleep(450);
+        Check(!IsWindowVisible(candidate), "old animation cannot resurrect hidden window");
+        state["CandidateAnimationDurationMs"] = 200;
         state["CandidateVisible"] = true; publish(state); Sleep(100);
         // Exercise motion plus resizing, then cancel midway. Late animation
         // timers must never resurrect a committed/hidden composition.

@@ -40,31 +40,22 @@ and `next/_native_build/`; it does not deploy or launch the Overlay.
 
 ## Build
 
-Candidate animations apply to every input mode. Old Core uses the default timings;
-configurable settings require updated Core and Dialog as well as Native Overlay.
-The old `CandidateBackgroundUntil` field is ignored: there is no square dwell.
-Hide takes 200 ms, keeping height while shrinking width to zero in horizontal
-layout, or keeping width while shrinking height to zero in vertical layout.
-Above-caret vertical windows collapse toward their bottom edge. Pixels and text
-remain clipped to the current surface until it is hidden at the deadline.
-Show expands from the same collapsed shape in 20 ms. New input during hiding
-reverses from the actual displayed rectangle with a fresh 20 ms transition.
+Candidate animations apply to every input mode and only interpolate geometry
+while the candidate window is already visible. Movement, growth and shrinkage
+share one duration (default 200 ms). Appearing publishes the full candidate
+frame immediately; disappearing cancels any animation and hides immediately.
+Interrupted geometry changes continue from the actual displayed rectangle.
 
-Experimental frame transitions are enabled by default; set
-`TIGERCLAW_OVERLAY_TRANSITION=0` to compare immediate updates.
-The Candidate settings category exposes one compact row: animation checkbox,
-show duration (default 20 ms), hide duration (default 200 ms).
-Show/growth/movement share the show duration; hide/shrink (including mixed
-grow/shrink) share the hide duration. Values accept 0..60000 ms; zero is immediate,
-empty/invalid configuration falls back to defaults. Disabling animation updates
-all geometry immediately. Settings apply to every input mode.
-Intermediate frames retain normal-size text and selection.
-Monitor-based nominal cadence remains unchanged (requested 2..4 ms); Win32 timers
-have a minimum 10 ms interval and are not synchronized to monitor refresh.
-Late callbacks skip frames, never queue playback or extend the timeline.
-Unchanged geometry publishes new text immediately. Interrupted geometry animations
-start from the currently displayed rectangle. No global timer-resolution change
-or busy waiting is used.
+The Candidate settings category exposes one compact row: animation checkbox and
+duration in milliseconds (`候选窗动效时间(毫秒)`, default 200).
+Values accept 0..60000; zero or disabling animation gives immediate updates.
+Empty/invalid configuration falls back to 200. The old separate show/hide
+settings are ignored and hidden from the settings UI.
+Old Core uses the new default automatically; custom duration requires updated
+Core and Dialog. `TIGERCLAW_OVERLAY_TRANSITION=0` remains a diagnostic override.
+Intermediate frames retain normal-size text and selection. Monitor-based cadence
+is unchanged (requested 2..4 ms; WM_TIMER minimum is 10 ms). Late callbacks skip
+frames rather than queue playback; no global timer-resolution changes are used.
 
 Candidate redraws prepare the complete offscreen frame before publishing pixels,
 size and final caret-relative position in one `UpdateLayeredWindow` call. A failed
