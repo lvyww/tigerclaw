@@ -360,7 +360,7 @@ namespace tiger::overlay
             FillSchemaMenu(schemas);
             const Text themeNames[] = {u"\u9ed8\u8ba4", u"\u901a\u900f", u"\u4e00\u822c\u901a\u900f", u"\u8ff7\u96fe", u"\u661f\u591c", u"\u7eb8", u"\u7c89", u"\u8d5b\u535a\u670b\u514b", u"\u6e05\u6668"};
             for (unsigned i = 0; i < 9; ++i)
-                AppendMenuW(menu, MF_STRING | (themeNames[i] == state_.theme ? MF_CHECKED : 0), 2000 + i, Wide(themeNames[i]).c_str());
+                AppendMenuW(themes, MF_STRING | (themeNames[i] == state_.theme ? MF_CHECKED : 0), 2000 + i, Wide(themeNames[i]).c_str());
             AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(schemas), L"\u65b9\u6848");
             AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(themes), L"\u4e3b\u9898");
             AppendMenuW(menu, MF_STRING, 6, L"\u8bbe\u7f6e");
