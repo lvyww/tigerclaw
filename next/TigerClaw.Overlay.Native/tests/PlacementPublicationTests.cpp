@@ -12,8 +12,8 @@ std::function<void()> duringPresent;
 std::vector<RECT> frames;
 void Check(bool ok, const char* reason) { ++checks; if (!ok) throw std::runtime_error(reason); }
 ULONGLONG WINAPI Tick() { return nowTick; }
-BOOL WINAPI Present(HWND w,HDC dc,const POINT* pos,const SIZE* size,HDC src,const POINT* origin,
-    COLORREF key,const BLENDFUNCTION* blend,DWORD flags)
+BOOL WINAPI Present(HWND w,HDC dc,POINT* pos,SIZE* size,HDC src,POINT* origin,
+    COLORREF key,BLENDFUNCTION* blend,DWORD flags)
 {
     if(w==candidate && failPresent) { --failPresent;SetLastError(ERROR_GEN_FAILURE);return FALSE; }
     const auto ok=UpdateLayeredWindow(w,dc,pos,size,src,origin,key,blend,flags);
