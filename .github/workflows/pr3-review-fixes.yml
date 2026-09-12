@@ -1,0 +1,47 @@
+name: Apply PR3 review fixes
+on:
+  push:
+    branches: [fix/native-pending-candidate-frame]
+    paths: [.github/workflows/pr3-review-fixes.yml]
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+      - name: Apply hash-verified source and regression changes
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, lzma, pathlib, subprocess
+          patch = lzma.decompress(base64.b64decode(pathlib.Path('.review/pr3-review.patch.xz.b64').read_text()))
+          assert hashlib.sha256(patch).hexdigest() == 'a944080c238cc0421c431be0c66a4b30fd22aa9422ec0cf5a07a803e42fb21ad'
+          paths = [
+              'Protocol/ui_state.md',
+              'next/TigerClaw.Core/InputMethodEngine.CandidateFrame.cs',
+              'next/TigerClaw.Core/InputMethodEngine.cs',
+              'next/TigerClaw.Core/ProtocolHandler.cs',
+              'next/TigerClaw.Overlay.Native/Model.cpp',
+              'next/TigerClaw.Overlay.Native/Model.h',
+              'next/TigerClaw.Overlay.Native/PendingFrameTests.cmake',
+              'next/TigerClaw.Overlay.Native/main.cpp',
+              'next/TigerClaw.Overlay.Native/tests/CandidateFrameHoldTests.cpp',
+              'next/TigerClaw.Overlay.Native/tests/test_pending_frame.py',
+              'next/TigerClaw.Shared/OverlayUiState.cs',
+              'tests/TigerClaw.CandidateFrame.Tests/Program.cs',
+          ]
+          subprocess.run(['git','diff','--exit-code','2bc9abc3dc2016ae08efa16e5c4b6f83195f8631','HEAD','--',*paths],check=True)
+          subprocess.run(['git','apply','--index','--binary','--whitespace=nowarn','-'],input=patch,check=True)
+          actual = subprocess.check_output(['git','diff','--cached','--name-only'],text=True).splitlines()
+          assert set(actual) == set(paths), actual
+          subprocess.run(['git','-c','core.whitespace=cr-at-eol','diff','--cached','--check'],check=True)
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Bind pending-frame retention to display session and currently published candidate pixels'
+          git push origin HEAD:fix/native-pending-candidate-frame
