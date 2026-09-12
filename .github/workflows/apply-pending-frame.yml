@@ -22,7 +22,7 @@ jobs:
           payload = b''.join(git('show', f'HEAD:tools/.pending-frame-source/{i}.b64') for i in range(7))
           patch = gzip.decompress(base64.b64decode(payload, validate=True))
           assert hashlib.sha256(patch).hexdigest() == '6be8041cb562cf9a0104d8441a19ab30395337f357288ea7b5e7975b546bd95e'
-          changes = []
+          changes, selected = [], []
           for block in patch.split(b'diff --git ')[1:]:
               paths = block.splitlines()[0].decode().split(' ')
               assert paths[0][2:] == paths[1][2:]
@@ -30,17 +30,21 @@ jobs:
               match = re.search(rb'^index ([0-9a-f]{40})\.\.([0-9a-f]{40})', block, re.M)
               assert match is not None
               before, after = (v.decode() for v in match.groups())
+              if path.startswith('.github/workflows/'):
+                  assert git('rev-parse','HEAD:'+path).decode().strip() == after, path
+                  continue
               if before == '0'*40:
                   assert subprocess.run(['git','cat-file','-e','HEAD:'+path], capture_output=True).returncode != 0
               else:
                   assert git('rev-parse','HEAD:'+path).decode().strip() == before, path
               changes.append((path, after))
-          assert len(changes) == 16
-          subprocess.run(['git','apply','--cached','--whitespace=nowarn','-'], input=patch, check=True)
+              selected.append(b'diff --git '+block)
+          assert len(changes) == 15
+          subprocess.run(['git','apply','--cached','--whitespace=nowarn','-'], input=b''.join(selected), check=True)
           for path, after in changes:
               assert git('rev-parse',':'+path).decode().strip() == after, path
           PY
-          git rm --cached -r tools/.pending-frame-source .github/workflows/apply-pending-frame.yml
+          git rm --cached -r tools/.pending-frame-source
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m 'Preserve an existing native candidate frame while decoding an auto-committed suffix'
