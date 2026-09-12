@@ -1,0 +1,22 @@
+name: Learning implementation workspace
+on:
+  push:
+    branches: [codex/tab-confirmed-learning]
+    paths: [.github/workflows/learning-workspace.yml]
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          lfs: false
+          submodules: false
+      - run: git archive --format=tar HEAD -o source.tar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: learning-source
+          path: source.tar
+          retention-days: 1
