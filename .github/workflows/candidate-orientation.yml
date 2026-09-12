@@ -1,0 +1,30 @@
+name: Candidate orientation
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: candidate-orientation-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Archive exact test inputs
+        run: |
+          git rev-parse HEAD > source-commit.txt
+          git archive --format=zip HEAD next BimeTSF2/SampleIME Protocol AGENTS.md > candidate-source.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: candidate-source
+          path: |
+            candidate-source.zip
+            source-commit.txt
+          retention-days: 1
