@@ -71,3 +71,37 @@ Tests: `TigerClaw.Core.Tests --ui-snapshot-tests` exercises the actual C# writer
 native `overlay_transport_tests` covers first-read acceptance, paused/abandoned
 writers and downgrade matching; opt-in `overlay_window_tests` drives the real
 native application with the new snapshot and event.
+
+## Pending sentence candidate frames
+
+Optional `CandidateHoldWhilePending` (default false) accompanies
+`CandidateVisible=false` when a Chinese sentence composition has an empty
+projected candidate list and its decoder has not finished. Core captures the
+list and decode-pending flag under one engine lock. The existing fresh-caret
+barrier, focus loss, deactivation and cancellation must not emit a hold hint.
+
+Native Overlay may retain an already visible, successfully published candidate
+frame while this hint is true. It never shows a new placeholder, revives a hidden
+window, or restores committed entries into the engine's selectable candidates.
+The current caret must be usable and remain on the published frame's monitor,
+effective DPI and work area. Code-only placeholders do not qualify. Explicit
+candidate hiding and disabled/English modes take precedence.
+
+Retention does not call Present, move/resize the window, advance placement history,
+reset reveal clocks, or accept a pending animation target. Completion drives the
+next layout; there is no extra wait duration, polling loop, or timer. Status UI
+continues updating. A completed empty result takes the ordinary display path,
+not this retention path. Pending snapshots are not reusable candidate data.
+
+This additive field is only on Core-to-Overlay UI snapshots: no TSF/Hook pipe
+change. Older Core omits it; older Native/WPF ignores it and keeps its previous
+immediate-hide behavior. The fix requires rebuilding both Core and Native
+Overlay, with Shared source included. The existing latest-only mailbox and its
+coalescing semantics are unchanged; it is not a cross-context frame cache.
+
+Regression: `tests/TigerClaw.CandidateFrame.Tests` generates isolated MMF snapshots
+from real asynchronous sentence auto-commit (vu -> \u8fd9, then pending j).
+`overlay_pending_frame_tests` consumes that wire trace with real, test-owned
+nonactivating layered windows, controlled time and publication faults. The
+without-hint control must reproduce the original hide. No production IPC,
+registration, input injection or daily-runtime replacement is performed.

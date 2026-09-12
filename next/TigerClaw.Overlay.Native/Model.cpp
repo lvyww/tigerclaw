@@ -103,6 +103,7 @@ namespace tiger::overlay
             };
             scalar("IsOff", next.isOff); scalar("IsChinese", next.isChinese);
             scalar("CandidateVisible", next.candidateVisible); scalar("VerticalCandidates", next.vertical);
+            scalar("CandidateHoldWhilePending", next.candidateHoldWhilePending);
             scalar("ShowCandidateIndex", next.showIndex); scalar("HideCandidateItems", next.hideCandidates);
             scalar("HideStatusBar", next.hideStatus); scalar("ShowInputCodeInCandidateWindow", next.showCode);
             scalar("IsNativeHook", next.nativeHook); scalar("CompositionState", next.composition);
