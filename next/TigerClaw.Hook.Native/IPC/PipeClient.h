@@ -26,11 +26,15 @@ namespace TigerClawHookNative
         bool TrySendCompositionCanceled(std::wstring& error);
         bool TrySendHookDisabled(bool disabled, std::wstring& error);
         bool IsCommunicationBlocked() const;
+        bool NeedsFocusSync() const { return _focusSyncRequired; }
+        std::string PrepareKey(const KeyboardHookEvent& keyEvent, const HookState& state, const CaretSnapshot& caret);
+        bool TrySendPreparedKey(const std::string& request, const FocusSnapshot& focus, CoreResponse& response, std::wstring& error);
+        bool TryCancelForRecovery(std::wstring& error);
 
     private:
-        static constexpr DWORD ConnectTimeoutMs = 1000;
-        static constexpr DWORD NotifyTimeoutMs = 1000;
-        static constexpr DWORD ResponseTimeoutMs = 1000;
+        static constexpr DWORD ConnectTimeoutMs = 20;
+        static constexpr DWORD NotifyTimeoutMs = 20;
+        static constexpr DWORD ResponseTimeoutMs = 60;
 
         bool EnsureRequestPipe(std::wstring& error);
         bool EnsureNotifyPipe(std::wstring& error);
@@ -56,5 +60,10 @@ namespace TigerClawHookNative
         HANDLE _notifyPipe = INVALID_HANDLE_VALUE;
         long _nextSeq = 1;
         bool _communicationBlocked = false;
+        bool _focusSyncRequired = true;
+        std::string _clientSession;
+        unsigned long long _nextEventId = 0;
+        bool _requestFocusKnown = false;
+        FocusSnapshot _requestFocus;
     };
 }

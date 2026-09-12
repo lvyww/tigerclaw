@@ -726,6 +726,13 @@ local function load_mobile(path)
     local bi_index = read_at(bi_index_off, bi_index_count * 16)
     local tri_index = read_at(tri_index_off, tri_index_count * 16)
     local unknown = string.unpack("<f", unigrams, 5)
+    -- Small resident section: decode once instead of binary-searching and
+    -- unpacking it for every uncached trigram probability.
+    local unigram_values = {}
+    for position = 1, #unigrams, 8 do
+        local key, probability = string.unpack("<i4f", unigrams, position)
+        unigram_values[key] = probability
+    end
 
     local cache = {}
     local cache_bytes = 0
@@ -813,19 +820,7 @@ local function load_mobile(path)
     end
 
     local function lookup_unigram(key, fallback)
-        local low, high = 0, uni_count
-        while low < high do
-            local middle = low + math.floor((high - low) / 2)
-            local value = string.unpack("<i4", unigrams, middle * 8 + 1)
-            if value < key then low = middle + 1 else high = middle end
-        end
-        if low < uni_count then
-            local at = low * 8 + 1
-            if string.unpack("<i4", unigrams, at) == key then
-                return string.unpack("<f", unigrams, at + 4)
-            end
-        end
-        return fallback
+        return unigram_values[key] or fallback
     end
 
     local function lookup_context(kind, index_data, index_count, context_count, section_end, key, target)
@@ -1501,6 +1496,40 @@ local function isolation_penalty(text)
     return penalty
 end
 
+-- Evaluate only published/scored paths, never during Beam expansion. Appending
+-- an edge can change the old final character's right neighbour, but cannot
+-- change any earlier character's isolation status.
+local function path_isolation_penalty(item)
+    local model = ensure_kn()
+    if not item or not model or not model.has_observed_bigram or
+        not lexicon_state.isolation_enabled then return 0 end
+    if item._isolation_penalty ~= nil then
+        performance.isolation_hits = performance.isolation_hits + 1
+        return item._isolation_penalty
+    end
+    performance.isolation_misses = performance.isolation_misses + 1
+    local previous = item.previous
+    local penalty = path_isolation_penalty(previous)
+    local last_char = previous and previous._isolation_last_char
+    local last_isolated = previous and previous._isolation_last_isolated or false
+    local chars = item.edge_chars or {}
+    for i = 1, #chars do
+        local ch = chars[i]
+        local rank = lexicon_state.character_ranks[ch] or lexicon_state.unknown_character_rank
+        local rare = rank > isolation_threshold
+        local linked = last_char and (last_isolated or rare) and
+            has_observed_bigram(last_char, ch)
+        if last_isolated and linked then penalty = penalty - isolation_lambda end
+        last_isolated = rare and not linked
+        if last_isolated then penalty = penalty + isolation_lambda end
+        last_char = ch
+    end
+    item._isolation_penalty = penalty
+    item._isolation_last_char = last_char
+    item._isolation_last_isolated = last_isolated
+    return penalty
+end
+
 local function parse_selector(raw, code_end)
     local next_index = code_end + 1
     if next_index > #raw then
@@ -1599,7 +1628,8 @@ local function has_complete_candidate(raw_code, required_text_prefix, excluded_t
                                         required,
                                         matched_length,
                                         candidate.t)
-                                    if next_matched and (not first_ranks_only or candidate.r == 1) then
+                                    if next_matched and (not first_ranks_only or candidate.r == 1 or
+                                        (active_allow_duplicate_single and candidate_is_single(candidate))) then
                                         local next_excluded = packed % stride
                                         if excluded_text and next_excluded <= #excluded_text then
                                             if excluded_text:sub(next_excluded + 1,
@@ -1939,6 +1969,7 @@ local function expand_range(raw, states, from_pos, length, minimum_consumed_end)
                                         supplement_score = (item.supplement_score or 0.0) +
                                             supplement_added,
                                         previous = item,
+                                        edge_chars = chars,
                                         text_length = #text,
                                         raw_length = consumed_end,
                                         edge_count = (item.edge_count or 0) + 1
@@ -1972,9 +2003,19 @@ local function segmented_from_path(raw, path)
     return table.concat(pieces, " ")
 end
 
+local candidate_display_meta = {
+    __index = function(item, key)
+        if key == "segmented" then
+            local value = segmented_from_path(item._raw, item.path)
+            rawset(item, key, value)
+            return value
+        end
+    end
+}
+
 local function evaluate_state(item)
     local ending_adjustment = logp(item.prev2, item.prev1, EOS) -
-        isolation_penalty(item.text)
+        path_isolation_penalty(item)
     return {
         score = item.score + ending_adjustment,
         confidence_score = (item.mass_score or item.score) + ending_adjustment,
@@ -2271,8 +2312,10 @@ local function emit(raw, states, length, include_early_commit, required_text_pre
             or state_better_rank_first
     end
     local result = select_exact_top(all_candidates, candidate_limit, better)
+    result._completed_truncated = completed._truncated or false
     for i = 1, #result do
-        result[i].segmented = segmented_from_path(raw, result[i].path)
+        result[i]._raw = raw
+        setmetatable(result[i], candidate_display_meta)
     end
     result.early_commit_evidence = {
         prefixes = {},
@@ -2420,6 +2463,19 @@ local function decode(raw_code, include_early_commit, required_text_prefix)
         -- lattice with early-commit evidence before accepting the next key.
         -- Reuse the lattice; rebuilding a long composition here caused the
         -- visible pause after roughly forty uncommitted keys.
+        -- Only evidence is missing/different. Keep final scoring, Top-K and
+        -- lazily generated display strings for this exact generation.
+        local result = decode_cache.result
+        if result then
+            result.early_commit_evidence = build_early_commit_evidence(
+                raw, old_states, result,
+                result._completed_truncated,
+                required_text_prefix)
+            decode_cache.includes_early_commit = true
+            decode_cache.required_text_prefix = required_text_prefix
+            record_decode(started)
+            return result
+        end
         states = old_states
     elseif old_states and type(old_raw) == "string" and old_raw ~= "" then
         local old_n = #old_raw
@@ -2597,9 +2653,11 @@ local function implicit_rank_allowed(candidate, raw, continuation_after_auto_com
     if not continuation_after_auto_commit then
         return true
     end
-    -- Continuations after empty-code auto commit keep implicit first ranks
-    -- only; an explicit selector suffix still unlocks any rank.
-    return has_selection_suffix(raw) or (candidate.max_rank or 1) <= 1
+    -- Segmented paths already passed decoder eligibility. Do not discard
+    -- legal duplicate singles when empty-code commit fixes an earlier prefix.
+    local previous = candidate.path and candidate.path.previous
+    return has_selection_suffix(raw) or (candidate.max_rank or 1) <= 1 or
+        (active_allow_duplicate_single and previous and (previous.text or "") ~= "")
 end
 
 local function strong_empty_code_candidate(candidate, eligible, visible_top, pool_truncated)
@@ -2643,10 +2701,12 @@ local function capture_empty_code_candidate(full_before, committed_text)
     local eligible = {}
     local restrict = not has_selection_suffix(full_before)
     for i = 1, #decoded do
-        -- Whole-input non-first ranks are visible for explicit selection, but
-        -- are not legal implicit segments after the appended key makes the
-        -- edge dead, so they never join the empty-code eligible group.
-        if not restrict or (decoded[i].max_rank or 1) <= 1 then
+        -- Include duplicate singles in uniqueness and confidence, even when
+        -- the current whole-input winner is still ordered by lexicon rank.
+        local previous = decoded[i].path and decoded[i].path.previous
+        if not restrict or (decoded[i].max_rank or 1) <= 1 or
+            (active_allow_duplicate_single and
+             ((previous and (previous.text or "") ~= "") or utf_length(decoded[i].text) == 1)) then
             eligible[#eligible + 1] = decoded[i]
         end
     end
@@ -3237,6 +3297,9 @@ M.lexicon_data_view = function()
     }
 end
 M.capture_empty_code_candidate = capture_empty_code_candidate
+-- Independent full-text oracle for regression tests of lazy path scoring.
+M.reference_isolation_penalty = isolation_penalty
+M.path_isolation_penalty = path_isolation_penalty
 M.has_complete_candidate = has_complete_candidate
 M.set_allow_duplicate_single = set_allow_duplicate_single
 M.build_prefix_evidence = build_prefix_evidence

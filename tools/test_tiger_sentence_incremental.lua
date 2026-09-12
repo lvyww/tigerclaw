@@ -48,6 +48,31 @@ local function fail(message)
     os.exit(1)
 end
 
+local function check_lazy_scoring(raw)
+    sentence.reset_decode_cache()
+    for length = 1, #raw do
+        local prefix = raw:sub(1, length)
+        local result = sentence.decode(prefix, false, "")
+        for i = 1, #result do
+            local candidate = result[i]
+            if sentence.path_isolation_penalty(candidate.path) ~=
+                sentence.reference_isolation_penalty(candidate.text) then
+                fail("incremental isolation differs from full-text oracle: " .. candidate.text)
+            end
+            if rawget(candidate, "segmented") ~= nil then
+                fail("decode eagerly constructed display segmentation")
+            end
+        end
+        local with_evidence = sentence.decode(prefix, true, "")
+        if result ~= with_evidence then
+            fail("same-generation evidence did not reuse candidate results")
+        end
+        if not sentence.results_equal(with_evidence, sentence.decode_full(prefix, true, "")) then
+            fail("lazy output/evidence differs from full rebuild: " .. prefix)
+        end
+    end
+end
+
 sentence.ensure_lexicon(nil)
 local status = sentence.data_status()
 if not status.built then
@@ -77,6 +102,22 @@ end
 print(string.format(
     "OK  plain-text data files loaded (%d codes, %d ranks, %d whitelist)",
     status.codes_count, status.ranks_count, status.whitelist_count))
+
+for _, raw in ipairs({ "awmenamcunta", "iejryfenahbmsp", "jqtusotuqiueottu",
+        "nnczggqrrjrrltwwbwkedmkswgjgiuapnphbszbp" }) do
+    check_lazy_scoring(raw)
+end
+-- A local PRNG leaves other tests' random state untouched.
+local seed = 20260907
+for _ = 1, 20 do
+    local chars = {}
+    for i = 1, 40 do
+        seed = seed * 48271 % 2147483647
+        chars[i] = string.char(97 + seed % 26)
+    end
+    check_lazy_scoring(table.concat(chars))
+end
+print("OK  lazy path isolation, display and evidence match full-text/full-decode oracles")
 
 sentence.reset_decode_cache()
 local standalone_rl = sentence.decode("rl")
@@ -490,6 +531,9 @@ punctuation_schema:close()
 if not punctuation_schema_content:find("import_preset: symbols", 1, true) then
     fail("schema does not import the editable symbols.yaml punctuation table")
 end
+if not punctuation_schema_content:match('\npunctuator:%s*\n.-\n  digit_separators: ""') then
+    fail("schema must disable Rime's pending ASCII digit-separator candidates")
+end
 local symbols_file = assert(io.open(
     repo .. "/rime/tiger_sentence/symbols.yaml", "rb"))
 local symbols_content = symbols_file:read("*a")
@@ -589,6 +633,8 @@ if #commits_dig ~= 4 or commits_dig[4] ~= "7" then
     fail("digits stopped committing after a decimal point")
 end
 -- A comma passes through to the punctuator instead of being intercepted.
+-- The schema check above is essential: the Lua-only mock cannot exercise
+-- librime's punct_number branch, which otherwise opens an ASCII comma menu.
 sentence.processor(fake_key(","), env_dig)
 if #commits_dig ~= 4 or context_dig.input ~= "" then
     fail("comma after digits should pass through to the punctuator")
@@ -659,6 +705,20 @@ if #yielded ~= 1 or yielded[1] ~= "了" then
     fail("automatic-commit continuation rl exposed an implicit non-first candidate")
 end
 print("OK  automatic-commit continuation uses first ranks only")
+
+-- A segmented decoder-approved duplicate single remains legal in continuation.
+context_empty.input = "xrxbj"
+yielded = {}
+Candidate = function(_, _, _, text, _) return { text = text } end
+yield = function(candidate) yielded[#yielded + 1] = candidate.text end
+sentence.translator("xrxbj", { start = 0, _end = 5 }, env_empty)
+Candidate, yield = old_candidate, old_yield
+local has_rumination = false
+for _, text in ipairs(yielded) do
+    if text == "反刍" then has_rumination = true end
+end
+if not has_rumination then fail("empty-code continuation filtered legal 反刍") end
+print("OK  empty-code continuation retains duplicate single characters")
 
 -- 保留最少编码数量 also gates empty-code auto commit. Every two-letter
 -- combination is a valid code in this table, so a retained floor of two can
@@ -1009,6 +1069,19 @@ local ja = sentence.decode("ja")
 if not ja[1] or ja[1].text ~= "甲" or not ja[2] or ja[2].text ~= "乙" then
     fail("imported table lost line-order ranks for shared code ja")
 end
+sentence.set_allow_duplicate_single(nil)
+if sentence.capture_empty_code_candidate("ja", "") then
+    fail("duplicate single was excluded from empty-code confidence")
+end
+if not sentence.has_complete_candidate("ja", "", "甲", true) then
+    fail("exact empty-code query lost the duplicate single")
+end
+sentence.set_allow_duplicate_single({ get_option = function() return false end })
+if not sentence.capture_empty_code_candidate("ja", "") or
+    sentence.has_complete_candidate("ja", "", "甲", true) then
+    fail("disabled duplicate-single switch did not restore first-rank grouping")
+end
+sentence.set_allow_duplicate_single(nil)
 rime_api.get_user_data_dir = original_user_dir
 os.execute("rm -rf '" .. import_dir .. "'")
 sentence.apply_high_freq_limit(1500)

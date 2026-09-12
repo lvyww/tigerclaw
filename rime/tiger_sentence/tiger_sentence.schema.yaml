@@ -71,6 +71,9 @@ key_binder:
     - { when: has_menu, accept: equal, send: Page_Down }
 
 punctuator:
+  # Disable Rime's pending ASCII number-separator candidates (e.g. 1 + comma).
+  # Lua already handles decimal points; other punctuation follows symbols.yaml.
+  digit_separators: ""
   # Use the user's symbols.yaml punctuation table. Scalar/{commit: ...}
   # entries commit directly; list entries intentionally open a symbol menu.
   import_preset: symbols

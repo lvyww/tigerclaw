@@ -16,6 +16,8 @@ static volatile LONG s_capsCompensateWorkerRunning = 0;
 static const ULONGLONG kFailedKeyQueueTtlMs = 5000;
 static const size_t kFailedKeyQueueMaxSize = 128;
 static const DWORD kPipeKeyResponseTimeoutMs = 60;
+static const DWORD kFailedKeyFlushBudgetMs = 60;
+static const size_t kFailedKeyFlushBatchSize = 8;
 static const UINT kKeyUpForwardBudgetMax = 20;
 
 static LONG GetPendingCapsCompensateFlag()
@@ -917,6 +919,7 @@ void CSampleIME::_EnqueueFailedKeyMessage(UINT vkCode,
     _failedKeyQueue.push_back(message);
 
     _PruneFailedKeyQueue(nowTick);
+    _ScheduleFailedKeyFlush();
 
     Global::LogToFileVerbose("KeyFailQueue: enqueue size=%u vk=%u action=%s reason=%s",
                              static_cast<unsigned>(_failedKeyQueue.size()),
@@ -927,7 +930,20 @@ void CSampleIME::_EnqueueFailedKeyMessage(UINT vkCode,
 
 BOOL CSampleIME::_FlushFailedKeyQueue(_In_opt_ ITfContext *pContext, _In_z_ const char *stageTag)
 {
+    if (_failedKeyFlushActive)
+    {
+        _ScheduleFailedKeyFlush();
+        return FALSE;
+    }
+    struct FlushScope
+    {
+        bool &active;
+        explicit FlushScope(bool &value) : active(value) { active = true; }
+        ~FlushScope() { active = false; }
+    } scope(_failedKeyFlushActive);
     ULONGLONG nowTick = GetTickCount64();
+    const ULONGLONG started = nowTick;
+    size_t flushed = 0;
     _PruneFailedKeyQueue(nowTick);
     if (_failedKeyQueue.empty())
     {
@@ -936,13 +952,20 @@ BOOL CSampleIME::_FlushFailedKeyQueue(_In_opt_ ITfContext *pContext, _In_z_ cons
 
     if (!_EnsurePipeConnected())
     {
+        _ScheduleFailedKeyFlush();
         Global::LogToFileVerbose("KeyFailQueue: flush skipped disconnected size=%u", static_cast<unsigned>(_failedKeyQueue.size()));
         return FALSE;
     }
 
     while (!_failedKeyQueue.empty())
     {
-        const FailedKeyMessage &message = _failedKeyQueue.front();
+        ULONGLONG elapsed = GetTickCount64() - started;
+        if (elapsed >= kFailedKeyFlushBudgetMs || flushed >= kFailedKeyFlushBatchSize)
+        {
+            _ScheduleFailedKeyFlush();
+            return FALSE;
+        }
+        const FailedKeyMessage message = _failedKeyQueue.front();
         ULONGLONG age = (nowTick >= message.tick) ? (nowTick - message.tick) : 0;
         if (age > kFailedKeyQueueTtlMs)
         {
@@ -968,10 +991,11 @@ BOOL CSampleIME::_FlushFailedKeyQueue(_In_opt_ ITfContext *pContext, _In_z_ cons
                                                   message.caretX,
                                                   message.caretY,
                                                   &response,
-                                                  kPipeKeyResponseTimeoutMs,
+                                                  static_cast<DWORD>(kFailedKeyFlushBudgetMs - elapsed),
                                                   message.eventId);
         if (FAILED(hr))
         {
+            _ScheduleFailedKeyFlush();
             Global::LogToFile("KeyFailQueue: flush failed hr=0x%08X vk=%u action=%s size=%u",
                               static_cast<unsigned>(hr),
                               message.vkCode,
@@ -980,6 +1004,11 @@ BOOL CSampleIME::_FlushFailedKeyQueue(_In_opt_ ITfContext *pContext, _In_z_ cons
             return FALSE;
         }
 
+        // Focus notifications dispatched during the wait invalidate queued keys.
+        if (_failedKeyQueue.empty() || _failedKeyQueue.front().eventId != message.eventId)
+        {
+            return FALSE;
+        }
         BOOL committedViaAnchor = FALSE;
         _ApplyResponseAndSyncState(pContext, &response, stageTag, &committedViaAnchor);
         if (message.isKeyDown)
@@ -994,11 +1023,47 @@ BOOL CSampleIME::_FlushFailedKeyQueue(_In_opt_ ITfContext *pContext, _In_z_ cons
                                  message.isKeyDown ? "down" : "up",
                                  response.handled,
                                  committedViaAnchor);
+        if (_failedKeyQueue.empty() || _failedKeyQueue.front().eventId != message.eventId)
+        {
+            return FALSE;
+        }
         _failedKeyQueue.pop_front();
+        ++flushed;
         nowTick = GetTickCount64();
     }
 
     return TRUE;
+}
+
+void CSampleIME::_ScheduleFailedKeyFlush()
+{
+    if (_msgWndHandle != nullptr && !_failedKeyQueue.empty())
+    {
+        SetTimer(_msgWndHandle, kFailedKeyFlushTimerId, 30, nullptr);
+    }
+}
+
+void CSampleIME::_HandleFailedKeyFlush()
+{
+    KillTimer(_msgWndHandle, kFailedKeyFlushTimerId);
+    if (_failedKeyQueue.empty()) return;
+    ITfDocumentMgr *document = nullptr;
+    ITfContext *context = nullptr;
+    if (_pThreadMgr != nullptr && SUCCEEDED(_pThreadMgr->GetFocus(&document)) && document != nullptr)
+    {
+        document->GetTop(&context);
+    }
+    if (context != nullptr && !_trialExpired && !_IsStartupGuardActive() && !_IsKeyboardDisabled(context))
+    {
+        _FlushFailedKeyQueue(context, "FailedKeyTimer");
+    }
+    else
+    {
+        _PruneFailedKeyQueue(GetTickCount64());
+        _ScheduleFailedKeyFlush();
+    }
+    if (context != nullptr) context->Release();
+    if (document != nullptr) document->Release();
 }
 
 BOOL CSampleIME::_ApplyResponseAndSyncState(_In_opt_ ITfContext *pContext, _Inout_ BimeResponse *pResponse, _In_z_ const char *stageTag, _Out_opt_ BOOL *pCommittedViaAnchor)

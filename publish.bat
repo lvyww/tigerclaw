@@ -58,7 +58,7 @@ if not defined MSBUILD (
 )
 
 set "CORE_PROJECT=%ROOT%\next\TigerClaw.Core\TigerClaw.Core.csproj"
-set "OVERLAY_PROJECT=%ROOT%\next\TigerClaw.Overlay\TigerClaw.Overlay.csproj"
+set "OVERLAY_PROJECT=%ROOT%\next\build_overlay.bat"
 set "DIALOG_PROJECT=%ROOT%\next\TigerClaw.Dialog\TigerClaw.Dialog.csproj"
 set "HOOK_NATIVE_PROJECT=%ROOT%\next\TigerClaw.Hook.Native\TigerClaw.Hook.Native.vcxproj"
 set "TSF_PROJECT=%ROOT%\BimeTSF2\SampleIME\BimeTSF2.vcxproj"
@@ -204,7 +204,7 @@ if errorlevel 1 (
 
 echo.
 echo [4/13] Build TigerClaw.Overlay Release
-"%DOTNET%" msbuild /m /nr:false "%OVERLAY_PROJECT%" /restore /p:Configuration=Release /p:Platform=AnyCPU /p:OutDir="%OVERLAY_OUT%\\" /v:minimal
+call "%OVERLAY_PROJECT%" x64 "%OVERLAY_OUT%" Release
 if errorlevel 1 (
     echo ERROR: TigerClaw.Overlay Release build failed.
     exit /b 1
@@ -302,6 +302,7 @@ if not exist "%RELEASE_MODELS%" mkdir "%RELEASE_MODELS%"
 
 call :RequireFile "%CORE_OUT%\TigerClaw.Core.exe" "TigerClaw.Core.exe" || exit /b 1
 call :RequireFile "%OVERLAY_OUT%\TigerClaw.Overlay.exe" "TigerClaw.Overlay.exe" || exit /b 1
+for %%F in (Overlay-THIRD-PARTY-NOTICES.txt sounds\KeyNormal.wav sounds\KeySpace.wav sounds\KeyFunc.wav) do call :RequireFile "%OVERLAY_OUT%\%%F" "%%F" || exit /b 1
 call :RequireFile "%DIALOG_OUT%\TigerClaw.Dialog.exe" "TigerClaw.Dialog.exe" || exit /b 1
 call :RequireFile "%SENTENCE_OUT%\TigerClaw.Sentence.exe" "TigerClaw.Sentence.exe" || exit /b 1
 call :RequireFile "%SENTENCE_NGRAM_MODEL%" "sentence n-gram model" || exit /b 1
@@ -317,6 +318,9 @@ if exist "%RELEASE_DIR%\TigerClaw.Core.exe.config" del /q "%RELEASE_DIR%\TigerCl
 if exist "%CORE_OUT%\TigerClaw.Core.pdb" del /q "%RELEASE_DIR%\TigerClaw.Core.pdb" >nul 2>&1
 
 call :CopyFileStrict "%OVERLAY_OUT%\TigerClaw.Overlay.exe" "%RELEASE_DIR%\TigerClaw.Overlay.exe" || exit /b 1
+if not exist "%OVERLAY_OUT%\TigerClaw.Overlay.exe.config" if exist "%RELEASE_DIR%\TigerClaw.Overlay.exe.config" del /q "%RELEASE_DIR%\TigerClaw.Overlay.exe.config"
+if not exist "%RELEASE_DIR%\sounds" mkdir "%RELEASE_DIR%\sounds"
+for %%F in (Overlay-THIRD-PARTY-NOTICES.txt sounds\KeyNormal.wav sounds\KeySpace.wav sounds\KeyFunc.wav) do call :CopyFileStrict "%OVERLAY_OUT%\%%F" "%RELEASE_DIR%\%%F" || exit /b 1
 if exist "%OVERLAY_OUT%\TigerClaw.Overlay.exe.config" call :CopyFileStrict "%OVERLAY_OUT%\TigerClaw.Overlay.exe.config" "%RELEASE_DIR%\TigerClaw.Overlay.exe.config" || exit /b 1
 if exist "%OVERLAY_OUT%\TigerClaw.Overlay.pdb" del /q "%RELEASE_DIR%\TigerClaw.Overlay.pdb" >nul 2>&1
 
@@ -347,7 +351,7 @@ call :CopyFileStrict "%HOOK_NATIVE_OUT%\TigerClaw.Hook.Native.exe" "%RELEASE_DIR
 if exist "%HOOK_NATIVE_OUT%\TigerClaw.Hook.Native.pdb" del /q "%RELEASE_DIR%\TigerClaw.pdb" >nul 2>&1
 
 if exist "%ROOT%\next\TigerClaw.Dialog\bime.ico" call :CopyFileStrict "%ROOT%\next\TigerClaw.Dialog\bime.ico" "%RELEASE_DIR%\bime.ico" || exit /b 1
-call :CopyFileStrict "%OVERLAY_OUT%\TigerClaw.Shared.dll" "%RELEASE_DIR%\TigerClaw.Shared.dll" || exit /b 1
+call :CopyFileStrict "%DIALOG_OUT%\TigerClaw.Shared.dll" "%RELEASE_DIR%\TigerClaw.Shared.dll" || exit /b 1
 call :CopyFileStrict "%TSF_X64_DLL%" "%RELEASE_TSF_X64%\TigerClaw.dll" || exit /b 1
 call :CopyFileStrict "%TSF_X86_DLL%" "%RELEASE_TSF_X86%\TigerClaw.dll" || exit /b 1
 if defined CHANGELOG_NAME if exist "%CHANGELOG_FILE%" call :CopyFileStrict "%CHANGELOG_FILE%" "%RELEASE_DIR%\!CHANGELOG_NAME!" || exit /b 1

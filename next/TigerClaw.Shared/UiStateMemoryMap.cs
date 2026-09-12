@@ -18,15 +18,21 @@ namespace TigerClaw.Shared
         private readonly object _sync = new object();
         private readonly MemoryMappedFile _mmf;
         private readonly MemoryMappedViewAccessor _view;
+        private readonly UiStateSnapshotPublisher _snapshot;
 #if !NET8_0_OR_GREATER
         private readonly DataContractJsonSerializer _serializer = new DataContractJsonSerializer(typeof(OverlayUiState));
 #endif
         private long _sequence;
 
-        public UiStatePublisher()
+        public UiStatePublisher() : this(RuntimeConstants.UiStateMmfName)
         {
-            _mmf = MemoryMappedFile.CreateOrOpen(RuntimeConstants.UiStateMmfName, Capacity);
+        }
+
+        public UiStatePublisher(string mapName)
+        {
+            _mmf = MemoryMappedFile.CreateOrOpen(mapName, Capacity);
             _view = _mmf.CreateViewAccessor();
+            _snapshot = new UiStateSnapshotPublisher(mapName);
         }
 
         public void Publish(OverlayUiState state)
@@ -45,9 +51,8 @@ namespace TigerClaw.Shared
             int maxPayload = Capacity - HeaderSize;
             if (payload.Length > maxPayload)
             {
-                byte[] clipped = new byte[maxPayload];
-                Buffer.BlockCopy(payload, 0, clipped, 0, maxPayload);
-                payload = clipped;
+                // Truncating UTF-8 JSON cannot produce a usable UI state.
+                return;
             }
 
             lock (_sync)
@@ -59,6 +64,7 @@ namespace TigerClaw.Shared
                 _view.Write(sizeof(long) * 2, payload.Length);
                 _view.WriteArray(HeaderSize, payload, 0, payload.Length);
                 _view.Flush();
+                _snapshot.Publish(seq, tick, payload);
             }
         }
 
@@ -86,6 +92,7 @@ namespace TigerClaw.Shared
 
         public void Dispose()
         {
+            _snapshot.Dispose();
             _view.Dispose();
             _mmf.Dispose();
         }

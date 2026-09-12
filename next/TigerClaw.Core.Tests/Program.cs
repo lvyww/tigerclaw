@@ -22,6 +22,17 @@ namespace TigerClaw.Core.Tests
         {
             try
             {
+                if (args.Length == 2 && args[0] == "--ui-publish-stdio")
+                    return RunUiPublisherProbe(args[1]);
+                if (args.Length == 1 && args[0] == "--ui-snapshot-tests")
+                {
+                    RunUiSnapshotTests();
+                    return 0;
+                }
+                if (args.Length == 1 && args[0] == "--overlay-format-stdio")
+                {
+                    return RunOverlayFormatProbe();
+                }
                 if (args.Length == 2 &&
                     string.Equals(args[0], "--core-diff-stdio", StringComparison.OrdinalIgnoreCase))
                 {
@@ -192,6 +203,9 @@ namespace TigerClaw.Core.Tests
                 SentenceEngineHonorsSelectionSymbolSettings();
                 SentenceEngineKeepsArrowSelectionInPlace();
                 SentenceEngineUsesTabToTraverseCandidates();
+                SentenceTabSelectionLocksOnContinuedInput();
+                SentenceTabLocksStackAndPreserveSelectors();
+                SentenceEmptyCodeCountsDuplicateSingles();
                 SentenceEnginePassesCtrlNumberShortcut();
                 SentenceEngineCommitsSmartQuoteAfterCandidate();
                 SentenceMinRetainedRawLengthDefaultsToZeroAndClamps();
@@ -208,6 +222,10 @@ namespace TigerClaw.Core.Tests
                 SentencePathCheckMatchesFullDecode();
                 SentenceEmptyCodeDoesNotTreatPrunedCandidateAsUnique();
                 SentenceAutoCommitExitKeepsOnlyLiveTail();
+                SmartSentenceFixedSegmentation();
+                SmartSentenceClosedSegmentDisplay();
+                SmartSentenceKeysAndExits();
+                SmartSentenceEarlyCommitConsumesSeparators();
                 TemporaryPinyinAlwaysShowsReverseLookupAnnotations();
                 SettingsOrderIsIndependentOfConfigurationOrder();
                 SentenceNeuralWeightPreservesShortNgramWinner();
@@ -226,6 +244,7 @@ namespace TigerClaw.Core.Tests
                 SentenceAutoCommitStopsBeforeExtendableSegment();
                 SentenceAutoCommitUsesTwoStrongGenerationCommonPrefix();
                 SentenceAutoCommitKeepsThreeGenerationWindowForWeakEvidence();
+                SentenceEmptyCodeContinuationPreservesDuplicateSingles();
                 SentenceAutoCommitTracksPrefixesIndependently();
                 SentencePrefixEvidenceWeightsBoundaryDisagreement();
                 SentencePrefixEvidenceKeepsRawBoundariesDistinct();
@@ -237,6 +256,7 @@ namespace TigerClaw.Core.Tests
                 CustomActionShortcutsTriggerAndRearm();
                 CustomRecentSchemaShortcutSwitchesSchemas();
                 SchemaSwitchPreservesOnlyLiveRaw();
+                CandidateAnimationSettings();
                 KeyResponsesDeclareExpectedKeyUp();
                 CtrlSpaceStillTogglesWithExpectedKeyUpResponses();
                 KeyUpExpectationCoversReleaseDependentState();
@@ -249,6 +269,7 @@ namespace TigerClaw.Core.Tests
                 SentenceAutoEnableUsesSchemaNameWithoutChangingSwitch();
                 SentenceGoldenExportIsDeterministic();
                 SentenceGoldenCasesIncrementalMatchesFull();
+                RunUiSnapshotTests();
                 Console.WriteLine("TigerClaw.Core.Tests: all tests passed.");
                 return 0;
             }
@@ -343,6 +364,31 @@ namespace TigerClaw.Core.Tests
                 {
                     Directory.Delete(root, recursive: true);
                 }
+            }
+        }
+
+        private static void CandidateAnimationSettings()
+        {
+            string root = Path.Combine(Path.GetTempPath(), "TigerClaw-AnimationTest-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            try
+            {
+                var state = new CoreRuntimeState(root);
+                state.Initialize();
+                True(state.GetCandidateAnimationEnabled(), "animation enabled default");
+                True(state.GetCandidateAnimationDurationMs() == 200, "animation duration default");
+                state.TrySetConfigValue("候选窗动效", "否", out _, out _);
+                state.TrySetConfigValue("候选窗动效时间(毫秒)", "420", out _, out _);
+                True(!state.GetCandidateAnimationEnabled(), "animation disabled");
+                True(state.GetCandidateAnimationDurationMs() == 420, "animation custom duration");
+                state.TrySetConfigValue("候选窗动效时间(毫秒)", "", out _, out _);
+                True(state.GetCandidateAnimationDurationMs() == 200, "animation empty uses default");
+                state.TrySetConfigValue("候选窗动效时间(毫秒)", "0", out _, out _);
+                True(state.GetCandidateAnimationDurationMs() == 0, "animation zero means immediate");
+            }
+            finally
+            {
+                Directory.Delete(root, recursive: true);
             }
         }
 
@@ -3585,6 +3631,132 @@ namespace TigerClaw.Core.Tests
             Equal(second, Press(engine, 0x20).TextToOutput, nameof(SentenceEngineKeepsArrowSelectionInPlace) + ".commit");
         }
 
+        private static void SentenceTabSelectionLocksOnContinuedInput()
+        {
+            foreach (bool autoCommit in new[] { false, true })
+            foreach (bool synchronous in new[] { false, true })
+            {
+                var state = new CoreRuntimeState();
+                EnableSentenceMode(state);
+                state.TrySetConfigValue("整句自动提前上屏", autoCommit ? "是" : "否", out _, out _);
+                using (var engine = new InputMethodEngine(state, CreateSentenceDecoder(
+                    new Dictionary<string, List<string>>
+                    {
+                        ["ab"] = new List<string> { "甲", "乙乙" },
+                        ["cd"] = new List<string> { "丙", "戊戊" },
+                        ["abcd"] = new List<string> { "丁" }
+                    }), sentenceDecodeSynchronously: synchronous))
+                {
+                    void WaitForDecode() => True(SpinWait.SpinUntil(() => !engine.IsSentenceDecodePending, 3000),
+                        "tab_lock.decode_completed");
+                    TypeLetters(engine, "ab");
+                    WaitForDecode();
+                    Equal(null, Press(engine, 0x09).TextToOutput, "tab_lock.no_immediate_commit");
+                    True(engine.GetUiSnapshot(5).SelectedCandidateIndex == 1, "tab_lock.highlight");
+                    long oldGeneration = engine.GetDifferentialSnapshot(5).SentenceGeneration;
+                    Equal(autoCommit ? "乙乙" : null, Press(engine, 0x43).TextToOutput, "tab_lock.next_key_commit");
+                    True(!engine.ApplySentenceNeuralScores(oldGeneration, "ab", new[] { 0.0, -100.0 }),
+                        "tab_lock.old_rerank_rejected");
+                    Press(engine, 0x44);
+                    WaitForDecode();
+                    Equal(autoCommit ? "丙" : "乙乙丙", engine.GetUiSnapshot(5).Candidates[0], "tab_lock.fixed_boundary");
+                    Equal(autoCommit ? "丙" : "乙乙丙", Press(engine, 0x20).TextToOutput, "tab_lock.no_duplicate_commit");
+
+                    TypeLetters(engine, "ab"); Press(engine, 0x09); Press(engine, 0x43); Press(engine, 0x44);
+                    Press(engine, 0x08); Press(engine, 0x08);
+                    WaitForDecode();
+                    if (autoCommit)
+                        True(!engine.GetUiSnapshot(5).IsComposing, "tab_lock.committed_not_erasable");
+                    else
+                    {
+                        Equal("甲", engine.GetUiSnapshot(5).Candidates[0], "tab_lock.backspace_unlock");
+                        Equal("ab", engine.GetUiSnapshot(5).ActiveInputCode, "tab_lock.raw_restored");
+                    }
+                    Press(engine, 0x1b);
+                    TypeLetters(engine, "ab"); Press(engine, 0x09); Press(engine, 0x43); Press(engine, 0x44);
+                    Equal(autoCommit ? "cd" : "abcd", Press(engine, 0x0d).TextToOutput, "tab_lock.literal_exit");
+                }
+            }
+        }
+
+        private static void SentenceTabLocksStackAndPreserveSelectors()
+        {
+            var state = new CoreRuntimeState();
+            EnableSentenceMode(state);
+            var decoder = CreateSentenceDecoder(new Dictionary<string, List<string>>
+            {
+                ["ab"] = new List<string> { "甲", "乙乙" },
+                ["cd"] = new List<string> { "丙" },
+                ["ef"] = new List<string> { "丁" },
+                ["cdef"] = new List<string> { "戊" },
+                ["abcd"] = new List<string> { "己" }
+            });
+            using (var engine = new InputMethodEngine(state, decoder))
+            {
+                TypeLetters(engine, "ab");
+                Press(engine, 0x09);
+                TypeLetters(engine, "cd");
+                Press(engine, 0x09); // Even the only candidate can be confirmed.
+                TypeLetters(engine, "ef");
+                Equal("乙乙丙丁", engine.GetUiSnapshot(5).Candidates[0], "tab_lock.second_boundary");
+                Press(engine, 0x08); Press(engine, 0x08);
+                Equal("乙乙丙", engine.GetUiSnapshot(5).Candidates[0], "tab_lock.previous_lock_retained");
+                TypeLetters(engine, "ef");
+                True(engine.GetUiSnapshot(5).Candidates.Contains("乙乙戊"), "tab_lock.second_boundary_released");
+                Press(engine, 0x1b);
+                TypeLetters(engine, "abcd");
+                True(engine.GetUiSnapshot(5).Candidates.Contains("己"), "tab_lock.clear_resets_boundary");
+                Press(engine, 0x1b);
+                TypeLetters(engine, "ab");
+                Press(engine, 0x09);
+                Press(engine, 0x32);
+                Equal("乙乙", engine.GetUiSnapshot(5).Candidates[0], "tab_lock.selector_edits_current_segment");
+            }
+
+            SentenceCandidate selected = decoder.Decode("ab").Candidates.Single(candidate => candidate.Text == "乙乙");
+            var prefix = new SentenceLockedPrefix("ab", selected.Text, selected.Boundary);
+            True(decoder.HasCompleteCandidate("abcd", groupEligibleOnly: true, lockedPrefix: prefix),
+                "tab_lock.explicit_prefix_is_group_eligible");
+            True(!decoder.HasCompleteCandidate("abcd", excludedText: "乙乙丙", groupEligibleOnly: true, lockedPrefix: prefix),
+                "tab_lock.exact_query_excludes_crossing_path");
+            True(!decoder.HasCompleteCandidate("ab", excludedText: "乙乙", lockedPrefix: prefix),
+                "tab_lock.exact_query_excludes_fixed_text");
+            True(decoder.Decode("abcd", lockedPrefix: prefix).Candidates.All(candidate => candidate.Text == "乙乙丙"),
+                "tab_lock.decoder_fixed_text_and_boundary");
+        }
+
+        private static void SentenceEmptyCodeCountsDuplicateSingles()
+        {
+            foreach (bool duplicates in new[] { false, true })
+            foreach (int beam in new[] { 1, 100 })
+            {
+                var state = new CoreRuntimeState();
+                EnableSentenceEarlyCommit(state);
+                state.TrySetConfigValue("高频字仅使用最优码组句", "0", out _, out _);
+                state.TrySetConfigValue("允许单字重码组句", duplicates ? "是" : "否", out _, out _);
+                var decoder = new SentenceInputDecoder(SentenceLexiconIndex.Build(
+                    new Dictionary<string, List<string>>
+                    {
+                        ["ot"] = new List<string> { "是", "题", "多字词" },
+                        ["qm"] = new List<string> { "目" }
+                    }), new PrefersCharactersLanguageModel("题", "目"), beamWidth: beam,
+                    allowDuplicateSingleCharacters: duplicates);
+                True(decoder.HasCompleteCandidate("ot", excludedText: "是", groupEligibleOnly: true) == duplicates,
+                    "empty_code.duplicate_exact_ambiguity");
+                using (var engine = new InputMethodEngine(state, decoder))
+                {
+                    TypeLetters(engine, "ot");
+                    Equal(duplicates ? null : "是", Press(engine, 0x51).TextToOutput,
+                        "empty_code.otq_does_not_discard_ti");
+                    Press(engine, 0x4d);
+                    if (duplicates && beam == 100)
+                    {
+                        Equal("题目", engine.GetUiSnapshot(5).Candidates[0], "empty_code.otqm");
+                    }
+                }
+            }
+        }
+
         private static void SentenceEngineUsesTabToTraverseCandidates()
         {
             var state = new CoreRuntimeState();
@@ -4436,7 +4608,7 @@ namespace TigerClaw.Core.Tests
         {
             InputMethodEngine engine = CreateAutoCommitSentenceEngine();
             TypeLetters(engine, "abcde");
-            Press(engine, 0x09);
+            Press(engine, 0x28);
             KeyEngineResult result = Press(engine, 0x46);
             Equal(null, result.TextToOutput,
                 nameof(SentenceAutoCommitSuspendsAfterManualNavigation));
@@ -5190,6 +5362,7 @@ namespace TigerClaw.Core.Tests
 
             var multipleState = new CoreRuntimeState();
             EnableSentenceEarlyCommit(multipleState);
+            multipleState.TrySetConfigValue("允许单字重码组句", "否", out _, out _);
             var multiple = new InputMethodEngine(multipleState, CreateSentenceDecoder(
                 new Dictionary<string, List<string>>
                 {
@@ -5308,6 +5481,36 @@ namespace TigerClaw.Core.Tests
                     nameof(SentenceEmptyCodeAutoCommitWorksWithAsyncDecode) + ".retained_code");
                 True(completed.WaitOne(3000),
                     nameof(SentenceEmptyCodeAutoCommitWorksWithAsyncDecode) + ".suffix_ready");
+            }
+        }
+
+        private static void SentenceEmptyCodeContinuationPreservesDuplicateSingles()
+        {
+            foreach (string prefixCode in new[] { "xr", "xry" })
+            foreach (bool autoCommit in new[] { false, true })
+            foreach (bool duplicates in new[] { false, true })
+            {
+                var state = new CoreRuntimeState();
+                EnableSentenceMode(state);
+                state.TrySetConfigValue("整句自动提前上屏", autoCommit ? "是" : "否", out _, out _);
+                state.TrySetConfigValue("允许单字重码组句", duplicates ? "是" : "否", out _, out _);
+                var decoder = new SentenceInputDecoder(
+                    SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
+                    {
+                        ["xr"] = new List<string> { "反" },
+                        ["xry"] = new List<string> { "反" },
+                        ["xbj"] = new List<string> { "秉", "刍", "多字词" }
+                    }), new PrefersCharactersLanguageModel("刍", "多", "字", "词"),
+                    beamWidth: 100, allowDuplicateSingleCharacters: duplicates);
+                var engine = new InputMethodEngine(state, decoder);
+                TypeLetters(engine, prefixCode);
+                string prefix = Press(engine, 0x58).TextToOutput ?? string.Empty;
+                Equal(autoCommit ? "反" : string.Empty, prefix, "rumination.prefix");
+                TypeLetters(engine, "bj");
+                var view = engine.GetUiSnapshot(5);
+                Equal(duplicates ? "反刍" : "反秉", prefix + view.Candidates[0], "rumination.first");
+                True(!view.Candidates.Any(text => text.Contains("多字词")), "rumination.implicit_word_hidden");
+                Equal(duplicates ? "反刍" : "反秉", prefix + Press(engine, 0x20).TextToOutput, "rumination.commit");
             }
         }
 

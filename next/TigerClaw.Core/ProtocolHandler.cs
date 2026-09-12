@@ -399,6 +399,7 @@ namespace TigerClaw.Core
                     {
                         string key = ConvertToString(msg.GetValue("key"));
                         string value = ConvertToString(msg.GetValue("value"));
+                        bool wasSmartSentence = _state.IsSmartSentenceInputActive();
                         bool ok = _state.TrySetConfigValue(key, value, out bool changed, out string reason);
                         bool lexOk = true;
                         if (ok && changed && IsLexiconConfigKey(key))
@@ -407,13 +408,21 @@ namespace TigerClaw.Core
                         }
 
                         bool success = ok && lexOk;
-                        if (success && changed &&
+                        bool rebuildSmartSentence = (wasSmartSentence || _state.IsSmartSentenceInputActive()) &&
+                            (IsSentenceInputConfigKey(key) || IsLexiconConfigKey(key) ||
+                             key?.Trim() == "最大码长" || key?.Trim() == "分号次选" || key?.Trim() == "引号三选");
+                        if (success && changed && rebuildSmartSentence)
+                        {
+                            _engine.RefreshCompositionAfterSchemaSwitch();
+                            ClearFreshCaretAwaitState();
+                        }
+                        if (success && changed && !rebuildSmartSentence &&
                             (IsUnlimitedMixedInputConfigKey(key) || IsSentenceInputConfigKey(key)))
                         {
                             _pendingFrontendCompositionReset |= _engine.ResetCompositionForConfigChange();
                             ClearFreshCaretAwaitState();
                         }
-                        if (success && changed &&
+                        if (success && changed && !rebuildSmartSentence &&
                             (IsSentenceInputConfigKey(key) || IsLexiconConfigKey(key)))
                         {
                             if (IsLexiconConfigKey(key))
@@ -895,6 +904,8 @@ namespace TigerClaw.Core
                         HideCandidateItems = _state.GetHideCandidateItems(),
                         ShowInputCodeInCandidateWindow = _state.GetShowInputCodeInCandidateWindow(),
                         CandidateExpandDelayMs = _state.GetCandidateExpandDelayMs(),
+                        CandidateAnimationEnabled = _state.GetCandidateAnimationEnabled(),
+                        CandidateAnimationDurationMs = _state.GetCandidateAnimationDurationMs(),
                         // Temporary pinyin is a reverse lookup: show its hints immediately.
                         AnnotationExpandDelayMs = engineState.CompositionState == 4
                             ? 0 : _state.GetAnnotationExpandDelayMs(),
@@ -1045,6 +1056,11 @@ namespace TigerClaw.Core
 
         private string BuildDisplayComposition(string prefix, string activeCode)
         {
+            string smartDisplay = _engine.GetSmartSentenceFormattedDisplay(MaskInputBufferForDisplay);
+            if (smartDisplay != null)
+            {
+                return smartDisplay;
+            }
             return (prefix ?? string.Empty) + MaskInputBufferForDisplay(activeCode ?? string.Empty);
         }
 

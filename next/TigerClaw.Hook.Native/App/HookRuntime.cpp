@@ -4,6 +4,8 @@
 #include "..\Common\NativeHelpers.h"
 
 #include <objbase.h>
+#include <algorithm>
+#include <iterator>
 #include <sstream>
 
 namespace
@@ -264,6 +266,7 @@ namespace TigerClawHookNative
         RefreshFocusSnapshot();
 
         CaretSnapshot lightweightCaret = {};
+        DrainPendingKeys();
         if (_caretTracker.TryGetLightweightSnapshot(lightweightCaret))
         {
             const bool changed = !_cachedLightweightCaret.Equals(lightweightCaret);
@@ -294,7 +297,14 @@ namespace TigerClawHookNative
             return false;
         }
 
-        if (!_state.UpdateFocus(focus))
+        const bool changed = _state.UpdateFocus(focus);
+        if (changed && (!_pendingKeys.empty() ||
+            std::any_of(std::begin(_replayedDown), std::end(_replayedDown), [](bool down) { return down; })))
+        {
+            DropPendingKeys();
+        }
+        _focusPublishPending = _focusPublishPending || changed || _pipeClient.NeedsFocusSync();
+        if (!_focusPublishPending)
         {
             return false;
         }
@@ -302,14 +312,17 @@ namespace TigerClawHookNative
         std::wstringstream stream;
         stream << L"focus hwnd=0x" << std::hex << reinterpret_cast<UINT_PTR>(focus.Window)
                << L" pid=" << std::dec << focus.ProcessId
-               << L" class=" << focus.ClassName
-               << L" title=" << focus.WindowTitle;
+               << L" class=" << focus.ClassName;
         Logger::Info(L"focus", stream.str());
 
         std::wstring error;
         if (!_pipeClient.TrySendFocus(focus, error))
         {
             Logger::Info(L"core", std::wstring(L"focus request failed: ") + error);
+        }
+        else
+        {
+            _focusPublishPending = false;
         }
 
         return true;
@@ -594,14 +607,12 @@ namespace TigerClawHookNative
 
     bool HookRuntime::OnKeyboardEvent(const KeyboardHookEvent& keyEvent)
     {
-        _state.UpdateModifierState(keyEvent.VirtualKey, keyEvent.IsKeyDown, keyEvent.IsKeyUp);
-
-        RefreshFocusSnapshot();
-
         if (_inputReplay.ShouldSuppressHookEvent(keyEvent.Flags, keyEvent.ExtraInfo))
         {
             return false;
         }
+        _state.UpdateModifierState(keyEvent.VirtualKey, keyEvent.IsKeyDown, keyEvent.IsKeyUp);
+        RefreshFocusSnapshot();
 
         if (ShouldSuppressToggleAltKeyUp(keyEvent))
         {
@@ -609,12 +620,12 @@ namespace TigerClawHookNative
             return true;
         }
 
-        const FocusSnapshot& focus = _state.GetFocus();
+        const FocusSnapshot focus = _state.GetFocus();
         const CaretSnapshot& caret = _state.GetCaret();
-        const std::wstring previousInputBuffer = _state.CurrentInputBuffer();
 
         if (ShouldHandleAltBackslashToggle(keyEvent))
         {
+            if (!_pendingKeys.empty()) DropPendingKeys();
             return HandleAltBackslashToggle(focus);
         }
 
@@ -640,15 +651,36 @@ namespace TigerClawHookNative
 
         CoreResponse response = {};
         std::wstring error;
-        if (!_pipeClient.TrySendKey(keyEvent, _state, focus, caret, response, error))
+        PendingKey pending = { keyEvent, focus, _pipeClient.PrepareKey(keyEvent, _state, caret), GetTickCount64() };
+        if (_pendingKeys.size() >= 128) DropPendingKeys();
+        if (!_pendingKeys.empty() || _compositionCancelPending)
+        {
+            _pendingKeys.push_back(pending);
+            return true;
+        }
+        if (!_pipeClient.TrySendPreparedKey(pending.Request, focus, response, error))
         {
             Logger::Info(L"core", std::wstring(L"key request failed: ") + error);
             if (!_pipeClient.IsCommunicationBlocked())
             {
                 _coreLaunchHelper.TryLaunchCoreIfNeeded(L"key request failed");
             }
-            return false;
+            _pendingKeys.push_back(pending);
+            return true;
         }
+
+        if (GetForegroundWindow() != focus.Window)
+        {
+            DropPendingKeys();
+            return true;
+        }
+        if (keyEvent.IsKeyUp && keyEvent.VirtualKey < 256) _replayedDown[keyEvent.VirtualKey] = false;
+        return ApplyKeyResponse(keyEvent, response, focus);
+    }
+
+    bool HookRuntime::ApplyKeyResponse(const KeyboardHookEvent& keyEvent, const CoreResponse& response, const FocusSnapshot& focus)
+    {
+        const std::wstring previousInputBuffer = _state.CurrentInputBuffer();
 
         const bool shouldEmitTrainerInternalBack =
             keyEvent.IsKeyDown &&
@@ -661,8 +693,8 @@ namespace TigerClawHookNative
 
         std::wstringstream responseStream;
         responseStream << L"response handled=" << (response.Handled ? L"true" : L"false")
-                       << L" commit=\"" << response.CommitText << L"\""
-                       << L" input=\"" << response.InputBuffer << L"\""
+                       << L" commit_len=" << response.CommitText.size()
+                       << L" input_len=" << response.InputBuffer.size()
                        << L" keyboard_open=" << (response.KeyboardOpen ? L"true" : L"false")
                        << L" cancel=" << (response.CancelComposition ? L"true" : L"false");
         Logger::Info(L"resp", responseStream.str());
@@ -730,5 +762,78 @@ namespace TigerClawHookNative
         }
 
         return false;
+    }
+
+    void HookRuntime::DropPendingKeys()
+    {
+        // Release only keys previously replayed as down, never replay old text
+        // into a new foreground window.
+        for (UINT vk = 0; vk < 256; ++vk)
+        {
+            if (!_replayedDown[vk]) continue;
+            INPUT release = {};
+            release.type = INPUT_KEYBOARD;
+            release.ki.wVk = static_cast<WORD>(vk);
+            release.ki.dwFlags = KEYEVENTF_KEYUP;
+            release.ki.dwExtraInfo = InputReplay::ReplayMarker;
+            SendInput(1, &release, sizeof(release));
+            _replayedDown[vk] = false;
+        }
+        _pendingKeys.clear();
+        _state.ResetCompositionState();
+        _compositionCancelPending = true;
+    }
+
+    void HookRuntime::DrainPendingKeys()
+    {
+        if (!_pendingKeys.empty() && GetTickCount64() - _pendingKeys.front().Tick >= 5000)
+            DropPendingKeys();
+        std::wstring error;
+        if (_compositionCancelPending)
+        {
+            if (!_pipeClient.TryCancelForRecovery(error)) return;
+            _compositionCancelPending = false;
+        }
+        if (_state.DisabledByHotkey()) return;
+        const ULONGLONG started = GetTickCount64();
+        for (int count = 0; count < 8 && !_pendingKeys.empty() && GetTickCount64() - started < 60; ++count)
+        {
+            PendingKey pending = _pendingKeys.front();
+            if (!pending.Focus.Equals(_state.GetFocus()) || GetForegroundWindow() != pending.Focus.Window)
+            {
+                DropPendingKeys();
+                return;
+            }
+            CoreResponse response;
+            if (!_pipeClient.TrySendPreparedKey(pending.Request, pending.Focus, response, error)) return;
+            if (GetForegroundWindow() != pending.Focus.Window)
+            {
+                DropPendingKeys();
+                return;
+            }
+            _pendingKeys.pop_front();
+            if (pending.Event.IsKeyUp && pending.Event.VirtualKey < 256)
+            {
+                _replayedDown[pending.Event.VirtualKey] = false;
+            }
+            if (!ApplyKeyResponse(pending.Event, response, pending.Focus))
+            {
+                // This physical event was held earlier; only now is passing it safe.
+                INPUT input = {};
+                input.type = INPUT_KEYBOARD;
+                input.ki.wVk = static_cast<WORD>(pending.Event.VirtualKey);
+                input.ki.wScan = static_cast<WORD>(pending.Event.ScanCode);
+                input.ki.dwFlags = (pending.Event.IsKeyUp ? KEYEVENTF_KEYUP : 0) |
+                    (pending.Event.IsExtended ? KEYEVENTF_EXTENDEDKEY : 0);
+                input.ki.dwExtraInfo = InputReplay::ReplayMarker;
+                if (SendInput(1, &input, sizeof(input)) != 1)
+                {
+                    DropPendingKeys();
+                    return;
+                }
+                if (pending.Event.VirtualKey < 256)
+                    _replayedDown[pending.Event.VirtualKey] = pending.Event.IsKeyDown;
+            }
+        }
     }
 }

@@ -8,6 +8,7 @@
 #include "..\State\HookState.h"
 #include "..\Tracking\CaretTracker.h"
 #include "..\Tracking\FocusTracker.h"
+#include <deque>
 
 namespace TigerClawHookNative
 {
@@ -26,6 +27,19 @@ namespace TigerClawHookNative
 
         void OnStatePump();
         bool OnKeyboardEvent(const KeyboardHookEvent& keyEvent);
+        bool ApplyKeyResponse(const KeyboardHookEvent& keyEvent, const CoreResponse& response, const FocusSnapshot& focus);
+        void DrainPendingKeys();
+        void DropPendingKeys();
+        struct PendingKey
+        {
+            KeyboardHookEvent Event;
+            FocusSnapshot Focus;
+            std::string Request;
+            ULONGLONG Tick;
+        };
+        std::deque<PendingKey> _pendingKeys;
+        bool _compositionCancelPending = false;
+        bool _replayedDown[256] = {};
         void TryPublishTrackedCaret(bool preferPrecise);
         void RequestEnsureEnglishSystemLayout();
         void EnsureEnglishSystemLayout();
@@ -44,6 +58,7 @@ namespace TigerClawHookNative
         CoreLaunchHelper _coreLaunchHelper;
         CoreIntegrity _startupIntegrity;
         HookState _state;
+        bool _focusPublishPending = true;
         KeyboardHook _keyboardHook;
         UINT_PTR _statePumpTimerId = 0;
         DWORD _threadId = 0;

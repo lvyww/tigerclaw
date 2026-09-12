@@ -46,7 +46,9 @@ namespace TigerClawHookNative
         if (!active)
         {
             LeaveCriticalSection(&_lock);
-            return false;
+            // Our marker is sufficient even for delayed recovery events that
+            // were not part of a text-replay batch.
+            return true;
         }
 
         if (_pendingReplayEvents > 0)

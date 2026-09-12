@@ -316,6 +316,20 @@ namespace TigerClaw.Core
         }
     }
 
+    internal sealed class SentenceLockedPrefix
+    {
+        public string RawCode { get; }
+        public string Text { get; }
+        public SentencePathBoundary Boundary { get; }
+
+        public SentenceLockedPrefix(string rawCode, string text, SentencePathBoundary boundary)
+        {
+            RawCode = rawCode;
+            Text = text;
+            Boundary = boundary;
+        }
+    }
+
     internal sealed class SentencePathBoundary
     {
         public SentencePathBoundary Previous { get; set; }
@@ -385,7 +399,7 @@ namespace TigerClaw.Core
         public long IsolationCacheMisses { get; set; }
     }
 
-    internal sealed class SentenceInputDecoder
+    internal sealed partial class SentenceInputDecoder
     {
         private const string Bos = "\x02";
         private const string Eos = "\x03";
@@ -573,9 +587,13 @@ namespace TigerClaw.Core
             double emittedCharacterReward = 0.0,
             double wholeInputSingleCharacterReward = 0.0,
             SentenceSupplementMatcher supplementMatcher = null,
-            bool allowDuplicateSingleCharacters = false)
+            bool allowDuplicateSingleCharacters = false,
+            int smartMaxCodeLength = 0,
+            int smartSelectionMask = 3)
         {
             _lexicon = lexicon ?? throw new ArgumentNullException(nameof(lexicon));
+            SmartMaxCodeLength = Math.Max(0, smartMaxCodeLength);
+            SmartSelectionMask = smartSelectionMask;
             _languageModel = languageModel ?? NeutralSentenceLanguageModel.Instance;
             _beamWidth = Math.Max(1, beamWidth);
             _rankPenalty = Math.Max(0.0, rankPenalty);
@@ -609,14 +627,19 @@ namespace TigerClaw.Core
             string rawCode,
             int candidateLimit = 20,
             bool includeEarlyCommitEvidence = false,
-            string requiredTextPrefix = null)
+            string requiredTextPrefix = null,
+            SentenceLockedPrefix lockedPrefix = null)
         {
             lock (_decodeLock)
             {
                 long started = Stopwatch.GetTimestamp();
                 long isolationHitsBefore = _isolationPenaltyCacheHits;
                 long isolationMissesBefore = _isolationPenaltyCacheMisses;
-                SentenceDecodeResult result = DecodeIncrementalLocked(
+                SentenceDecodeResult result = lockedPrefix != null
+                    ? DecodeLockedPrefix(rawCode, candidateLimit, includeEarlyCommitEvidence, requiredTextPrefix, lockedPrefix)
+                    : SmartMaxCodeLength > 0
+                    ? DecodeSmart(rawCode, candidateLimit, includeEarlyCommitEvidence, requiredTextPrefix)
+                    : DecodeIncrementalLocked(
                     rawCode,
                     candidateLimit,
                     includeEarlyCommitEvidence,
@@ -635,6 +658,10 @@ namespace TigerClaw.Core
             bool includeEarlyCommitEvidence = false,
             string requiredTextPrefix = null)
         {
+            if (SmartMaxCodeLength > 0)
+            {
+                lock (_decodeLock) return DecodeSmart(rawCode, candidateLimit, includeEarlyCommitEvidence, requiredTextPrefix);
+            }
             string normalized = NormalizeRawCode(rawCode);
             if (normalized.Length == 0 || !normalized.Any(char.IsLetter))
             {
@@ -698,7 +725,7 @@ namespace TigerClaw.Core
         }
 
         internal bool HasCompleteCandidate(string rawCode, string requiredTextPrefix = null,
-            string excludedText = null, bool groupEligibleOnly = false)
+            string excludedText = null, bool groupEligibleOnly = false, SentenceLockedPrefix lockedPrefix = null)
         {
             string normalized = NormalizeRawCode(rawCode);
             if (normalized.Length == 0 || !normalized.Any(char.IsLetter))
@@ -710,9 +737,29 @@ namespace TigerClaw.Core
             bool firstRanksOnly = groupEligibleOnly && !normalized.Any(mark =>
                 char.IsDigit(mark) || mark == ';' || mark == '\'');
             var states = new HashSet<(int Required, int Excluded)>[normalized.Length + 1];
-            states[0] = new HashSet<(int, int)> { (0, 0) };
+            int start = 0, matchedPrefix = 0, matchedExcluded = 0;
+            if (lockedPrefix != null)
+            {
+                string lockedRaw = NormalizeRawCode(lockedPrefix.RawCode);
+                if (!normalized.StartsWith(lockedRaw, StringComparison.Ordinal) ||
+                    !TryAdvanceRequiredPrefix(required, 0, lockedPrefix.Text, out matchedPrefix))
+                {
+                    return false;
+                }
+                start = lockedRaw.Length;
+                if (excludedText != null)
+                {
+                    matchedExcluded = excludedText.StartsWith(lockedPrefix.Text, StringComparison.Ordinal)
+                        ? lockedPrefix.Text.Length : -1;
+                }
+                if (start == normalized.Length)
+                {
+                    return matchedPrefix == required.Length && (excludedText == null || matchedExcluded != excludedText.Length);
+                }
+            }
+            states[start] = new HashSet<(int, int)> { (matchedPrefix, matchedExcluded) };
 
-            for (int position = 0; position < normalized.Length; position++)
+            for (int position = start; position < normalized.Length; position++)
             {
                 if (states[position] == null)
                 {
@@ -746,7 +793,8 @@ namespace TigerClaw.Core
                     {
                         foreach (SentenceLexiconCandidate candidate in candidates)
                         {
-                            if ((firstRanksOnly && candidate.Rank > 1) ||
+                            if ((firstRanksOnly && candidate.Rank > 1 &&
+                                 !(_allowDuplicateSingleCharacters && candidate.TextElements.Length == 1)) ||
                                 !RankMatches(candidate, selectedRank, wholeInputEdge) || !TryAdvanceRequiredPrefix(
                                 required,
                                 matched.Required,
@@ -972,6 +1020,45 @@ namespace TigerClaw.Core
             }
 
             return _languageModel.LogProbability(previous2, previous1, target);
+        }
+
+        private SentenceDecodeResult DecodeLockedPrefix(string rawCode, int limit, bool evidence,
+            string requiredTextPrefix, SentenceLockedPrefix prefix)
+        {
+            string raw = NormalizeRawCode(rawCode);
+            string lockedRaw = NormalizeRawCode(prefix.RawCode);
+            if (lockedRaw.Length == 0 || !raw.StartsWith(lockedRaw, StringComparison.Ordinal))
+            {
+                return SentenceDecodeResult.Empty;
+            }
+            var states = CreateStates(raw.Length);
+            states[0] = new BeamBucket();
+            var seed = new BeamState
+            {
+                Text = prefix.Text,
+                Previous2 = Bos,
+                Previous1 = Bos,
+                MaxLexiconRank = 1,
+                Boundary = prefix.Boundary
+            };
+            var elements = StringInfo.GetTextElementEnumerator(prefix.Text);
+            while (elements.MoveNext())
+            {
+                string target = elements.GetTextElement();
+                seed.Score += TransitionScore(seed.Previous2, seed.Previous1, target) + _emittedCharacterReward;
+                if (_hasSupplements)
+                {
+                    seed.SupplementState = _supplementMatcher.Advance(seed.SupplementState, target, out double reward);
+                    seed.Score += reward;
+                    seed.SupplementScore += reward;
+                }
+                seed.Previous2 = seed.Previous1;
+                seed.Previous1 = target;
+            }
+            seed.LogMass = seed.Score - seed.SupplementScore;
+            states[lockedRaw.Length].Add(seed);
+            int expanded = ExpandRange(raw, states, lockedRaw.Length, raw.Length);
+            return Emit(raw, states, limit, expanded, evidence, requiredTextPrefix ?? string.Empty);
         }
 
         private static BeamBucket[] CreateStates(int length)

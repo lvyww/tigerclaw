@@ -180,6 +180,8 @@ namespace TigerClaw.Core
             new KeyValuePair<string, string>(KeyShowSplit, No),
 
             new KeyValuePair<string, string>(KeyCandidateExpandDelayMs, string.Empty),
+            new KeyValuePair<string, string>("候选窗动效", Yes),
+            new KeyValuePair<string, string>("候选窗动效时间(毫秒)", "200"),
 
             new KeyValuePair<string, string>(KeyAnnotationExpandDelayMs, string.Empty),
 
@@ -1373,8 +1375,12 @@ namespace TigerClaw.Core
 
             string schema = GetCurrentSchema();
             return !string.IsNullOrEmpty(schema) &&
-                   schema.IndexOf("\u6574\u53e5", StringComparison.Ordinal) >= 0; // 整句
+                   (schema.IndexOf("\u6574\u53e5", StringComparison.Ordinal) >= 0 ||
+                    schema.IndexOf("\u667a\u80fd", StringComparison.Ordinal) >= 0); // 整句 / 智能
         }
+
+        public bool IsSmartSentenceInputActive() => GetAutoEnableSentenceBySchema() &&
+            (GetCurrentSchema() ?? string.Empty).IndexOf("\u667a\u80fd", StringComparison.Ordinal) >= 0;
 
         public bool GetSentenceNeuralRerankEnabled() => GetBool(KeySentenceNeuralRerank, true);
 
@@ -1490,6 +1496,18 @@ namespace TigerClaw.Core
         public bool GetShowComment() => GetBool(KeyShowComment, true);
 
         public bool GetShowSplit() => GetBool(KeyShowSplit, false);
+
+        public bool GetCandidateAnimationEnabled() => GetBool("候选窗动效", true);
+        public int GetCandidateAnimationDurationMs() => GetAnimationDuration("候选窗动效时间(毫秒)", 200);
+
+        private int GetAnimationDuration(string key, int fallback)
+        {
+            lock (_lock)
+            {
+                return _config.TryGetValue(key, out string raw) && int.TryParse(raw, out int value)
+                    ? Math.Clamp(value, 0, 60000) : fallback;
+            }
+        }
 
         public int GetCandidateExpandDelayMs()
         {

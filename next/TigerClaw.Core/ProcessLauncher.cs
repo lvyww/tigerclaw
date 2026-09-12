@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using TigerClaw.Shared;
 
 namespace TigerClaw.Core
@@ -31,6 +32,31 @@ namespace TigerClaw.Core
             string args = addCi ? "--addci" : null;
             string exePath = ResolveSiblingExe(RuntimeConstants.DialogProcessName + ".exe");
             return Start(exePath, args);
+        }
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool AllowSetForegroundWindow(uint processId);
+
+        public void AllowOverlayForeground()
+        {
+            // Only the sibling runtime receives the permission passed by TSF.
+            string expected = Path.GetFullPath(ResolveSiblingExe(RuntimeConstants.OverlayProcessName + ".exe"));
+            Process[] processes;
+            try { processes = Process.GetProcessesByName(RuntimeConstants.OverlayProcessName); }
+            catch { return; }
+            foreach (Process process in processes)
+            {
+                using (process)
+                {
+                    try
+                    {
+                        if (string.Equals(process.MainModule?.FileName, expected, StringComparison.OrdinalIgnoreCase))
+                            AllowSetForegroundWindow((uint)process.Id);
+                    }
+                    catch { /* Exited or inaccessible: do not broaden permission. */ }
+                }
+            }
         }
 
         public bool TryLaunchSentence(string arguments)

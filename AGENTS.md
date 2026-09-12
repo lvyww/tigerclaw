@@ -34,7 +34,13 @@ Active components:
 - `next/TigerClaw.Core/`: configuration, lexicons, input state, candidates,
   sentence decoding, IPC and process lifecycle. It is a .NET 10 Native AOT
   executable; there is no maintained .NET Framework Core configuration.
-- `next/TigerClaw.Overlay/`: WPF status/candidate UI and typing sounds.
+- `next/TigerClaw.Overlay.Native/`: mainline C++ Win32/Direct2D/DirectWrite
+  status/candidate UI and typing sounds, promoted at the user's request on
+  2026-09-09. Release x64/ARM64 and debug builds default to this implementation.
+  `next/build_overlay.bat` is the shared build entry; it does not deploy.
+  `--demo` remains isolated from production IPC. See its README for validation.
+- `next/TigerClaw.Overlay/`: retained WPF fallback and display-parity reference.
+  Set `TIGERCLAW_OVERLAY_BACKEND=wpf` before building to explicitly use it.
 - `next/TigerClaw.Dialog/`: settings, add-word and selection-key UI.
 - `next/TigerClaw.Shared/`: shared constants, build identity, MMF and guards.
 - `next/TigerClaw.Sentence.Native/`: optional native C++ Qwen reranking sidecar,
@@ -69,6 +75,12 @@ UI state:
 - `Local\TigerClaw.OverlayHeartbeat.v1`: Overlay heartbeat
 - `Local\TigerClaw.ShowMenu.v1`: status-window menu trigger
 
+Native Overlay's low-latency path adds `Local\TigerClaw.UiState.v1.Snapshot.v2`
+with a `.Lock` mutex and `.Changed` event. Core retains v1 for WPF, then publishes
+a mutex-protected complete snapshot and signals after unlock. Native reads it
+without a second polling interval; old Core retains the legacy fallback. Never
+block Core on a paused reader. Contract: `Protocol/ui_state.md`.
+
 ## Behavior That Must Stay Aligned
 
 - Raw code is authoritative. Mixed input keeps the complete raw composition,
@@ -81,15 +93,28 @@ UI state:
   and rebuilds for the target schema. Preserve raw casing across sentence mode.
   With mixed input disabled, short codes use ordinary composition; an imported
   code longer than maximum code length uses a temporary mixed composition.
-- Sentence segmentation spaces are display-only. The raw code never contains
+- In ordinary sentence mode, segmentation spaces are display-only. The raw code never contains
   them. Up/Down and Tab/Shift+Tab traverse visible sentence candidates; sentence
   mode leaves Ctrl+number to the target application.
-- A one-key sentence segment is legal only when the whole input is one key.
+- Windows sentence input: Tab/Shift+Tab highlights without submitting. The next
+  code letter locks that candidate's text and consumed raw boundary, retaining
+  language-model context and preventing later resegmentation across the boundary.
+  With early commit enabled, this manual confirmation immediately submits only
+  the uncommitted selected text; confidence and retained-code floors do not delay
+  it. Otherwise Backspace unlocks when it reaches the noncommitted boundary.
+  Rank selectors still edit the current segment rather than confirm a Tab lock.
+  Up/Down alone does not arm locking. Clear/schema migration discards locks;
+  literal exits still emit only live raw code. Rime/Android do not yet implement
+  this Tab-confirmation interaction.
+- In ordinary sentence mode, a one-key segment is legal only when the whole input is one key.
   Other segments consume at least two keys. `;`, `'` and digits select explicit
   lexicon ranks. An implicit non-first rank is legal only when the whole input is
   consumed by one lexicon edge; segmented paths use first ranks unless selection
-  is explicit. Empty-code automatic-commit continuations also use first ranks;
-  probabilistic early commit must preserve the already-ranked full-sentence paths,
+  is explicit. Empty-code automatic-commit continuations hide whole-input
+  non-first edges, but retain decoder-approved segmented duplicate-single paths
+  when `允许单字重码组句` is on (for example `xrxbj` must retain `反刍` after
+  committing `反`); non-first multi-character words still need a selector.
+  Probabilistic early commit must preserve the already-ranked full-sentence paths,
   including eligible non-first single-character segments.
   Multi-character lexicon entries are legal edges. `允许单字重码组句` (default
   on) additionally allows non-first single characters without a selector on
@@ -99,8 +124,35 @@ UI state:
   `高频字仅使用最优码组句` or the full-code whitelist, and explicit digit/`;`/`'`
   rank selection still works when it is on. Multi-character words still need an
   explicit selector on segmented paths.
-- Sentence mode is controlled only by `自动启用整句模式` (default on). It
-  activates when the current schema name contains `整句`.
+- Sentence mode is controlled only by `自动启用整句模式` (default on). Schema
+  names containing `智能` activate experimental Windows fixed-segmentation
+  word/sentence mode, taking precedence over the ordinary `整句` name match.
+  `SmartSentenceSegmentation.cs` and the `SentenceInputDecoder.Smart.cs` partial
+  keep its search separate. Actual raw spaces and single-key rank selectors
+  close segments; otherwise only overflow beyond configured maximum letter
+  count splits input. Every segment requires an exact code; eligible lexicon
+  ranks compete by existing model/reward scoring without optimal-code filters.
+  Below the configured maximum code length, non-first multi-character entries
+  require an explicit rank selector. First-rank words, all single characters and
+  full-length words remain eligible implicitly. Apply this before Beam expansion
+  and in the lightweight key-path validity check, so Qwen and confidence evidence
+  cannot reintroduce excluded words. Only code letters count toward this length.
+  Digits 1–9/0 select ranks 1–10; enabled semicolon/quote select 2/3. Orphan or
+  repeated selectors are invalid, not multi-digit ranks. One space separates;
+  two consecutive unmodified spaces commit. Invalid input never commits stale
+  candidates on punctuation or double-space. Backspace removes actual raw keys.
+  Closed segments in Overlay/composition display the current model-best path's
+  words, while open tails retain raw code. A display-only last-ranked path may
+  survive incomplete tails/pending work only at matching raw prefixes and ranks;
+  clear it on composition/schema reset and reject different lexicon versions.
+  Code masking applies only to raw display spans, never substituted words.
+  Early commit uses existing confidence trackers only at closed fixed boundaries,
+  consumes their separators and retains at least three letters (also respecting
+  the configured retained-code floor). A merely full-length tail remains open.
+  No empty-code implicit splitting is used. Leaving this mode removes raw spaces
+  from the uncommitted suffix before target-schema migration. Max-code/selector
+  setting changes preserve that suffix and rebuild the generation. These new
+  rules are Windows-only; the ordinary sentence rules and ports below are unchanged.
 - Sentence decoding is latest-generation-only and asynchronous. A stale Beam or
   Qwen result must never replace newer composition state. Pending UI keeps the
   previous candidate list and stitched live raw suffix.
@@ -159,9 +211,14 @@ UI state:
   or a group-eligible candidate that is also the visible first candidate and has
   untruncated confidence share at least `0.99999`. Appending an ordinary letter
   must then leave no complete lexicon path; first check whether the selected last
-  lexicon segment is still a proper code prefix. Whole-input non-first ranks shown
-  for manual selection do not create implicit group ambiguity unless a rank
-  selector is present. Defer
+  lexicon segment is still a proper code prefix. Non-first multi-character words
+  shown for manual selection do not create implicit group ambiguity without a
+  rank selector. With duplicate-single grouping enabled, eligible non-first
+  single characters (including whole-input edges) and decoder-approved segmented
+  paths participate in both uniqueness and strong-confidence comparisons.
+  The exact precommit query must apply the same eligibility, independently of
+  Beam pruning: `ot` = `是/题`, `qm` = `目` must not falsely commit `是` at `otq`.
+  Defer
   while the segment can grow; if the actual extension goes dead, commit the saved
   candidate's uncommitted suffix, preserve the committed sentence context, and
   retain every appended letter as the next composition. Collecting confidence
@@ -192,16 +249,34 @@ UI state:
 - TSF key requests carry stable `client_session` + `event_id`; timeout retries
   reuse them and Core returns the cached first response without executing a
   physical key twice.
+  Pipe requests reject reentry; TSF timers defer pipe work while a request is
+  active. Read/write share one request deadline, with cancellation completion
+  drained before releasing I/O storage (cleanup may exceed that deadline).
+  Failed-key replay keeps event IDs and FIFO order, yields after 8 events or a
+  60 ms batch budget, and resumes on a 30 ms timer under the existing queue TTL.
+  Standalone Windows pipe fault tests: `tools/test_tsf_pipe.bat` (isolated pipe).
+- Native Hook also snapshots each physical key with stable replay identities.
+  Uncertain requests are held and retried FIFO (128 events, 5 s TTL; batches of
+  at most 8 events / 60 ms, resumed by the 200 ms state pump). Expiry, overflow
+  or focus changes discard pending events and order composition cancellation
+  before subsequent keys; never pass through a key whose result is unknown.
+  Focus publication remains pending until sent and reconnects resynchronize it.
+  Left/right modifiers are tracked independently. Diagnostics are opt-in via
+  `TIGERCLAW_HOOK_DIAGNOSTICS=1` and omit input/commit text and window titles.
+  Isolated frontend tests: `tools/test_hook_native.bat` (no global hook).
 - Manual add-word and recent-schema switching keep their existing enable flags
   and use configurable exact modifier chords. Defaults remain `Ctrl+=` and
   `Ctrl+M`; TSF and Native Hook both route these actions through Core.
   Settings show only the two shortcut rows. Disabled bindings display `清空`;
   the `修改` dialog clears or restores defaults immediately into the unsaved
   settings page. Legacy enable flags remain internal compatibility data.
-- Overlay owns candidate display. Above-direction memory survives normal commits
-  in the same focused input environment; a stable small caret-Y band, environment
-  generation and current-frame confirmation govern reuse. See
-  `docs/candidate-orientation-memory.md`. TSF legacy candidate UI is not active.
+- Overlay owns candidate display. It pins the first caret anchor for a composition
+  and flips above the caret when needed. TSF legacy candidate UI is not active.
+  Native menus open without waiting for Core schema queries and use a dedicated
+  temporary host independent of candidate/status visibility. Foreground permission
+  is best-effort, not a display prerequisite; menu-lifetime outside-click/Escape
+  monitoring provides fallback dismissal. Schema submenu command IDs are fixed
+  to the list shown at expansion, never remapped by a later Core reply.
   Temporary pinyin reverse lookup always shows available splits, full codes and
   comments without annotation delay, irrespective of normal annotation settings.
 
@@ -229,6 +304,9 @@ Input behavior and data:
 TSF/UI:
 
 - `BimeTSF2/SampleIME/KeyEventSink.cpp`
+- `next/TigerClaw.Overlay.Native/main.cpp`
+- `next/TigerClaw.Overlay.Native/Renderer.cpp`
+- `next/TigerClaw.Overlay.Native/Transport.cpp`
 - `next/TigerClaw.Overlay/MainWindow.xaml.cs`
 - `next/TigerClaw.Overlay/MainWindow.Candidate.cs`
 - `next/TigerClaw.Overlay/OverlayStateSource.cs`
@@ -305,6 +383,12 @@ release tree. Keep `.bat` files CRLF.
   plain-text data files with `python3 tools/export_tiger_sentence_rime.py`.
   The pack includes `symbols.yaml` as its directly-committing punctuation
   default; the schema imports that preset instead of Rime's `default` preset.
+  The schema disables built-in `digit_separators` so punctuation after digits
+  follows that table without a pending ASCII separator candidate. Lua retains
+  the immediate decimal point after a digit.
+  Lua predecodes mobile-model unigrams, lazily scores isolation from path
+  prefixes without changing Beam pruning, materializes segmentation on display
+  access, and reuses final candidates when adding same-generation evidence.
   The code table, character ranks and full-code whitelist are runtime-loaded
   txt files (`tiger_sentence.codes.txt` and siblings) so users can edit or
   import other shape-code tables without re-running the exporter; the

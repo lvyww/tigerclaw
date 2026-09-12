@@ -48,7 +48,7 @@ if not defined MSBUILD for /f "delims=" %%I in ('where.exe MSBuild.exe 2^>nul') 
 if not defined MSBUILD echo ERROR: MSBuild.exe not found. & exit /b 1
 
 set "CORE_PROJECT=%ROOT%\next\TigerClaw.Core\TigerClaw.Core.csproj"
-set "OVERLAY_PROJECT=%ROOT%\next\TigerClaw.Overlay\TigerClaw.Overlay.csproj"
+set "OVERLAY_PROJECT=%ROOT%\next\build_overlay.bat"
 set "DIALOG_PROJECT=%ROOT%\next\TigerClaw.Dialog\TigerClaw.Dialog.csproj"
 set "SENTENCE_NATIVE_BUILD=%ROOT%\next\build_sentence_native.bat"
 set "HOOK_PROJECT=%ROOT%\next\TigerClaw.Hook.Native\TigerClaw.Hook.Native.vcxproj"
@@ -96,7 +96,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "$p='%SHARED_BUILD_INFO%'
 echo.
 echo [2/10] Build .NET payload
 "%DOTNET%" publish "%CORE_PROJECT%" -c Release -r win-arm64 --self-contained true -o "%CORE_OUT%" /p:PublishAot=true || exit /b 1
-"%DOTNET%" msbuild /m /nr:false "%OVERLAY_PROJECT%" /restore /p:Configuration=Release /p:Platform=AnyCPU /p:TigerClawTargetFramework=net481 /p:PlatformTarget=ARM64 /p:Prefer32Bit=false /p:OutDir="%UI_OUT%\\" /v:minimal || exit /b 1
+call "%OVERLAY_PROJECT%" ARM64 "%UI_OUT%" Release || exit /b 1
 "%DOTNET%" msbuild /m /nr:false "%DIALOG_PROJECT%" /restore /p:Configuration=Release /p:Platform=AnyCPU /p:TigerClawTargetFramework=net481 /p:PlatformTarget=ARM64 /p:Prefer32Bit=false /p:OutDir="%UI_OUT%\\" /v:minimal || exit /b 1
 call "%SENTENCE_NATIVE_BUILD%" ARM64 "%SENTENCE_OUT%" Release || exit /b 1
 if not exist "%CORE_OUT%\Models" mkdir "%CORE_OUT%\Models"
@@ -138,6 +138,10 @@ echo [8/10] Validate artifacts
 for %%P in ("%CORE_OUT%\TigerClaw.Core.exe" "%UI_OUT%\TigerClaw.Overlay.exe" "%UI_OUT%\TigerClaw.Dialog.exe" "%UI_OUT%\TigerClaw.Shared.dll" "%CORE_OUT%\Models\sentence-ngram-v2.bin" "%SENTENCE_OUT%\TigerClaw.Sentence.exe" "%SENTENCE_OUT%\Models\sentence-qwen-q8.gguf" "%SENTENCE_QWEN_LICENSE%" "%ROOT%\third_party\llama.cpp\LICENSE" "%HOOK_OUT%\TigerClaw.Hook.Native.exe" "%TSF_X86%" "%TSF_X64%" "%TSF_ARM64%" "%TSF_SERVER%" "%WRAPPER_DLL%") do if not exist %%~P echo ERROR: Missing %%~P & exit /b 1
 
 echo.
+for %%F in (Overlay-THIRD-PARTY-NOTICES.txt sounds\KeyNormal.wav sounds\KeySpace.wav sounds\KeyFunc.wav) do if not exist "%UI_OUT%\%%F" (
+  echo ERROR: Missing overlay payload %%F
+  exit /b 1
+)
 echo [9/10] Copy artifacts
 taskkill /F /IM TigerClaw.Sentence.exe /T >nul 2>&1
 taskkill /F /IM TigerClaw.Overlay.exe /T >nul 2>&1
@@ -155,6 +159,9 @@ if exist "%RELEASE_DIR%\Models\sentence-ngram.tcmodel" del /q "%RELEASE_DIR%\Mod
 copy /Y "%CORE_OUT%\TigerClaw.Core.exe" "%RELEASE_DIR%\TigerClaw.Core.exe" >nul || exit /b 1
 if exist "%RELEASE_DIR%\TigerClaw.Core.exe.config" del /q "%RELEASE_DIR%\TigerClaw.Core.exe.config"
 copy /Y "%UI_OUT%\TigerClaw.Overlay.exe" "%RELEASE_DIR%\TigerClaw.Overlay.exe" >nul || exit /b 1
+if not exist "%UI_OUT%\TigerClaw.Overlay.exe.config" if exist "%RELEASE_DIR%\TigerClaw.Overlay.exe.config" del /q "%RELEASE_DIR%\TigerClaw.Overlay.exe.config"
+if not exist "%RELEASE_DIR%\sounds" mkdir "%RELEASE_DIR%\sounds"
+for %%F in (Overlay-THIRD-PARTY-NOTICES.txt sounds\KeyNormal.wav sounds\KeySpace.wav sounds\KeyFunc.wav) do copy /Y "%UI_OUT%\%%F" "%RELEASE_DIR%\%%F" >nul || exit /b 1
 if exist "%UI_OUT%\TigerClaw.Overlay.exe.config" copy /Y "%UI_OUT%\TigerClaw.Overlay.exe.config" "%RELEASE_DIR%\TigerClaw.Overlay.exe.config" >nul || exit /b 1
 copy /Y "%UI_OUT%\TigerClaw.Dialog.exe" "%RELEASE_DIR%\TigerClaw.Dialog.exe" >nul || exit /b 1
 if exist "%UI_OUT%\TigerClaw.Dialog.exe.config" copy /Y "%UI_OUT%\TigerClaw.Dialog.exe.config" "%RELEASE_DIR%\TigerClaw.Dialog.exe.config" >nul || exit /b 1
