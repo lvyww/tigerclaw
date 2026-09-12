@@ -1,0 +1,43 @@
+name: Sync candidate branch with native main
+on:
+  push:
+    branches: [feat/candidate-orientation-memory]
+    paths: ['.github/workflows/candidate-sync-main.yml']
+permissions:
+  contents: write
+jobs:
+  sync:
+    if: github.repository == 'lvyww/tigerclaw'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 0
+      - name: Preserve both histories and additive protocol fields
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git merge --no-commit 538096b776778f0d9e8d7e3a9cf2f06481fb75be || test "$(git diff --name-only --diff-filter=U | sort | tr '\n' ':')" = 'AGENTS.md:next/TigerClaw.Shared/OverlayUiState.cs:'
+          git checkout --theirs AGENTS.md
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('next/TigerClaw.Shared/OverlayUiState.cs')
+          text = p.read_text()
+          start = text.index('<<<<<<< HEAD')
+          mid = text.index('=======', start)
+          marker = text.index('>>>>>>>', mid)
+          end = text.index('\n', marker)
+          ours = text[start + len('<<<<<<< HEAD\n'):mid]
+          theirs = text[mid + len('=======\n'):marker]
+          for i in range(33, 28, -1):
+              ours = ours.replace(f'Order = {i}', f'Order = {i+5}')
+          p.write_text(text[:start] + theirs + ours + text[end:])
+          PY
+          git add AGENTS.md next/TigerClaw.Shared/OverlayUiState.cs
+          git rm .github/workflows/candidate-source-snapshot.yml .github/workflows/candidate-sync-main.yml
+          git -c core.whitespace=cr-at-eol diff --cached --check
+          git commit -m 'Merge current native-Overlay main while retaining candidate environment protocol fields'
+          git push origin HEAD:refs/heads/feat/candidate-orientation-memory
