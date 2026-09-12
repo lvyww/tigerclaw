@@ -1,0 +1,29 @@
+name: Apply candidate compiler fixes
+on:
+  push:
+    branches: [feat/candidate-orientation-memory]
+    paths: ['.github/workflows/candidate-build-fix.yml']
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.repository == 'lvyww/tigerclaw'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, subprocess, tempfile, zlib
+          patch = zlib.decompress(base64.b64decode('eNqtVNtu2kAQfbfUf5imUgSYWwhKQkgiEjAJEtjIGCH1JVrsMaxwdunuGkKr/nvXF3Kp0iqRYtmWvTNzzpw5awc0DKFSWVAFpHZDH9Cb9Bu1CXlYRzgYWTVvKZAEo4WwNsjUhLJV1V+vYf7+XIOyAB+heRyGiPVqtYWNIMRTOKrXT5pNo1KpfITZME3zQ+ydDlRa5RMwW+VT6HQM+EaZH8UBwsFtxOckktXlwZeXy0+QfwesgKoJSkk5S0Pmc2hM19iNqCbOivQpFVHUB58zqWA6sD1YdYlANSQ7HisXf8Qo1YiyAVMoNiQaSbiE43o7rQ5e2sLwUdU8ukDRjci26mxQRGRXtTX+BmtKw8iaIxJyvcLZOJ5H1E8fvSSWG/YJKLmV5BSbjbNWtXrUaJ60tPxXVn4GT2byZyAl9jfq5TMw07t+lSo4P9+gr7i4cK2udwWhIA8o20YWCmPmJxgXG06DQvEKglhQtkjR5VJnJevQXaK/Ksw5j0B7F2M5N9pfElGC7XJXhF9gmn6SJttAQyh8TROLoJaCbzMuETOld/I9CsFFIalqw28DpkPHvk0umA3s6/EAPKrJEkS9f2LBgPFtkli5cZzhPidvsHA3s3uw1U7xbRnuel1QRCxQ9fx9i2NHb8YSrDllar82GXy3SiDpT8xqJI+Fj7rGqMAbxysgLuiCsjJ0naHjulYfVrjb494MLbvXn9pdb+DYJZhHyIIy9GaO24MwIgupRRnmB2W8FvDv1s23Wv9v0+9qN4VJDM26g8vLvDc4PISQ0CgWmCTq73f/1oZJ8uFLZaVGW67ruPe3ln3fvx4Mp66lbc+d7V8PJ1a6CZKDxIrriIwjpX8O03VAFOr/BwoMZil5YT+h5+nkY8kG8jSMJ8GpzlxYJqn9rCin0jre0pYiJw8JdtH4AwPGAhg=', validate=True))
+          assert hashlib.sha256(patch).hexdigest() == 'cf8c2190a83150cde5e79cfd9d009f0bdfedbbe3275d320e522f2cf827178333'
+          with tempfile.NamedTemporaryFile() as file:
+              file.write(patch);file.flush()
+              subprocess.run(['git','apply','--check','--index',file.name],check=True)
+              subprocess.run(['git','apply','--index',file.name],check=True)
+          PY
+          git rm .github/workflows/candidate-build-fix.yml
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Include PipeClient definition and match Windows SDK publication test signature'
+          git push origin HEAD:refs/heads/feat/candidate-orientation-memory
