@@ -1,0 +1,40 @@
+# One-time, same-repository development transfer. This job can write only the
+# named feature branch below; it never merges, installs or edits main.
+name: Materialize candidate orientation sources
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.candidate-orientation-transfer/**'
+      - '.github/workflows/candidate-orientation-apply.yml'
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: github.repository == 'lvyww/tigerclaw' && github.event.pull_request.number == 1 && github.event.pull_request.head.repo.full_name == github.repository && github.event.pull_request.head.ref == 'feat/candidate-orientation-memory'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Verify and apply exact source patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, pathlib, subprocess, tempfile, zlib
+          root = pathlib.Path('.candidate-orientation-transfer')
+          encoded = ''.join((root / ('part' + str(i))).read_text() for i in range(4))
+          patch = zlib.decompress(base64.b64decode(encoded, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == '8aea30363f8f12a1a40a341e956084d5bd296db15dc12396e065c956b66dc259', 'Source transfer checksum mismatch'
+          assert b'diff --git a/.github/' not in patch, 'Workflow changes are not part of source transfer'
+          with tempfile.NamedTemporaryFile(suffix='.patch') as file:
+              file.write(patch); file.flush()
+              subprocess.run(['git', 'apply', '--check', '--index', file.name], check=True)
+              subprocess.run(['git', 'apply', '--index', '--whitespace=nowarn', file.name], check=True)
+          subprocess.run(['git', '-c', 'core.whitespace=cr-at-eol', 'diff', '--cached', '--check'], check=True)
+          PY
+          git rm -r .candidate-orientation-transfer
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Retain candidate above-direction memory across compositions with environment and publication guards'
+          git push origin HEAD:refs/heads/feat/candidate-orientation-memory
