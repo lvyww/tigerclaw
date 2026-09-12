@@ -15,6 +15,7 @@ namespace tiger::overlay
         bool vertical = false, showIndex = false, hideCandidates = false;
         bool hideStatus = false, showCode = false, nativeHook = false;
         Text status, input, codeMask, theme, font;
+        Text candidateFrameSession;
         std::vector<Text> candidates, annotations;
         int composition = 0, caretX = 0, caretY = 0, caretHeight = 0;
         int soundVk = 0, soundVolume = 0, candidateDelay = 0, annotationDelay = 0;

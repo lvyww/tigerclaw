@@ -132,8 +132,16 @@ internal static class Program
                 }
                 f.Idle();f.Key('u');f.Idle();
                 var ready = f.Read();Check(ready.Candidates.Length == 1 && ready.Candidates[0] == "这", "Prefix missing");
+                Check(!string.IsNullOrEmpty(ready.CandidateFrameSession), "Ready frame missing session token");
+                Check(f.Read().CandidateFrameSession == ready.CandidateFrameSession, "Snapshot polling renewed session");
                 Record("ready", ready);
-                lock (f.PublishGate) lock (f.EngineGate) Record("pending", f.CommitPrefix());
+                lock (f.PublishGate) lock (f.EngineGate)
+                {
+                    var pending = f.CommitPrefix();
+                    Check(pending.CandidateFrameSession == ready.CandidateFrameSession,
+                        "Automatic prefix commit broke display continuity");
+                    Record("pending", pending);
+                }
                 f.Idle();var empty = f.Read();
                 Check(!empty.CandidateHoldWhilePending && empty.CandidateVisible && empty.Candidates.Length == 0,
                     "Completed empty result still requested a hold");
@@ -141,14 +149,58 @@ internal static class Program
                 f.Key('w');f.Idle();var completed = f.Read();
                 Check(completed.Candidates.Length > 0 && completed.Candidates[0] == "人" && !completed.CandidateHoldWhilePending,
                     "Suffix completion lost/duplicated the committed prefix");
+                Check(empty.CandidateFrameSession == ready.CandidateFrameSession &&
+                      completed.CandidateFrameSession == ready.CandidateFrameSession,
+                    "Decode completion renewed the display session");
                 Record("completed_candidates", completed);
+            }
+            // A real end/new-input sequence, with precisely the same input and
+            // geometry. Native tests intentionally never consume the hidden state.
+            var tokens = new HashSet<string>(StringComparer.Ordinal);
+            foreach (string ending in new[] { "commit", "cancel", "escape", "backspace" })
+            {
+                using var f = new Fixture();f.Ready();var before = f.Read();
+                Check(tokens.Add(before.CandidateFrameSession), "Different engines reused a display token");
+                Record("previous_" + ending, before);
+                string nextSession;
+                lock (f.PublishGate) lock (f.EngineGate)
+                {
+                    switch (ending)
+                    {
+                        case "commit": f.Key(' '); break;
+                        case "cancel": f.Handler.Handle("{\"type\":\"composition_canceled\"}"); break;
+                        case "escape": f.Key((char)27); break;
+                        default: f.Key((char)8);f.Key((char)8);break;
+                    }
+                    var hidden = f.Read();
+                    Check(!hidden.CandidateVisible && !hidden.CandidateHoldWhilePending,
+                        "Input did not end: " + ending);
+                    // Only the final MMF snapshot will be delivered to Native.
+                    f.Key('v');f.Key('u');var next = f.Read();nextSession = next.CandidateFrameSession;
+                    Check(next.CandidateHoldWhilePending && !next.CandidateVisible && next.Candidates.Length == 0,
+                        "New input was not pending: " + ending);
+                    Check(!string.IsNullOrEmpty(nextSession) && nextSession != before.CandidateFrameSession,
+                        "New input reused the old display session: " + ending);
+                    Check(next.InputCode == before.InputCode && next.CaretX == before.CaretX && next.CaretY == before.CaretY,
+                        "Coalesced regression must keep identical input and coordinates");
+                    Record("new_" + ending + "_pending", next);
+                }
+                f.Idle();var ready = f.Read();
+                Check(ready.CandidateVisible && ready.CandidateFrameSession == nextSession, "New input completion changed session");
+                Record("new_" + ending + "_ready", ready);
+                lock (f.PublishGate) lock (f.EngineGate)
+                {
+                    var next = f.CommitPrefix();
+                    Check(next.CandidateFrameSession == nextSession, "New input continuation changed session");
+                    Record("new_" + ending + "_continuation", next);
+                }
             }
             foreach (string action in new[] { "cancel", "focus", "inactive", "english", "disabled" })
             {
                 using var f = new Fixture();f.Ready();
                 lock (f.PublishGate) lock (f.EngineGate)
                 {
-                    f.CommitPrefix();
+                    var pending = f.CommitPrefix();
                     string message = action switch
                     {
                         "cancel" => "{\"type\":\"composition_canceled\"}",
@@ -160,6 +212,8 @@ internal static class Program
                     f.Handler.Handle(message);var ended = f.Read();
                     Check(!ended.CandidateHoldWhilePending && !ended.CandidateVisible,
                         "Pending hold bypassed " + action);
+                    Check(ended.CandidateFrameSession != pending.CandidateFrameSession,
+                        "Boundary retained frame identity: " + action);
                     Record(action, ended);
                 }
             }

@@ -105,3 +105,32 @@ from real asynchronous sentence auto-commit (vu -> \u8fd9, then pending j).
 nonactivating layered windows, controlled time and publication faults. The
 without-hint control must reproduce the original hide. No production IPC,
 registration, input injection or daily-runtime replacement is performed.
+
+### Display-continuity identity and current-frame eligibility
+
+`CandidateFrameSession` is an optional opaque string identifying candidate-frame
+continuity. Core captures it under the same engine lock as candidates and pending
+state. Clearing/restarting composition or losing focus/activation changes it;
+ordinary decoding and automatic prefix commit within continuing sentence input
+do not. It is freshly randomized across engine instances, not a process-local
+counter reused on restart. Every snapshot carries it, so Native does not have to
+see an intermediate hidden snapshot. Missing/empty identity disables retention
+conservatively (including when talking to older builds of this PR).
+
+Native requires an exact identity match to the successfully published frame.
+A changed identity resets only the current display/reveal session and horizontal
+anchor; it does not clear or partition the geometric 100-decision history. This
+identity is not a TSF context ID and is not used for placement direction.
+
+Frame eligibility describes the currently published pixels, not whether a
+candidate appeared at some earlier point. CodeOnly/InputOnly publication removes
+eligibility, including animation samples and reentrant publication. A failed
+publication leaves the eligibility of untouched pixels intact; a reentrant reset
+cannot be rolled back. Preparing a future layout alone changes no eligibility.
+
+The review regressions generate real identical-code commit/cancel/Escape/Backspace
+end/new-input sequences and deliberately omit hidden snapshots from Native
+consumption. They additionally exercise both code-only modes after candidates,
+intermediate/final animations, publication failure, missing identity and reentry.
+Two compiled negative controls restore missing session checks and the historical
+candidate latch, and must fail for the corresponding reported defects.

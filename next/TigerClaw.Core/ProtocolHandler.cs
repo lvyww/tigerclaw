@@ -517,6 +517,7 @@ namespace TigerClaw.Core
                     _imeActive = ConvertToBool(msg.GetValue("active"), false);
                     if (!_imeActive)
                     {
+                        _engine.InvalidateCandidateFrame();
                         _candidateFrameHoldBlocked = true;
                         _candidateAnchorRefreshPending = false;
                     }
@@ -869,7 +870,7 @@ namespace TigerClaw.Core
                 lock (_publishLock)
                 {
                     int pageSize = _state.GetPageSize();
-                    EngineUiSnapshot engineState = _engine.GetUiSnapshot(pageSize, out bool sentenceDecodePending);
+                    EngineUiSnapshot engineState = _engine.GetUiSnapshot(pageSize, out bool sentenceDecodePending, out string candidateFrameSession);
                     bool candidateVisible = ShouldShowCandidate(engineState, sentenceDecodePending, out bool holdCandidateFrame);
                     _state.GetCaret(out int caretX, out int caretY, out _, out int caretHeight);
                     bool hideStatusBar = _state.GetHideStatusBar() || (!_isNativeHookStatus && !_imeActive);
@@ -882,6 +883,7 @@ namespace TigerClaw.Core
                         StatusText = _hookNativeDisabled ? "\u7981" : (engineState.IsChinese ? "\u4e2d" : "EN"),
                         CandidateVisible = candidateVisible,
                         CandidateHoldWhilePending = holdCandidateFrame,
+                        CandidateFrameSession = candidateFrameSession,
                         InputCode = BuildDisplayComposition(engineState),
                         Candidates = engineState.Candidates ?? Array.Empty<string>(),
                         CandidateAnnotations = engineState.CandidateAnnotations ?? Array.Empty<string>(),

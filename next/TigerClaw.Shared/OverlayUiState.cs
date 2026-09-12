@@ -98,6 +98,10 @@ namespace TigerClaw.Shared
         // Optional hint; old overlays still see CandidateVisible == false.
         [DataMember(Order = 34)]
         public bool CandidateHoldWhilePending { get; set; }
+
+        // Optional display-continuity token. Missing/empty tokens cannot hold a frame.
+        [DataMember(Order = 35)]
+        public string CandidateFrameSession { get; set; }
     }
 }
 

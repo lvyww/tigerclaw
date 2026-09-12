@@ -33,7 +33,8 @@ namespace tiger::overlay
         Renderer candidateRenderer_, statusRenderer_, transitionRenderer_;
         FrameTransition transition_;
         bool transitionsEnabled_ = true;
-        bool hasPresentedCandidates_ = false;
+        bool frameHasCandidates_ = false;
+        Text candidateSession_, frameSession_;
         HMONITOR frameMonitor_ = nullptr;
         RECT frameWork_{};
         UINT frameDpi_ = 0;
@@ -49,6 +50,36 @@ namespace tiger::overlay
             explicit FrameGuard(bool& value) : active(value) { active = true; }
             ~FrameGuard() { active = false; }
         };
+        static bool IsCandidateFrame(DisplayMode mode)
+        {
+            return mode == DisplayMode::CandidatesOnly || mode == DisplayMode::CodeAndCandidates;
+        }
+        void ObserveCandidateSession()
+        {
+            if (state_.candidateFrameSession != candidateSession_)
+            {
+                candidateSession_ = state_.candidateFrameSession;
+                HideImmediately();
+                placement_.EndInput(); // short-term anchor only; 100-entry history survives
+                reveal_ = Reveal{};
+                candidateDrawn_ = false;
+            }
+        }
+        void PresentCandidate(Renderer& renderer, const POINT& destination, std::uint64_t revision)
+        {
+            const bool previous = frameHasCandidates_;
+            // Invalidate BEFORE Present: it can reenter after publishing code-only
+            // pixels but before ShowCandidate acknowledges the complete frame.
+            if (!IsCandidateFrame(display_.mode)) frameHasCandidates_ = false;
+            try { renderer.Present(candidate_, &destination); }
+            catch (...)
+            {
+                // A failed publication leaves old pixels intact; a reentrant
+                // replacement/reset is never rolled back by this older call.
+                if (revision == visualRevision_) frameHasCandidates_ = previous;
+                throw;
+            }
+        }
         bool ShowCandidate(std::uint64_t revision)
         {
             if (revision != visualRevision_ || !validCaret_ || display_.mode == DisplayMode::Hidden) return false;
@@ -56,8 +87,8 @@ namespace tiger::overlay
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW))
                 throw std::runtime_error("Candidate show failed");
             if (revision != visualRevision_ || !IsWindowVisible(candidate_)) return false;
-            if (display_.mode == DisplayMode::CandidatesOnly || display_.mode == DisplayMode::CodeAndCandidates)
-                hasPresentedCandidates_ = true;
+            frameHasCandidates_ = IsCandidateFrame(display_.mode);
+            frameSession_ = state_.candidateFrameSession;
             frameMonitor_ = MonitorFromPoint({state_.caretX, state_.caretY}, MONITOR_DEFAULTTONEAREST);
             MONITORINFO monitor{sizeof(monitor)};
             frameDpi_ = GetMonitorInfoW(frameMonitor_, &monitor) ? candidateDpi_ : 0;
@@ -67,12 +98,13 @@ namespace tiger::overlay
         void HideImmediately()
         {
             StopTransition();
-            hasPresentedCandidates_ = false;
+            frameHasCandidates_ = false;
             ShowWindow(candidate_, SW_HIDE);
         }
         bool CanHoldCandidateFrame()
         {
-            if (!hasPresentedCandidates_ || !IsWindowVisible(candidate_) ||
+            if (!frameHasCandidates_ || state_.candidateFrameSession.empty() ||
+                state_.candidateFrameSession != frameSession_ || !IsWindowVisible(candidate_) ||
                 !UsableCaret(state_.caretX, state_.caretY)) return false;
             const POINT caret{state_.caretX, state_.caretY};
             const auto monitorId = MonitorFromPoint(caret, MONITOR_DEFAULTTONEAREST);
@@ -118,12 +150,12 @@ namespace tiger::overlay
                 {
                     transitionRenderer_.Prepare(state_, display_, candidateDpi_, false, &size);
                     if (revision != visualRevision_) return;
-                    transitionRenderer_.Present(candidate_, &point);
+                    PresentCandidate(transitionRenderer_, point, revision);
                 }
                 else
                 {
                     KillTimer(candidate_, 4);
-                    candidateRenderer_.Present(candidate_, &point);
+                    PresentCandidate(candidateRenderer_, point, revision);
                     if (ShowCandidate(revision))
                     {
                         placement_ = placement;
@@ -159,7 +191,7 @@ namespace tiger::overlay
                 else { pendingPlacement_ = placement; return; }
             }
             StopTransition();
-            candidateRenderer_.Present(candidate_, &destination);
+            PresentCandidate(candidateRenderer_, destination, revision);
             // A computed target is not an observation. Only successful full
             // publication/show (or the final animation tick) commits one record.
             if (ShowCandidate(revision)) placement_ = placement;
@@ -252,6 +284,7 @@ namespace tiger::overlay
         {
             if (!candidate_ || !status_) return;
             const auto revision = ++visualRevision_;
+            ObserveCandidateSession();
             if (inFrame_)
             {
                 // A forced refresh can be coalesced safely; never consume a

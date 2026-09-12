@@ -566,6 +566,7 @@ namespace TigerClaw.Core
         {
             lock (_lock)
             {
+                InvalidateCandidateFrame();
                 _smartSpaceArmed = false;
                 ResetOneShotActionState();
                 ResetCtrlSpaceState();
@@ -3399,6 +3400,7 @@ namespace TigerClaw.Core
 
         private void ClearCompositionInput()
         {
+            InvalidateCandidateFrame();
             if (_sentenceRawBuffer.Length > 0)
             {
                 _sentenceInputDecoder?.CompleteComposition();
