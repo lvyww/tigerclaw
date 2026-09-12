@@ -10,21 +10,62 @@ concurrency:
   group: candidate-orientation-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  source:
+  geometry:
+    name: Portable production geometry
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
-      - name: Archive exact test inputs
-        run: |
-          git rev-parse HEAD > source-commit.txt
-          git archive --format=zip HEAD next BimeTSF2/SampleIME Protocol AGENTS.md > candidate-source.zip
-      - uses: actions/upload-artifact@v4
+      - uses: actions/setup-dotnet@v4
         with:
-          name: candidate-source
-          path: |
-            candidate-source.zip
-            source-commit.txt
-          retention-days: 1
+          dotnet-version: '10.0.x'
+      - run: python3 tools/test_candidate_orientation.py
+  windows:
+    name: Windows ${{ matrix.platform }} WPF
+    runs-on: windows-2025
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [x64, x86]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build actual Overlay and Dialog
+        shell: pwsh
+        run: |
+          dotnet build next/TigerClaw.Overlay/TigerClaw.Overlay.csproj -c Release --artifacts-path "$env:RUNNER_TEMP/production-overlay" -p:PlatformTarget=${{ matrix.platform }} --nologo
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet build next/TigerClaw.Dialog/TigerClaw.Dialog.csproj -c Release --artifacts-path "$env:RUNNER_TEMP/production-dialog" -p:PlatformTarget=${{ matrix.platform }} --nologo
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build TSF bridge with context-change notification
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.Component.MSBuild -property installationPath
+          if (!$vs) { throw 'MSBuild unavailable' }
+          $platform = if ('${{ matrix.platform }}' -eq 'x86') { 'Win32' } else { 'x64' }
+          & "$vs\MSBuild\Current\Bin\MSBuild.exe" BimeTSF2/SampleIME/BimeTSF2.vcxproj /nr:false /p:Configuration=Release "/p:Platform=$platform" /p:PlatformToolset=v145 "/p:OutDir=$env:RUNNER_TEMP\bridge\" "/p:IntDir=$env:RUNNER_TEMP\bridge-obj\" /v:minimal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Geometry, WPF publication and negative controls
+        shell: pwsh
+        run: |
+          python tools/test_candidate_orientation.py --windows-ui --platform ${{ matrix.platform }}
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Real Core protocol and existing Core regressions
+        if: matrix.platform == 'x64'
+        shell: pwsh
+        run: |
+          python tools/test_candidate_orientation.py --protocol
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet build next/TigerClaw.Core.Tests/TigerClaw.Core.Tests.csproj -c Release --artifacts-path "$env:RUNNER_TEMP/core-tests" -p:PublishAot=false --nologo
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $tests = @(Get-ChildItem "$env:RUNNER_TEMP/core-tests/bin/TigerClaw.Core.Tests" -Recurse -Filter TigerClaw.Core.Tests.dll)
+          if ($tests.Count -ne 1) { throw 'Expected exactly one Core test binary' }
+          dotnet $tests[0].FullName
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
