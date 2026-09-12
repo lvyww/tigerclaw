@@ -227,17 +227,42 @@ int main()
         Check(Until([&] { return !IsWindowVisible(candidate); }, 150), "hide interrupts active resizing immediately");
         Sleep(450);
         Check(!IsWindowVisible(candidate), "old animation cannot resurrect hidden window");
-        state["CandidateAnimationDurationMs"] = 200;
-        state["CandidateVisible"] = true; publish(state); Sleep(100);
+        // Measure a bounded fixture before testing movement. The original
+        // 52-character horizontal line plus annotations could fill a small CI
+        // desktop, making raw x+240 an impossible endpoint after work-area clamp.
+        state["CandidateAnimationEnabled"] = false;
+        state["CandidateVisible"] = true;
+        state["CandidateExpandDelayMs"] = state["AnnotationExpandDelayMs"] = 0;
+        state["VerticalCandidates"] = true; state["CandidateAnnotations"] = nlohmann::json::array();
+        state["FontSize"] = 17; state["InputCode"] = "ab";
+        const int motionStartX = area.left + 10;
+        state["CandidateAnchorRevision"] = 2; state["CaretX"] = motionStartX;
+        publish(state);
+        RECT motionShort{};
+        Check(Until([&] { GetWindowRect(candidate, &motionShort);
+            return IsWindowVisible(candidate) && motionShort.left == motionStartX;
+        }), "motion fixture starts at its requested anchor");
+        state["InputCode"] = "abcdefghijklmnop"; publish(state);
+        RECT motionLong{};
+        Check(Until([&] { GetWindowRect(candidate, &motionLong);
+            return motionLong.right-motionLong.left > motionShort.right-motionShort.left;
+        }), "motion fixture expands before measurement");
+        const int motionWidth = motionLong.right-motionLong.left;
+        const int motionTargetX = static_cast<int>((std::min)(static_cast<LONG>(motionStartX+240), area.right-motionWidth-2));
+        Check(motionTargetX > motionStartX+10, "motion fixture has room for actual horizontal travel");
+        state["InputCode"] = "ab"; publish(state);
+        Check(Until([&] { RECT rect{}; GetWindowRect(candidate, &rect);
+            return rect.left == motionStartX && rect.right-rect.left == motionShort.right-motionShort.left;
+        }), "motion fixture returns to short layout");
         // Exercise motion plus resizing, then cancel midway. Late animation
         // timers must never resurrect a committed/hidden composition.
-        state["CandidateExpandDelayMs"] = 0; state["AnnotationExpandDelayMs"] = 0;
-        state["CandidateAnchorRevision"] = 2; state["CaretX"] = x + 240;
-        state["InputCode"] = "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz";
-        publish(state);
+        state["CandidateAnimationEnabled"] = true; state["CandidateAnimationDurationMs"] = 200;
+        state["CandidateAnchorRevision"] = 3; state["CaretX"] = motionTargetX;
+        state["InputCode"] = "abcdefghijklmnop"; publish(state);
         Check(Until([&] { RECT rect{}; GetWindowRect(candidate, &rect);
-            return rect.left == x + 240; }), "animated movement reaches latest anchor");
-        state["CandidateAnchorRevision"] = 3; state["CaretX"] = x;
+            return rect.left == motionTargetX && rect.right-rect.left == motionWidth;
+        }), "animated movement reaches latest anchor and full target size");
+        state["CandidateAnchorRevision"] = 4; state["CaretX"] = motionStartX;
         state["InputCode"] = "ab"; publish(state);
         Sleep(5);
         state["CandidateVisible"] = false; publish(state);
