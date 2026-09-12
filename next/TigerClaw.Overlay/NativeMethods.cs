@@ -33,6 +33,21 @@ namespace TigerClaw.Overlay
             public char[] szDevice = new char[32];
         }
 
+        [StructLayout(LayoutKind.Sequential)]
+        internal struct GUITHREADINFO
+        {
+            public uint cbSize, flags;
+            public IntPtr hwndActive, hwndFocus, hwndCapture, hwndMenuOwner, hwndMoveSize, hwndCaret;
+            public RECT rcCaret;
+        }
+
+        [DllImport("user32.dll")]
+        internal static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        internal static extern bool GetGUIThreadInfo(uint threadId, ref GUITHREADINFO info);
+
         internal const int GWL_EXSTYLE = -20;
         internal const int WS_EX_NOACTIVATE = 0x08000000;
         internal const uint SWP_NOSIZE = 0x0001;

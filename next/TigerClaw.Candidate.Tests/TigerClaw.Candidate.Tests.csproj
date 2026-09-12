@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <CandidateOrientationSource Condition="'$(CandidateOrientationSource)' == ''">..\TigerClaw.Overlay\CandidateOrientation.cs</CandidateOrientationSource>
+    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework Condition="'$(CandidateProtocolTests)' == 'true'">net10.0-windows</TargetFramework>
+    <DefineConstants Condition="'$(CandidateProtocolTests)' == 'true'">$(DefineConstants);CANDIDATE_PROTOCOL_TESTS</DefineConstants>
+    <LangVersion>7.3</LangVersion>
+    <Nullable>disable</Nullable>
+    <AssemblyName>TigerClaw.Candidate.Tests</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="ProtocolTests.cs" />
+    <Compile Include="$(CandidateOrientationSource)" Link="Production\CandidateOrientation.cs" />
+    <Compile Include="..\TigerClaw.Overlay\OverlaySessionState.cs" Link="Production\OverlaySessionState.cs" />
+    <Compile Include="..\TigerClaw.Overlay\OverlayUiChangeFlags.cs" Link="Production\OverlayUiChangeFlags.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(CandidateProtocolTests)' != 'true'">
+    <Compile Include="..\TigerClaw.Shared\OverlayUiState.cs" Link="Production\OverlayUiState.cs" />
+    <Compile Include="..\TigerClaw.Core\CandidateEnvironmentTracker.cs" Link="Production\CandidateEnvironmentTracker.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(CandidateProtocolTests)' == 'true'">
+    <ProjectReference Include="..\TigerClaw.Core\TigerClaw.Core.csproj" />
+  </ItemGroup>
+</Project>

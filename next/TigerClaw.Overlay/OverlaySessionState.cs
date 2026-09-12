@@ -53,7 +53,18 @@ namespace TigerClaw.Overlay
                 changes |= OverlayUiChangeFlags.Style;
             }
 
-            if (_current.CaretX != next.CaretX ||
+            if (!StringEquals(_current.CandidateEnvironmentId, next.CandidateEnvironmentId) ||
+                _current.CandidateEnvironmentRevision != next.CandidateEnvironmentRevision ||
+                _current.CandidateEnvironmentActive != next.CandidateEnvironmentActive ||
+                _current.CandidateOwnerHwnd != next.CandidateOwnerHwnd ||
+                _current.CandidateOwnerProcessId != next.CandidateOwnerProcessId ||
+                _current.IsOff != next.IsOff || _current.IsChinese != next.IsChinese)
+            {
+                changes |= OverlayUiChangeFlags.Content | OverlayUiChangeFlags.Position;
+            }
+
+            if (_current.CaretHeight != next.CaretHeight ||
+                _current.CaretX != next.CaretX ||
                 _current.CaretY != next.CaretY ||
                 _current.IsNativeHook != next.IsNativeHook ||
                 _current.CandidateVisible != next.CandidateVisible ||
@@ -97,6 +108,11 @@ namespace TigerClaw.Overlay
                 CaretY = state.CaretY,
                 CaretHeight = state.CaretHeight,
                 CandidateAnchorRevision = state.CandidateAnchorRevision,
+                CandidateEnvironmentRevision = state.CandidateEnvironmentRevision,
+                CandidateEnvironmentId = state.CandidateEnvironmentId,
+                CandidateEnvironmentActive = state.CandidateEnvironmentActive,
+                CandidateOwnerHwnd = state.CandidateOwnerHwnd,
+                CandidateOwnerProcessId = state.CandidateOwnerProcessId,
                 VerticalCandidates = state.VerticalCandidates,
                 ShowCandidateIndex = state.ShowCandidateIndex,
                 HideCandidateItems = state.HideCandidateItems,

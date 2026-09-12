@@ -39,6 +39,8 @@ namespace TigerClaw.Core
         private int _soundVk;
         private int _soundVolumePercent;
         private long _candidateAnchorRevision;
+        private readonly CandidateEnvironmentTracker _candidateEnvironment = new CandidateEnvironmentTracker();
+        internal long CandidateEnvironmentRevision => _candidateEnvironment.Revision;
         private bool _candidateAnchorRefreshPending;
         private bool _awaitingFreshCaretForComposition;
         private long _awaitingFreshCaretDeadlineTick;
@@ -173,6 +175,7 @@ namespace TigerClaw.Core
             switch (type)
             {
                 case "hello":
+                    _candidateEnvironment.Invalidate(); // Reconnect/restart is not an ordinary commit.
                     MarkFrontendMode(ConvertToString(msg.GetValue("frontend")));
                     PublishUiState();
                     return BuildHelloResponse(seq);
@@ -584,6 +587,11 @@ namespace TigerClaw.Core
             bool cancelComposition = result.CancelComposition || _pendingFrontendCompositionReset;
             _pendingFrontendCompositionReset = false;
             bool languageStateChanged = wasChinese != result.IsChinese;
+            if (languageStateChanged)
+            {
+                _candidateEnvironment.ObserveMode(_isNativeHookStatus,
+                    _isNativeHookStatus ? !_hookNativeDisabled : _imeActive, result.IsChinese);
+            }
             string extraJsonPairs = BuildHookNativeConfigExtraJson(frontend) + BuildCompositionStatusExtraJson();
             if (isKeyDown)
             {
@@ -669,7 +677,20 @@ namespace TigerClaw.Core
             string windowTitle = ConvertToString(msg.GetValue("windowTitle"));
 
             _state.GetFocus(out long previousHwnd, out int previousProcessId, out string previousProcessName, out string previousClassName, out string previousWindowTitle);
+            // The bridge's context-only hint intentionally omits window metadata.
+            // Do not feed it into the normal focus/engine-reset path.
+            if (ConvertToBool(msg.GetValue("candidate_environment_changed"), false))
+            {
+                if (previousHwnd == hwnd && previousProcessId == processId)
+                    _candidateEnvironment.Invalidate();
+                return;
+            }
             _state.UpdateFocus(hwnd, processId, processName, className, windowTitle);
+
+            if (previousHwnd != hwnd || previousProcessId != processId)
+            {
+                _candidateEnvironment.Invalidate();
+            }
 
             bool focusChanged =
                 previousHwnd != hwnd ||
@@ -835,6 +856,10 @@ namespace TigerClaw.Core
 
         private void PublishUiState()
         {
+            // Observe even with a null publisher (protocol tests), and before
+            // MMF coalescing can hide a short off/on transition from Overlay.
+            _candidateEnvironment.ObserveMode(_isNativeHookStatus,
+                _isNativeHookStatus ? !_hookNativeDisabled : _imeActive, _engine.IsChinese);
             if (_uiStatePublisher == null)
             {
                 return;
@@ -847,6 +872,7 @@ namespace TigerClaw.Core
                     int pageSize = _state.GetPageSize();
                     EngineUiSnapshot engineState = _engine.GetUiSnapshot(pageSize);
                     _state.GetCaret(out int caretX, out int caretY, out _, out int caretHeight);
+                    _state.GetFocus(out long ownerHwnd, out int ownerProcessId, out _, out _, out _);
                     bool hideStatusBar = _state.GetHideStatusBar() || (!_isNativeHookStatus && !_imeActive);
 
                     var state = new OverlayUiState
@@ -881,7 +907,12 @@ namespace TigerClaw.Core
                         SoundSeq = Interlocked.Read(ref _soundSeq),
                         SoundVk = _soundVk,
                         SoundVolumePercent = _soundVolumePercent,
-                        CandidateAnchorRevision = Interlocked.Read(ref _candidateAnchorRevision)
+                        CandidateAnchorRevision = Interlocked.Read(ref _candidateAnchorRevision),
+                        CandidateEnvironmentRevision = _candidateEnvironment.Revision,
+                        CandidateEnvironmentId = _candidateEnvironment.InstanceId,
+                        CandidateEnvironmentActive = _isNativeHookStatus ? !_hookNativeDisabled : _imeActive,
+                        CandidateOwnerHwnd = ownerHwnd,
+                        CandidateOwnerProcessId = ownerProcessId
                     };
 
                     _uiStatePublisher.Publish(state);

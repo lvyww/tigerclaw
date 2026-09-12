@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk.WindowsDesktop">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+    <CandidatePositionerSource Condition="'$(CandidatePositionerSource)' == ''">..\TigerClaw.Overlay\CandidateWindowPositioner.cs</CandidatePositionerSource>
+    <TargetFramework>net48</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <LangVersion>7.3</LangVersion>
+    <Nullable>disable</Nullable>
+    <ApplicationManifest>..\app.manifest</ApplicationManifest>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="Program.cs" />
+    <Compile Include="..\TigerClaw.Overlay\CandidateOrientation.cs" Link="Production\CandidateOrientation.cs" />
+    <Compile Include="$(CandidatePositionerSource)" Link="Production\CandidateWindowPositioner.cs" />
+    <Compile Include="..\TigerClaw.Overlay\NativeMethods.cs" Link="Production\NativeMethods.cs" />
+    <ProjectReference Include="..\TigerClaw.Shared\TigerClaw.Shared.csproj" />
+  </ItemGroup>
+</Project>

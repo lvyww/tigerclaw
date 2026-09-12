@@ -12,6 +12,34 @@
 
 static const UINT kCaretLayoutRequestMinIntervalMs = 30;
 
+// A genuine TSF document/context transition can occur inside the same HWND.
+// A separate optional focus hint bypasses HWND-only focus-message debouncing.
+// Old Core versions safely ignore the extra field on this known no-reply message.
+static void NotifyCandidateEnvironmentChange(CPipeClient *client)
+{
+    HWND foreground = GetForegroundWindow();
+    DWORD processId = 0;
+    GetWindowThreadProcessId(foreground, &processId);
+    if (!foreground || processId != GetCurrentProcessId() || !client || !client->IsConnected()) return;
+    char message[256] = {};
+    int count = sprintf_s(message, sizeof(message),
+        "{\"type\":\"focus\",\"hwnd\":%lld,\"processId\":%lu,\"candidate_environment_changed\":true}\n",
+        static_cast<LONGLONG>(reinterpret_cast<LONG_PTR>(foreground)), processId);
+    if (count > 0) client->SendMessage(message);
+}
+
+static bool IsFocusedDocumentContext(ITfThreadMgr *manager, ITfContext *context)
+{
+    if (!manager || !context) return false;
+    ITfDocumentMgr *focused = nullptr, *owner = nullptr;
+    manager->GetFocus(&focused);
+    context->GetDocumentMgr(&owner);
+    bool matches = focused && owner && focused == owner;
+    if (focused) focused->Release();
+    if (owner) owner->Release();
+    return matches;
+}
+
 static void LogForegroundWindowInfoThreadMgr(_In_opt_ const char *stage)
 {
     if (!Global::IsVerboseLoggingEnabledRuntime())
@@ -638,6 +666,7 @@ STDAPI CSampleIME::OnUninitDocumentMgr(_In_ ITfDocumentMgr *pDocMgr)
 STDAPI CSampleIME::OnSetFocus(_In_ ITfDocumentMgr *pDocMgrFocus, _In_ ITfDocumentMgr *pDocMgrPrevFocus)
 {
     pDocMgrPrevFocus;
+    const bool candidateEnvironmentChanged = _pDocMgrLastFocused != pDocMgrFocus;
     HWND hwndForeground = GetForegroundWindow();
     LogDocMgrFocusState(pDocMgrFocus);
     LogForegroundWindowInfoThreadMgr("OnSetFocus");
@@ -664,6 +693,7 @@ STDAPI CSampleIME::OnSetFocus(_In_ ITfDocumentMgr *pDocMgrFocus, _In_ ITfDocumen
 
     _StopCaretTracking();
     _SendFocusMessage();
+    if (candidateEnvironmentChanged) NotifyCandidateEnvironmentChange(_pPipeClient);
 
     // Status window activation: focus changed, so republish. _PublishImeActive queries focus
     // editability live from the current thread focus, so no need to compute it here.
@@ -684,6 +714,7 @@ STDAPI CSampleIME::OnPushContext(_In_ ITfContext *pContext)
     Global::LogToFileVerbose("ThreadMgrEvent OnPushContext context=%p", pContext);
     LogForegroundWindowInfoThreadMgr("OnPushContext");
     LogActiveProfileStateThreadMgr("OnPushContext");
+    if (IsFocusedDocumentContext(_pThreadMgr, pContext)) NotifyCandidateEnvironmentChange(_pPipeClient);
     _RefreshCaretTrackingFromThreadFocus();
     return S_OK;
 }
@@ -700,6 +731,10 @@ STDAPI CSampleIME::OnPopContext(_In_ ITfContext *pContext)
     Global::LogToFileVerbose("ThreadMgrEvent OnPopContext context=%p", pContext);
     LogForegroundWindowInfoThreadMgr("OnPopContext");
     LogActiveProfileStateThreadMgr("OnPopContext");
+    // A popped context may no longer report its document. The retained tracking
+    // references still identify the previously focused context at this callback.
+    if (pContext && (pContext == _pCaretTrackingContext || pContext == _pCaretAnchorContext ||
+        IsFocusedDocumentContext(_pThreadMgr, pContext))) NotifyCandidateEnvironmentChange(_pPipeClient);
     _RefreshCaretTrackingFromThreadFocus();
     return S_OK;
 }

@@ -198,8 +198,10 @@ UI state:
   Settings show only the two shortcut rows. Disabled bindings display `清空`;
   the `修改` dialog clears or restores defaults immediately into the unsaved
   settings page. Legacy enable flags remain internal compatibility data.
-- Overlay owns candidate display. It pins the first caret anchor for a composition
-  and flips above the caret when needed. TSF legacy candidate UI is not active.
+- Overlay owns candidate display. Above-direction memory survives normal commits
+  in the same focused input environment; a stable small caret-Y band, environment
+  generation and current-frame confirmation govern reuse. See
+  `docs/candidate-orientation-memory.md`. TSF legacy candidate UI is not active.
   Temporary pinyin reverse lookup always shows available splits, full codes and
   comments without annotation delay, irrespective of normal annotation settings.
 

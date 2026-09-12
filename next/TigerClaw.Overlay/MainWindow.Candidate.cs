@@ -50,7 +50,7 @@ namespace TigerClaw.Overlay
                 ResetCandidateRevealState();
                 _lastRenderSignature = string.Empty;
                 HideCandidate();
-                _positioner.Reset();
+                _positioner.EndComposition();
                 return;
             }
 
@@ -119,10 +119,12 @@ namespace TigerClaw.Overlay
             }
 
             bool becameVisible = IsCandidateHidden();
-            bool hasPosition = _positioner.Update(this, BorderCandi, _state, true, _predictedWindowWidthDip, _predictedWindowHeightDip);
-            if (hasPosition)
+            var positioningState = _state;
+            bool hasPosition = _positioner.Update(this, BorderCandi, positioningState, true, _predictedWindowWidthDip, _predictedWindowHeightDip);
+            if (hasPosition && ReferenceEquals(_state, positioningState) && ShouldShowCandidateWindowForCurrentReveal())
             {
                 ShowCandidate(becameVisible);
+                _positioner.ConfirmShown(this, positioningState);
                 return;
             }
 
@@ -186,7 +188,10 @@ namespace TigerClaw.Overlay
             {
                 Visibility = Visibility.Visible;
             }
-            Opacity = 1.0;
+            // Measure while transparent; publish the inherited position before
+            // making a newly shown candidate visible (including delayed reveal).
+            Opacity = 0.0;
+            IsHitTestVisible = false;
             CandidateTransform.Y = 0.0;
         }
 
@@ -455,12 +460,12 @@ namespace TigerClaw.Overlay
 
         private bool ShouldShowCandidateWindow()
         {
-            return _candidateTextFormatter.ShouldShowCandidateWindow(_state);
+            return CandidateWindowPositioner.CanDisplay(_state) && _candidateTextFormatter.ShouldShowCandidateWindow(_state);
         }
 
         private bool ShouldShowCandidateWindowForCurrentReveal()
         {
-            return _candidateTextFormatter.ShouldShowCandidateWindow(_state, _candidateExpanded);
+            return CandidateWindowPositioner.CanDisplay(_state) && _candidateTextFormatter.ShouldShowCandidateWindow(_state, _candidateExpanded);
         }
 
         private bool IsCandidateHidden()

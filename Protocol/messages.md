@@ -122,3 +122,15 @@ Core 以 `handled` 决定前端是否吞键，以 `commit_text` 要求前端上�
 
 自定义选重键支持十进制、`0x` 十六进制和 `VK_*` 名称；空绑定行用于清除该选位
 默认键。
+
+
+### Optional candidate orientation focus hint
+
+A TSF `focus` notification may include `candidate_environment_changed:true`
+with its foreground `hwnd` and `processId`. When both identify the stored focus,
+Core advances the candidate-environment revision without replacing omitted focus
+metadata or clearing input. This known notification still has no response.
+It distinguishes a genuine TSF document/context change inside one HWND from an
+ordinary commit; legacy Core safely ignores the additional field. The Overlay
+UI state appends optional environment revision/active/owner/instance fields.
+See `docs/candidate-orientation-memory.md` for compatibility and validation.

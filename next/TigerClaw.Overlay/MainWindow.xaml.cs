@@ -118,6 +118,7 @@ namespace TigerClaw.Overlay
 
         private void ApplyUiState(OverlayUiChangeFlags changes)
         {
+            _positioner.ObserveState(_state); // Also observe hidden/idle environment changes.
             if ((changes & OverlayUiChangeFlags.Sound) != 0)
             {
                 TryPlayTypingSound();

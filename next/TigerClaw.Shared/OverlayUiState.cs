@@ -88,6 +88,22 @@ namespace TigerClaw.Shared
 
         [DataMember(Order = 28)]
         public long CandidateAnchorRevision { get; set; }
+
+        // Monotonic within one Core lifetime; ordinary commits do not change it.
+        [DataMember(Order = 29)]
+        public long CandidateEnvironmentRevision { get; set; }
+
+        [DataMember(Order = 30)]
+        public bool CandidateEnvironmentActive { get; set; }
+
+        [DataMember(Order = 31)]
+        public long CandidateOwnerHwnd { get; set; }
+
+        [DataMember(Order = 32)]
+        public int CandidateOwnerProcessId { get; set; }
+
+        [DataMember(Order = 33)]
+        public string CandidateEnvironmentId { get; set; }
     }
 }
 

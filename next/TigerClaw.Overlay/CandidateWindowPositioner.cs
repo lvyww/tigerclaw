@@ -1,419 +1,247 @@
 using System;
 using System.Text;
 using System.Windows;
-using System.Windows.Controls;
-
 using TigerClaw.Shared;
 
 namespace TigerClaw.Overlay
 {
     internal sealed class CandidateWindowPositioner
     {
-        private const int StartMenuOffsetPx = 10;
-        private const int CaretGapPx = 5;
         private const int DefaultCaretHeightPx = 20;
-        private IntPtr _lastMonitor = IntPtr.Zero;
-        private double _screenDpiX = 96.0;
-        private double _screenDpiY = 96.0;
-        private bool _prevComposing;
-        private int _lastTargetXPx = int.MinValue;
-        private int _lastTargetYPx = int.MinValue;
-        private bool _placeAboveLocked;
-        private bool _placeBelowLocked;
-        private bool _hasPlacementDecision;
-        private bool _lastPlacedAbove;
-        private bool _forceMoveForAnchorRefresh;
-        private bool _hasCaretAnchor;
-        private int _anchorXPx;
-        private int _anchorYPx;
-        private int _anchorHeightPx;
+        private readonly ICandidatePlacementHost _host;
+        private CandidateOrientation _orientation, _pendingOrientation;
+        private CandidatePlacementEnvironment _environment, _pendingEnvironment;
+        private bool _hasEnvironment, _pending, _hasCaretAnchor;
+        private int _anchorXPx, _anchorYPx, _anchorHeightPx;
+        private int _pendingX, _pendingY;
+        private long _revision, _pendingRevision;
+        private OverlayUiState _pendingState;
+        private bool _observed, _nativeHook, _off, _chinese, _active;
+        private long _coreRevision, _owner;
+        private string _instanceId;
+        private int _ownerProcess;
 
+        public CandidateWindowPositioner() : this(new Win32CandidatePlacementHost()) { }
+        internal CandidateWindowPositioner(ICandidatePlacementHost host)
+        { _host = host ?? throw new ArgumentNullException(nameof(host)); }
+        internal bool Above => _orientation.Above;
+
+        public static bool CanDisplay(OverlayUiState state)
+        {
+            return state != null && !state.IsOff && state.IsChinese &&
+                (state.CandidateEnvironmentRevision == 0 || state.CandidateEnvironmentActive);
+        }
+        public void ObserveState(OverlayUiState state)
+        {
+            if (state == null) { Reset(); _observed = false; return; }
+            if ((_observed && !SameStateEnvironment(state)) || !CanDisplay(state)) Reset();
+            _observed = true;
+            _coreRevision = state.CandidateEnvironmentRevision;
+            _instanceId = state.CandidateEnvironmentId;
+            _owner = state.CandidateOwnerHwnd;
+            _ownerProcess = state.CandidateOwnerProcessId;
+            _nativeHook = state.IsNativeHook;
+            _off = state.IsOff;
+            _chinese = state.IsChinese;
+            _active = state.CandidateEnvironmentActive;
+        }
+        private bool SameStateEnvironment(OverlayUiState state)
+        {
+            return state != null && string.Equals(_instanceId, state.CandidateEnvironmentId, StringComparison.Ordinal) &&
+                _coreRevision == state.CandidateEnvironmentRevision &&
+                _owner == state.CandidateOwnerHwnd && _ownerProcess == state.CandidateOwnerProcessId &&
+                _nativeHook == state.IsNativeHook && _off == state.IsOff && _chinese == state.IsChinese &&
+                _active == state.CandidateEnvironmentActive;
+        }
+        // Normal hidden/idle transitions keep the accepted direction but release
+        // the previous composition's anchor and any unconfirmed frame.
+        public void EndComposition()
+        {
+            ++_revision;
+            _pending = false;
+            _pendingState = null;
+            _hasCaretAnchor = false;
+        }
         public void Reset()
         {
-            _prevComposing = false;
-            _lastTargetXPx = int.MinValue;
-            _lastTargetYPx = int.MinValue;
-            _placeAboveLocked = false;
-            _placeBelowLocked = false;
-            _hasPlacementDecision = false;
-            _lastPlacedAbove = false;
-            _forceMoveForAnchorRefresh = false;
-            ClearCaretAnchor();
+            EndComposition();
+            _orientation.Reset();
+            _hasEnvironment = false;
         }
-
         public void RefreshCaretAnchorPreservingPlacement()
         {
-            if (!_hasCaretAnchor && !_hasPlacementDecision)
-            {
-                return;
-            }
-
-            if (_hasPlacementDecision)
-            {
-                _placeAboveLocked = _lastPlacedAbove;
-                _placeBelowLocked = !_lastPlacedAbove;
-            }
-            _forceMoveForAnchorRefresh = true;
-            ClearCaretAnchor();
+            // Partial/automatic commit updates the anchor, not the environment.
+            EndComposition();
         }
-
-        public bool Update(Window window, FrameworkElement contentRoot, OverlayUiState state, bool nowComposing, double predictedWidthDip, double predictedHeightDip)
+        public bool Update(Window window, FrameworkElement contentRoot, OverlayUiState state,
+            bool nowComposing, double predictedWidthDip, double predictedHeightDip)
         {
-            if (window == null || contentRoot == null)
-            {
-                return false;
-            }
+            ObserveState(state);
+            _pending = false;
+            if (!nowComposing) { EndComposition(); return false; }
+            if (window == null || contentRoot == null || !CanDisplay(state)) return false;
+            int caretX = state.CaretX, caretY = state.CaretY;
+            if (!IsUsableCaret(caretX, caretY)) return false;
+            int caretHeight = state.CaretHeight > 0 ? state.CaretHeight : DefaultCaretHeightPx;
+            CandidatePlacementEnvironment environment;
+            if (!_host.TryCapture(state, caretX, caretY, out environment)) return false;
 
-            if (!nowComposing)
-            {
-                _prevComposing = false;
-                _lastTargetXPx = int.MinValue;
-                _lastTargetYPx = int.MinValue;
-                _placeAboveLocked = false;
-                _placeBelowLocked = false;
-                _hasPlacementDecision = false;
-                _lastPlacedAbove = false;
-                _forceMoveForAnchorRefresh = false;
-                ClearCaretAnchor();
-                return false;
-            }
-
-            if (!_prevComposing)
-            {
-                _placeAboveLocked = false;
-                _placeBelowLocked = false;
-                _hasPlacementDecision = false;
-                _lastPlacedAbove = false;
-                _forceMoveForAnchorRefresh = false;
-                ClearCaretAnchor();
-            }
-
-            if (!TryResolveCaretPosition(state, out int caretX, out int caretY, out int caretHeightPx))
-            {
-                _prevComposing = nowComposing;
-                return false;
-            }
-
-            if (!_hasCaretAnchor)
+            bool environmentChanged = !_hasEnvironment || !_environment.Equals(environment);
+            int tolerance = CandidateOrientation.Tolerance(caretHeight, _anchorHeightPx, environment.Dpi);
+            // Retain the composition X anchor. Actual Y follows the current
+            // caret; only direction uses the stable jitter reference. A real
+            // line/host move also refreshes X, as does an automatic-commit anchor.
+            if (!_hasCaretAnchor || environmentChanged ||
+                Math.Abs((long)caretY - _anchorYPx) > tolerance)
             {
                 _anchorXPx = caretX;
                 _anchorYPx = caretY;
-                _anchorHeightPx = Math.Max(1, caretHeightPx);
+                _anchorHeightPx = caretHeight;
                 _hasCaretAnchor = true;
             }
-
-            caretX = _anchorXPx;
-            caretY = _anchorYPx;
-            caretHeightPx = _anchorHeightPx;
-
-            IntPtr hwnd = new System.Windows.Interop.WindowInteropHelper(window).Handle;
-            int rawXPx = caretX;
-            int rawYPx = caretY + CaretGapPx;
-            NativeMethods.POINT caretPoint = new NativeMethods.POINT { X = rawXPx, Y = rawYPx };
-            IntPtr monitor = NativeMethods.MonitorFromPoint(caretPoint, 2);
-            if (monitor == IntPtr.Zero)
+            int width, height;
+            if (!TryPixels(GetCurrentWidthDip(window, contentRoot, predictedWidthDip), environment.Dpi, out width) ||
+                !TryPixels(GetCurrentHeightDip(window, contentRoot, predictedHeightDip), environment.Dpi, out height)) return false;
+            var next = _orientation;
+            if (environment.UncertainOwner) next.Reset(); // Display without inheriting an unknown host.
+            int x, y;
+            if (environment.StartMenu)
             {
-                IntPtr fallbackForeground = NativeMethods.GetForegroundWindow();
-                if (fallbackForeground != IntPtr.Zero)
-                {
-                    monitor = NativeMethods.MonitorFromWindow(fallbackForeground, 2);
-                }
+                next.Reset(); // A special corner location is not an above decision.
+                var work = environment.Work;
+                x = CandidateOrientation.Clamp((long)work.Left + 10, work.Left, Math.Max((long)work.Left, (long)work.Right - width - 2));
+                y = CandidateOrientation.Clamp((long)work.Top + 10, work.Top, Math.Max((long)work.Top, (long)work.Bottom - height - 2));
             }
-            if (monitor == IntPtr.Zero && hwnd != IntPtr.Zero)
+            else if (!next.TryPlace(_anchorXPx, caretY, caretHeight, environment, width, height, out x, out y)) return false;
+
+            var hwnd = new System.Windows.Interop.WindowInteropHelper(window).Handle;
+            if (hwnd == IntPtr.Zero) return false;
+            CandidateRect current;
+            long revision = _revision;
+            // Do not use the old 50-pixel movement gate to suppress a necessary
+            // side/size change. The small stable-Y band handles layout jitter.
+            if (!_host.TryGetRect(hwnd, out current) || current.Left != x || current.Top != y)
             {
-                monitor = NativeMethods.MonitorFromWindow(hwnd, 2);
+                if (!_host.Move(hwnd, x, y)) return false;
             }
-
-            bool monitorChanged = monitor != _lastMonitor;
-            GetWorkAreaPx(monitor, monitorChanged, out int workLeftPx, out int workTopPx, out int workRightPx, out int workBottomPx);
-
-            double widthDip = GetCurrentWidthDip(window, contentRoot, predictedWidthDip);
-            double heightDip = GetCurrentHeightDip(window, contentRoot, predictedHeightDip);
-            int widthPx = Math.Max(1, (int)Math.Ceiling(widthDip * _screenDpiX / 96.0));
-            int heightPx = Math.Max(1, (int)Math.Ceiling(heightDip * _screenDpiY / 96.0));
-
-            IntPtr foreground = NativeMethods.GetForegroundWindow();
-            bool isStartMenuLike = IsStartMenuLike(foreground);
-
-            int maxXPx = Math.Max(workLeftPx, workRightPx - widthPx - 2);
-            int maxYPx = Math.Max(workTopPx, workBottomPx - heightPx - 2);
-            int targetXPx = isStartMenuLike ? workLeftPx + StartMenuOffsetPx : rawXPx;
-            int targetYPx;
-            if (isStartMenuLike)
-            {
-                targetYPx = workTopPx + StartMenuOffsetPx;
-            }
-            else
-            {
-                int caretBottomPx = caretY;
-                int caretTopPx = caretBottomPx - Math.Max(1, caretHeightPx);
-                bool placeAbove = ShouldPlaceAbove(caretTopPx, caretBottomPx, heightPx, workTopPx, workBottomPx);
-                _hasPlacementDecision = true;
-                _lastPlacedAbove = placeAbove;
-                if (placeAbove)
-                {
-                    _placeAboveLocked = true;
-                    targetYPx = caretTopPx - CaretGapPx - heightPx;
-                }
-                else
-                {
-                    targetYPx = caretBottomPx + CaretGapPx;
-                }
-            }
-            int clampedXPx = (int)Clamp(targetXPx, workLeftPx, maxXPx);
-            int clampedYPx = (int)Clamp(targetYPx, workTopPx, maxYPx);
-            bool outOfBounds = targetXPx != clampedXPx || targetYPx != clampedYPx;
-            bool targetUnchanged = _lastTargetXPx == clampedXPx && _lastTargetYPx == clampedYPx;
-
-            int currentXPx = clampedXPx;
-            int currentYPx = clampedYPx;
-            var rect = new NativeMethods.RECT();
-            if (hwnd != IntPtr.Zero && NativeMethods.GetWindowRect(hwnd, ref rect))
-            {
-                currentXPx = rect.left;
-                currentYPx = rect.top;
-            }
-
-            double posDelta = Math.Abs(currentXPx - clampedXPx) + Math.Abs(currentYPx - clampedYPx);
-            bool shouldMove = (!_prevComposing && nowComposing) ||
-                              _forceMoveForAnchorRefresh ||
-                              posDelta > 50 ||
-                              outOfBounds ||
-                              monitorChanged;
-            if (targetUnchanged && !outOfBounds && !monitorChanged && posDelta < 1)
-            {
-                shouldMove = false;
-            }
-
-            if (shouldMove && hwnd != IntPtr.Zero)
-            {
-                NativeMethods.SetWindowPos(
-                    hwnd,
-                    IntPtr.Zero,
-                    clampedXPx,
-                    clampedYPx,
-                    0,
-                    0,
-                    NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_NOOWNERZORDER);
-            }
-
-            _lastTargetXPx = clampedXPx;
-            _lastTargetYPx = clampedYPx;
-            _prevComposing = nowComposing;
-            _forceMoveForAnchorRefresh = false;
+            if (revision != _revision || !SameStateEnvironment(state) || !CanDisplay(state)) return false;
+            _pendingOrientation = next;
+            _pendingEnvironment = environment;
+            _pendingState = state;
+            _pendingRevision = revision;
+            _pendingX = x;
+            _pendingY = y;
+            _pending = true;
             return true;
         }
-
-        private void ClearCaretAnchor()
+        // Called only after ShowCandidate. Hidden/failed/reentrant frames cannot
+        // teach the next word a direction which was never successfully shown.
+        public bool ConfirmShown(Window window, OverlayUiState state)
         {
-            _hasCaretAnchor = false;
-            _anchorXPx = 0;
-            _anchorYPx = 0;
-            _anchorHeightPx = DefaultCaretHeightPx;
-        }
-
-        private bool ShouldPlaceAbove(int caretTopPx, int caretBottomPx, int windowHeightPx, int workTopPx, int workBottomPx)
-        {
-            if (_placeAboveLocked)
-            {
-                return true;
-            }
-
-            if (_placeBelowLocked)
-            {
-                return false;
-            }
-
-            bool fitsBelow = caretBottomPx + CaretGapPx + windowHeightPx <= workBottomPx;
-            if (fitsBelow)
-            {
-                return false;
-            }
-
-            bool fitsAbove = caretTopPx - CaretGapPx - windowHeightPx >= workTopPx;
-            if (fitsAbove)
-            {
-                return true;
-            }
-
-            int spaceAbove = caretTopPx - workTopPx;
-            int spaceBelow = workBottomPx - caretBottomPx;
-            return spaceAbove > spaceBelow;
-        }
-
-        private bool TryResolveCaretPosition(OverlayUiState state, out int x, out int y, out int height)
-        {
-            x = 0;
-            y = 0;
-            height = DefaultCaretHeightPx;
-
-            int frontendCaretX = state?.CaretX ?? 0;
-            int frontendCaretY = state?.CaretY ?? 0;
-            if (!IsUsableCaret(frontendCaretX, frontendCaretY))
-            {
-                return false;
-            }
-
-            x = frontendCaretX;
-            y = frontendCaretY;
-            if (state != null && state.CaretHeight > 0)
-            {
-                height = state.CaretHeight;
-            }
-
+            if (!_pending || _pendingRevision != _revision || !ReferenceEquals(state, _pendingState) ||
+                !SameStateEnvironment(state) || !CanDisplay(state) || window == null ||
+                !window.IsVisible || window.Opacity <= 0) return false;
+            CandidateRect rect;
+            if (!_host.TryGetRect(new System.Windows.Interop.WindowInteropHelper(window).Handle, out rect) ||
+                rect.Left != _pendingX || rect.Top != _pendingY) return false;
+            _orientation = _pendingOrientation;
+            _environment = _pendingEnvironment;
+            _hasEnvironment = true;
+            _pending = false;
+            _pendingState = null;
             return true;
         }
-
-        private void GetWorkAreaPx(IntPtr monitor, bool monitorChanged, out int left, out int top, out int right, out int bottom)
+        private static bool TryPixels(double dip, int dpi, out int pixels)
         {
-            Rect workArea = SystemParameters.WorkArea;
-            left = (int)Math.Round(workArea.Left);
-            top = (int)Math.Round(workArea.Top);
-            right = (int)Math.Round(workArea.Right);
-            bottom = (int)Math.Round(workArea.Bottom);
-
-            if (monitor == IntPtr.Zero)
-            {
-                NativeMethods.POINT origin = new NativeMethods.POINT { X = 0, Y = 0 };
-                monitor = NativeMethods.MonitorFromPoint(origin, 2);
-            }
-
-            if (monitor == IntPtr.Zero)
-            {
-                return;
-            }
-
-            var info = new NativeMethods.MONITORINFOEX();
-            if (!NativeMethods.GetMonitorInfo(monitor, info))
-            {
-                return;
-            }
-
-            left = info.rcWork.left;
-            top = info.rcWork.top;
-            right = info.rcWork.right;
-            bottom = info.rcWork.bottom;
-
-            if (monitorChanged || _lastMonitor == IntPtr.Zero)
-            {
-                if (NativeMethods.GetDpiForMonitor(monitor, 0, out uint dpiX, out uint dpiY) == 0 &&
-                    dpiX > 0 &&
-                    dpiY > 0)
-                {
-                    _screenDpiX = dpiX;
-                    _screenDpiY = dpiY;
-                }
-                else
-                {
-                    _screenDpiX = 96.0;
-                    _screenDpiY = 96.0;
-                }
-
-                _lastMonitor = monitor;
-            }
+            double scaled = Math.Ceiling(dip * dpi / 96.0);
+            pixels = 0;
+            if (double.IsNaN(scaled) || double.IsInfinity(scaled) || scaled < 1 || scaled > int.MaxValue) return false;
+            pixels = (int)scaled;
+            return true;
         }
-
-        private static double Clamp(double value, double min, double max)
-        {
-            if (value < min)
-            {
-                return min;
-            }
-
-            if (value > max)
-            {
-                return max;
-            }
-
-            return value;
-        }
-
         private static bool IsUsableCaret(int x, int y)
         {
-            return !(x == 0 && y == 0) &&
-                   x > -30000 &&
-                   x < 300000 &&
-                   y > -30000 &&
-                   y < 300000;
+            return !(x == 0 && y == 0) && x > -30000 && x < 300000 && y > -30000 && y < 300000;
         }
-
-        private static bool IsStartMenuLike(IntPtr hwnd)
+        private static double GetCurrentWidthDip(Window window, FrameworkElement contentRoot, double predicted)
         {
-            if (hwnd == IntPtr.Zero)
-            {
-                return false;
-            }
-
-            string className = GetWindowClassName(hwnd);
-            string windowTitle = GetWindowTitle(hwnd);
-            return string.Equals(className, "Windows.UI.Core.CoreWindow", StringComparison.Ordinal) &&
-                   string.Equals(windowTitle, "\u641C\u7D22", StringComparison.Ordinal);
-        }
-
-        private static string GetWindowClassName(IntPtr hwnd)
-        {
-            var buffer = new StringBuilder(256);
-            return NativeMethods.GetClassName(hwnd, buffer, buffer.Capacity) > 0
-                ? buffer.ToString()
-                : string.Empty;
-        }
-
-        private static string GetWindowTitle(IntPtr hwnd)
-        {
-            var buffer = new StringBuilder(256);
-            return NativeMethods.GetWindowText(hwnd, buffer, buffer.Capacity) > 0
-                ? buffer.ToString()
-                : string.Empty;
-        }
-
-        private static double GetCurrentWidthDip(Window window, FrameworkElement contentRoot, double predictedWidthDip)
-        {
-            if (predictedWidthDip > 1)
-            {
-                return predictedWidthDip;
-            }
-
-            if (contentRoot.ActualWidth > 1)
-            {
-                return contentRoot.ActualWidth;
-            }
-
-            if (contentRoot.DesiredSize.Width > 1)
-            {
-                return contentRoot.DesiredSize.Width;
-            }
-
-            if (window.ActualWidth > 1)
-            {
-                return window.ActualWidth;
-            }
-
+            if (predicted > 1) return predicted;
+            if (contentRoot.ActualWidth > 1) return contentRoot.ActualWidth;
+            if (contentRoot.DesiredSize.Width > 1) return contentRoot.DesiredSize.Width;
+            if (window.ActualWidth > 1) return window.ActualWidth;
             return Math.Max(contentRoot.MinWidth, 120);
         }
-
-        private static double GetCurrentHeightDip(Window window, FrameworkElement contentRoot, double predictedHeightDip)
+        private static double GetCurrentHeightDip(Window window, FrameworkElement contentRoot, double predicted)
         {
-            if (predictedHeightDip > 1)
-            {
-                return predictedHeightDip;
-            }
-
-            if (contentRoot.ActualHeight > 1)
-            {
-                return contentRoot.ActualHeight;
-            }
-
-            if (contentRoot.DesiredSize.Height > 1)
-            {
-                return contentRoot.DesiredSize.Height;
-            }
-
-            if (window.ActualHeight > 1)
-            {
-                return window.ActualHeight;
-            }
-
+            if (predicted > 1) return predicted;
+            if (contentRoot.ActualHeight > 1) return contentRoot.ActualHeight;
+            if (contentRoot.DesiredSize.Height > 1) return contentRoot.DesiredSize.Height;
+            if (window.ActualHeight > 1) return window.ActualHeight;
             return Math.Max(contentRoot.MinHeight, 30);
+        }
+    }
+
+    internal interface ICandidatePlacementHost
+    {
+        bool TryCapture(OverlayUiState state, int x, int y, out CandidatePlacementEnvironment environment);
+        bool TryGetRect(IntPtr window, out CandidateRect rect);
+        bool Move(IntPtr window, int x, int y);
+    }
+    internal sealed class Win32CandidatePlacementHost : ICandidatePlacementHost
+    {
+        public bool TryCapture(OverlayUiState state, int x, int y, out CandidatePlacementEnvironment environment)
+        {
+            environment = default(CandidatePlacementEnvironment);
+            IntPtr foreground = NativeMethods.GetForegroundWindow();
+            if (foreground == IntPtr.Zero) return false;
+            uint processId;
+            uint thread = NativeMethods.GetWindowThreadProcessId(foreground, out processId);
+            // A newer Core's owner must still be the foreground host; otherwise a
+            // delayed MMF snapshot must not show candidates over another app.
+            if (state.CandidateEnvironmentRevision != 0 && state.CandidateOwnerHwnd != 0 &&
+                (unchecked((uint)foreground.ToInt64()) != unchecked((uint)state.CandidateOwnerHwnd) ||
+                 (state.CandidateOwnerProcessId != 0 && processId != (uint)state.CandidateOwnerProcessId))) return false;
+            var gui = new NativeMethods.GUITHREADINFO();
+            gui.cbSize = (uint)System.Runtime.InteropServices.Marshal.SizeOf(typeof(NativeMethods.GUITHREADINFO));
+            bool uncertain = thread == 0 || !NativeMethods.GetGUIThreadInfo(thread, ref gui);
+            CandidateRect bounds, focusBounds;
+            if (!TryGetRect(foreground, out bounds)) uncertain = true;
+            IntPtr focus = gui.hwndFocus != IntPtr.Zero ? gui.hwndFocus : foreground;
+            if (!TryGetRect(focus, out focusBounds)) uncertain = true;
+            IntPtr monitor = NativeMethods.MonitorFromPoint(new NativeMethods.POINT { X = x, Y = y }, 2);
+            var info = new NativeMethods.MONITORINFOEX();
+            if (monitor == IntPtr.Zero || !NativeMethods.GetMonitorInfo(monitor, info)) return false;
+            uint dpiX, dpiY;
+            if (NativeMethods.GetDpiForMonitor(monitor, 0, out dpiX, out dpiY) != 0 || dpiY == 0 || dpiY > 65535)
+            { dpiY = 96; uncertain = true; }
+            var className = new StringBuilder(256);
+            var title = new StringBuilder(256);
+            NativeMethods.GetClassName(foreground, className, className.Capacity);
+            NativeMethods.GetWindowText(foreground, title, title.Capacity);
+            environment = new CandidatePlacementEnvironment
+            {
+                InstanceId = state.CandidateEnvironmentId, UncertainOwner = uncertain,
+                Revision = state.CandidateEnvironmentRevision, Owner = state.CandidateOwnerHwnd,
+                ProcessId = (int)processId, Foreground = foreground.ToInt64(), Focus = focus.ToInt64(),
+                Monitor = monitor.ToInt64(), Dpi = (int)dpiY,
+                Work = new CandidateRect(info.rcWork.left, info.rcWork.top, info.rcWork.right, info.rcWork.bottom),
+                OwnerBounds = focusBounds, ForegroundBounds = bounds,
+                StartMenu = string.Equals(className.ToString(), "Windows.UI.Core.CoreWindow", StringComparison.Ordinal) &&
+                    string.Equals(title.ToString(), "\u641C\u7D22", StringComparison.Ordinal)
+            };
+            return environment.Work.Right > environment.Work.Left && environment.Work.Bottom > environment.Work.Top;
+        }
+        public bool TryGetRect(IntPtr window, out CandidateRect rect)
+        {
+            var native = new NativeMethods.RECT();
+            bool ok = NativeMethods.GetWindowRect(window, ref native);
+            rect = new CandidateRect(native.left, native.top, native.right, native.bottom);
+            return ok;
+        }
+        public bool Move(IntPtr window, int x, int y)
+        {
+            return NativeMethods.SetWindowPos(window, IntPtr.Zero, x, y, 0, 0,
+                NativeMethods.SWP_NOSIZE | NativeMethods.SWP_NOZORDER | NativeMethods.SWP_NOACTIVATE | NativeMethods.SWP_NOOWNERZORDER);
         }
     }
 }
