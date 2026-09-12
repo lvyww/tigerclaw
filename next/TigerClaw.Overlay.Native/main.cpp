@@ -19,6 +19,12 @@ namespace tiger::overlay
     static constexpr const wchar_t* MenuClass = L"TigerClaw.Native.MenuHost.v1";
     class Application
     {
+#ifdef TIGERCLAW_ORIENTATION_PROBE
+        friend struct OrientationPublicationProbe;
+#endif
+        std::uint64_t visualRevision_ = 0;
+        bool refreshing_ = false, refreshQueued_ = false;
+        static constexpr UINT DeferredGeometryMessage = WM_APP + 0x351;
         HWND candidate_ = nullptr, status_ = nullptr, menuHost_ = nullptr;
         bool statusPlaced_ = false;
         State state_;
@@ -90,6 +96,12 @@ namespace tiger::overlay
                     if (!SetTimer(candidate_, 4, transition_.Interval(), nullptr))
                     { StopTransition(); candidateRenderer_.Present(candidate_, &destination); }
                 }
+                if (transition_.Active()) {
+                    auto frame = transition_.Sample(GetTickCount64());
+                    POINT at{frame.x, frame.y}; SIZE frameSize{std::max(1, frame.width), std::max(1, frame.height)};
+                    transitionRenderer_.Prepare(state_, display_, candidateDpi_, false, &frameSize);
+                    transitionRenderer_.Present(candidate_, &at);
+                }
                 return;
             }
             StopTransition();
@@ -147,42 +159,89 @@ namespace tiger::overlay
             GetDpiForMonitor(MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST), MDT_EFFECTIVE_DPI, &x, &y);
             return x;
         }
-        bool ResolvePosition(Placement& placement, SIZE size, POINT& result)
+        static WorkArea Area(const RECT& r) { return {r.left, r.top, r.right, r.bottom}; }
+        bool CapturePlacementEnvironment(PlacementEnvironment& env)
+        {
+            auto monitor = MonitorFromPoint({state_.caretX, state_.caretY}, MONITOR_DEFAULTTONEAREST);
+            MONITORINFO info{sizeof(info)};
+            if (!monitor || !GetMonitorInfoW(monitor, &info)) return false;
+            env.work = Area(info.rcWork); env.monitor = reinterpret_cast<std::uintptr_t>(monitor);
+            env.revision = state_.environmentRevision; env.instance = state_.environmentId;
+            env.owner = static_cast<std::uintptr_t>(state_.ownerHwnd); env.processId = state_.ownerProcessId;
+            UINT dpiY = 96; env.dpi = 96;
+            if (FAILED(GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &env.dpi, &dpiY))) env.uncertain = true;
+            HWND foreground = GetForegroundWindow();
+            env.foreground = reinterpret_cast<std::uintptr_t>(foreground);
+            RECT bounds{};
+            if (foreground && GetWindowRect(foreground, &bounds)) env.foregroundBounds = Area(bounds);
+            // Legacy snapshots have no owner identity; use the actual foreground
+            // environment, never the candidate HWND. New Core also fences missed
+            // off/on or same-HWND document transitions with an epoch + instance ID.
+            if (env.owner) {
+                auto owner = reinterpret_cast<HWND>(env.owner);
+                DWORD ownerPid = 0, foregroundPid = 0;
+                GetWindowThreadProcessId(owner, &ownerPid);
+                auto thread = GetWindowThreadProcessId(foreground, &foregroundPid);
+                if (!ownerPid || (env.processId && env.processId != ownerPid) ||
+                    (foreground && foregroundPid != ownerPid)) return false;
+                if (GetWindowRect(owner, &bounds)) env.ownerBounds = Area(bounds);
+                else env.uncertain = true;
+                GUITHREADINFO gui{sizeof(gui)};
+                if (thread && GetGUIThreadInfo(thread, &gui)) env.focus = reinterpret_cast<std::uintptr_t>(gui.hwndFocus);
+                else env.uncertain = true;
+            }
+            wchar_t className[128]{}, title[128]{};
+            GetClassNameW(foreground, className, 128); GetWindowTextW(foreground, title, 128);
+            env.startMenu = !wcscmp(className, L"Windows.UI.Core.CoreWindow") && !wcscmp(title, L"\u641c\u7d22");
+            return true;
+        }
+        bool ResolvePosition(Placement& placement, SIZE size, POINT& result, bool& environmentChanged)
         {
             if (!validCaret_) return false;
-            auto anchor = placement.Anchor();
-            auto monitor = MonitorFromPoint({anchor.x, anchor.y}, MONITOR_DEFAULTTONEAREST);
-            MONITORINFO info{sizeof(info)};
-            if (!GetMonitorInfoW(monitor, &info)) return false;
-            auto work = info.rcWork;
-            wchar_t className[128]{}, title[128]{};
-            HWND foreground = GetForegroundWindow();
-            GetClassNameW(foreground, className, 128); GetWindowTextW(foreground, title, 128);
-            bool startMenu = !wcscmp(className, L"Windows.UI.Core.CoreWindow") && !wcscmp(title, L"\u641c\u7d22");
-            auto position = placement.Resolve(size.cx, size.cy,
-                {static_cast<int>(work.left), static_cast<int>(work.top), static_cast<int>(work.right), static_cast<int>(work.bottom)}, startMenu);
+            PlacementEnvironment env;
+            if (!CapturePlacementEnvironment(env)) return false;
+            environmentChanged = !placement.SameEnvironment(env);
+            if (!placement.Acquire(state_.caretX, state_.caretY, state_.caretHeight)) return false;
+            auto position = placement.Resolve(size.cx, size.cy, env);
             result = {position.x, position.y};
             return true;
         }
         void Position()
         {
-            POINT position{};
-            if (!ResolvePosition(placement_, candidateSize_, position)) return;
-            if (transition_.Active())
-            {
-                PublishCandidate(candidateSize_, position);
-                return;
-            }
+            const auto revision = visualRevision_;
+            auto nextPlacement = placement_;
+            POINT position{}; bool environmentChanged = false;
+            if (!ResolvePosition(nextPlacement, candidateSize_, position, environmentChanged)) { HideImmediately(); return; }
+            if (environmentChanged) StopTransition();
             RECT current{}; GetWindowRect(candidate_, &current);
-            if (current.left != position.x || current.top != position.y || !IsWindowVisible(candidate_))
-            {
-                PublishCandidate(candidateSize_, position);
-                if (!IsWindowVisible(candidate_)) ShowWindow(candidate_, SW_SHOWNOACTIVATE);
+            if (transition_.Active() || current.left != position.x || current.top != position.y || !IsWindowVisible(candidate_)) {
+                // Do not interpolate from a different monitor/window environment.
+                if (environmentChanged) candidateRenderer_.Present(candidate_, &position);
+                else PublishCandidate(candidateSize_, position);
+                if (revision != visualRevision_) return;
+                if (!IsWindowVisible(candidate_) && !SetWindowPos(candidate_, HWND_TOPMOST, 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW))
+                    throw std::runtime_error("Candidate show failed");
             }
+            if (revision == visualRevision_ && IsWindowVisible(candidate_)) placement_ = nextPlacement;
         }
         void Refresh(bool force)
         {
             if (!candidate_ || !status_) return;
+            const auto revision = ++visualRevision_;
+            // Publishing can synchronously deliver DPI/layout messages. Do not
+            // reenter the renderer; invalidate this frame and coalesce a refresh.
+            if (refreshing_) {
+                if (!refreshQueued_) refreshQueued_ = PostMessageW(candidate_, DeferredGeometryMessage, 0, 0) != FALSE;
+                return;
+            }
+            struct Guard { bool& flag; explicit Guard(bool& f) : flag(f) { flag = true; } ~Guard() { flag = false; } } guard(refreshing_);
+            const bool environmentReset = state_.environmentRevision != renderedState_.environmentRevision ||
+                state_.environmentId != renderedState_.environmentId || state_.ownerHwnd != renderedState_.ownerHwnd ||
+                state_.ownerProcessId != renderedState_.ownerProcessId || state_.nativeHook != renderedState_.nativeHook ||
+                state_.isChinese != renderedState_.isChinese || state_.isOff != renderedState_.isOff ||
+                state_.environmentActive != renderedState_.environmentActive;
+            if (environmentReset) { placement_.Reset(); StopTransition(); }
             auto now = GetTickCount64();
             bool reformat = force || !SameDisplayContent(state_, renderedState_) || reveal_.NextDelay(state_, now) != 0;
             Display formatted;
@@ -190,7 +249,7 @@ namespace tiger::overlay
             const auto& next = reformat ? formatted : display_;
             if (ModeFor(state_) == DisplayMode::Hidden)
             {
-                placement_.Reset();
+                placement_.EndComposition();
             }
             if (anchorRevision_ != state_.anchorRevision)
             {
@@ -198,8 +257,7 @@ namespace tiger::overlay
                 placement_.RefreshAnchor();
             }
             validCaret_ = next.mode != DisplayMode::Hidden && placement_.Acquire(state_.caretX, state_.caretY, state_.caretHeight);
-            auto anchor = placement_.Anchor();
-            UINT dpi = validCaret_ ? DpiAt({anchor.x, anchor.y}) : 96;
+            UINT dpi = validCaret_ ? DpiAt({state_.caretX, state_.caretY}) : 96;
             bool changed = force || !candidateDrawn_ || state_.animationEnabled != renderedState_.animationEnabled ||
                 state_.animationDurationMs != renderedState_.animationDurationMs || state_.theme != renderedState_.theme || state_.font != renderedState_.font ||
                 state_.fontSize != renderedState_.fontSize || state_.vertical != renderedState_.vertical ||
@@ -223,21 +281,24 @@ namespace tiger::overlay
                     {
                         auto size = candidateRenderer_.Prepare(state_, display_, dpi);
                         auto placement = placement_;
-                        POINT destination{};
-                        if (!ResolvePosition(placement, size, destination))
-                            throw std::runtime_error("Candidate monitor unavailable");
+                        POINT destination{}; bool environmentChanged = false;
+                        if (!ResolvePosition(placement, size, destination, environmentChanged)) {
+                            HideImmediately(); return;
+                        }
                         // Publish pixels, dimensions and final location together.
                         // The OS retains the previous frame throughout Prepare.
-                        PublishCandidate(size, destination);
+                        if (environmentChanged) { StopTransition(); candidateRenderer_.Present(candidate_, &destination); }
+                        else PublishCandidate(size, destination);
+                        if (revision != visualRevision_) return;
+                        if (!IsWindowVisible(candidate_) && !SetWindowPos(candidate_, HWND_TOPMOST, 0, 0, 0, 0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW))
+                            throw std::runtime_error("Candidate show failed");
+                        if (revision != visualRevision_ || !IsWindowVisible(candidate_)) return;
                         candidateSize_ = size;
                         placement_ = placement;
-
                         candidateDrawn_ = true;
                         candidateRetryCount_ = 0;
                         KillTimer(candidate_, 3);
-                        if (!IsWindowVisible(candidate_))
-                            SetWindowPos(candidate_, HWND_TOPMOST, 0, 0, 0, 0,
-                                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
                     }
                     catch (...)
                     {
@@ -247,8 +308,13 @@ namespace tiger::overlay
                         if (candidateRetryCount_++ < 3) SetTimer(candidate_, 3, 100, nullptr);
                     }
                 }
-                else Position();
+                else {
+                    try { Position(); }
+                    catch (...) { StopTransition(); candidateDrawn_ = false;
+                        if (candidateRetryCount_++ < 3) SetTimer(candidate_, 3, 100, nullptr); }
+                }
             }
+            if (revision != visualRevision_) return;
             if (force || !statusDrawn_ || state_.isOff != renderedState_.isOff || state_.isChinese != renderedState_.isChinese ||
                 state_.nativeHook != renderedState_.nativeHook || state_.status != renderedState_.status || state_.hideStatus != renderedState_.hideStatus)
             {
@@ -388,6 +454,7 @@ namespace tiger::overlay
         {
             switch (message)
             {
+            case DeferredGeometryMessage: refreshQueued_ = false; Refresh(true); return 0;
             case WM_INITMENUPOPUP:
                 // Freeze command IDs to the list actually shown. Later Core
                 // replies update the cache, not a submenu under the pointer.

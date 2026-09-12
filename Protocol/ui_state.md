@@ -71,3 +71,16 @@ Tests: `TigerClaw.Core.Tests --ui-snapshot-tests` exercises the actual C# writer
 native `overlay_transport_tests` covers first-read acceptance, paused/abandoned
 writers and downgrade matching; opt-in `overlay_window_tests` drives the real
 native application with the new snapshot and event.
+
+## Candidate input-environment identity
+
+Five optional fields are shared by Native Overlay and the WPF fallback:
+`CandidateEnvironmentRevision` (monotonic within a Core process),
+`CandidateEnvironmentId` (unique Core process instance),
+`CandidateEnvironmentActive`, `CandidateOwnerHwnd` and `CandidateOwnerProcessId`.
+Normal composition completion does not advance the revision. Focus/activation/mode
+transitions and TSF document/context hints do, even when intermediate snapshots
+are coalesced. These fields are carried unchanged by both v1 and snapshot v2.
+Old readers ignore them; missing fields keep legacy behavior. New Core/Overlay
+and bridge builds are required for reliable same-HWND context-change invalidation.
+Animation DataMember orders are not changed; these fields are appended at 34–38.

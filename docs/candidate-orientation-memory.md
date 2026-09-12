@@ -105,3 +105,44 @@ runner retries scratch cleanup and reports persistent file locks without masking
 actual test failures. Check CI for execution results, not this test inventory.
 QQ/WeChat, physical multi-monitor movement and installed-app focus behavior remain
 manual acceptance checks. No installation or merge is performed by this change.
+
+## Mainline Native Overlay
+
+The feature branch was synchronized with main `538096b` after the native Overlay
+became available during this change. No mainline settings, instant visibility or
+geometry-animation configuration is rolled back. WPF remains a supported fallback.
+
+`next/TigerClaw.Overlay.Native/Placement.h` owns the same direction policy.
+`EndComposition` releases its X anchor but retains the direction/reference;
+`Reset` discards the entire environment. `Model` reads the five optional Core
+fields and rejects display in an explicitly inactive environment. Legacy Core
+payloads retain their existing visibility contract and best-effort foreground
+geometry checks. Monitor/work area, DPI, owner/foreground/focus HWND and window
+rectangles fence geometry reuse. Ordinary hiding does not discard direction.
+Unknown owner geometry disables inheritance; a conflicting known foreground PID
+hides rather than displaying stale candidates over another process.
+
+Application layout resolves on a copy. Failed Prepare/Present/show does not
+accept direction. Visible animations publish their first sample before accepting
+the target, rather than treating a scheduled timer as a successful frame.
+Reentrant layout is deferred and invalidates the older frame's acceptance.
+Environment changes do not animate from old screen/window coordinates. Existing
+show/hide remains immediate and the 2-pixel bottom/right reserves are retained.
+
+Native validation:
+- `python tools/test_native_orientation.py --cxx g++` and
+  `--cxx clang++ --sanitize`: production C++ geometry plus separate no-memory and
+  per-composition-reset mutations. Each positive run includes 122,124 positions,
+  302,495 checks, 100,000 fixed-seed random rectangles and word-size sequences.
+- CMake `overlay_orientation_publication`: real production Application/Renderer
+  with test-owned layered HWNDs, controlled clock and injected publication/show
+  failures. No running Core or global input is used.
+- Existing `overlay_window_tests`: the actual isolated native executable and MMF
+  transport, extended with cross-word, jitter, cumulative upward and epoch-change
+  regressions. Existing visibility/animation/menu checks remain in place.
+- Existing CTest model and transport, plus production native/TSF bridge builds,
+  WPF builds/tests and actual Core protocol regression are also run in CI.
+
+Core DataMember orders 29/30/33 (existing animation compatibility) are retained;
+the new environment fields use 34 through 38. Full Windows UI/TSF injection in
+QQ/WeChat and physical mixed-DPI dragging still require installation acceptance.

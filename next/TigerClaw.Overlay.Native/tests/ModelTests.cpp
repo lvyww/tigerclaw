@@ -74,7 +74,7 @@ int main()
         Check(!position.Acquire(0, 0, 20) && position.Anchor().x == 100, "invalid caret preserves anchor");
         position.RefreshAnchor(); position.Acquire(1800, 1060, 20);
         point = position.Resolve(300, 100, area);
-        Check(!position.IsAbove() && point.x == 1618 && point.y == 978, "explicit anchor refresh preserves below placement");
+        Check(position.IsAbove() && point.x == 1618 && point.y == 935, "anchor refresh must not force a below placement that cannot fit");
         position.Reset(); position.Acquire(1800, 1060, 20);
         point = position.Resolve(300, 100, area);
         Check(position.IsAbove() && point.y == 935, "bottom edge flips above");

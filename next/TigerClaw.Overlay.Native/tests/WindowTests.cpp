@@ -160,6 +160,34 @@ int main()
             "annotation timer updates real window layout");
         Check(GetForegroundWindow() == foreground, "IPC updates never activate windows");
         auto savedState = state;
+        // Real executable/MMF: repeated commit/new-word snapshots must inherit
+        // above, and an epoch change must reset even without an idle snapshot.
+        state["CandidateAnimationEnabled"] = false;
+        state["CandidateExpandDelayMs"] = state["AnnotationExpandDelayMs"] = 0;
+        state["ShowInputCodeInCandidateWindow"] = false; state["VerticalCandidates"] = true;
+        state["FontSize"] = 17; state["CaretY"] = area.bottom - 100;
+        state["CandidateEnvironmentRevision"] = 100; state["CandidateEnvironmentId"] = "ipc-test-core";
+        state["CandidateEnvironmentActive"] = true;
+        auto above = [&] { RECT r{}; GetWindowRect(candidate, &r); return IsWindowVisible(candidate) &&
+            r.bottom == state["CaretY"].get<int>() - 25; };
+        auto below = [&] { RECT r{}; GetWindowRect(candidate, &r); return IsWindowVisible(candidate) &&
+            r.top == state["CaretY"].get<int>() + 5; };
+        state["Candidates"] = {"one","two","three","four","five"}; publish(state);
+        Check(Until(above), "orientation fixture initially flips");
+        for (int word=0;word<10;++word) {
+            state["CandidateVisible"] = false; publish(state);
+            Check(Until([&]{return !IsWindowVisible(candidate);}), "word commit hides");
+            state["CandidateVisible"] = true; state["Candidates"] = {"one"}; publish(state);
+            Check(Until(above), "cross-word above memory survives through real IPC");
+            RECT r{};GetWindowRect(candidate,&r);
+            Check(state["CaretY"].get<int>()+5+r.bottom-r.top<=area.bottom-2,"short regression must fit below too");
+        }
+        state["CaretY"] = area.bottom - 101; publish(state); Check(Until(above),"jitter keeps above");
+        state["CaretY"] = area.bottom - 104; publish(state); Check(Until(below),"cumulative upward movement releases above");
+        state["Candidates"] = {"one","two","three","four","five"}; publish(state); Check(Until(above),"reflip for epoch fixture");
+        state["Candidates"] = {"one"}; state["CandidateEnvironmentRevision"] = 101; publish(state);
+        Check(Until(below),"missed focus transition detected by epoch");
+        state = savedState;
         for (bool vertical : {false, true})
         {
             for (int composition : {2, 3, 4})

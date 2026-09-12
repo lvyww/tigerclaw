@@ -270,8 +270,13 @@ block Core on a paused reader. Contract: `Protocol/ui_state.md`.
   Settings show only the two shortcut rows. Disabled bindings display `清空`;
   the `修改` dialog clears or restores defaults immediately into the unsaved
   settings page. Legacy enable flags remain internal compatibility data.
-- Overlay owns candidate display. It pins the first caret anchor for a composition
-  and flips above the caret when needed. TSF legacy candidate UI is not active.
+- Overlay owns candidate display. Native and WPF preserve the composition's X
+  anchor but use live caret Y. Above-direction memory survives normal commit and
+  cancel while the caret stays near a stable Y or moves down. A clear upward move
+  or input-environment change re-evaluates placement. The jitter band is 3 DIP,
+  capped to a quarter of the smaller current/reference caret height. Core publishes
+  an environment epoch/instance identity so missed focus transitions invalidate
+  both backends. See `docs/candidate-orientation-memory.md`. TSF legacy UI is not active.
   Native menus open without waiting for Core schema queries and use a dedicated
   temporary host independent of candidate/status visibility. Foreground permission
   is best-effort, not a display prerequisite; menu-lifetime outside-click/Escape

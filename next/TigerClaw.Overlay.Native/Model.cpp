@@ -115,6 +115,11 @@ namespace tiger::overlay
             scalar("SelectedCandidateIndex", next.selected); scalar("FontSize", next.fontSize);
             scalar("SoundSeq", next.soundSequence); scalar("CandidateAnchorRevision", next.anchorRevision);
             scalar("CandidateBackgroundUntil", next.backgroundUntil);
+            scalar("CandidateEnvironmentRevision", next.environmentRevision);
+            scalar("CandidateEnvironmentActive", next.environmentActive);
+            scalar("CandidateOwnerHwnd", next.ownerHwnd);
+            scalar("CandidateOwnerProcessId", next.ownerProcessId);
+            text("CandidateEnvironmentId", next.environmentId);
             text("StatusText", next.status); text("InputCode", next.input); text("CodeMasking", next.codeMask);
             text("ThemeName", next.theme); text("FontName", next.font);
             array("Candidates", next.candidates); array("CandidateAnnotations", next.annotations);
@@ -145,7 +150,8 @@ namespace tiger::overlay
 
     DisplayMode ModeFor(const State& state, bool expanded)
     {
-        if (!state.candidateVisible) return DisplayMode::Hidden;
+        if (!state.candidateVisible || (state.environmentRevision > 0 &&
+            (!state.environmentActive || state.isOff || !state.isChinese))) return DisplayMode::Hidden;
         bool code = state.showCode || state.nativeHook;
         if (!expanded || (state.hideCandidates && state.candidateDelay <= 0))
             return code && !state.input.empty() ? DisplayMode::CodeOnly : DisplayMode::Hidden;
@@ -156,7 +162,10 @@ namespace tiger::overlay
 
     bool SameDisplayContent(const State& a, const State& b)
     {
-        return a.candidateVisible == b.candidateVisible && a.vertical == b.vertical && a.showIndex == b.showIndex &&
+        return (a.environmentRevision > 0) == (b.environmentRevision > 0) &&
+            (a.environmentRevision <= 0 || (a.environmentActive == b.environmentActive &&
+                a.isOff == b.isOff && a.isChinese == b.isChinese)) &&
+            a.candidateVisible == b.candidateVisible && a.vertical == b.vertical && a.showIndex == b.showIndex &&
             a.hideCandidates == b.hideCandidates && a.showCode == b.showCode && a.nativeHook == b.nativeHook &&
             a.input == b.input && a.codeMask == b.codeMask && a.candidates == b.candidates && a.annotations == b.annotations &&
             a.selected == b.selected && a.composition == b.composition &&

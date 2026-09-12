@@ -23,6 +23,10 @@ namespace tiger::overlay
         double fontSize = 0;
         std::int64_t soundSequence = 0, anchorRevision = 0;
         std::int64_t backgroundUntil = 0;
+        std::int64_t environmentRevision = 0, ownerHwnd = 0;
+        int ownerProcessId = 0;
+        bool environmentActive = false;
+        Text environmentId;
     };
     Text FromUtf8(std::string_view value);
     std::string ToUtf8(std::u16string_view value);
