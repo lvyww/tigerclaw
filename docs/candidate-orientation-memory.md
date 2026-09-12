@@ -1,9 +1,9 @@
 # Cross-composition candidate orientation
 
-This change adds the direction-memory policy used by Tigirl to the maintained
-TigerClaw C# Core / WPF Overlay runtime. It does not change candidate ranking,
-input commits, lexicons, the sentence decoder, configuration defaults or installs.
-The reference implementation and release directories are untouched.
+This change adds the direction-memory policy used by Tigirl to TigerClaw's
+maintained C# Core, default Native Overlay and retained WPF fallback. It does not
+change candidate ranking, input commits, lexicons, the sentence decoder,
+configuration defaults or installs. Reference and release directories are untouched.
 
 ## Positioning policy
 
@@ -146,3 +146,17 @@ Native validation:
 Core DataMember orders 29/30/33 (existing animation compatibility) are retained;
 the new environment fields use 34 through 38. Full Windows UI/TSF injection in
 QQ/WeChat and physical mixed-DPI dragging still require installation acceptance.
+
+### Superseded-frame regression and CI build settings
+
+The real-window publication test caught an A -> B -> A cache error: a reentrant
+hide could reject a prepared tall B frame but leave its formatted display cached
+while renderedState still described short A. Returning to A must reformat when
+candidateDrawn is false; otherwise stale tall content would induce an incorrect
+above decision. The production cache now enforces this, with the original reset/
+reentry assertion retained. Failure output includes actual caret/window geometry.
+
+The isolated TSF bridge CI build uses Release/v145 with WholeProgramOptimization
+set to false. This avoids the existing project's OPT:NOREF conflicting with the
+new toolchain's incremental LTCG default; source/project/release settings are not
+changed to accommodate the CI host. Native Overlay is built normally in Release.
