@@ -74,8 +74,19 @@ struct OrientationPublicationProbe {
     RECT Rect() { RECT r{}; probe::Check(GetWindowRect(app.candidate_, &r) != FALSE, "no candidate rectangle"); return r; }
     void Above() { probe::Check(IsWindowVisible(app.candidate_) && app.placement_.IsAbove() &&
         Rect().bottom == app.state_.caretY-app.state_.caretHeight-5, "candidate did not stay above"); }
-    void Below() { probe::Check(IsWindowVisible(app.candidate_) && !app.placement_.IsAbove() &&
-        Rect().top == app.state_.caretY+5, "candidate did not return below"); }
+    void Below() {
+        const auto rect = Rect();
+        const bool visible = IsWindowVisible(app.candidate_) != FALSE;
+        if (!visible || app.placement_.IsAbove() || rect.top != app.state_.caretY+5) {
+            std::cerr << "below mismatch: case=" << probe::cases << " checks=" << probe::checks
+                      << " visible=" << visible << " above=" << app.placement_.IsAbove()
+                      << " caret=" << app.state_.caretY << " top=" << rect.top << " bottom=" << rect.bottom
+                      << " targetHeight=" << app.candidateSize_.cy << " dpi=" << app.candidateDpi_
+                      << " animation=" << app.transition_.Active() << " drawn=" << app.candidateDrawn_ << '\n';
+        }
+        probe::Check(visible && !app.placement_.IsAbove() && rect.top == app.state_.caretY+5,
+                     "candidate did not return below");
+    }
     void Large() { app.state_.candidates = {u"first",u"second",u"third",u"fourth",u"fifth"}; app.Refresh(false); }
     void Short() { app.state_.candidates = {u"first"}; app.Refresh(false); }
     void Commit() { app.state_.candidateVisible = false; app.Refresh(false); }

@@ -54,7 +54,7 @@ jobs:
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.Component.MSBuild -property installationPath
           if (!$vs) { throw 'MSBuild unavailable' }
           $platform = if ('${{ matrix.platform }}' -eq 'x86') { 'Win32' } else { 'x64' }
-          & "$vs\MSBuild\Current\Bin\MSBuild.exe" BimeTSF2/SampleIME/BimeTSF2.vcxproj /nr:false /p:Configuration=Release "/p:Platform=$platform" /p:PlatformToolset=v145 "/p:OutDir=$env:RUNNER_TEMP\bridge\" "/p:IntDir=$env:RUNNER_TEMP\bridge-obj\" /v:minimal
+          & "$vs\MSBuild\Current\Bin\MSBuild.exe" BimeTSF2/SampleIME/BimeTSF2.vcxproj /nr:false /p:Configuration=Release "/p:Platform=$platform" /p:PlatformToolset=v145 /p:WholeProgramOptimization=false "/p:OutDir=$env:RUNNER_TEMP\bridge\" "/p:IntDir=$env:RUNNER_TEMP\bridge-obj\" /v:minimal
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Geometry, WPF publication and negative controls
         shell: pwsh
