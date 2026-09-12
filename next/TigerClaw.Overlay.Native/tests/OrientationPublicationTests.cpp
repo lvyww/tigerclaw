@@ -20,8 +20,8 @@ std::vector<RECT> frames;
 std::function<void()> duringPublish;
 void Check(bool value, const char* why) { ++checks; if (!value) throw std::runtime_error(why); }
 ULONGLONG WINAPI Tick() { return now; }
-BOOL WINAPI Publish(HWND window, HDC targetDc, const POINT* point, const SIZE* size, HDC sourceDc,
-                    const POINT* origin, COLORREF key, const BLENDFUNCTION* blend, DWORD flags) {
+BOOL WINAPI Publish(HWND window, HDC targetDc, POINT* point, SIZE* size, HDC sourceDc,
+                    POINT* origin, COLORREF key, BLENDFUNCTION* blend, DWORD flags) {
     if (window == target && failures) { --failures; SetLastError(ERROR_GEN_FAILURE); return FALSE; }
     auto result = UpdateLayeredWindow(window, targetDc, point, size, sourceDc, origin, key, blend, flags);
     if (result && window == target && point && size)

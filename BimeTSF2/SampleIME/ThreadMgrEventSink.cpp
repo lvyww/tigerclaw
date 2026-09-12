@@ -9,6 +9,7 @@
 #include "Globals.h"
 #include "SampleIME.h"
 #include "EditSession.h"
+#include "PipeClient.h"
 
 static const UINT kCaretLayoutRequestMinIntervalMs = 30;
 
