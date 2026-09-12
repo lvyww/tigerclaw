@@ -243,7 +243,11 @@ namespace tiger::overlay
                 state_.environmentActive != renderedState_.environmentActive;
             if (environmentReset) { placement_.Reset(); StopTransition(); }
             auto now = GetTickCount64();
-            bool reformat = force || !SameDisplayContent(state_, renderedState_) || reveal_.NextDelay(state_, now) != 0;
+            // A failed/superseded publication can leave display_ prepared for an
+            // unaccepted state while renderedState_ still describes an older one.
+            // Reformat whenever no current frame is accepted, even if the new
+            // input happens to equal that older renderedState_ (A -> B -> A).
+            bool reformat = force || !candidateDrawn_ || !SameDisplayContent(state_, renderedState_) || reveal_.NextDelay(state_, now) != 0;
             Display formatted;
             if (reformat) formatted = reveal_.Update(state_, now);
             const auto& next = reformat ? formatted : display_;
