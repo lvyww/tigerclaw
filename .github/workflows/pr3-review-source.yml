@@ -1,0 +1,25 @@
+name: PR3 review source snapshot
+on:
+  push:
+    branches: [fix/native-pending-candidate-frame]
+    paths: [.github/workflows/pr3-review-source.yml]
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - run: |
+          git archive --format=zip HEAD -o "$RUNNER_TEMP/pr3-source.zip"
+          git rev-parse HEAD > "$RUNNER_TEMP/pr3-source-commit.txt"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: pr3-review-source
+          path: |
+            ${{ runner.temp }}/pr3-source.zip
+            ${{ runner.temp }}/pr3-source-commit.txt
+          retention-days: 1
