@@ -67,9 +67,11 @@ jobs:
         run: |
           python tools/test_candidate_orientation.py --protocol
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          dotnet build next/TigerClaw.Core.Tests/TigerClaw.Core.Tests.csproj -c Release --artifacts-path "$env:RUNNER_TEMP/core-tests" "-p:OutputPath=$env:RUNNER_TEMP/core-tests-output/" -p:PublishAot=false --nologo
+          # The existing golden resolver walks from the binary to the source tree.
+          # This is a disposable CI checkout directory, never a deployment folder.
+          dotnet build next/TigerClaw.Core.Tests/TigerClaw.Core.Tests.csproj -c Release --artifacts-path "$env:RUNNER_TEMP/core-tests" "-p:OutputPath=$env:GITHUB_WORKSPACE/next/_ci-candidate-core-tests/" -p:PublishAot=false --nologo
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $tests = @(Get-ChildItem "$env:RUNNER_TEMP/core-tests-output" -Recurse -Filter TigerClaw.Core.Tests.dll)
+          $tests = @(Get-ChildItem "$env:GITHUB_WORKSPACE/next/_ci-candidate-core-tests" -Recurse -Filter TigerClaw.Core.Tests.dll)
           if ($tests.Count -ne 1) { throw 'Expected exactly one Core test binary' }
           dotnet $tests[0].FullName
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
