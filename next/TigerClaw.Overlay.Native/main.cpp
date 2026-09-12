@@ -230,7 +230,7 @@ namespace tiger::overlay
             }
             FrameGuard guard(inFrame_);
             auto now = GetTickCount64();
-            bool reformat = force || !SameDisplayContent(state_, renderedState_) || reveal_.NextDelay(state_, now) != 0;
+            bool reformat = force || !candidateDrawn_ || !SameDisplayContent(state_, renderedState_) || reveal_.NextDelay(state_, now) != 0;
             Display formatted;
             if (reformat) formatted = reveal_.Update(state_, now);
             const auto& next = reformat ? formatted : display_;

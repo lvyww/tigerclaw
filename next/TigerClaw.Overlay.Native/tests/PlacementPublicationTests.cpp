@@ -193,7 +193,16 @@ struct PlacementPublicationProbe
             ++p.app.state_.anchorRevision;p.app.state_.caretX+=40;p.app.Refresh(false);p.Above();
             Check(p.app.placement_.Anchor().x==p.app.state_.caretX && p.app.placement_.EvidenceCount()==1,"partial commit anchor refresh lost memory");++cases;
         }
-        Check(cases==13,"missing publication scenarios");
+        {
+            // A -> B -> A: a superseded B layout is not the accepted A cache.
+            PlacementPublicationProbe p;p.Rows(5);
+            duringPresent=[&]{p.Rows(1);p.app.Refresh(false);};
+            p.app.Refresh(false);
+            Check(p.app.placement_.RecordCount()==1,"superseded target recorded");
+            p.app.Refresh(false);p.Below();p.Drain();p.Below();
+            Check(p.app.placement_.EvidenceCount()==0,"superseded tall layout seeded evidence");++cases;
+        }
+        Check(cases==14,"missing publication scenarios");
     }
 };
 }
