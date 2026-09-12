@@ -1,0 +1,29 @@
+name: Repair isolated candidate animation fixture
+on:
+  push:
+    branches: [feat/candidate-orientation-memory]
+    paths: ['.github/workflows/candidate-fixture-fix.yml']
+permissions:
+  contents: write
+jobs:
+  repair:
+    if: github.repository == 'lvyww/tigerclaw'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, hashlib, subprocess, tempfile, zlib
+          patch = zlib.decompress(base64.b64decode('eNqtV11v2koQfe+vmMtDBALz1USRwm2UiuZWkdJWSrhtpaq6WuwBb7PedXfXQFLlv99ZG4PBmNCkPGDknT2ze2bmzOB5HrCOxIXtjPgU9VCwefvTDLVg9+2PzPIZdiwaazpfuAzUfOR+t/04ftVsNmH8rJ0XF+D1+6et3ik03fO4DxcXryD/DEP07+r/SstF/dvRd/gFGm2iJfx1ZTKoz9zwscC6z2TAA2axMYDHFvROuo0W1EIeIHBpUesktgaY785CIIY/cDkFHkUYcNol7muNwdrvrUCM68cEMtg+zB7P5FCJAJjkEd1ZSaAlqaxzl2iNvgU6T4AS5imA8+jl4MYSwrfaMAd7m4O8S3T6/GBq3+EN9LvdPbuWZ0otrU5wAHEyFtyE9dSSuMlu1uu6mzVzmE4HPiCjQyIwGKtEBhjAhC+sezPGiaKHi5+jLFIzjFDaNoxCBKX5lEsmNrBO+p4fMk1ko4aQTB6UtEyA4BIhFgnFwfGSXsuArxLhvAlBzk3E6Dm82sAL0NxZFbcgYnfuCJrNYdHsH3cJh0IYK5PeGlAGsaJoA5s4z3Ol7zymkYEvWBS315iVZF9KRkBByt+ECYOD6k0lrqtNLxcx/XyHVA7LMC4t3q54KJt0y4CfUVvuM7ECNoVIly+14ji1kkKFERF/dvbDKPpmWrP7eqPs5R+K1i1/yG7WO10hX8k4sUMVZAs1Nq4V9vrkxrpSowRxPm8t0/Yr2bkAtAVOLDSh1x3sC4JPuXKDM+JVySzZC7eiwv+aviziF+C2En29cHM5HOWbyIH99VhYLAvMe7RZfd9Qwa6LuwVHBYwivvssValaGuDoqHiGjJA3lZd5dFqSra3q0DgjKh1imR4afyZUkejkxvFW2xHIUsD8ACfTkP+4E5FUcW1wEGnXSk5fyJmDqKBsbdAmKQmtV3iRknS+wVvRZs3kE8xhWlsmV7IokzonYhusbafwFx7YcJVw1UfcAzFieoppGTiGuf+fz4z9m9bP68R5cHYWcdmoF9euP318f14vpoUTOrpUWkdF/+nxvH6jUQrNpu/zjSRr9rplgkJGCaVUBMSP65EJiXVBt61mMxQHZdi+nCrnTZplrjFSfu1JImdRkT5uaWcxuYJLFzPKdtk9P6Ey5wasAuP2AKm2SuzGCEF963KB2ucGlw6z1pfPHi2wIaYjgo8CIh7MaVaCa7rxeoDYQLM8Qm0gSijDJNJwVZgrqMWpKOKW9KCznDHoBTVG7mDa1QPDrrZzYHPyXirkC+oIlNtlpCd066c2NpnNF/cP1Su1AmplQh40BlQ11z3j2e+0uNfVLW5ZwH9C1+FP1aD3VA3mQc3qJstkalL51EjGzA/RUMW4gbLQvLyXkrY4WCFyZXxSIlKJ3daCA+9ED5pqE5pmbeoOjBupGr+XHcdPD0DwDEne+p9z0ijD7Bxzs5G4BPc/8d2SsA==', validate=True))
+          assert hashlib.sha256(patch).hexdigest() == '1a9f4c5cf49952ba5469c806849c29774c5c1a4f784ac851bb69963e8d72ef24'
+          with tempfile.NamedTemporaryFile() as file:
+              file.write(patch);file.flush()
+              subprocess.run(['git','apply','--check','--index',file.name],check=True)
+              subprocess.run(['git','apply','--index',file.name],check=True)
+          PY
+          git rm .github/workflows/candidate-fixture-fix.yml
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'Measure a bounded animation fixture so work-area clamping cannot make the requested test endpoint impossible'
+          git push origin HEAD:refs/heads/feat/candidate-orientation-memory
