@@ -20,38 +20,35 @@ jobs:
           root = pathlib.Path('next/TigerClaw.Overlay.Native')
           source = root / 'main.cpp'
           tests = root / 'tests/PlacementPublicationTests.cpp'
-          assert subprocess.check_output(['git','hash-object',str(source)],text=True).strip() == 'd978a284a3a876a6363cbcbcd4bd85e4fdc0ae87'
+          assert subprocess.check_output(['git','hash-object',str(source)],text=True).strip() == '3f61e8e21f5a843ba838324e6f8e1e3343c07cf7'
           assert subprocess.check_output(['git','hash-object',str(tests)],text=True).strip() == '9abfd2c2225a5258e447c8dd5a98caf25b14c485'
           data = source.read_bytes()
           old = b'bool reformat = force || !SameDisplayContent(state_, renderedState_)'
           assert data.count(old) == 1
           data = data.replace(old, b'bool reformat = force || !candidateDrawn_ || !SameDisplayContent(state_, renderedState_)')
-          old = b'AppendMenuW(menu, MF_STRING | (themeNames[i]'
-          assert data.count(old) == 1
-          data = data.replace(old, b'AppendMenuW(themes, MF_STRING | (themeNames[i]')
           source.write_bytes(data)
           data = tests.read_bytes()
           old = b'        Check(cases==13,"missing publication scenarios");'
           assert data.count(old) == 1
-          new = '''        {
-                      // A -> B -> A before the queued refresh: B may prepare a
-                      // tall display but its superseded publication is not A's cache.
-                      PlacementPublicationProbe p;p.Rows(5);
-                      duringPresent=[&]{p.Rows(1);p.app.Refresh(false);};
-                      p.app.Refresh(false);
-                      Check(p.app.placement_.RecordCount()==1,"superseded target recorded");
-                      p.app.Refresh(false);p.Below();p.Drain();p.Below();
-                      Check(p.app.placement_.EvidenceCount()==0,"superseded tall layout seeded evidence");++cases;
-                  }
-                  Check(cases==14,"missing publication scenarios");'''
-          # Keep indentation aligned with the surrounding source.
-          new = new.replace('\n          ', '\n')
+          new = '\n'.join([
+              '        {',
+              '            // A -> B -> A: a superseded B layout is not the accepted A cache.',
+              '            PlacementPublicationProbe p;p.Rows(5);',
+              '            duringPresent=[&]{p.Rows(1);p.app.Refresh(false);};',
+              '            p.app.Refresh(false);',
+              '            Check(p.app.placement_.RecordCount()==1,"superseded target recorded");',
+              '            p.app.Refresh(false);p.Below();p.Drain();p.Below();',
+              '            Check(p.app.placement_.EvidenceCount()==0,"superseded tall layout seeded evidence");++cases;',
+              '        }',
+              '        Check(cases==14,"missing publication scenarios");'])
           tests.write_bytes(data.replace(old,new.encode()))
+          assert subprocess.check_output(['git','hash-object',str(source)],text=True).strip() == '310b73ec1c2188454cbcce81accc37bce906c3b7'
+          assert subprocess.check_output(['git','hash-object',str(tests)],text=True).strip() == '3a910cbfea241161cf7d6971f100403f290d6c91'
           PY
           rm .github/workflows/finish-native-history-review.yml
           git add next/TigerClaw.Overlay.Native/main.cpp next/TigerClaw.Overlay.Native/tests/PlacementPublicationTests.cpp .github/workflows/finish-native-history-review.yml
           git diff --cached --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'Preserve theme submenu and refresh superseded candidate layout before publication'
+          git commit -m 'Refresh superseded candidate layout before publication and remove review helper'
           git push origin HEAD:feat/native-placement-history-100
