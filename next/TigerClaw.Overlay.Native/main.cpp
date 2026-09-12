@@ -10,6 +10,7 @@
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <memory>
+#include <optional>
 #include <sstream>
 
 namespace tiger::overlay
@@ -19,6 +20,7 @@ namespace tiger::overlay
     static constexpr const wchar_t* MenuClass = L"TigerClaw.Native.MenuHost.v1";
     class Application
     {
+        friend struct PlacementPublicationProbe;
         HWND candidate_ = nullptr, status_ = nullptr, menuHost_ = nullptr;
         bool statusPlaced_ = false;
         State state_;
@@ -30,6 +32,26 @@ namespace tiger::overlay
         Renderer candidateRenderer_, statusRenderer_, transitionRenderer_;
         FrameTransition transition_;
         bool transitionsEnabled_ = true;
+        std::optional<Placement> pendingPlacement_;
+        std::uint64_t visualRevision_ = 0, contentRevision_ = 0;
+        bool inFrame_ = false, refreshQueued_ = false;
+        static constexpr UINT RefreshMessage = WM_APP + 0x154;
+        // Rendering/Present may reenter the window. Defer the replacement render
+        // and reject the older publication without reusing an active renderer.
+        struct FrameGuard
+        {
+            bool& active;
+            explicit FrameGuard(bool& value) : active(value) { active = true; }
+            ~FrameGuard() { active = false; }
+        };
+        bool ShowCandidate(std::uint64_t revision)
+        {
+            if (revision != visualRevision_ || !validCaret_ || display_.mode == DisplayMode::Hidden) return false;
+            if (!IsWindowVisible(candidate_) && !SetWindowPos(candidate_, HWND_TOPMOST, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW))
+                throw std::runtime_error("Candidate show failed");
+            return revision == visualRevision_ && IsWindowVisible(candidate_);
+        }
         void HideImmediately()
         {
             StopTransition();
@@ -45,10 +67,16 @@ namespace tiger::overlay
             return 60;
         }
 
-        void StopTransition() { transition_.Cancel(); KillTimer(candidate_, 4); }
+        void StopTransition()
+        {
+            transition_.Cancel(); KillTimer(candidate_, 4); pendingPlacement_.reset();
+        }
         void TransitionTick()
         {
-            if (!transition_.Active()) return;
+            if (inFrame_ || !transition_.Active() || !pendingPlacement_) return;
+            FrameGuard guard(inFrame_);
+            const auto revision = visualRevision_;
+            auto placement = *pendingPlacement_;
             auto rect = transition_.Sample(GetTickCount64());
             POINT point{rect.x, rect.y}; SIZE size{std::max(1, rect.width), std::max(1, rect.height)};
             try
@@ -56,44 +84,52 @@ namespace tiger::overlay
                 if (transition_.Active())
                 {
                     transitionRenderer_.Prepare(state_, display_, candidateDpi_, false, &size);
+                    if (revision != visualRevision_) return;
                     transitionRenderer_.Present(candidate_, &point);
                 }
                 else
                 {
                     KillTimer(candidate_, 4);
                     candidateRenderer_.Present(candidate_, &point);
+                    if (ShowCandidate(revision))
+                    {
+                        placement_ = placement;
+                        pendingPlacement_.reset();
+                    }
                 }
             }
             catch (...)
             {
                 StopTransition();
                 candidateDrawn_ = false;
-                SetTimer(candidate_, 3, 100, nullptr);
+                if (candidateRetryCount_++ < 3) SetTimer(candidate_, 3, 100, nullptr);
             }
         }
-        void PublishCandidate(SIZE size, POINT destination)
+        void PublishCandidate(SIZE size, POINT destination, const Placement& placement)
         {
+            const auto revision = visualRevision_;
             FrameRect target{destination.x, destination.y, size.cx, size.cy};
             RECT current{}; GetWindowRect(candidate_, &current);
             FrameRect from{current.left, current.top, current.right - current.left, current.bottom - current.top};
             bool appearing = !IsWindowVisible(candidate_);
-            if (!appearing && transitionsEnabled_ && state_.animationEnabled && from != target)
+            if (!appearing && placement_.SameEnvironment(placement) && transitionsEnabled_ && state_.animationEnabled && from != target)
             {
                 if (!transition_.Active() || transition_.Target() != target ||
                     transition_.Duration() != static_cast<unsigned>(state_.animationDurationMs))
                 {
+                    StopTransition();
                     transition_.Start(from, target, GetTickCount64(), RefreshRate(destination),
                         state_.animationDurationMs);
-                    if (!transition_.Active())
-                    { StopTransition(); candidateRenderer_.Present(candidate_, &destination); return; }
-
-                    if (!SetTimer(candidate_, 4, transition_.Interval(), nullptr))
-                    { StopTransition(); candidateRenderer_.Present(candidate_, &destination); }
+                    if (transition_.Active() && SetTimer(candidate_, 4, transition_.Interval(), nullptr))
+                    { pendingPlacement_ = placement; return; }
                 }
-                return;
+                else { pendingPlacement_ = placement; return; }
             }
             StopTransition();
             candidateRenderer_.Present(candidate_, &destination);
+            // A computed target is not an observation. Only successful full
+            // publication/show (or the final animation tick) commits one record.
+            if (ShowCandidate(revision)) placement_ = placement;
         }
         Sound sound_;
         std::unique_ptr<StateSource> source_;
@@ -150,47 +186,60 @@ namespace tiger::overlay
         bool ResolvePosition(Placement& placement, SIZE size, POINT& result)
         {
             if (!validCaret_) return false;
-            auto anchor = placement.Anchor();
-            auto monitor = MonitorFromPoint({anchor.x, anchor.y}, MONITOR_DEFAULTTONEAREST);
+            if (size.cx <= 0 || size.cy <= 0) return false;
+            // Select the display from live coordinates, not a pinned old X.
+            auto monitor = MonitorFromPoint({state_.caretX, state_.caretY}, MONITOR_DEFAULTTONEAREST);
             MONITORINFO info{sizeof(info)};
             if (!GetMonitorInfoW(monitor, &info)) return false;
             auto work = info.rcWork;
+            if (work.right <= work.left || work.bottom <= work.top) return false;
             wchar_t className[128]{}, title[128]{};
             HWND foreground = GetForegroundWindow();
             GetClassNameW(foreground, className, 128); GetWindowTextW(foreground, title, 128);
             bool startMenu = !wcscmp(className, L"Windows.UI.Core.CoreWindow") && !wcscmp(title, L"\u641c\u7d22");
             auto position = placement.Resolve(size.cx, size.cy,
-                {static_cast<int>(work.left), static_cast<int>(work.top), static_cast<int>(work.right), static_cast<int>(work.bottom)}, startMenu);
+                {static_cast<int>(work.left), static_cast<int>(work.top), static_cast<int>(work.right), static_cast<int>(work.bottom)}, startMenu,
+                reinterpret_cast<std::uintptr_t>(monitor), candidateDpi_, contentRevision_);
             result = {position.x, position.y};
             return true;
         }
         void Position()
         {
+            auto placement = placement_;
             POINT position{};
-            if (!ResolvePosition(placement_, candidateSize_, position)) return;
-            if (transition_.Active())
-            {
-                PublishCandidate(candidateSize_, position);
-                return;
-            }
+            if (!ResolvePosition(placement, candidateSize_, position)) return;
             RECT current{}; GetWindowRect(candidate_, &current);
-            if (current.left != position.x || current.top != position.y || !IsWindowVisible(candidate_))
-            {
-                PublishCandidate(candidateSize_, position);
-                if (!IsWindowVisible(candidate_)) ShowWindow(candidate_, SW_SHOWNOACTIVATE);
-            }
+            if (!transition_.Active() && IsWindowVisible(candidate_) && placement_.SameDecision(placement) &&
+                current.left == position.x && current.top == position.y) return;
+            // Both text/size and position-only changes use the same transactional
+            // publisher. The Placement key filters duplicate repaint/timer work.
+            PublishCandidate(candidateSize_, position, placement);
         }
         void Refresh(bool force)
         {
             if (!candidate_ || !status_) return;
+            const auto revision = ++visualRevision_;
+            if (inFrame_)
+            {
+                // A forced refresh can be coalesced safely; never consume a
+                // source snapshot or mutate a renderer recursively.
+                if (!refreshQueued_) refreshQueued_ = PostMessageW(candidate_, RefreshMessage, 0, 0) != FALSE;
+                if (ModeFor(state_) == DisplayMode::Hidden || !UsableCaret(state_.caretX, state_.caretY))
+                    HideImmediately();
+                return;
+            }
+            FrameGuard guard(inFrame_);
             auto now = GetTickCount64();
-            bool reformat = force || !SameDisplayContent(state_, renderedState_) || reveal_.NextDelay(state_, now) != 0;
+            bool reformat = force || !candidateDrawn_ || !SameDisplayContent(state_, renderedState_) || reveal_.NextDelay(state_, now) != 0;
             Display formatted;
             if (reformat) formatted = reveal_.Update(state_, now);
             const auto& next = reformat ? formatted : display_;
+            if (next.mode != display_.mode || next.text != display_.text ||
+                next.selectionStart != display_.selectionStart || next.selectionLength != display_.selectionLength)
+                ++contentRevision_;
             if (ModeFor(state_) == DisplayMode::Hidden)
             {
-                placement_.Reset();
+                placement_.EndInput();
             }
             if (anchorRevision_ != state_.anchorRevision)
             {
@@ -198,8 +247,7 @@ namespace tiger::overlay
                 placement_.RefreshAnchor();
             }
             validCaret_ = next.mode != DisplayMode::Hidden && placement_.Acquire(state_.caretX, state_.caretY, state_.caretHeight);
-            auto anchor = placement_.Anchor();
-            UINT dpi = validCaret_ ? DpiAt({anchor.x, anchor.y}) : 96;
+            UINT dpi = validCaret_ ? DpiAt({state_.caretX, state_.caretY}) : 96;
             bool changed = force || !candidateDrawn_ || state_.animationEnabled != renderedState_.animationEnabled ||
                 state_.animationDurationMs != renderedState_.animationDurationMs || state_.theme != renderedState_.theme || state_.font != renderedState_.font ||
                 state_.fontSize != renderedState_.fontSize || state_.vertical != renderedState_.vertical ||
@@ -222,22 +270,20 @@ namespace tiger::overlay
                     try
                     {
                         auto size = candidateRenderer_.Prepare(state_, display_, dpi);
+                        if (revision != visualRevision_) return;
                         auto placement = placement_;
                         POINT destination{};
                         if (!ResolvePosition(placement, size, destination))
                             throw std::runtime_error("Candidate monitor unavailable");
                         // Publish pixels, dimensions and final location together.
                         // The OS retains the previous frame throughout Prepare.
-                        PublishCandidate(size, destination);
+                        PublishCandidate(size, destination, placement);
+                        if (revision != visualRevision_) return;
                         candidateSize_ = size;
-                        placement_ = placement;
 
                         candidateDrawn_ = true;
                         candidateRetryCount_ = 0;
                         KillTimer(candidate_, 3);
-                        if (!IsWindowVisible(candidate_))
-                            SetWindowPos(candidate_, HWND_TOPMOST, 0, 0, 0, 0,
-                                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
                     }
                     catch (...)
                     {
@@ -247,8 +293,17 @@ namespace tiger::overlay
                         if (candidateRetryCount_++ < 3) SetTimer(candidate_, 3, 100, nullptr);
                     }
                 }
-                else Position();
+                else
+                {
+                    try { Position(); }
+                    catch (...)
+                    {
+                        StopTransition(); candidateDrawn_ = false;
+                        if (candidateRetryCount_++ < 3) SetTimer(candidate_, 3, 100, nullptr);
+                    }
+                }
             }
+            if (revision != visualRevision_) return;
             if (force || !statusDrawn_ || state_.isOff != renderedState_.isOff || state_.isChinese != renderedState_.isChinese ||
                 state_.nativeHook != renderedState_.nativeHook || state_.status != renderedState_.status || state_.hideStatus != renderedState_.hideStatus)
             {
@@ -267,6 +322,7 @@ namespace tiger::overlay
                 ShowWindow(status_, state_.hideStatus ? SW_HIDE : SW_SHOWNOACTIVATE);
                 statusDrawn_ = true;
             }
+            if (revision != visualRevision_) return;
             renderedState_ = state_;
             KillTimer(candidate_, 1);
             auto delay = reveal_.NextDelay(state_, GetTickCount64());
@@ -397,6 +453,7 @@ namespace tiger::overlay
             case WM_MOUSEACTIVATE: return MA_NOACTIVATE;
             case WM_ERASEBKGND: return 1;
             case WM_PAINT: { PAINTSTRUCT paint{}; BeginPaint(hwnd, &paint); EndPaint(hwnd, &paint); return 0; }
+            case RefreshMessage: refreshQueued_ = false; Refresh(true); return 0;
             case WM_TIMER:
                 if (wp == 4) TransitionTick();
                 else if (wp == 2) CheckMenuDismiss();

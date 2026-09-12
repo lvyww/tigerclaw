@@ -1,0 +1,68 @@
+name: Native Overlay placement history
+on:
+  pull_request:
+    branches: [main]
+    paths: ['next/TigerClaw.Overlay.Native/**', '.github/workflows/native-placement-history.yml']
+  push:
+    branches: [main]
+    paths: ['next/TigerClaw.Overlay.Native/**', '.github/workflows/native-placement-history.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: native-placement-history-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  portable:
+    name: Linux geometry ASan and UBSan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.11'
+      - run: python next/TigerClaw.Overlay.Native/tests/test_placement_history.py --cxx clang++ --sanitize --build-dir "${{ runner.temp }}/history-controls"
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+  windows:
+    name: Windows ${{ matrix.arch }} Native Overlay
+    runs-on: windows-2025
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x64, x86, arm64]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.11'
+      - name: Build native application and tests; run host-compatible tests
+        shell: pwsh
+        env:
+          TEST_ARCH: ${{ matrix.arch }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw 'MSVC unavailable' }
+          Import-Module "$vs\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+          Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments "-arch=$env:TEST_ARCH -host_arch=x64"
+          $build = Join-Path $env:RUNNER_TEMP "overlay-history-$env:TEST_ARCH"
+          cmake -S next/TigerClaw.Overlay.Native -B $build -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build $build --parallel 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # x64 hosted Windows cannot execute ARM64 binaries: build-only, not a runtime claim.
+          if ($env:TEST_ARCH -ne 'arm64') {
+            ctest --test-dir $build --output-on-failure
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            python next/TigerClaw.Overlay.Native/tests/test_placement_history.py --cxx cl --build-dir "$build/negative-controls"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            & "$build/overlay_placement_publication_tests.exe"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
