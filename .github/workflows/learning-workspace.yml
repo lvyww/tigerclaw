@@ -1,0 +1,32 @@
+name: Learning workspace snapshot
+on:
+  push:
+    branches: [feat/tab-confirmed-learning]
+    paths: [.github/workflows/learning-workspace.yml]
+permissions:
+  contents: read
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Archive text source only
+        run: |
+          python3 - <<'PY'
+          import pathlib, subprocess, tarfile
+          excluded = {'.ttf','.otf','.woff','.woff2','.png','.jpg','.jpeg','.gif','.pdf','.exe','.dll','.lib','.pdb','.bin','.gguf','.zip','.7z'}
+          with tarfile.open('/tmp/learning-source.tar.gz','w:gz') as out:
+              for name in subprocess.check_output(['git','ls-files','-z']).decode().split('\0'):
+                  if not name:
+                      continue
+                  p = pathlib.Path(name)
+                  if p.is_file() and p.suffix.lower() not in excluded and p.stat().st_size < 10000000:
+                      out.add(p, arcname=name, recursive=False)
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: learning-source
+          path: /tmp/learning-source.tar.gz
+          retention-days: 1
