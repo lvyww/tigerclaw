@@ -94,6 +94,14 @@ namespace TigerClaw.Shared
         public bool CandidateAnimationEnabled { get; set; } = true;
         [DataMember(Order = 33)]
         public int CandidateAnimationDurationMs { get; set; } = 200;
+
+        // Optional hint; old overlays still see CandidateVisible == false.
+        [DataMember(Order = 34)]
+        public bool CandidateHoldWhilePending { get; set; }
+
+        // Optional display-continuity token. Missing/empty tokens cannot hold a frame.
+        [DataMember(Order = 35)]
+        public string CandidateFrameSession { get; set; }
     }
 }
 

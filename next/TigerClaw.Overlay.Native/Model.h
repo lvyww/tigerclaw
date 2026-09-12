@@ -11,9 +11,11 @@ namespace tiger::overlay
     struct State
     {
         bool isOff = false, isChinese = false, candidateVisible = false;
+        bool candidateHoldWhilePending = false;
         bool vertical = false, showIndex = false, hideCandidates = false;
         bool hideStatus = false, showCode = false, nativeHook = false;
         Text status, input, codeMask, theme, font;
+        Text candidateFrameSession;
         std::vector<Text> candidates, annotations;
         int composition = 0, caretX = 0, caretY = 0, caretHeight = 0;
         int soundVk = 0, soundVolume = 0, candidateDelay = 0, annotationDelay = 0;
@@ -37,6 +39,15 @@ namespace tiger::overlay
     Display Format(const State& state, bool expanded = true, bool annotations = true);
     DisplayMode ModeFor(const State& state, bool expanded = true);
     bool SameDisplayContent(const State& left, const State& right);
+    // A hint is not permission to show a window: Application also requires an
+    // already visible, successfully published candidate frame and valid geometry.
+    inline bool PendingCandidateFrame(const State& state)
+    {
+        return state.candidateHoldWhilePending && !state.candidateVisible &&
+            state.isChinese && !state.isOff && state.composition == 5 &&
+            !state.input.empty() && state.candidates.empty() &&
+            !(state.hideCandidates && state.candidateDelay <= 0);
+    }
     class Reveal
     {
         bool active_ = false, candidates_ = false, annotations_ = false;

@@ -103,6 +103,7 @@ namespace tiger::overlay
             };
             scalar("IsOff", next.isOff); scalar("IsChinese", next.isChinese);
             scalar("CandidateVisible", next.candidateVisible); scalar("VerticalCandidates", next.vertical);
+            scalar("CandidateHoldWhilePending", next.candidateHoldWhilePending);
             scalar("ShowCandidateIndex", next.showIndex); scalar("HideCandidateItems", next.hideCandidates);
             scalar("HideStatusBar", next.hideStatus); scalar("ShowInputCodeInCandidateWindow", next.showCode);
             scalar("IsNativeHook", next.nativeHook); scalar("CompositionState", next.composition);
@@ -117,6 +118,7 @@ namespace tiger::overlay
             scalar("CandidateBackgroundUntil", next.backgroundUntil);
             text("StatusText", next.status); text("InputCode", next.input); text("CodeMasking", next.codeMask);
             text("ThemeName", next.theme); text("FontName", next.font);
+            text("CandidateFrameSession", next.candidateFrameSession);
             array("Candidates", next.candidates); array("CandidateAnnotations", next.annotations);
             if (!std::isfinite(next.fontSize)) return false;
             state = std::move(next);

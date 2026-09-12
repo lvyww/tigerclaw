@@ -71,3 +71,66 @@ Tests: `TigerClaw.Core.Tests --ui-snapshot-tests` exercises the actual C# writer
 native `overlay_transport_tests` covers first-read acceptance, paused/abandoned
 writers and downgrade matching; opt-in `overlay_window_tests` drives the real
 native application with the new snapshot and event.
+
+## Pending sentence candidate frames
+
+Optional `CandidateHoldWhilePending` (default false) accompanies
+`CandidateVisible=false` when a Chinese sentence composition has an empty
+projected candidate list and its decoder has not finished. Core captures the
+list and decode-pending flag under one engine lock. The existing fresh-caret
+barrier, focus loss, deactivation and cancellation must not emit a hold hint.
+
+Native Overlay may retain an already visible, successfully published candidate
+frame while this hint is true. It never shows a new placeholder, revives a hidden
+window, or restores committed entries into the engine's selectable candidates.
+The current caret must be usable and remain on the published frame's monitor,
+effective DPI and work area. Code-only placeholders do not qualify. Explicit
+candidate hiding and disabled/English modes take precedence.
+
+Retention does not call Present, move/resize the window, advance placement history,
+reset reveal clocks, or accept a pending animation target. Completion drives the
+next layout; there is no extra wait duration, polling loop, or timer. Status UI
+continues updating. A completed empty result takes the ordinary display path,
+not this retention path. Pending snapshots are not reusable candidate data.
+
+This additive field is only on Core-to-Overlay UI snapshots: no TSF/Hook pipe
+change. Older Core omits it; older Native/WPF ignores it and keeps its previous
+immediate-hide behavior. The fix requires rebuilding both Core and Native
+Overlay, with Shared source included. The existing latest-only mailbox and its
+coalescing semantics are unchanged; it is not a cross-context frame cache.
+
+Regression: `tests/TigerClaw.CandidateFrame.Tests` generates isolated MMF snapshots
+from real asynchronous sentence auto-commit (vu -> \u8fd9, then pending j).
+`overlay_pending_frame_tests` consumes that wire trace with real, test-owned
+nonactivating layered windows, controlled time and publication faults. The
+without-hint control must reproduce the original hide. No production IPC,
+registration, input injection or daily-runtime replacement is performed.
+
+### Display-continuity identity and current-frame eligibility
+
+`CandidateFrameSession` is an optional opaque string identifying candidate-frame
+continuity. Core captures it under the same engine lock as candidates and pending
+state. Clearing/restarting composition or losing focus/activation changes it;
+ordinary decoding and automatic prefix commit within continuing sentence input
+do not. It is freshly randomized across engine instances, not a process-local
+counter reused on restart. Every snapshot carries it, so Native does not have to
+see an intermediate hidden snapshot. Missing/empty identity disables retention
+conservatively (including when talking to older builds of this PR).
+
+Native requires an exact identity match to the successfully published frame.
+A changed identity resets only the current display/reveal session and horizontal
+anchor; it does not clear or partition the geometric 100-decision history. This
+identity is not a TSF context ID and is not used for placement direction.
+
+Frame eligibility describes the currently published pixels, not whether a
+candidate appeared at some earlier point. CodeOnly/InputOnly publication removes
+eligibility, including animation samples and reentrant publication. A failed
+publication leaves the eligibility of untouched pixels intact; a reentrant reset
+cannot be rolled back. Preparing a future layout alone changes no eligibility.
+
+The review regressions generate real identical-code commit/cancel/Escape/Backspace
+end/new-input sequences and deliberately omit hidden snapshots from Native
+consumption. They additionally exercise both code-only modes after candidates,
+intermediate/final animations, publication failure, missing identity and reentry.
+Two compiled negative controls restore missing session checks and the historical
+candidate latch, and must fail for the corresponding reported defects.
