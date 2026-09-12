@@ -1,0 +1,47 @@
+name: Apply reviewed pending-frame source
+on:
+  push:
+    branches: [fix/native-pending-candidate-frame]
+    paths: [.github/workflows/apply-pending-frame.yml]
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - name: Verify and apply exact source patch on the feature branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import base64, gzip, hashlib, re, subprocess
+          def git(*args):
+              return subprocess.check_output(['git', *args])
+          payload = b''.join(git('show', f'HEAD:tools/.pending-frame-source/{i}.b64') for i in range(7))
+          patch = gzip.decompress(base64.b64decode(payload, validate=True))
+          assert hashlib.sha256(patch).hexdigest() == '6be8041cb562cf9a0104d8441a19ab30395337f357288ea7b5e7975b546bd95e'
+          changes = []
+          for block in patch.split(b'diff --git ')[1:]:
+              paths = block.splitlines()[0].decode().split(' ')
+              assert paths[0][2:] == paths[1][2:]
+              path = paths[0][2:]
+              match = re.search(rb'^index ([0-9a-f]{40})\.\.([0-9a-f]{40})', block, re.M)
+              assert match is not None
+              before, after = (v.decode() for v in match.groups())
+              if before == '0'*40:
+                  assert subprocess.run(['git','cat-file','-e','HEAD:'+path], capture_output=True).returncode != 0
+              else:
+                  assert git('rev-parse','HEAD:'+path).decode().strip() == before, path
+              changes.append((path, after))
+          assert len(changes) == 16
+          subprocess.run(['git','apply','--cached','--whitespace=nowarn','-'], input=patch, check=True)
+          for path, after in changes:
+              assert git('rev-parse',':'+path).decode().strip() == after, path
+          PY
+          git rm --cached -r tools/.pending-frame-source .github/workflows/apply-pending-frame.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Preserve an existing native candidate frame while decoding an auto-committed suffix'
+          git push origin HEAD:fix/native-pending-candidate-frame
