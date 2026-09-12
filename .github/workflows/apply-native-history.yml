@@ -27,7 +27,7 @@ jobs:
           git merge-base --is-ancestor 538096b776778f0d9e8d7e3a9cf2f06481fb75be HEAD
           git read-tree --reset -u 538096b776778f0d9e8d7e3a9cf2f06481fb75be
           git apply --index "$RUNNER_TEMP/native-history.patch"
-          git diff --cached --check
+          git diff --cached --check 538096b776778f0d9e8d7e3a9cf2f06481fb75be
           python3 - <<'PY'
           import subprocess
           paths = subprocess.check_output(['git','diff','--cached','--name-only','538096b776778f0d9e8d7e3a9cf2f06481fb75be'], text=True).splitlines()
