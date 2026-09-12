@@ -22,6 +22,10 @@ jobs:
         with:
           dotnet-version: '10.0.x'
       - run: python3 tools/test_candidate_orientation.py
+      - run: python3 tools/test_native_orientation.py --cxx clang++ --sanitize
+        env:
+          ASAN_OPTIONS: detect_leaks=1:halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
   windows:
     name: Windows ${{ matrix.platform }} WPF
     runs-on: windows-2025
@@ -68,4 +72,42 @@ jobs:
           $tests = @(Get-ChildItem "$env:RUNNER_TEMP/core-tests/bin/TigerClaw.Core.Tests" -Recurse -Filter TigerClaw.Core.Tests.dll)
           if ($tests.Count -ne 1) { throw 'Expected exactly one Core test binary' }
           dotnet $tests[0].FullName
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  native:
+    name: Windows ${{ matrix.platform }} Native
+    runs-on: windows-2025
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [x64, Win32]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+          submodules: true
+      - name: Build actual Native Overlay and isolated probes
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw 'MSVC unavailable' }
+          Import-Module "$vs\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+          $arch = if ('${{ matrix.platform }}' -eq 'Win32') { 'x86' } else { 'x64' }
+          Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments "-arch=$arch -host_arch=x64"
+          python tools/test_native_orientation.py --cxx cl
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $cmake = "$vs\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe"
+          if (!(Test-Path $cmake)) { $cmake = (Get-Command cmake.exe).Source }
+          & $cmake -S next/TigerClaw.Overlay.Native -B "$env:RUNNER_TEMP/native-build" -G "Visual Studio 18 2026" -A ${{ matrix.platform }} "-DCMAKE_GENERATOR_INSTANCE=$vs"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $cmake --build "$env:RUNNER_TEMP/native-build" --config Release -j 4
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Model, transport, publication and real isolated executable IPC
+        shell: pwsh
+        run: |
+          ctest --test-dir "$env:RUNNER_TEMP/native-build" -C Release --output-on-failure
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$env:RUNNER_TEMP/native-build/Release/overlay_orientation_publication.exe"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$env:RUNNER_TEMP/native-build/Release/overlay_window_tests.exe"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
