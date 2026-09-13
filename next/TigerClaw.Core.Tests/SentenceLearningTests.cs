@@ -33,6 +33,7 @@ namespace TigerClaw.Core.Tests
             try
             {
                 LearningRules(); LearningStorage(root); LearningDecoder(); LearningEngineAndProtocol(root);
+                LearningPerformance();
                 Console.WriteLine(JsonSerializer.Serialize(new { test = "tab_learning", status = "passed", checks = learningChecks, physicalTsfTested = false }));
                 return 0;
             }
