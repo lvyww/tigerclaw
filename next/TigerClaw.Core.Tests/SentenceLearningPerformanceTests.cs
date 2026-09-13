@@ -87,8 +87,8 @@ namespace TigerClaw.Core.Tests
             LearningCheck(snapshot.PrefixScore("test-v1", "aa063", "甲", "前甲") == 0, "exact code not prefix hint");
             LearningCheck(snapshot.PrefixScore("test-v1", "aa06", "甲乙", "前甲") == 0, "exact text not prefix hint");
             LearningCheck(snapshot.PrefixScore("test-v1", "AA06", "甲", "前甲") == 0, "ordinal case-sensitive matching");
-            var scalar = SentenceLearningSnapshot.Build(new[] { IndexEvent("test-v1", "aabb", "𰻞甲", "", LearningBenchmarkTime) });
-            var oracle = SentenceLearningReference.Build(new[] { IndexEvent("test-v1", "aabb", "𰻞甲", "", LearningBenchmarkTime) });
+            var scalar = SentenceLearningSnapshot.Build(new[] { IndexEvent("test-v1", "aabb", "𰻞甲", "", LearningBenchmarkTime) }, LearningBenchmarkTime);
+            var oracle = SentenceLearningReference.Build(new[] { IndexEvent("test-v1", "aabb", "𰻞甲", "", LearningBenchmarkTime) }, LearningBenchmarkTime);
             LearningCheck(Math.Abs(scalar.PrefixScore("test-v1", "aa", "𰻞".Substring(0, 1), "") -
                 oracle.PrefixScore("test-v1", "aa", "𰻞".Substring(0, 1), "")) < 1e-12, "UTF-16 ordinal prefix compatibility");
         }
@@ -150,10 +150,10 @@ namespace TigerClaw.Core.Tests
             Parallel.For(0, parallel.Length, i => parallel[i] = indexed());
             LearningCheck(parallel.All(value => value == 6), "concurrent immutable query results");
 
-            var lexicon = SentenceLexiconIndex.Create(new Dictionary<string, List<string>>
+            var lexicon = SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
             {
                 ["aa"] = new() { "甲" }, ["bb"] = new() { "乙" }
-            }, Array.Empty<string>(), Array.Empty<string>());
+            });
             var decoder = new SentenceInputDecoder(lexicon, NeutralSentenceLanguageModel.Instance,
                 beamWidth: 1, isolationPenalty: SentenceIsolationPenalty.None);
             decoder.SetLearning(snapshot, "test-v1");
