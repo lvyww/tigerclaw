@@ -20,6 +20,8 @@ if not exist "%DIST_CONFIG%" (
 )
 
 set "PACK_VERSION_LABEL=%~1"
+set "PACK_NO_QWEN=0"
+if /I "%~2"=="--no-qwen" set "PACK_NO_QWEN=1"
 set "PACK_BUILD_INFO=%ROOT%\next\TigerClaw.Shared\BuildInfo.cs"
 set "PACK_RELEASE_DIR=%RELEASE_DIR%"
 set "PACK_STAGE_DIR=%STAGE_DIR%"
@@ -38,6 +40,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$stage=$env:PACK_STAGE_DIR;" ^
   "$distConfig=$env:PACK_DIST_CONFIG;" ^
   "$sevenZ=$env:PACK_SEVEN_Z;" ^
+  "$noQwen=$env:PACK_NO_QWEN -eq '1';" ^
   "$armRelease=$env:PACK_SENTENCE_LEXICON_SOURCE;" ^
   "$version = $env:PACK_VERSION_LABEL;" ^
   "if([string]::IsNullOrWhiteSpace($version)){ $q=[char]34; $info=Get-Content -LiteralPath $env:PACK_BUILD_INFO -Raw; $match=[regex]::Match($info,('VersionLabel\s*=\s*'+$q+'([^'+$q+']+)'+$q)); if($match.Success){ $version=$match.Groups[1].Value } };" ^
@@ -62,9 +65,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "foreach($item in $items){ $src=Join-Path $release $item; if(-not (Test-Path -LiteralPath $src)){ throw ('Missing required item: {0}' -f $src) } };" ^
   "if(Test-Path -LiteralPath $stage){ Remove-Item -LiteralPath $stage -Recurse -Force };" ^
   "New-Item -Path $stage -ItemType Directory -Force | Out-Null;" ^
-  "foreach($item in $items){ Copy-Item -LiteralPath (Join-Path $release $item) -Destination $stage -Recurse -Force };" ^
+  "function Copy-Payload($src,$dst){ if(Test-Path -LiteralPath $src -PathType Container){ New-Item -ItemType Directory -Path $dst -Force | Out-Null; foreach($child in Get-ChildItem -LiteralPath $src -Force){ Copy-Payload $child.FullName (Join-Path $dst $child.Name) } } elseif(-not ($noQwen -and [IO.Path]::GetExtension($src) -ieq '.gguf')){ Copy-Item -LiteralPath $src -Destination $dst -Force } };" ^
+  "foreach($item in $items){ Copy-Payload (Join-Path $release $item) (Join-Path $stage $item) };" ^
   "Copy-Item -LiteralPath $distConfig -Destination (Join-Path $stage 'config.txt') -Force;" ^
   "$fileName = '{0}-{1}.7z' -f $imeName,$version;" ^
+  "if($noQwen){ $fileName = '{0}-{1}-no-qwen.7z' -f $imeName,$version };" ^
   "$archivePath = Join-Path $release $fileName;" ^
   "if(Test-Path -LiteralPath $archivePath){ Remove-Item -LiteralPath $archivePath -Force };" ^
   "Push-Location $release;" ^

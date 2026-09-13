@@ -665,6 +665,49 @@ namespace TigerClaw.Dialog
             Grid.SetColumn(editor, 1);
             grid.Children.Add(editor);
 
+            if (key == "整句神经重排")
+            {
+                grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                var guide = new StackPanel { Margin = new Thickness(0, 12, 0, 0) };
+                var download = new Button
+                {
+                    Content = "打开 Qwen 模型下载页",
+                    HorizontalAlignment = HorizontalAlignment.Left,
+                    Style = (Style)FindResource("ActionButtonStyle"),
+                    ToolTip = "Hugging Face · ggml-org · Qwen3-0.6B-Base-Q8_0.gguf"
+                };
+                download.Click += (sender, args) =>
+                {
+                    try
+                    {
+                        Process.Start(new ProcessStartInfo
+                        {
+                            FileName = "https://huggingface.co/ggml-org/Qwen3-0.6B-Base-GGUF/blob/main/Qwen3-0.6B-Base-Q8_0.gguf",
+                            UseShellExecute = true
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        StatusText.Text = "状态：无法打开模型下载页 - " + ex.Message;
+                    }
+                };
+                guide.Children.Add(download);
+                guide.Children.Add(new TextBlock
+                {
+                    Text = "1. 在下载页点击 Download，下载 Qwen3-0.6B-Base-Q8_0.gguf（约 639 MB）。\n" +
+                        "2. 将文件重命名为 sentence-qwen-q8.gguf，放入 TigerClaw.Core.exe 所在目录下的 Models 文件夹；没有该文件夹时请新建。\n" +
+                        "3. 确认本项已开启并点击“保存”，重启虎爪后使用整句方案。\n" +
+                        "已有该模型时无需重复下载。模型缺失或加载失败时，仍可使用本地 n-gram 整句输入。",
+                    TextWrapping = TextWrapping.Wrap,
+                    Margin = new Thickness(0, 8, 0, 0),
+                    Style = (Style)FindResource("RowDescriptionStyle")
+                });
+                Grid.SetRow(guide, 1);
+                Grid.SetColumnSpan(guide, 2);
+                grid.Children.Add(guide);
+            }
+
             border.Child = grid;
             return border;
         }
@@ -1382,7 +1425,7 @@ namespace TigerClaw.Dialog
                 case "自动启用整句模式":
                     return "方案名含“整句”时启用整句输入：连续编码由本地模型自动切分并生成整句候选。";
                 case "整句神经重排":
-                    return "使用独立 Qwen 推理进程重排前 5 个整句候选；不可用时自动保留三元模型结果。";
+                    return "使用 Qwen3 0.6B Base Q8 重排前 5 个整句候选。下方提供模型下载链接和配置说明；不可用时保留三元模型结果。";
                 case "整句Tab自学习":
                     return "仅学习 Tab 明确纠正且目标应用确认成功上屏的片段；记录保存在当前方案目录，不改变原码表。关闭后保留记录但不参与排序。";
                 case "整句自动提前上屏":

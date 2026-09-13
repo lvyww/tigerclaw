@@ -4,6 +4,13 @@
 TSF 发布包的一部分。它仍处于实验阶段，尤其是自动提前上屏在不同 Rime 前端上的
 闪烁、提交顺序和长时间稳定性需要分别验收。
 
+Lua 5.5、Lua 5.4 和 LuaJIT 均有独立回归验证。Linux 前端如果报告
+`attempt to assign to const variable 'line'`（或 `'r'`），说明仍在使用旧 Lua 文件：
+Lua 5.5 将 `for` 控制变量设为只读，需更新模块中读取数据行和恢复 Tab 锁定边界
+的两处循环，使用局部变量保存转换结果。`func type: nil` 是模块加载失败的后续错误。
+验证命令：`python3 tools/run_regressions.py --lua /path/to/lua5.5 --negative-control`；
+将解释器参数换成 Lua 5.4 或 LuaJIT，可执行同一套回归。
+
 ## 生成与部署
 
 ```bash
@@ -33,9 +40,42 @@ schema 默认值一致（不一致直接报错），白名单可用 `--full-code
 
 ## 运行文件与明文数据
 
-本方案没有使用 Rime 的 `table_translator`，运行时只有一个实质 Lua 模块：
-`lua/tiger_sentence.lua`（输入、整句解码、n-gram、补充语料和码表索引构建）。
+本方案没有使用 Rime 的 `table_translator`。`lua/tiger_sentence.lua` 负责输入、
+整句解码、n-gram、补充语料和码表索引；`lua/tiger_sentence_learning.lua` 负责 Tab
+纠正学习、内存评分索引及 Rime LevelDb 存储适配。升级时两个文件都要复制。
 根目录的 `rime.lua` 只负责向 Rime 注册 processor 和 translator。
+
+## 候选纠正自学习
+
+`tiger_sentence/tab_learning: true` 默认开启，同时控制点选与 Tab 学习。直接点选
+非首选候选提交，也会与当前首选比较并学习改变的片段；点选首选不反复强化。
+Rime 的手动候选确认共用提交通知，因此键盘改选非首选后确认也适用。
+Tab/Shift+Tab 改选后，空格提交，
+或开启提前上屏时下一字母确认提交，才记录改变的片段；关闭提前上屏时，锁定的
+纠正暂存到后续提交。普通首选、仅高亮后取消、原始编码退出不学习。手动编辑编码
+会保守地丢弃尚未提交的学习记录。输出转换后的文字与原候选不一致时也不学习。
+
+按共同编码边界提取最多 16 个 Unicode 字符，前文只取当前组合中的最后两字。
+首次纠正加 6 分，累计封顶 10，30 天半衰期；单字不跨前文泛化。学习参与合法
+搜索路径的保留，每个位置最多额外保留四条未完成学习路径。受学习影响的结果
+不能作为概率性或空码自动上屏证据，用户主动 Tab 确认仍可提交。
+
+偏好按 schema ID 分库存放在 Rime 用户目录的 `tiger_sentence_learning_<散列>.userdb`
+中；码表、频序、白名单、高频限制和重码开关也参与模式隔离。关闭设置保留数据库。
+备份或清空前先完全退出 Rime，再备份或移走对应数据库目录；不要套用 Windows
+学习日志的维护工具。记录只保存在本机，不由此方案自动上传。
+
+需要 [librime-lua 的 `LevelDb` 接口](https://github.com/hchunhui/librime-lua/blob/master/src/types_ext.cc)；接口缺失、数据库被其他进程占用或写入失败时，
+输入照常工作，学习不会发布未保存的加分。最多 10,000 条、16 MiB 的有效记录数据。
+纯 Lua 没有后台工作线程：普通解码仅查内存索引，数据库写入及索引更新发生在
+明确提交时；空闲组合开始时按需刷新时间衰减。大量记录下的手机提交延迟仍需实测。
+
+Rime 的 `commit_notifier`/`commit_text` 只能表示宿主提交，不能证明目标应用已经
+插入文字，区别于 Windows TSF 的成功回执。合并 `rime.lua` 时使用
+`tiger_sentence.processor_component` 注册 processor，以便释放提交通知连接。
+Lua 5.4、LuaJIT 的测试覆盖取消、输出转换、失败写入、开关、方案隔离、持久化和
+10,000 条评分索引，以及直接点选、首选不强化、重复通知和 Tab 后点选不重复计数；
+这些测试不替代手机或真实应用输入验收。
 
 码表数据全部是明文 txt，由 Lua 在首次使用时加载并建索引（与 Windows Core 的
 `SentenceLexiconIndex.Build` 同语义：行序=名次、最优码选择、高频过滤、
@@ -85,7 +125,8 @@ schema 配置 `tiger_sentence/high_freq_limit`（默认 `1500`）对应 Windows 
 - `tiger_sentence_allow_duplicate_single` 开关（默认开，即“允许单字重码组句”）
   开启时，多段整句路径中的非首选单字按语言模型分数参与竞争，可以成为可见
   首选；非首选多字词在任何切分路径中仍必须显式选重。开关关闭时，切分路径
-  只取各段首选。单独输入一个完整编码时始终保持码表首选在前。
+  只取各段首选。单独输入一个完整编码的基础排序保持码表首选在前；明确的 Tab
+  学习偏好可以改变合法候选的最终次序。
 - 分段空格只用于显示，不进入 raw code。
 
 码表默认过滤与 Windows Core 相同：`高频字仅使用最优码组句`

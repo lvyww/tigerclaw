@@ -1,6 +1,8 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 chcp 65001 >nul
+set "PUBLISH_NO_QWEN=0"
+if /I "%~1"=="--no-qwen" set "PUBLISH_NO_QWEN=1"
 
 echo ====================================
 echo Publish TigerClaw (Release)
@@ -263,9 +265,9 @@ for %%F in (Overlay-THIRD-PARTY-NOTICES.txt sounds\KeyNormal.wav sounds\KeySpace
 call :RequireFile "%DIALOG_OUT%\TigerClaw.Dialog.exe" "TigerClaw.Dialog.exe" || exit /b 1
 call :RequireFile "%SENTENCE_OUT%\TigerClaw.Sentence.exe" "TigerClaw.Sentence.exe" || exit /b 1
 call :RequireFile "%SENTENCE_NGRAM_MODEL%" "sentence n-gram model" || exit /b 1
-call :RequireFile "%SENTENCE_QWEN_MODEL%" "Qwen Q8 model" || exit /b 1
+if "%PUBLISH_NO_QWEN%"=="0" call :RequireFile "%SENTENCE_QWEN_MODEL%" "Qwen Q8 model" || exit /b 1
 call :RequireFile "%ROOT%\third_party\llama.cpp\LICENSE" "llama.cpp license" || exit /b 1
-call :RequireFile "%SENTENCE_QWEN_LICENSE%" "Qwen license" || exit /b 1
+if "%PUBLISH_NO_QWEN%"=="0" call :RequireFile "%SENTENCE_QWEN_LICENSE%" "Qwen license" || exit /b 1
 call :RequireFile "%HOOK_NATIVE_OUT%\TigerClaw.Hook.Native.exe" "TigerClaw.Hook.Native.exe" || exit /b 1
 call :RequireFile "%TSF_X64_DLL%" "TigerClaw.dll x64" || exit /b 1
 call :RequireFile "%TSF_X86_DLL%" "TigerClaw.dll Win32" || exit /b 1
@@ -301,10 +303,10 @@ if exist "%RELEASE_SENTENCE%\Models\sentence-vocabulary.json" del /q "%RELEASE_S
 if exist "%RELEASE_SENTENCE%\Models\sentence-transformer.tcmodel" del /q "%RELEASE_SENTENCE%\Models\sentence-transformer.tcmodel"
 if exist "%RELEASE_SENTENCE%\Models\sentence-vocabulary.tcmodel" del /q "%RELEASE_SENTENCE%\Models\sentence-vocabulary.tcmodel"
 if exist "%RELEASE_SENTENCE%\Models\sentence-transformer.json" del /q "%RELEASE_SENTENCE%\Models\sentence-transformer.json"
-call :CopyFileStrict "%SENTENCE_QWEN_MODEL%" "%RELEASE_SENTENCE%\Models\sentence-qwen-q8.gguf" || exit /b 1
+if "%PUBLISH_NO_QWEN%"=="0" call :CopyFileStrict "%SENTENCE_QWEN_MODEL%" "%RELEASE_SENTENCE%\Models\sentence-qwen-q8.gguf" || exit /b 1
 call :CopyFileStrict "%SENTENCE_NGRAM_MODEL%" "%RELEASE_MODELS%\sentence-ngram-v2.bin" || exit /b 1
 call :CopyFileStrict "%ROOT%\third_party\llama.cpp\LICENSE" "%RELEASE_SENTENCE%\licenses\llama.cpp-LICENSE.txt" || exit /b 1
-call :CopyFileStrict "%SENTENCE_QWEN_LICENSE%" "%RELEASE_SENTENCE%\licenses\Qwen3-LICENSE.txt" || exit /b 1
+if "%PUBLISH_NO_QWEN%"=="0" call :CopyFileStrict "%SENTENCE_QWEN_LICENSE%" "%RELEASE_SENTENCE%\licenses\Qwen3-LICENSE.txt" || exit /b 1
 
 call :CopyFileStrict "%HOOK_NATIVE_OUT%\TigerClaw.Hook.Native.exe" "%RELEASE_DIR%\TigerClaw.exe" || exit /b 1
 if exist "%HOOK_NATIVE_OUT%\TigerClaw.Hook.Native.pdb" del /q "%RELEASE_DIR%\TigerClaw.pdb" >nul 2>&1
@@ -325,7 +327,9 @@ if exist "%RELEASE_DIR%\uninstall.bat" del /q "%RELEASE_DIR%\uninstall.bat" >nul
 
 echo.
 echo [12/13] Package release archive
-call "%PACK_SCRIPT%" "%BUILD_VERSION_LABEL%"
+set "PACK_MODEL_OPTION="
+if "%PUBLISH_NO_QWEN%"=="1" set "PACK_MODEL_OPTION=--no-qwen"
+call "%PACK_SCRIPT%" "%BUILD_VERSION_LABEL%" %PACK_MODEL_OPTION%
 if errorlevel 1 (
     echo ERROR: Release packaging failed.
     exit /b 1

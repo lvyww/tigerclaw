@@ -1,0 +1,151 @@
+-- Run in the isolated public-pack layout. Production decoder and processor,
+-- with a small host/LevelDb fake; never touches an installed input method.
+local repo = arg[1] or "."
+package.path = repo .. "/lua/?.lua;" .. package.path
+rime_api = {get_user_data_dir=function() return repo end}
+local databases = {}
+local writes, fail_write = 0, false
+LevelDb = function(name)
+    local data = databases[name] or {}; databases[name] = data
+    return {
+        open=function() return true end, close=function() end,
+        query=function() return {iter=function()
+            local keys, n = {}, 0
+            for k in pairs(data) do keys[#keys+1]=k end
+            table.sort(keys)
+            return function() n=n+1; local k=keys[n]; if k then return k,data[k] end end
+        end} end,
+        update=function(_, k, v) if fail_write then return false end; writes=writes+1; data[k]=v; return true end
+    }
+end
+local sentence = require("tiger_sentence")
+local learning = sentence.learning
+sentence.set_model_enabled(false)
+sentence.ensure_lexicon(nil)
+local checks = 0
+local function check(ok, name) checks=checks+1; assert(ok, name) end
+local now = os.time()
+local function event(code, text, ctx, mode)
+    return {time=now, mode=mode or "test", code=code, text=text, context=ctx or ""}
+end
+local index = learning.build({event("ab", "疒")}, now)
+check(learning.score(index,"test","ab","疒","")==6, "first correction six")
+check(learning.score(index,"test","ab","疒","甲")==0, "single character context isolation")
+check(learning.score(index,"other","ab","疒","")==0, "mode isolation")
+check(learning.score(learning.build({event("ab","疒")},now+30*86400),"test","ab","疒","")==3,"half life")
+local events={event("ab","甲乙","前"),event("ab","甲乙","后"),event("ab","甲乙","后")}
+check(learning.score(learning.build(events,now),"test","ab","甲乙","新")==2,"weak multi-character generalization")
+events[#events+1]=event("ab","甲丙","后")
+check(learning.score(learning.build(events,now),"test","ab","甲乙","后")==3,"competitor decay")
+local before={text="甲乙",path={raw_length=4,text_length=6,previous={raw_length=2,text_length=3}}}
+local selected={text="甲丙",path=before.path}
+local diff=learning.diff("ABcd",before,selected,0,"test")
+check(#diff==1 and diff[1].code=="cd" and diff[1].context=="甲","shared-boundary correction")
+check(#learning.diff("abcd",before,selected,4,"test")==0,"locked boundary floor")
+check(learning.context("甲乙😀")=="乙😀","unicode scalar context")
+local pressure={}
+for i=1,10000 do pressure[i]=event("abcd","甲"..tostring(i),tostring(i%10)) end
+local indexed=learning.build(pressure,now)
+for i=1,10000 do check(learning.prefix_score(indexed,"test","ab","甲",tostring(i%10))>0,"indexed prefix pressure") end
+
+sentence.set_learning_for_test(index,"test")
+local result=sentence.decode("ab",true)
+check(result[1].text=="疒" and result.learning_affected,"learning ranks a legal whole edge")
+check(#result.early_commit_evidence.prefixes==0,"learning cannot create confidence")
+check(sentence.capture_empty_code_candidate("ab","")==nil,"learning cannot create empty-code proof")
+local full=sentence.decode_full("ab",true)
+check(result[1].score==full[1].score,"learned incremental full parity")
+sentence.set_learning_for_test(nil,"")
+check(sentence.decode("ab")[1].text=="交","disable restores base ranking")
+
+local function key(repr)
+    return {repr=function()return repr end,release=function()return false end,
+        ctrl=function()return false end,alt=function()return false end,
+        super=function()return false end,shift=function()return false end}
+end
+local function host(name, early)
+    local properties, listeners, commits = {}, {}, {}
+    local context = {input="",caret_pos=0}
+    local segment = {selected_index=0}
+    segment.menu = {prepare=function(_,n)return math.min(n,#sentence.decode(context.input)) end,
+        candidate_count=function()return #sentence.decode(context.input)end}
+    context.composition = {empty=function()return context.input=="" end,back=function()return segment end}
+    function context:get_property(k)return properties[k] or ""end
+    function context:set_property(k,v)properties[k]=v end
+    function context:get_option(k)return k=="tiger_sentence_allow_duplicate_single" or (k=="tiger_sentence_early_commit" and early)end
+    function context:is_composing()return self.input~=""end
+    function context:has_menu()return self:is_composing()end
+    function context:clear()self.input="";self.caret_pos=0;segment.selected_index=0 end
+    function context:push_input(ch)self.input=self.input..ch;self.caret_pos=#self.input;segment.selected_index=0 end
+    function context:highlight(i)segment.selected_index=i;return true end
+    function context:get_commit_text()return self.actual or ""end
+    function context:confirm_current_selection()
+        self.actual=sentence.decode(self.input)[segment.selected_index+1].text
+        if self.transform then self.actual=self.actual.."x"end
+        commits[#commits+1]=self.actual
+        for _,f in pairs(listeners)do f(self)end
+        if self.repeat_notification then for _,f in pairs(listeners)do f(self)end end
+        self:clear();return true
+    end
+    context.commit_notifier={connect=function(_,f)
+        listeners[#listeners+1]=f;local i=#listeners
+        return {disconnect=function()listeners[i]=nil end}
+    end}
+    local config={enabled=true,get_int=function()return nil end}
+    function config:get_bool()return self.enabled end
+    local env={engine={context=context,schema={schema_id=name,config=config},
+        commit_text=function(_,text)commits[#commits+1]=text end}}
+    local function press(repr)return sentence.processor(key(repr),env)end
+    local function type_ot()press("a");press("b")end
+    return env,context,press,type_ot,commits,config
+end
+local env,ctx,press,type_ot,commits,config=host("learning-test",false)
+type_ot();press("Tab");press("Escape")
+check(writes==0,"cancel is not a correction")
+type_ot();press("Down");press("space")
+check(writes==0,"navigation without Tab does not learn")
+type_ot();press("Tab");ctx.transform=true;press("space");ctx.transform=false
+check(writes==0,"transformed commit does not learn")
+type_ot();press("Tab");press("space")
+check(writes==1 and commits[#commits]=="疒","host submission learns once")
+type_ot();check(sentence.decode("ab")[1].text=="疒","next composition uses learning")
+press("space");check(writes==1,"ordinary learned first choice is not reinforced")
+config.enabled=false;type_ot()
+check(sentence.decode("ab")[1].text=="交","schema setting disables scoring")
+press("Escape");config.enabled=true;type_ot()
+check(sentence.decode("ab")[1].text=="疒","reenable retains preferences")
+press("Escape")
+sentence.processor_component.fini(env)
+local other,_,other_press,other_type=host("other-schema",false)
+other_type();check(sentence.decode("ab")[1].text=="交","schemas do not share records")
+other_press("Tab");fail_write=true;other_press("space");fail_write=false
+other_type();check(sentence.decode("ab")[1].text=="交","failed persistence does not publish score")
+other_press("Escape");sentence.processor_component.fini(other)
+local lock_env,lock_ctx,lock_press,lock_type=host("lock-schema",true)
+lock_type();lock_press("Tab");local previous=writes;lock_press("a")
+check(writes==previous+1,"Tab next letter submission learns")
+check(lock_ctx.input=="a","Tab learning keeps live raw suffix")
+sentence.processor_component.fini(lock_env)
+local reopened = dofile(repo.."/lua/tiger_sentence_learning.lua")
+local persisted = reopened.open("tiger_sentence_learning_"..learning.hash("learning-test"))
+check(persisted.count==1 and #persisted.events==1,"database restart loads one event")
+local saved=persisted.events[1]
+check(reopened.score(persisted.index,saved.mode,"ab","疒","")==6,"length-framed persistence round trip")
+check(not learning.confirm({db={update=function()error("must not write")end},count=10000}, {event("ab","乙")}),"bounded event history")
+local tap_env,tap_ctx,tap_press,tap_type,_,tap_config=host("tap-schema",false)
+local before_taps=writes
+tap_type();tap_ctx:highlight(0);tap_ctx:confirm_current_selection()
+check(writes==before_taps,"tapping first candidate does not reinforce")
+tap_type();tap_ctx:highlight(1);tap_ctx.transform=true;tap_ctx:confirm_current_selection();tap_ctx.transform=false
+check(writes==before_taps,"transformed tap is not learned")
+tap_type();tap_ctx:highlight(1);tap_ctx.repeat_notification=true;tap_ctx:confirm_current_selection()
+check(writes==before_taps+1,"non-first tap learns exactly once without Tab or space")
+tap_type();check(sentence.decode("ab")[1].text=="疒","tap changes next composition ranking")
+tap_ctx:highlight(0);tap_ctx:confirm_current_selection()
+check(writes==before_taps+1,"tapping learned first candidate does not reinforce")
+tap_config.enabled=false;tap_type();tap_ctx:highlight(1);tap_ctx:confirm_current_selection()
+check(writes==before_taps+1,"disabled learning ignores taps")
+tap_config.enabled=true;tap_type();tap_press("Tab");tap_ctx:confirm_current_selection()
+check(writes==before_taps+2,"Tab followed by tap records one correction")
+sentence.processor_component.fini(tap_env)
+print(string.format('{"status":"passed","learning_checks":%d,"real_frontend":false}',checks))

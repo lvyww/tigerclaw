@@ -320,8 +320,16 @@ remaining removed. `整句Tab自学习` defaults on; only corrected text acknowl
 as successfully committed by the updated TSF is learned. Journals stay in each
 schema source directory. Learning scores use immutable indexes; learned search
 results cannot supply automatic-commit confidence. Existing candidate-length Qwen
-weights remain in effect, with the learning reward added afterwards. Hook/Rime do
-not gain learning receipts from this Windows change. See `TAB_LEARNING.md` and
+weights remain in effect, with the learning reward added afterwards. Hook does
+not gain learning receipts from this Windows change. The Rime and Fcitx5 ports
+now share correction scoring, legal search retention and automatic-commit isolation;
+they learn after host submission, not a Windows TSF/application insertion receipt.
+Rime uses schema-scoped LevelDb and `tiger_sentence/tab_learning` (default on);
+Fcitx5 uses an asynchronous TCL1 journal and `TabLearning` (default on). Both
+settings also cover direct non-first candidate taps: compare against the current
+first path, do not reinforce first-choice taps, and consume each submission once.
+Rime's shared manual-confirm notification also covers keyboard selection. See each
+port README for persistence and acceptance limits. See `TAB_LEARNING.md` and
 `Protocol/messages.md`; tests include 10,000-record index pressure and score
 equivalence. Actual application commit acceptance remains separate from tests.
 
@@ -392,6 +400,15 @@ publish.bat
 publish_arm64.bat
 ```
 
+`publish_no_qwen.bat` runs the x64/Win32 release pipeline with `--no-qwen`:
+keeps the n-gram model, Sentence host and llama.cpp license, skips the external
+Qwen model/license requirement and copy, and produces `虎爪输入法-<版本>-no-qwen.7z`.
+Packaging excludes all GGUF files, including leftovers in an existing release;
+the source release model files are preserved. The normal package is unchanged.
+Users can obtain the model through the Dialog's neural-rerank setting guide.
+WSL packaging regression: `python3 tools/test_publish_no_qwen.py` (Windows 7-Zip
+required, isolated fixtures only).
+
 The main release is `release/`. Windows on ARM development output is
 `release_arm64/`; its default uses an ARM64X wrapper with ARM64 and x64 TSF
 sidecars. `--diagnostic` enables embedded TSF logging.
@@ -448,6 +465,9 @@ release tree. Keep `.bat` files CRLF.
 
 - `rime/tiger_sentence/`: standalone experimental Rime pack. Regenerate its
   plain-text data files with `python3 tools/export_tiger_sentence_rime.py`.
+  Keep Lua 5.5 compatibility: never assign to a `for` control variable; use a
+  separate local for converted values. Run `tools/run_regressions.py` with
+  Lua 5.5, Lua 5.4 and LuaJIT when changing the runtime module.
   The pack includes `symbols.yaml` as its directly-committing punctuation
   default; the schema imports that preset instead of Rime's `default` preset.
   The schema disables built-in `digit_separators` so punctuation after digits

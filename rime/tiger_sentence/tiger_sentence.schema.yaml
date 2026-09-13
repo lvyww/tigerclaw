@@ -57,6 +57,8 @@ menu:
   page_size: 5
 
 tiger_sentence:
+  # Learn submitted candidate corrections (direct taps and Tab selections).
+  tab_learning: true
   # 提前上屏与空码自动上屏共用的最短保留编码数；0 表示不额外限制。
   # 概率型提前上屏仍永远不少于 3。
   min_retained_raw_length: 0
