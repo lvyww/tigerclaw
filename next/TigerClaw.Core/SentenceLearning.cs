@@ -100,74 +100,160 @@ namespace TigerClaw.Core
         }
     }
 
-    // Immutable query snapshot. Automatic use never calls Build with a new
-    // event; only explicit Tab corrections acknowledged by TSF produce events.
+    // Immutable query snapshot. Replay/aggregation happens once on the store
+    // worker; candidate generation never scans events or context histories.
     internal sealed class SentenceLearningSnapshot
     {
-        internal static readonly SentenceLearningSnapshot Empty = Build(Array.Empty<SentenceLearningEvent>());
+        internal static readonly SentenceLearningSnapshot Empty = new();
+
         private sealed class Choice
         {
-            public string Mode, Text, Context;
-            public double Weight;
-            public int Count;
-            public long Time;
+            internal double Weight;
+            internal int Count;
+            internal long Time;
         }
-        private readonly Dictionary<string, List<Choice>> _byCode = new(StringComparer.Ordinal);
+
+        private sealed class Scores
+        {
+            internal readonly Dictionary<string, double> Exact = new(StringComparer.Ordinal);
+            internal double General;
+
+            internal double ForContext(string context) =>
+                Exact.TryGetValue(context, out double exact) ? Math.Max(exact, General) : General;
+
+            // max_t(max(exact_t[context], general_t)) can be pre-aggregated
+            // independently for each context and for the general score.
+            internal void Include(Scores other)
+            {
+                General = Math.Max(General, other.General);
+                foreach (var entry in other.Exact)
+                {
+                    if (!Exact.TryGetValue(entry.Key, out double previous) || entry.Value > previous)
+                        Exact[entry.Key] = entry.Value;
+                }
+            }
+        }
+
+        private sealed class Summary
+        {
+            internal readonly Scores Scores = new();
+            internal double Weight;
+            internal int Count, KnownContexts;
+        }
+
+        private sealed class ModeIndex
+        {
+            internal readonly Dictionary<string, Scores> Texts = new(StringComparer.Ordinal);
+            internal readonly Dictionary<string, Scores> Prefixes = new(StringComparer.Ordinal);
+        }
+
+        private readonly Dictionary<string, Dictionary<string, ModeIndex>> _byCode = new(StringComparer.Ordinal);
         private string[] _codes = Array.Empty<string>();
         internal bool IsEmpty => _byCode.Count == 0;
+
         internal static SentenceLearningSnapshot Build(IEnumerable<SentenceLearningEvent> events, long? at = null)
         {
             long now = at ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            var snapshot = new SentenceLearningSnapshot();
+            // Competitors share code, mode AND context. Unrelated contexts no
+            // longer make journal replay quadratic for the same code/text.
+            var groups = new Dictionary<(string Code, string Mode, string Context), Dictionary<string, Choice>>();
             foreach (var e in events)
             {
                 if (e.Mode.Length == 0 || e.Mode.Length > 512 || e.Code.Length == 0 || e.Code.Length > 128 || !SentenceLearning.StaticText(e.Text) ||
                     (e.Context.Length > 0 && SentenceLearning.Characters(e.Context) == 0) || SentenceLearning.Characters(e.Context) > 2) continue;
-                if (!snapshot._byCode.TryGetValue(e.Code, out var choices)) snapshot._byCode[e.Code] = choices = new();
-                Choice target = null; long time = Math.Min(now, e.Time);
-                foreach (var c in choices)
+                var key = (e.Code, e.Mode, e.Context);
+                if (!groups.TryGetValue(key, out var choices))
+                    groups[key] = choices = new(StringComparer.Ordinal);
+                long time = Math.Min(now, e.Time);
+                foreach (var entry in choices)
                 {
-                    if (c.Mode != e.Mode || c.Context != e.Context) continue;
-                    c.Weight *= Math.Pow(2, -Math.Max(0, time - c.Time) / (30.0 * 86400)); c.Time = Math.Max(c.Time, time);
-                    if (c.Text == e.Text) target = c; else c.Weight *= 0.25;
+                    var c = entry.Value;
+                    c.Weight *= Math.Pow(2, -Math.Max(0, time - c.Time) / (30.0 * 86400));
+                    c.Time = Math.Max(c.Time, time);
+                    if (entry.Key != e.Text) c.Weight *= 0.25;
                 }
-                if (target == null) { target = new Choice { Mode = e.Mode, Text = e.Text, Context = e.Context, Time = time }; choices.Add(target); }
-                target.Weight = Math.Min(3, target.Weight + 1); target.Count = Math.Min(3, target.Count + 1);
+                if (!choices.TryGetValue(e.Text, out var target))
+                    choices[e.Text] = target = new Choice { Time = time };
+                target.Weight = Math.Min(3, target.Weight + 1);
+                target.Count = Math.Min(3, target.Count + 1);
             }
-            foreach (var choices in snapshot._byCode.Values) foreach (var c in choices)
-                c.Weight *= Math.Pow(2, -Math.Max(0, now - c.Time) / (30.0 * 86400));
+            if (groups.Count == 0) return Empty;
+
+            var summaries = new Dictionary<(string Code, string Mode, string Text), Summary>();
+            foreach (var group in groups)
+            {
+                foreach (var entry in group.Value)
+                {
+                    var c = entry.Value;
+                    double weight = c.Weight * Math.Pow(2, -Math.Max(0, now - c.Time) / (30.0 * 86400));
+                    var key = (group.Key.Code, group.Key.Mode, entry.Key);
+                    if (!summaries.TryGetValue(key, out var summary)) summaries[key] = summary = new();
+                    summary.Scores.Exact[group.Key.Context] = Math.Min(10, 6 * Math.Min(1, weight) + 2 * Math.Max(0, weight - 1));
+                    summary.Weight += weight;
+                    summary.Count = Math.Min(3, summary.Count + c.Count);
+                    // A context occurs once per summary. Empty is unknown, not
+                    // sentence-start evidence; expired weak contexts do not count.
+                    if (group.Key.Context.Length > 0 && weight >= 0.1) summary.KnownContexts++;
+                }
+            }
+
+            var snapshot = new SentenceLearningSnapshot();
+            foreach (var entry in summaries)
+            {
+                var summary = entry.Value;
+                summary.Scores.General = SentenceLearning.Characters(entry.Key.Text) > 1 && summary.Count >= 3 && summary.KnownContexts >= 2
+                    ? 2 * Math.Min(1, summary.Weight / 3) : 0;
+                if (!snapshot._byCode.TryGetValue(entry.Key.Code, out var modes))
+                    snapshot._byCode[entry.Key.Code] = modes = new(StringComparer.Ordinal);
+                if (!modes.TryGetValue(entry.Key.Mode, out var index)) modes[entry.Key.Mode] = index = new();
+                index.Texts.Add(entry.Key.Text, summary.Scores);
+            }
+            foreach (var modes in snapshot._byCode.Values)
+            {
+                foreach (var index in modes.Values)
+                {
+                    foreach (var entry in index.Texts)
+                    {
+                        // Only proper text prefixes: exact text is NOT a hint.
+                        // UTF-16 prefixes preserve the previous ordinal contract.
+                        // StaticText bounds this to at most 31 prefixes per text.
+                        for (int length = 1; length < entry.Key.Length; length++)
+                        {
+                            string prefix = entry.Key.Substring(0, length);
+                            if (!index.Prefixes.TryGetValue(prefix, out var scores)) index.Prefixes[prefix] = scores = new();
+                            scores.Include(entry.Value);
+                        }
+                    }
+                }
+            }
             snapshot._codes = snapshot._byCode.Keys.OrderBy(s => s, StringComparer.Ordinal).ToArray();
             return snapshot;
         }
+
         internal double PrefixScore(string mode, string code, string text, string context)
         {
             if (code.Length == 0 || text.Length == 0) return 0;
-            int first = Array.BinarySearch(_codes, code, StringComparer.Ordinal); if (first < 0) first = ~first;
+            int first = Array.BinarySearch(_codes, code, StringComparer.Ordinal);
+            if (first < 0) first = ~first;
             double score = 0;
-            for (int i = first; i < _codes.Length && i < first + 64; i++)
+            // Preserve the original 64 CODE ROW limit, including rows skipped
+            // for mode or equal-code length. Each row uses only indexed lookups,
+            // independent of the number of matching texts or contexts.
+            for (int i = first; i < _codes.Length && i - first < 64; i++)
             {
-                string full = _codes[i]; if (!full.StartsWith(code, StringComparison.Ordinal)) break;
+                string full = _codes[i];
+                if (!full.StartsWith(code, StringComparison.Ordinal)) break;
                 if (full.Length <= code.Length) continue;
-                foreach (var c in _byCode[full])
-                    if (c.Mode == mode && c.Text.Length > text.Length && c.Text.StartsWith(text, StringComparison.Ordinal))
-                        score = Math.Max(score, Score(mode, full, c.Text, context));
+                if (_byCode[full].TryGetValue(mode, out var index) && index.Prefixes.TryGetValue(text, out var scores))
+                    score = Math.Max(score, scores.ForContext(context));
             }
             return score;
         }
+
         internal double Score(string mode, string code, string text, string context)
         {
-            if (!_byCode.TryGetValue(code, out var choices)) return 0;
-            double exact = 0, aggregate = 0; int count = 0;
-            var contexts = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var c in choices)
-            {
-                if (c.Mode != mode || c.Text != text) continue;
-                if (c.Context == context) exact = Math.Min(10, 6 * Math.Min(1, c.Weight) + 2 * Math.Max(0, c.Weight - 1));
-                aggregate += c.Weight; count += c.Count;
-                if (c.Context.Length > 0 && c.Weight >= 0.1) contexts.Add(c.Context);
-            }
-            double general = SentenceLearning.Characters(text) > 1 && count >= 3 && contexts.Count >= 2 ? 2 * Math.Min(1, aggregate / 3) : 0;
-            return Math.Max(exact, general);
+            return _byCode.TryGetValue(code, out var modes) && modes.TryGetValue(mode, out var index) && index.Texts.TryGetValue(text, out var scores)
+                ? scores.ForContext(context) : 0;
         }
     }
 }
