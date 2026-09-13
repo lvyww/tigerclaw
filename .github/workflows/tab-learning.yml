@@ -34,6 +34,11 @@ jobs:
         run: |
           dotnet publish next/TigerClaw.Core -c Release -r win-x64 --output "$env:RUNNER_TEMP/learning-core"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Compile settings dialog including the learning switch
+        shell: pwsh
+        run: |
+          dotnet build next/TigerClaw.Dialog/TigerClaw.Dialog.csproj -c Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
   bridge:
     name: TSF receipt bridge ${{ matrix.platform }}
     runs-on: windows-2025
