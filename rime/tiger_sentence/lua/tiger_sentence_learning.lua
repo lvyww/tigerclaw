@@ -65,7 +65,9 @@ function M.build(events, now)
                 if text ~= e.text then c.weight = c.weight * 0.25 end
             end
             local c = group.choices[e.text] or {weight=0, count=0, time=time}
-            c.weight, c.count = math.min(3, c.weight + 1), math.min(3, c.count + 1)
+            -- One confirmation equals supplement weight 1000. Cap accumulated
+            -- weight where 9 + 2*ln(weight/1000) reaches the shared score cap.
+            c.weight, c.count = math.min(math.exp(3.5), c.weight + 1), math.min(3, c.count + 1)
             group.choices[e.text] = c
         end
     end
@@ -76,7 +78,7 @@ function M.build(events, now)
             local s = summaries[k] or {code=g.code, mode=g.mode, text=text, exact={}, weight=0, count=0, contexts=0}
             summaries[k] = s
             local weight = c.weight * 2 ^ (-math.max(0, now - c.time) / (30 * 86400))
-            s.exact[g.context] = math.min(10, 6 * math.min(1, weight) + 2 * math.max(0, weight - 1))
+            s.exact[g.context] = math.max(0, math.min(16, 9 + 2 * math.log(math.max(0.001, weight))))
             s.weight, s.count = s.weight + weight, math.min(3, s.count + c.count)
             if g.context ~= "" and weight >= 0.1 then s.contexts = s.contexts + 1 end
         end

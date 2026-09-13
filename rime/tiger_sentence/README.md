@@ -56,7 +56,9 @@ Tab/Shift+Tab 改选后，空格提交，
 会保守地丢弃尚未提交的学习记录。输出转换后的文字与原候选不一致时也不学习。
 
 按共同编码边界提取最多 16 个 Unicode 字符，前文只取当前组合中的最后两字。
-首次纠正加 6 分，累计封顶 10，30 天半衰期；单字不跨前文泛化。学习参与合法
+每次纠正累计相当于补充语料权重 1000，使用同一公式
+`clamp(9 + 2 * ln(weight / 1000), 0, 16)`：首次 9 分、两次约 10.386 分，上限 16。
+累计权重按 30 天半衰期衰减，竞争纠正仍会衰减旧偏好；单字不跨前文泛化。学习参与合法
 搜索路径的保留，每个位置最多额外保留四条未完成学习路径。受学习影响的结果
 不能作为概率性或空码自动上屏证据，用户主动 Tab 确认仍可提交。
 
@@ -76,6 +78,22 @@ Rime 的 `commit_notifier`/`commit_text` 只能表示宿主提交，不能证明
 Lua 5.4、LuaJIT 的测试覆盖取消、输出转换、失败写入、开关、方案隔离、持久化和
 10,000 条评分索引，以及直接点选、首选不强化、重复通知和 Tab 后点选不重复计数；
 这些测试不替代手机或真实应用输入验收。
+
+真实 librime/librime-lua 回归使用生产码表和 mobile 模型，通过点选及 Tab/空格
+两次纠正 `zhhbi` 为“虎娘”后应成为首选，并检查引擎重启后仍生效。
+旧版 10 分封顶无法跨过“其父”与“虎娘”约 10.083 分的差距，数据库有记录也不会换首选。
+现有学习记录自动按新规则重算，无需删除数据库。测试入口：
+`tools/test_rime_learning_integration.py`，探针源码 `tools/rime_learning_probe.cpp`。
+
+在有 librime 开发包和 librime-lua 的 Linux 环境，从开发仓库根目录运行：
+
+```sh
+g++ -std=c++17 tools/rime_learning_probe.cpp -lrime -ldl -o /tmp/rime-learning-probe
+python3 tools/test_rime_learning_integration.py --exe /tmp/rime-learning-probe \
+  --plugin /usr/lib64/rime-plugins/librime-lua.so --model /path/to/sentence-ngram-mobile.bin
+```
+
+插件路径按发行版调整；测试使用自己的临时用户目录，不修改已安装的输入法。
 
 码表数据全部是明文 txt，由 Lua 在首次使用时加载并建索引（与 Windows Core 的
 `SentenceLexiconIndex.Build` 同语义：行序=名次、最优码选择、高频过滤、

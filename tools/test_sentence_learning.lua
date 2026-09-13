@@ -29,14 +29,20 @@ local function event(code, text, ctx, mode)
     return {time=now, mode=mode or "test", code=code, text=text, context=ctx or ""}
 end
 local index = learning.build({event("ab", "疒")}, now)
-check(learning.score(index,"test","ab","疒","")==6, "first correction six")
+check(learning.score(index,"test","ab","疒","")==9, "first correction equals supplement weight 1000")
 check(learning.score(index,"test","ab","疒","甲")==0, "single character context isolation")
 check(learning.score(index,"other","ab","疒","")==0, "mode isolation")
-check(learning.score(learning.build({event("ab","疒")},now+30*86400),"test","ab","疒","")==3,"half life")
+check(math.abs(learning.score(learning.build({event("ab","疒")},now+30*86400),"test","ab","疒","")-(9+2*math.log(0.5)))<1e-9,"weight half life")
+local repeated={}
+for i=1,40 do
+    repeated[#repeated+1]=event("ab","疒")
+    check(math.abs(learning.score(learning.build(repeated,now),"test","ab","疒","")-math.min(16,9+2*math.log(i)))<1e-9,
+        "repeated corrections equal supplement weights, bounded at sixteen")
+end
 local events={event("ab","甲乙","前"),event("ab","甲乙","后"),event("ab","甲乙","后")}
 check(learning.score(learning.build(events,now),"test","ab","甲乙","新")==2,"weak multi-character generalization")
 events[#events+1]=event("ab","甲丙","后")
-check(learning.score(learning.build(events,now),"test","ab","甲乙","后")==3,"competitor decay")
+check(math.abs(learning.score(learning.build(events,now),"test","ab","甲乙","后")-(9+2*math.log(0.5)))<1e-9,"competitor weight decay")
 local before={text="甲乙",path={raw_length=4,text_length=6,previous={raw_length=2,text_length=3}}}
 local selected={text="甲丙",path=before.path}
 local diff=learning.diff("ABcd",before,selected,0,"test")
@@ -130,7 +136,7 @@ local reopened = dofile(repo.."/lua/tiger_sentence_learning.lua")
 local persisted = reopened.open("tiger_sentence_learning_"..learning.hash("learning-test"))
 check(persisted.count==1 and #persisted.events==1,"database restart loads one event")
 local saved=persisted.events[1]
-check(reopened.score(persisted.index,saved.mode,"ab","疒","")==6,"length-framed persistence round trip")
+check(reopened.score(persisted.index,saved.mode,"ab","疒","")==9,"length-framed persistence round trip")
 check(not learning.confirm({db={update=function()error("must not write")end},count=10000}, {event("ab","乙")}),"bounded event history")
 local tap_env,tap_ctx,tap_press,tap_type,_,tap_config=host("tap-schema",false)
 local before_taps=writes
