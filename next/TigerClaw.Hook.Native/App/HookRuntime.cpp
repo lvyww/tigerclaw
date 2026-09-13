@@ -86,31 +86,6 @@ namespace TigerClawHookNative
         CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
         _threadId = GetCurrentThreadId();
         _exitEvent = CreateEventW(nullptr, TRUE, FALSE, HookNativeExitEventName);
-        bool trialExpired = false;
-        std::wstring trialExpireUtc;
-        if (_startupIntegrity.IsTrialExpiredNow(trialExpired, trialExpireUtc))
-        {
-            std::wstringstream trialStream;
-            trialStream << L"trial expire_utc=" << trialExpireUtc
-                        << L" expired=" << (trialExpired ? L"true" : L"false");
-            Logger::Info(L"trial", trialStream.str());
-            if (trialExpired)
-            {
-                Logger::Info(L"runtime", L"native hook startup blocked by embedded trial expiry");
-                if (_exitEvent != nullptr)
-                {
-                    CloseHandle(_exitEvent);
-                    _exitEvent = nullptr;
-                }
-                CoUninitialize();
-                return 0;
-            }
-        }
-        else
-        {
-            Logger::Info(L"trial", std::wstring(L"trial expire utc unavailable: ") + trialExpireUtc);
-        }
-
         _startupKeyboardLayout = GetForegroundKeyboardLayout();
         _startupKeyboardLayoutCaptured = (_startupKeyboardLayout != nullptr);
         if (_startupKeyboardLayoutCaptured && !IsEnglishKeyboardLayout(_startupKeyboardLayout))
@@ -123,11 +98,8 @@ namespace TigerClawHookNative
         if (!_pipeClient.TryHello(helloResponse, error))
         {
             Logger::Info(L"core", std::wstring(L"hello failed: ") + error);
-            if (!_pipeClient.IsCommunicationBlocked())
-            {
-                _coreLaunchHelper.TryLaunchCoreIfNeeded(L"hello failed");
-                InterlockedExchange(&_pendingHelloRetry, 1);
-            }
+            _coreLaunchHelper.TryLaunchCoreIfNeeded(L"hello failed");
+            InterlockedExchange(&_pendingHelloRetry, 1);
         }
         else if (helloResponse.EnsureSystemLayoutEn)
         {
@@ -250,10 +222,7 @@ namespace TigerClawHookNative
             else
             {
                 Logger::Info(L"core", std::wstring(L"hello retry failed: ") + helloError);
-                if (!_pipeClient.IsCommunicationBlocked())
-                {
-                    InterlockedExchange(&_pendingHelloRetry, 1);
-                }
+                InterlockedExchange(&_pendingHelloRetry, 1);
             }
         }
 
@@ -661,10 +630,7 @@ namespace TigerClawHookNative
         if (!_pipeClient.TrySendPreparedKey(pending.Request, focus, response, error))
         {
             Logger::Info(L"core", std::wstring(L"key request failed: ") + error);
-            if (!_pipeClient.IsCommunicationBlocked())
-            {
-                _coreLaunchHelper.TryLaunchCoreIfNeeded(L"key request failed");
-            }
+            _coreLaunchHelper.TryLaunchCoreIfNeeded(L"key request failed");
             _pendingKeys.push_back(pending);
             return true;
         }

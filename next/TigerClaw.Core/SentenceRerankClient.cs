@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.IO.Pipes;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -26,155 +27,120 @@ namespace TigerClaw.Core
 
     internal sealed partial class SentenceRerankClient : ISentenceRerankService
     {
-        private readonly object _lock = new object();
         private readonly CoreRuntimeState _state;
         private readonly ProcessLauncher _launcher;
-        private readonly Action<long, string, double[]> _resultCallback;
-        private readonly Thread _worker;
-        private SentenceRerankRequest _pending;
-        private bool _stopping;
+        private readonly SentenceServiceLifecycle _lifecycle;
         private long _seq;
 
-        public SentenceRerankClient(
-            CoreRuntimeState state,
-            ProcessLauncher launcher,
+        public SentenceRerankClient(CoreRuntimeState state, ProcessLauncher launcher,
             Action<long, string, double[]> resultCallback)
         {
             _state = state ?? throw new ArgumentNullException(nameof(state));
             _launcher = launcher ?? throw new ArgumentNullException(nameof(launcher));
-            _resultCallback = resultCallback;
-            _worker = new Thread(WorkerMain)
-            {
-                IsBackground = true,
-                Name = "TigerClaw sentence reranker"
-            };
-            _worker.Start();
+            _lifecycle = new SentenceServiceLifecycle(Preload, Release, Score, resultCallback);
+            RefreshConfiguration();
         }
+
+        internal void RefreshConfiguration()
+        {
+            _lifecycle.SetEnabled(IsEligible(_state));
+        }
+
+        internal static bool IsEligible(CoreRuntimeState state) =>
+            state.IsSentenceInputActive() && state.GetSentenceNeuralRerankEnabled();
 
         public void Request(SentenceRerankRequest request)
         {
-            if (request?.Candidates == null || request.Candidates.Length == 0 ||
-                !_state.IsSentenceInputActive() || !_state.GetSentenceNeuralRerankEnabled())
-            {
-                return;
-            }
-
-            lock (_lock)
-            {
-                if (_stopping)
-                {
-                    return;
-                }
-
-                _pending = request;
-                Monitor.PulseAll(_lock);
-            }
+            RefreshConfiguration();
+            if (request?.Candidates == null || request.Candidates.Length == 0) return;
+            _lifecycle.Request(request);
         }
 
         public void Dispose()
         {
-            lock (_lock)
-            {
-                _stopping = true;
-                _pending = null;
-                Monitor.PulseAll(_lock);
-            }
-
-            if (_worker.IsAlive)
-            {
-                _worker.Join(1500);
-            }
+            _lifecycle.Dispose();
         }
 
-        private void WorkerMain()
+        private bool EnsureStarted(CancellationToken token)
         {
-            while (true)
-            {
-                SentenceRerankRequest request;
-                lock (_lock)
-                {
-                    while (!_stopping && _pending == null)
-                    {
-                        Monitor.Wait(_lock);
-                    }
-
-                    if (_stopping)
-                    {
-                        return;
-                    }
-
-                    request = _pending;
-                    _pending = null;
-                }
-
-                TryProcess(request);
-            }
+            token.ThrowIfCancellationRequested();
+            string modelPath = ResolveModelPath();
+            if (!File.Exists(modelPath)) return false;
+            string arguments = "--parent-pid " + Environment.ProcessId.ToString(CultureInfo.InvariantCulture) +
+                " --pipe " + QuoteArgument(RuntimeConstants.SentencePipeShortName) +
+                " --model " + QuoteArgument(modelPath);
+            return _launcher.TryLaunchSentence(arguments);
         }
 
-        private void TryProcess(SentenceRerankRequest request)
+        private void Preload(CancellationToken token)
         {
+            if (EnsureStarted(token))
+                Exchange(new SentencePipeRequest { Type = "hello" }, token, 10000);
+        }
+
+        private double[] Score(SentenceRerankRequest request, CancellationToken token)
+        {
+            if (!EnsureStarted(token)) return null;
+            var response = Exchange(new SentencePipeRequest
+            {
+                Type = "rerank", Generation = request.Generation,
+                RawCode = request.RawCode ?? string.Empty, Candidates = request.Candidates
+            }, token, 10000);
+            return response != null && response.Generation == request.Generation &&
+                string.Equals(response.RawCode, request.RawCode, StringComparison.Ordinal) &&
+                response.Scores?.Length == request.Candidates.Length ? response.Scores : null;
+        }
+
+        private void Release()
+        {
+            // Only the process started by this launcher is eligible for release.
+            if (!_launcher.HasOwnedSentence) return;
             try
             {
-                string modelPath = ResolveModelPath();
-                if (!File.Exists(modelPath))
-                {
-                    return;
-                }
-
-                string arguments =
-                    "--parent-pid " + Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture) +
-                    " --pipe " + QuoteArgument(RuntimeConstants.SentencePipeShortName) +
-                    " --model " + QuoteArgument(modelPath);
-                if (!_launcher.TryLaunchSentence(arguments))
-                {
-                    return;
-                }
-
-                using (var pipe = new NamedPipeClientStream(
-                    ".",
-                    RuntimeConstants.SentencePipeShortName,
-                    PipeDirection.InOut,
-                    PipeOptions.None))
-                {
-                    pipe.Connect(10000);
-                    using (var reader = new StreamReader(pipe, new UTF8Encoding(false), false, 4096, leaveOpen: true))
-                    using (var writer = new StreamWriter(pipe, new UTF8Encoding(false), 4096, leaveOpen: true)
-                    {
-                        AutoFlush = true,
-                        NewLine = "\n"
-                    })
-                    {
-                        long seq = Interlocked.Increment(ref _seq);
-                        var message = new SentencePipeRequest
-                        {
-                            Type = "rerank",
-                            Seq = seq,
-                            Generation = request.Generation,
-                            RawCode = request.RawCode ?? string.Empty,
-                            Candidates = request.Candidates
-                        };
-                        writer.WriteLine(Serialize(message));
-                        Task<string> readTask = Task.Factory.StartNew(reader.ReadLine);
-                        if (!readTask.Wait(TimeSpan.FromSeconds(5)))
-                        {
-                            return;
-                        }
-                        string line = readTask.Result;
-                        SentencePipeResponse response = DeserializeResponse(line);
-                        if (response != null && response.Success && response.Seq == seq &&
-                            response.Generation == request.Generation && response.Scores != null)
-                        {
-                            _resultCallback?.Invoke(response.Generation, response.RawCode, response.Scores);
-                        }
-                    }
-                }
+                Exchange(new SentencePipeRequest { Type = "shutdown" }, CancellationToken.None, 1000);
             }
-            catch (Exception ex)
+            catch (Exception error)
             {
-                // Neural reranking is optional. The n-gram order remains usable on every failure path.
-                Debug.WriteLine("[Sentence] rerank failed: " + ex.Message);
+                Debug.WriteLine("[Sentence] shutdown: " + error.Message);
             }
+            _launcher.StopOwnedSentence();
         }
+
+        private SentencePipeResponse Exchange(SentencePipeRequest request, CancellationToken token, int timeoutMs)
+        {
+            return ExchangeAsync(request, token, timeoutMs).GetAwaiter().GetResult();
+        }
+
+        private async Task<SentencePipeResponse> ExchangeAsync(
+            SentencePipeRequest request, CancellationToken token, int timeoutMs)
+        {
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
+            deadline.CancelAfter(timeoutMs);
+            using var pipe = new NamedPipeClientStream(".", RuntimeConstants.SentencePipeShortName,
+                PipeDirection.InOut, PipeOptions.Asynchronous);
+            await pipe.ConnectAsync(deadline.Token).ConfigureAwait(false);
+            // Preserve the existing scoring response budget after connection.
+            if (request.Type == "rerank") deadline.CancelAfter(5000);
+            if (request.Type == "shutdown" &&
+                (!GetNamedPipeServerProcessId(pipe.SafePipeHandle, out uint serverPid) ||
+                 serverPid != _launcher.OwnedSentenceId))
+            {
+                throw new IOException("Sentence shutdown pipe is not owned by this launcher");
+            }
+            using var reader = new StreamReader(pipe, new UTF8Encoding(false), false, 4096, leaveOpen: true);
+            using var writer = new StreamWriter(pipe, new UTF8Encoding(false), 4096, leaveOpen: true)
+                { AutoFlush = true, NewLine = "\n" };
+            request.Seq = Interlocked.Increment(ref _seq);
+            await writer.WriteLineAsync(Serialize(request).AsMemory(), deadline.Token).ConfigureAwait(false);
+            string line = await reader.ReadLineAsync(deadline.Token).ConfigureAwait(false);
+            var response = DeserializeResponse(line);
+            return response != null && response.Success && response.Seq == request.Seq ? response : null;
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool GetNamedPipeServerProcessId(
+            Microsoft.Win32.SafeHandles.SafePipeHandle pipe, out uint serverProcessId);
 
         private static string ResolveModelPath()
         {

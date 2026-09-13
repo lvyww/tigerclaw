@@ -4,7 +4,6 @@
 
 #include <string>
 
-#include "..\Common\CoreIntegrity.h"
 #include "..\Hook\KeyboardHook.h"
 #include "..\State\CaretSnapshot.h"
 #include "..\State\CoreResponse.h"
@@ -25,7 +24,6 @@ namespace TigerClawHookNative
         bool TrySendCaret(const CaretSnapshot& caret, std::wstring& error);
         bool TrySendCompositionCanceled(std::wstring& error);
         bool TrySendHookDisabled(bool disabled, std::wstring& error);
-        bool IsCommunicationBlocked() const;
         bool NeedsFocusSync() const { return _focusSyncRequired; }
         std::string PrepareKey(const KeyboardHookEvent& keyEvent, const HookState& state, const CaretSnapshot& caret);
         bool TrySendPreparedKey(const std::string& request, const FocusSnapshot& focus, CoreResponse& response, std::wstring& error);
@@ -55,11 +53,9 @@ namespace TigerClawHookNative
         static std::string ExtractJsonString(const std::string& json, const char* field);
         static bool ExtractJsonBool(const std::string& json, const char* field, bool fallback);
 
-        CoreIntegrity _coreIntegrity;
         HANDLE _requestPipe = INVALID_HANDLE_VALUE;
         HANDLE _notifyPipe = INVALID_HANDLE_VALUE;
         long _nextSeq = 1;
-        bool _communicationBlocked = false;
         bool _focusSyncRequired = true;
         std::string _clientSession;
         unsigned long long _nextEventId = 0;

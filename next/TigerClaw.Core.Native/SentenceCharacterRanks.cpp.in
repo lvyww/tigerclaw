@@ -1,0 +1,53 @@
+#include "SentenceCharacterRanks.h"
+#include "LexiconFile.h"
+#include <algorithm>
+#include <limits>
+#include <stdexcept>
+#include <unordered_map>
+
+namespace tiger::core
+{
+    SentenceCharacterRanks SentenceCharacterRanks::FromText(std::u16string_view text)
+    {
+        std::unordered_map<std::u16string, int> ranks;
+        for (std::size_t start = 0; start < text.size();)
+        {
+            auto end = text.find_first_of(u"\r\n", start);
+            if (end == std::u16string_view::npos) end = text.size();
+            auto line = TrimText(text.substr(start, end - start));
+            if (!line.empty() && line.front() != u'#')
+            {
+                if (ranks.size() >= static_cast<std::size_t>(std::numeric_limits<int>::max()))
+                    throw std::length_error("Too many sentence character ranks");
+                ranks.try_emplace(std::u16string(line), static_cast<int>(ranks.size() + 1));
+            }
+            start = end;
+            if (start < text.size() && text[start] == u'\r') ++start;
+            if (start < text.size() && text[start] == u'\n') ++start;
+        }
+        SentenceCharacterRanks result;
+        result._entries.reserve(ranks.size());
+        for (const auto& entry : ranks) result._entries.push_back(entry);
+        std::sort(result._entries.begin(), result._entries.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        return result;
+    }
+    const SentenceCharacterRanks& SentenceCharacterRanks::Default()
+    {
+        static constexpr std::uint8_t bytes[] = { @SENTENCE_RANK_BYTES@ };
+        static const SentenceCharacterRanks ranks = FromText(DecodeLexiconBytes(bytes, TextBomPolicy::StreamReader));
+        return ranks;
+    }
+    int SentenceCharacterRanks::GetRank(std::u16string_view text) const
+    {
+        auto found = std::lower_bound(_entries.begin(), _entries.end(), text,
+            [](const auto& entry, auto value) { return entry.first < value; });
+        return found != _entries.end() && found->first == text ? found->second : UnknownRank;
+    }
+    std::unordered_set<std::u16string> SentenceCharacterRanks::TakeTop(int count) const
+    {
+        std::unordered_set<std::u16string> result;
+        if (count <= 0) return result;
+        for (const auto& [text, rank] : _entries) if (rank <= count) result.insert(text);
+        return result;
+    }
+}

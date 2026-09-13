@@ -22,6 +22,34 @@ namespace TigerClaw.Core.Tests
         {
             try
             {
+                if (args.Length == 1 && args[0] == "--startup-context-tests")
+                {
+                    RunStartupContextTests();
+                    return 0;
+                }
+                RunStartupContextTests();
+                if (args.Length == 2 && args[0] == "--native-core-config-defaults")
+                    return ExportNativeCoreConfigDefaults(args[1]);
+                if (args.Length == 2 && args[0] == "--native-core-digit-table") return ExportNativeCoreLetterTable(args[1], true);
+                if (args.Length == 2 && args[0] == "--native-core-letter-table")
+                    return ExportNativeCoreLetterTable(args[1]);
+                if (args.Length == 2 && args[0] == "--native-core-grapheme-table")
+                    return ExportNativeCoreGraphemeTable(args[1]);
+                if (args.Length == 2 && args[0] == "--native-core-case-table")
+                    return ExportNativeCoreCaseTable(args[1]);
+                if (args.Length == 1 && args[0] == "--native-core-text-stdio")
+                    return RunNativeCoreTextProbe();
+                if (args.Length == 1 && args[0] == "--native-core-replay-stdio")
+                    return RunNativeCoreReplayProbe();
+                if (args.Length == 2 && args[0] == "--native-core-lexicon-fixtures")
+                    return ExportNativeCoreLexiconFixtures(args[1]);
+                if (args.Length == 2 && args[0] == "--compact-lexicon-bench")
+                    return RunCompactLexiconBench(args[1]);
+                if (args.Length == 1 && args[0] == "--compact-lexicon-tests")
+                {
+                    RunCompactLexiconTests();
+                    return 0;
+                }
                 if (args.Length == 1 && args[0] == "--learning-tests") return RunLearningTests();
                 if (args.Length == 4 && args[0] == "--learning-worker") return RunLearningWorker(args[1], args[2], int.Parse(args[3]));
                 if (args.Length == 2 && args[0] == "--ui-publish-stdio")
@@ -34,6 +62,12 @@ namespace TigerClaw.Core.Tests
                 if (args.Length == 1 && args[0] == "--overlay-format-stdio")
                 {
                     return RunOverlayFormatProbe();
+                }
+                if (args.Length == 1 && args[0] == "--sentence-lifecycle-tests")
+                {
+                    RunSentenceLifecycleTests();
+                    Console.WriteLine("Sentence lifecycle tests passed.");
+                    return 0;
                 }
                 if (args.Length == 2 &&
                     string.Equals(args[0], "--core-diff-stdio", StringComparison.OrdinalIgnoreCase))
@@ -219,19 +253,17 @@ namespace TigerClaw.Core.Tests
                 SentenceEmptyCodeAutoCommitDefersCompletableLastSegment();
                 SentenceEmptyCodeAutoCommitWorksWithAsyncDecode();
                 SentenceAutoCommitContinuationUsesFirstRanksOnly();
+                SentenceEmptyCodeContinuationPreservesDuplicateSingles();
                 EngineLightweightKeyStateMatchesUiSnapshot();
                 SentenceEngineRejectsStaleNeuralResult();
                 SentenceManualSelectionRejectsLateRerank();
                 SentencePathCheckMatchesFullDecode();
                 SentenceEmptyCodeDoesNotTreatPrunedCandidateAsUnique();
                 SentenceAutoCommitExitKeepsOnlyLiveTail();
-                SmartSentenceFixedSegmentation();
-                SmartSentenceClosedSegmentDisplay();
-                SmartSentenceKeysAndExits();
-                SmartSentenceEarlyCommitConsumesSeparators();
                 TemporaryPinyinAlwaysShowsReverseLookupAnnotations();
                 SettingsOrderIsIndependentOfConfigurationOrder();
                 SentenceNeuralWeightPreservesShortNgramWinner();
+                SentenceNeuralMixedLengthsUseConvexWeights();
                 SentenceEngineReranksOnlyTopFive();
                 SentenceNeuralRerankLetsSegmentedSingleDuplicatesCompete();
                 SentenceAutoCommitRequiresConsecutiveAppendEvidence();
@@ -247,7 +279,6 @@ namespace TigerClaw.Core.Tests
                 SentenceAutoCommitStopsBeforeExtendableSegment();
                 SentenceAutoCommitUsesTwoStrongGenerationCommonPrefix();
                 SentenceAutoCommitKeepsThreeGenerationWindowForWeakEvidence();
-                SentenceEmptyCodeContinuationPreservesDuplicateSingles();
                 SentenceAutoCommitTracksPrefixesIndependently();
                 SentencePrefixEvidenceWeightsBoundaryDisagreement();
                 SentencePrefixEvidenceKeepsRawBoundariesDistinct();
@@ -272,7 +303,9 @@ namespace TigerClaw.Core.Tests
                 SentenceAutoEnableUsesSchemaNameWithoutChangingSwitch();
                 SentenceGoldenExportIsDeterministic();
                 SentenceGoldenCasesIncrementalMatchesFull();
+                RunSentenceLifecycleTests();
                 RunUiSnapshotTests();
+                RunCompactLexiconTests();
                 Console.WriteLine("TigerClaw.Core.Tests: all tests passed.");
                 return 0;
             }
@@ -401,7 +434,7 @@ namespace TigerClaw.Core.Tests
             var state = new CoreRuntimeState(root);
             state.Initialize();
             string lastUiCommand = string.Empty;
-            using (var handler = new ProtocolHandler(command => lastUiCommand = command.ToString(), state, null))
+            using (var handler = new ProtocolHandler(command => lastUiCommand = command.ToString(), state, null, enableSentenceService: false))
             {
                 string line;
                 while ((line = Console.ReadLine()) != null)
@@ -3910,8 +3943,51 @@ namespace TigerClaw.Core.Tests
                 nameof(SentenceNeuralWeightPreservesShortNgramWinner));
             True(
                 Math.Abs(shortWeight - 0.30) < 1e-9 &&
-                Math.Abs(InputMethodEngine.GetSentenceNeuralWeight(3) - 0.84) < 1e-9,
+                Math.Abs(InputMethodEngine.GetSentenceNeuralWeight(3) - 0.84) < 1e-9 &&
+                Math.Abs(InputMethodEngine.GetSentenceNeuralWeight(1) - 0.30) < 1e-9 &&
+                Math.Abs(InputMethodEngine.GetSentenceNeuralWeight(7) - 0.84) < 1e-9 &&
+                Math.Abs(InputMethodEngine.GetSentenceNeuralWeight(0) - 0.84) < 1e-9,
                 nameof(SentenceNeuralWeightPreservesShortNgramWinner) + ".dynamic_weight");
+        }
+
+        private static void SentenceNeuralMixedLengthsUseConvexWeights()
+        {
+            var candidates = new[]
+            {
+                new SentenceCandidate { Text = "甲乙", BaseScore = -12, FinalScore = 100, MaxLexiconRank = 1 },
+                new SentenceCandidate { Text = "甲乙丙", BaseScore = -10, FinalScore = -100, MaxLexiconRank = 2 },
+                new SentenceCandidate { Text = "甲乙丙丁戊己", BaseScore = 0, MaxLexiconRank = 1 }
+            };
+            True(3 == InputMethodEngine.GetSentenceNeuralBaseTopLength(candidates, 2, true),
+                nameof(SentenceNeuralMixedLengthsUseConvexWeights) + ".base_not_final_or_outside_pool");
+            True(2 == InputMethodEngine.GetSentenceNeuralBaseTopLength(candidates, 2, false),
+                nameof(SentenceNeuralMixedLengthsUseConvexWeights) + ".lexicon_priority");
+            for (int length = 2; length <= 6; length++)
+            {
+                double alpha = length == 2 ? 0.15 : 0.30;
+                True(Math.Abs(InputMethodEngine.GetSentenceNeuralAlpha(length) - alpha) < 1e-9,
+                    nameof(SentenceNeuralMixedLengthsUseConvexWeights) + ".alpha");
+                True(Math.Abs(InputMethodEngine.CombineSentenceNeuralCandidateScore(-10, -30, 3, length)
+                    - ((1 - alpha) * -10 + alpha * -30)) < 1e-9,
+                    nameof(SentenceNeuralMixedLengthsUseConvexWeights) + ".sum_one");
+            }
+            // Equal model scores stay equal even across candidate lengths.
+            True(Math.Abs(InputMethodEngine.CombineSentenceNeuralCandidateScore(-20, -20, 3, 2)
+                - InputMethodEngine.CombineSentenceNeuralCandidateScore(-20, -20, 3, 3)) < 1e-9,
+                nameof(SentenceNeuralMixedLengthsUseConvexWeights) + ".equal_scores");
+            foreach (int baseLength in new[] { 0, 1, 7, 20 })
+            {
+                double expected = -10 + InputMethodEngine.GetSentenceNeuralWeight(baseLength) * -30;
+                True(Math.Abs(InputMethodEngine.CombineSentenceNeuralCandidateScore(-10, -30, baseLength, 2)
+                    - expected) < 1e-9, nameof(SentenceNeuralMixedLengthsUseConvexWeights) + ".legacy_outside_range");
+            }
+            foreach (int length in new[] { 1, 7 })
+            {
+                double weight = InputMethodEngine.GetSentenceNeuralWeight(length);
+                True(Math.Abs(InputMethodEngine.CombineSentenceNeuralCandidateScore(-10, -30, 3, length)
+                    - (-10 + weight * -30) / (1 + weight)) < 1e-9,
+                    nameof(SentenceNeuralMixedLengthsUseConvexWeights) + ".outside_candidate_normalized");
+            }
         }
 
         private static void SentenceEngineReranksOnlyTopFive()
@@ -5634,8 +5710,36 @@ namespace TigerClaw.Core.Tests
         private static void KeyResponsesDeclareExpectedKeyUp()
         {
             var state = new CoreRuntimeState();
-            using (var handler = new ProtocolHandler(_ => { }, state, null))
+            using (var handler = new ProtocolHandler(_ => { }, state, null, enableSentenceService: false))
             {
+                var holdField = typeof(ProtocolHandler).GetField("_candidateBackgroundUntil",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                handler.Handle("{\"type\":\"key\",\"action\":\"down\",\"vk\":65}");
+                handler.Handle("{\"type\":\"key\",\"action\":\"down\",\"vk\":13}");
+                long deadline = (long)holdField.GetValue(handler);
+                True(deadline > 0 && deadline <= Environment.TickCount64 + 2000, "ordinary commit sets bounded background deadline");
+                handler.Handle("{\"type\":\"key\",\"action\":\"up\",\"vk\":13}");
+                True(deadline == (long)holdField.GetValue(handler), "keyup does not extend background deadline");
+                handler.Handle("{\"type\":\"composition_canceled\"}");
+                True(0L == (long)holdField.GetValue(handler), "explicit cancellation removes background hold");
+                // Seed each active mode without model/lexicon loading; Enter
+                // finishes its raw composition and exercises the same policy.
+                var privateFlags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+                var engine = typeof(ProtocolHandler).GetField("_engine", privateFlags).GetValue(handler);
+                var modeField = typeof(InputMethodEngine).GetField("_compositionState", privateFlags);
+                foreach (string mode in new[] { "CnPinyin", "CnSentence" })
+                {
+                    handler.Handle("{\"type\":\"key\",\"action\":\"down\",\"vk\":65}");
+                    modeField.SetValue(engine, Enum.Parse(modeField.FieldType, mode));
+                    if (mode == "CnSentence")
+                    {
+                        var raw = (StringBuilder)typeof(InputMethodEngine).GetField("_sentenceRawBuffer", privateFlags).GetValue(engine);
+                        raw.Clear(); raw.Append("ab");
+                    }
+                    handler.Handle("{\"type\":\"key\",\"action\":\"down\",\"vk\":13}");
+                    True((long)holdField.GetValue(handler) > 0, mode + " completed commit retains background");
+                    handler.Handle("{\"type\":\"composition_canceled\"}");
+                }
                 string letterResponse = handler.Handle(
                     "{\"type\":\"key\",\"seq\":1,\"client_session\":\"keyup-test\"," +
                     "\"event_id\":\"letter\",\"action\":\"down\",\"vk\":65}");
@@ -5894,7 +5998,7 @@ namespace TigerClaw.Core.Tests
         private static void CtrlSpaceStillTogglesWithExpectedKeyUpResponses()
         {
             var state = new CoreRuntimeState();
-            using (var handler = new ProtocolHandler(_ => { }, state, null))
+            using (var handler = new ProtocolHandler(_ => { }, state, null, enableSentenceService: false))
             {
                 string ctrlDown = handler.Handle(
                     "{\"type\":\"key\",\"seq\":1,\"client_session\":\"ctrl-space-test\"," +
@@ -5912,7 +6016,7 @@ namespace TigerClaw.Core.Tests
 
 
             var ctrlFirstState = new CoreRuntimeState();
-            using (var ctrlFirstHandler = new ProtocolHandler(_ => { }, ctrlFirstState, null))
+            using (var ctrlFirstHandler = new ProtocolHandler(_ => { }, ctrlFirstState, null, enableSentenceService: false))
             {
                 ctrlFirstHandler.Handle(
                     "{\"type\":\"key\",\"seq\":1,\"client_session\":\"ctrl-first-test\"," +
@@ -5935,7 +6039,7 @@ namespace TigerClaw.Core.Tests
         private static void TransportDefersOnlyKeyUiPublication()
         {
             var state = new CoreRuntimeState();
-            using (var handler = new ProtocolHandler(_ => { }, state, null))
+            using (var handler = new ProtocolHandler(_ => { }, state, null, enableSentenceService: false))
             {
                 string response = handler.HandleTransport(
                     "{\"type\":\"key\",\"seq\":1,\"client_session\":\"test\",\"event_id\":\"1\",\"action\":\"down\",\"vk\":65}",

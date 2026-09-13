@@ -146,7 +146,15 @@ internal static class Program
                 Check(!empty.CandidateHoldWhilePending && empty.CandidateVisible && empty.Candidates.Length == 0,
                     "Completed empty result still requested a hold");
                 Record("completed_empty", empty);
-                f.Key('w');f.Idle();var completed = f.Read();
+                lock (f.PublishGate) lock (f.EngineGate)
+                {
+                    f.Key('w');var pending = f.Read();
+                    Check(!pending.CandidateVisible && pending.CandidateHoldWhilePending &&
+                          pending.Candidates.Length == 0 && pending.CandidateFrameSession == empty.CandidateFrameSession,
+                        "Input-only continuation lost its pending display session");
+                    Record("pending_after_empty", pending);
+                }
+                f.Idle();var completed = f.Read();
                 Check(completed.Candidates.Length > 0 && completed.Candidates[0] == "人" && !completed.CandidateHoldWhilePending,
                     "Suffix completion lost/duplicated the committed prefix");
                 Check(empty.CandidateFrameSession == ready.CandidateFrameSession &&

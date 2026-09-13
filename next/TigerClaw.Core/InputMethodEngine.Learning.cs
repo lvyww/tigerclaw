@@ -28,9 +28,7 @@ namespace TigerClaw.Core
                 _learningConfigVersion = _state.ConfigVersion; _learningSchema = schema;
                 string mode = "";
                 if (_state.GetSentenceLearningEnabled() && _state.IsSentenceInputActive())
-                    mode = IsSmartSentence
-                        ? "smart-v1|max=" + GetSafeMaxCodeLen().ToString(CultureInfo.InvariantCulture) + "|selectors=" + SmartSelectionConfigMask.ToString(CultureInfo.InvariantCulture)
-                        : "sentence-v1|dup=" + (_state.GetSentenceAllowDuplicateSingleCharacters() ? "1" : "0") +
+                    mode = "sentence-v1|dup=" + (_state.GetSentenceAllowDuplicateSingleCharacters() ? "1" : "0") +
                           "|optimal=" + _state.GetSentenceOptimalCodeHighFreqLimit().ToString(CultureInfo.InvariantCulture) + "|whitelist=" + SentenceLearning.ConfigurationHash(_state.GetSentenceFullCodeWhitelistText());
                 if (mode != _learningMode || changedScheme) { _pendingLearning.Clear(); _learningBaseline = null; }
                 _learningMode = mode;

@@ -403,7 +403,7 @@ namespace TigerClaw.Core
         public long IsolationCacheMisses { get; set; }
     }
 
-    internal sealed partial class SentenceInputDecoder
+    internal sealed class SentenceInputDecoder
     {
         private SentenceLearningSnapshot _learning = SentenceLearningSnapshot.Empty;
         private string _learningMode = "";
@@ -644,13 +644,9 @@ namespace TigerClaw.Core
             double emittedCharacterReward = 0.0,
             double wholeInputSingleCharacterReward = 0.0,
             SentenceSupplementMatcher supplementMatcher = null,
-            bool allowDuplicateSingleCharacters = false,
-            int smartMaxCodeLength = 0,
-            int smartSelectionMask = 3)
+            bool allowDuplicateSingleCharacters = false)
         {
             _lexicon = lexicon ?? throw new ArgumentNullException(nameof(lexicon));
-            SmartMaxCodeLength = Math.Max(0, smartMaxCodeLength);
-            SmartSelectionMask = smartSelectionMask;
             _languageModel = languageModel ?? NeutralSentenceLanguageModel.Instance;
             _beamWidth = Math.Max(1, beamWidth);
             _rankPenalty = Math.Max(0.0, rankPenalty);
@@ -693,11 +689,8 @@ namespace TigerClaw.Core
                 long started = Stopwatch.GetTimestamp();
                 long isolationHitsBefore = _isolationPenaltyCacheHits;
                 long isolationMissesBefore = _isolationPenaltyCacheMisses;
-                SentenceDecodeResult result = lockedPrefix != null
-                    ? DecodeLockedPrefix(rawCode, candidateLimit, includeEarlyCommitEvidence, requiredTextPrefix, lockedPrefix)
-                    : SmartMaxCodeLength > 0
-                    ? DecodeSmart(rawCode, candidateLimit, includeEarlyCommitEvidence, requiredTextPrefix)
-                    : DecodeIncrementalLocked(
+                SentenceDecodeResult result = lockedPrefix != null ? DecodeLockedPrefix(
+                    rawCode, candidateLimit, includeEarlyCommitEvidence, requiredTextPrefix, lockedPrefix) : DecodeIncrementalLocked(
                     rawCode,
                     candidateLimit,
                     includeEarlyCommitEvidence,
@@ -719,10 +712,6 @@ namespace TigerClaw.Core
             lock (_decodeLock)
             {
                 PrepareLearning();
-            if (SmartMaxCodeLength > 0)
-            {
-                lock (_decodeLock) return DecodeSmart(rawCode, candidateLimit, includeEarlyCommitEvidence, requiredTextPrefix);
-            }
             string normalized = NormalizeRawCode(rawCode);
             if (normalized.Length == 0 || !normalized.Any(char.IsLetter))
             {

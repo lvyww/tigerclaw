@@ -66,14 +66,14 @@ namespace TigerClaw.Core
     /// </summary>
     internal sealed class FixedLengthMixedInputDecoder : IMixedInputDecoder
     {
-        private readonly Func<string, List<string>> _candidateResolver;
+        private readonly Func<string, IReadOnlyList<string>> _candidateResolver;
         private readonly Func<string, string> _candidateOutputResolver;
         private readonly Dictionary<string, string> _firstCandidateCache =
             new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         private int _cachedLexiconVersion = -1;
 
         public FixedLengthMixedInputDecoder(
-            Func<string, List<string>> candidateResolver,
+            Func<string, IReadOnlyList<string>> candidateResolver,
             Func<string, string> candidateOutputResolver)
         {
             _candidateResolver = candidateResolver ?? throw new ArgumentNullException(nameof(candidateResolver));
@@ -161,7 +161,7 @@ namespace TigerClaw.Core
             }
 
             string candidateText = string.Empty;
-            List<string> candidates = _candidateResolver(code);
+            IReadOnlyList<string> candidates = _candidateResolver(code);
             if (candidates != null && candidates.Count > 0 && !string.IsNullOrEmpty(candidates[0]))
             {
                 candidateText = _candidateOutputResolver(candidates[0]) ?? string.Empty;

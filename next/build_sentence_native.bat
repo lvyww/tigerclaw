@@ -2,7 +2,7 @@
 setlocal EnableExtensions
 
 if "%~2"=="" (
-  echo Usage: build_sentence_native.bat ARCH OUTPUT_DIR [CONFIGURATION]
+  echo Usage: build_sentence_native.bat ARCH OUTPUT_DIR [CONFIGURATION] [JOBS]
   exit /b 2
 )
 
@@ -10,6 +10,9 @@ set "ARCH=%~1"
 set "OUTPUT_DIR=%~f2"
 set "CONFIGURATION=%~3"
 if not defined CONFIGURATION set "CONFIGURATION=Release"
+set "BUILD_JOBS=%~4"
+if not defined BUILD_JOBS set "BUILD_JOBS=8"
+powershell -NoProfile -Command "if ('%BUILD_JOBS%' -notmatch '^(?:[1-9]|[1-5][0-9]|6[0-4])$') { exit 2 }" || exit /b 2
 if /I not "%ARCH%"=="x64" if /I not "%ARCH%"=="ARM64" (
   echo ERROR: Unsupported sentence native architecture: %ARCH%
   exit /b 2
@@ -59,7 +62,7 @@ if errorlevel 1 (
   if /I "%ARCH%"=="ARM64" echo ERROR: ARM64 llama.cpp requires the Visual Studio C++ Clang tools component.
   exit /b 1
 )
-"%CMAKE%" --build "%BUILD_DIR%" --config "%CONFIGURATION%" --target TigerClaw.Sentence.Host -j 8 || exit /b 1
+"%CMAKE%" --build "%BUILD_DIR%" --config "%CONFIGURATION%" --target TigerClaw.Sentence.Host -j %BUILD_JOBS% || exit /b 1
 copy /Y "%BUILD_DIR%\%CONFIGURATION%\TigerClaw.Sentence.exe" "%OUTPUT_DIR%\TigerClaw.Sentence.exe" >nul || exit /b 1
 for %%F in (TigerClaw.Sentence.exe.config TigerClaw.Sentence.Native.dll TigerClaw.Sentence.pdb TigerClaw.Shared.dll TigerClaw.Shared.pdb) do if exist "%OUTPUT_DIR%\%%F" del /q "%OUTPUT_DIR%\%%F"
 

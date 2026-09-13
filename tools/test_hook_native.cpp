@@ -14,8 +14,6 @@
 #include "../next/TigerClaw.Hook.Native/Replay/InputReplay.cpp"
 namespace TigerClawHookNative
 {
-    // Tests inject their own connected pipe. Never bypass integrity in production.
-    bool CoreIntegrity::VerifyPipeServerExecutable(HANDLE, std::wstring&, std::wstring&) { return false; }
     void Logger::Info(const wchar_t*, const std::wstring&) {}
     void Logger::Info(const wchar_t*, const wchar_t*) {}
 }
@@ -38,6 +36,25 @@ static HANDLE Attach(PipeClient& client)
 }
 int main()
 {
+    // Exercise both real connection paths with this test executable as server.
+    // PipeName is local to the included implementation; production is untouched.
+    wchar_t connectionName[128];
+    swprintf_s(connectionName, L"\\\\.\\pipe\\TigerClaw.HookConnectTest.%lu", GetCurrentProcessId());
+    PipeName = connectionName;
+    for (bool notify : {false, true})
+    for (int attempt = 0; attempt < 2; ++attempt)
+    {
+        HANDLE server = CreateNamedPipeW(PipeName, PIPE_ACCESS_DUPLEX, PIPE_TYPE_BYTE | PIPE_WAIT,
+            1, 4096, 4096, 0, nullptr);
+        Check(server != INVALID_HANDLE_VALUE, "connection server");
+        PipeClient client;
+        std::wstring error;
+        Check(notify ? client.EnsureNotifyPipe(error) : client.EnsureRequestPipe(error), "connect arbitrary server executable");
+        Check(ConnectNamedPipe(server, nullptr) || GetLastError() == ERROR_PIPE_CONNECTED, "connection accepted");
+        client.DisconnectRequestPipe();
+        client.DisconnectNotifyPipe();
+        CloseHandle(server);
+    }
     for (auto pair : { std::pair<UINT,UINT>{VK_LSHIFT,VK_RSHIFT}, {VK_LCONTROL,VK_RCONTROL}, {VK_LMENU,VK_RMENU}, {VK_LWIN,VK_RWIN} })
     for (bool reverse : {false,true})
     {

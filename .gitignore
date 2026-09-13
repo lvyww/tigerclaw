@@ -12,6 +12,7 @@
 # Build outputs
 **/bin/
 **/obj/
+**/.tmpobj/
 **/x64/
 **/Win32/
 **/Debug/
@@ -39,6 +40,11 @@ _run)
 *.tmp
 *.temp
 *.bak
+/nul
+
+# Local packaging tools (not project sources)
+/7z.exe
+/7z.dll
 
 # Release/package noise
 release/**

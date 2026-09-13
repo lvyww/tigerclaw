@@ -84,7 +84,8 @@ Native Overlay may retain an already visible, successfully published candidate
 frame while this hint is true. It never shows a new placeholder, revives a hidden
 window, or restores committed entries into the engine's selectable candidates.
 The current caret must be usable and remain on the published frame's monitor,
-effective DPI and work area. Code-only placeholders do not qualify. Explicit
+effective DPI and work area. An already published nonempty input/code-only frame
+also qualifies; a pending state never creates a new placeholder. Explicit
 candidate hiding and disabled/English modes take precedence.
 
 Retention does not call Present, move/resize the window, advance placement history,
@@ -123,8 +124,10 @@ anchor; it does not clear or partition the geometric 100-decision history. This
 identity is not a TSF context ID and is not used for placement direction.
 
 Frame eligibility describes the currently published pixels, not whether a
-candidate appeared at some earlier point. CodeOnly/InputOnly publication removes
-eligibility, including animation samples and reentrant publication. A failed
+candidate appeared at some earlier point. Nonempty CodeOnly/InputOnly frames
+remain eligible, preventing hide/reappear when another key follows an empty
+decode result. Hidden/empty frames are ineligible, including animation samples
+and reentrant publication. A failed
 publication leaves the eligibility of untouched pixels intact; a reentrant reset
 cannot be rolled back. Preparing a future layout alone changes no eligibility.
 
@@ -132,5 +135,6 @@ The review regressions generate real identical-code commit/cancel/Escape/Backspa
 end/new-input sequences and deliberately omit hidden snapshots from Native
 consumption. They additionally exercise both code-only modes after candidates,
 intermediate/final animations, publication failure, missing identity and reentry.
-Two compiled negative controls restore missing session checks and the historical
-candidate latch, and must fail for the corresponding reported defects.
+Two compiled negative controls remove session checks and exclude input-only
+frames, and must fail for the corresponding reported defects. The real Core
+trace also includes an empty decode followed by another pending key.

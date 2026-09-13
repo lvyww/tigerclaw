@@ -14,8 +14,8 @@ checks = [
      'Pending suffix hid or changed published candidate frame'),
     (args.executable.with_name('overlay_pending_frame_no_session.exe'), [], 'coalesced_session',
      'Coalesced new input retained previous candidates'),
-    (args.executable.with_name('overlay_pending_frame_sticky_mode.exe'), [], 'historical_candidate_latch',
-     'Code replacement kept candidate eligibility'),
+    (args.executable.with_name('overlay_pending_frame_no_code_hold.exe'), [], 'code_only_hold',
+     'Published code-only frame lost hold eligibility'),
 ]
 for executable, extra, control, expected in checks:
     result = subprocess.run([str(executable), str(args.trace), *extra],

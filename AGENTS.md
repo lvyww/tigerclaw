@@ -29,6 +29,17 @@ Windows TSF
 
 Active components:
 
+- `next/TigerClaw.Core.Native/`: user-requested parallel C++ Core, **paused at the
+  user's request on 2026-09-09 due to usage cost**. Do not automatically resume;
+  wait for an explicit user request. The README's opening pause/resume section
+  records the latest state, evidence and unfinished work. Compact tables,
+  lexicon/config runtime, mixed/sentence decoding and shared event routing are
+  implemented and tested in isolation. Main IPC/UI publishing and complete
+  frontend hosting/acceptance are not done; it cannot replace the running Core.
+  C# remains production default and behavioral authority. Build/output/commands
+  are isolated; no production IPC or release deployment. Full completion gates
+  and current evidence are in that directory's README; do not equate this initial
+  data layer with completing the parallel Core.
 - `BimeTSF2/SampleIME/`: bridge-only TSF DLL. It captures key, focus, caret and
   activation events, forwards them to Core, and applies Core responses.
 - `next/TigerClaw.Core/`: configuration, lexicons, input state, candidates,
@@ -83,6 +94,13 @@ block Core on a paused reader. Contract: `Protocol/ui_state.md`.
 
 ## Behavior That Must Stay Aligned
 
+- Main and pinyin candidate tables use immutable `CompactLexicon` binary images
+  with pooled UTF-16 text and insertion-order-preserving candidate ranges.
+  Pinyin is runtime-owned, never schema-snapshot-owned: recent-schema switching
+  shares it; full reload replaces it. User edits publish a new main-table image
+  and preserve existing adjustment persistence. Ordinary/pinyin pagination reads
+  only the requested range. TXT/YAML remain authoritative; no disk cache or idle
+  unloading is introduced. See `docs/COMPACT_LEXICON.md` and compact lexicon tests.
 - Raw code is authoritative. Mixed input keeps the complete raw composition,
   decodes it again after every edit, performs case-insensitive lookup, and
   preserves casing for display and literal commits. Code masking is display-only.
@@ -93,10 +111,10 @@ block Core on a paused reader. Contract: `Protocol/ui_state.md`.
   and rebuilds for the target schema. Preserve raw casing across sentence mode.
   With mixed input disabled, short codes use ordinary composition; an imported
   code longer than maximum code length uses a temporary mixed composition.
-- In ordinary sentence mode, segmentation spaces are display-only. The raw code never contains
+- Sentence segmentation spaces are display-only. The raw code never contains
   them. Up/Down and Tab/Shift+Tab traverse visible sentence candidates; sentence
   mode leaves Ctrl+number to the target application.
-- Windows sentence input: Tab/Shift+Tab highlights without submitting. The next
+- Windows, Rime and Fcitx5 sentence input: Tab/Shift+Tab highlights without submitting. The next
   code letter locks that candidate's text and consumed raw boundary, retaining
   language-model context and preventing later resegmentation across the boundary.
   With early commit enabled, this manual confirmation immediately submits only
@@ -104,9 +122,10 @@ block Core on a paused reader. Contract: `Protocol/ui_state.md`.
   it. Otherwise Backspace unlocks when it reaches the noncommitted boundary.
   Rank selectors still edit the current segment rather than confirm a Tab lock.
   Up/Down alone does not arm locking. Clear/schema migration discards locks;
-  literal exits still emit only live raw code. Rime/Android do not yet implement
-  this Tab-confirmation interaction.
-- In ordinary sentence mode, a one-key segment is legal only when the whole input is one key.
+  literal exits still emit only live raw code. Rime stores the locked text/raw
+  boundaries in a length-framed context property shared by the separate processor
+  and translator environments; confidence trackers remain processor-local.
+- A one-key sentence segment is legal only when the whole input is one key.
   Other segments consume at least two keys. `;`, `'` and digits select explicit
   lexicon ranks. An implicit non-first rank is legal only when the whole input is
   consumed by one lexicon edge; segmented paths use first ranks unless selection
@@ -124,35 +143,8 @@ block Core on a paused reader. Contract: `Protocol/ui_state.md`.
   `高频字仅使用最优码组句` or the full-code whitelist, and explicit digit/`;`/`'`
   rank selection still works when it is on. Multi-character words still need an
   explicit selector on segmented paths.
-- Sentence mode is controlled only by `自动启用整句模式` (default on). Schema
-  names containing `智能` activate experimental Windows fixed-segmentation
-  word/sentence mode, taking precedence over the ordinary `整句` name match.
-  `SmartSentenceSegmentation.cs` and the `SentenceInputDecoder.Smart.cs` partial
-  keep its search separate. Actual raw spaces and single-key rank selectors
-  close segments; otherwise only overflow beyond configured maximum letter
-  count splits input. Every segment requires an exact code; eligible lexicon
-  ranks compete by existing model/reward scoring without optimal-code filters.
-  Below the configured maximum code length, non-first multi-character entries
-  require an explicit rank selector. First-rank words, all single characters and
-  full-length words remain eligible implicitly. Apply this before Beam expansion
-  and in the lightweight key-path validity check, so Qwen and confidence evidence
-  cannot reintroduce excluded words. Only code letters count toward this length.
-  Digits 1–9/0 select ranks 1–10; enabled semicolon/quote select 2/3. Orphan or
-  repeated selectors are invalid, not multi-digit ranks. One space separates;
-  two consecutive unmodified spaces commit. Invalid input never commits stale
-  candidates on punctuation or double-space. Backspace removes actual raw keys.
-  Closed segments in Overlay/composition display the current model-best path's
-  words, while open tails retain raw code. A display-only last-ranked path may
-  survive incomplete tails/pending work only at matching raw prefixes and ranks;
-  clear it on composition/schema reset and reject different lexicon versions.
-  Code masking applies only to raw display spans, never substituted words.
-  Early commit uses existing confidence trackers only at closed fixed boundaries,
-  consumes their separators and retains at least three letters (also respecting
-  the configured retained-code floor). A merely full-length tail remains open.
-  No empty-code implicit splitting is used. Leaving this mode removes raw spaces
-  from the uncommitted suffix before target-schema migration. Max-code/selector
-  setting changes preserve that suffix and rebuild the generation. These new
-  rules are Windows-only; the ordinary sentence rules and ports below are unchanged.
+- Sentence mode is controlled only by `自动启用整句模式` (default on). It
+  activates when the current schema name contains `整句`.
 - Sentence decoding is latest-generation-only and asynchronous. A stale Beam or
   Qwen result must never replace newer composition state. Pending UI keeps the
   previous candidate list and stitched live raw suffix.
@@ -166,8 +158,27 @@ block Core on a paused reader. Contract: `Protocol/ui_state.md`.
   when the unsplit input is that character's shortest available code (source
   order breaks equal-length ties), regardless of its rank under that code. The
   reward does not enter confidence mass or apply to an explicitly selected rank.
-- Qwen3 0.6B Q8 reranks exactly the first five n-gram candidates with weight
-  `0.84`. Its GGUF is mapped directly and is not encrypted.
+- Qwen3 0.6B Q8 reranks exactly the first five n-gram candidates. If the
+  pre-Qwen base winner has 2..6 text elements, score each candidate by
+  `(1-alpha)*BaseScore + alpha*QwenScore`: its own length 2 uses alpha=0.15,
+  3..6 uses 0.30. Candidate lengths outside that range use the original
+  lambda converted to alpha=lambda/(1+lambda) (one character lambda=0.30,
+  longer/unknown lambda=0.84). If the base winner itself is outside 2..6,
+  preserve the original whole-set additive policy, without extrapolation.
+  This supersedes the intermediate base-length shared-weight calibration.
+  The 2026-09-08 grouped experiments are documented in
+  `tools/SentenceLengthEval/README.md`. A subsequent frozen 50,000-case,
+  record/text-disjoint confirmation achieved 99.142% versus the original
+  99.006% and intermediate 99.066%; its net +38 over the intermediate policy
+  came from mixed-length sets. Three-character targets still regress versus
+  the intermediate policy (99.03% vs 99.16%), but beat the original 98.83%.
+  These are context-free snippet benchmarks, not real typing acceptance.
+  Its GGUF is mapped directly and is not encrypted.
+- Sentence residency follows both schema and settings: preload in the background
+  only when sentence input and neural reranking are enabled; otherwise cancel
+  pending work and release the owned Sentence process. Never unload on idle.
+  Rapid off/on transitions must finish release before reloading; late scores
+  from the previous lifecycle must not reach the active composition.
 - Known limitation: isolated Qwen scoring can worsen very short candidate sets,
   because it scores surface text without Tiger code context. Fix the scorer or
   skip short-text reranking if this becomes material; do not patch candidate
@@ -255,6 +266,20 @@ block Core on a paused reader. Contract: `Protocol/ui_state.md`.
   Failed-key replay keeps event IDs and FIFO order, yields after 8 events or a
   60 ms batch budget, and resumes on a 30 ms timer under the existing queue TTL.
   Standalone Windows pipe fault tests: `tools/test_tsf_pipe.bat` (isolated pipe).
+- Core startup is limited to a non-service user in a nonzero session on
+  `WinSta0\Default`. TSF checks before scheduling and launching Core; Core
+  independently checks before registration UI, singleton ownership or IPC so
+  older installed TSF DLLs cannot launch a SYSTEM Core from the logon desktop.
+  Startup checks: `tools/test_tsf_startup.bat` and Core tests
+  `--startup-context-tests`. Do not bypass the guard to support a service host.
+- TSF bypasses protected input before modifier tracking, cached responses or
+  key IPC: secure activation, non-user desktop/account, standard password
+  Edit/RichEdit controls and TSF keyboard-disabled contexts. Bypass clears
+  local pending responses/events/replay queues and timers; enqueue, replay and
+  response application recheck protection. Ordinary uncertain requests retain
+  their retry/dedup policy. Tests: `tools/test_tsf_protected_input.ps1` and
+  `tools/test_tsf_startup.bat`. Custom password controls without OS metadata
+  cannot be identified reliably; no input text is inspected for detection.
 - Native Hook also snapshots each physical key with stable replay identities.
   Uncertain requests are held and retried FIFO (128 events, 5 s TTL; batches of
   at most 8 events / 60 ms, resumed by the 200 ms state pump). Expiry, overflow
@@ -270,7 +295,13 @@ block Core on a paused reader. Contract: `Protocol/ui_state.md`.
   Settings show only the two shortcut rows. Disabled bindings display `清空`;
   the `修改` dialog clears or restores defaults immediately into the unsaved
   settings page. Legacy enable flags remain internal compatibility data.
-- Overlay owns candidate display. It pins the first caret anchor for a composition
+- Overlay owns candidate display. It retains an already published nonempty
+  candidate/code-only frame while
+  sentence decoding is pending in the same `CandidateFrameSession`. This also
+  covers another key after a completed empty decode, without a hide/show flash.
+  Clear/focus/session changes and explicit hiding still invalidate retention;
+  no hidden frame is resurrected and no placeholder is created while pending.
+  It pins the first caret anchor for a composition
   and flips above the caret when needed. TSF legacy candidate UI is not active.
   Native menus open without waiting for Core schema queries and use a dedicated
   temporary host independent of candidate/status visibility. Foreground permission
@@ -283,6 +314,16 @@ block Core on a paused reader. Contract: `Protocol/ui_state.md`.
 When changing sentence behavior, update tests and the standalone Rime/C++ ports
 only where they intentionally share that invariant. The implementation and tests
 remain the final authority for lower-level cache and Beam details.
+
+Windows sentence Tab learning from PR #4 is integrated locally with Smart mode
+remaining removed. `整句Tab自学习` defaults on; only corrected text acknowledged
+as successfully committed by the updated TSF is learned. Journals stay in each
+schema source directory. Learning scores use immutable indexes; learned search
+results cannot supply automatic-commit confidence. Existing candidate-length Qwen
+weights remain in effect, with the learning reward added afterwards. Hook/Rime do
+not gain learning receipts from this Windows change. See `TAB_LEARNING.md` and
+`Protocol/messages.md`; tests include 10,000-record index pressure and score
+equivalence. Actual application commit acceptance remains separate from tests.
 
 ## Key Code Paths
 
@@ -359,15 +400,41 @@ sidecars. `--diagnostic` enables embedded TSF logging.
 self-contained ARM64 Native AOT executable and replaces `TigerClaw.Core.exe` in
 an existing `release_arm64/`, skipping Overlay, Dialog, Sentence, Hook.Native,
 Shared.dll and both TSF DLLs for faster Core-only iteration. It does not touch
-`EmbeddedBuildInfo.h` or rebuild the TSF DLL. If the deployed TSF DLL was built
-with `core_hash_verify_enabled=1`, it embeds the old Core.exe's SHA256 and will
-disconnect the pipe against the new binary (`SampleIME.cpp`,
-`VerifyCoreExecutableHashCached`/`_EnsurePipeConnected`). Either set
-`core_hash_verify_enabled=0` in `publish_config.txt` and rebuild the TSF DLL
-once via `publish_arm64.bat`, or accept that a full `publish_arm64.bat` run is
-required whenever the embedded hash must match.
+`EmbeddedBuildInfo.h` or rebuild the TSF DLL. Current TSF and Native Hook do
+not bind connections to a Core executable hash or require querying its path.
+Trial expiry checks and metadata have been removed; protocol handshakes remain
+enforced. Legacy publish configuration keys for hash verification and expiry
+are ignored. Previously installed frontends retain their old hash/expiry checks
+until replaced with a new frontend;
+replacing Core alone cannot change an old DLL's behavior.
+
+`publish.bat` rebuilds TSF into `next/_run/Release/tsf/{Win32,x64}/` with
+separate `obj/publish-x64-tsf/` intermediates, never selecting legacy output
+paths. Before packaging it checks DLL PE architecture and source/copy identity.
+Isolated packaging tests: `tools/test_publish_tsf.ps1`. These checks do not
+replace real 32-bit WPS acceptance (loaded DLL identity, input, candidates,
+commit and reconnect); that acceptance remains pending until tested in WPS.
+
+`publish_arm64.bat` schedules dependency-aware build tasks with a default limit
+of 2 (`--jobs N`, 1..16; `--serial` selects 1). Embedded metadata is independent
+of Core and precedes every native frontend including the ARM64X wrapper. Overlay and
+  Dialog remain serialized to support the WPF fallback's shared build/output files. Each
+task has stdout/stderr logs and a timing CSV under
+`next/_run/ReleaseArm64/logs/`. Failed builds drain active workers and never
+enter deployment. `--build-only` validates artifacts but skips process shutdown
+and release-directory writes; it still builds and updates build metadata.
+Model files copy directly from their canonical sources at deployment, not via
+the intermediate build outputs. Scheduler isolation tests:
+`powershell -NoProfile -File tools/test_publish_arm64.ps1`.
 
 Important local rule: this checkout's `release_arm64/` is the user's daily
+runtime. Standing user authorization (2026-09-10): after each Overlay adjustment
+is built and verified, deploy the ARM64 Overlay executable into `release_arm64/`
+automatically, retaining a recoverable backup and restarting only that deployed
+Overlay if needed. This authorization does not cover Core or other components,
+configuration/code tables, or cleaning the release directory.
+
+Outside that Overlay-only authorization, `release_arm64/` is the user's daily
 runtime, not disposable build output. Never delete, clean, replace or partially
 rebuild it unless the user explicitly asks. In particular, do not run a broad
 `git clean -X` in this repository. Its config, code tables and user adjustments
@@ -401,6 +468,13 @@ release tree. Keep `.bat` files CRLF.
   long low-confidence input from queuing candidate generations. It is not part
   of Windows TSF.
 - Open-source mirror `tiger-sentense-rime`
+  received PR #1 on 2026-09-12 (merge `a19c38e`), synced back locally: caret-aware
+  edits, lazy-menu Tab preparation and whole-decode model-failure fallback.
+  Rime confidence now uses retained full Beam rather than display Top-20 and
+  propagates ancestor truncation, potentially delaying automatic commits;
+  Windows keeps its existing narrowed-pool policy. Details and tests:
+  `rime/tiger_sentence/RIME_CORRECTNESS.md`, `tools/run_regressions.py`.
+  The mirror
   (https://github.com/lvyww/tiger-sentense-rime, GPL-3.0, public): the
   standalone release of the Rime pack above. Publishing rules:
   - `rime/tiger_sentence/` in this repo is the source of truth. Published

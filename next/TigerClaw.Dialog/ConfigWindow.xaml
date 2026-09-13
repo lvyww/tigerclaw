@@ -500,7 +500,6 @@
                                         <RowDefinition Height="Auto" />
                                         <RowDefinition Height="Auto" />
                                         <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
                                     </Grid.RowDefinitions>
 
                                     <TextBlock Grid.Row="0"
@@ -548,18 +547,6 @@
                                                FontSize="13"
                                                Foreground="#34251B" />
 
-                                    <TextBlock x:Name="AboutTrialLabel"
-                                               Grid.Row="4"
-                                               Grid.Column="0"
-                                               Margin="0,10,0,0"
-                                               Text="试用到期"
-                                               Style="{StaticResource RowTitleStyle}" />
-                                    <TextBlock x:Name="AboutTrialText"
-                                               Grid.Row="4"
-                                               Grid.Column="1"
-                                               Margin="0,10,0,0"
-                                               FontSize="13"
-                                               Foreground="#34251B" />
 
                                 </Grid>
                             </Border>

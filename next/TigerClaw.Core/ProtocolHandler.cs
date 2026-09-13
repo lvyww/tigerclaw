@@ -41,6 +41,7 @@ namespace TigerClaw.Core
         private int _soundVk;
         private int _soundVolumePercent;
         private long _candidateAnchorRevision;
+        private long _candidateBackgroundUntil;
         private bool _candidateAnchorRefreshPending;
         private bool _awaitingFreshCaretForComposition;
         private long _awaitingFreshCaretDeadlineTick;
@@ -50,22 +51,24 @@ namespace TigerClaw.Core
         // the pending-frame hint; this is not a TSF identity or direction epoch.
         private volatile bool _candidateFrameHoldBlocked;
 
-        public ProtocolHandler(Action<CoreUiCommand> uiCommandCallback, CoreRuntimeState state, UiStatePublisher uiStatePublisher)
-            : this(uiCommandCallback, state, uiStatePublisher, null, null)
+        public ProtocolHandler(Action<CoreUiCommand> uiCommandCallback, CoreRuntimeState state, UiStatePublisher uiStatePublisher,
+            bool enableSentenceService = true)
+            : this(uiCommandCallback, state, uiStatePublisher, null, null, enableSentenceService)
         {
         }
 
         internal ProtocolHandler(Action<CoreUiCommand> uiCommandCallback, CoreRuntimeState state,
-            UiStatePublisher uiStatePublisher, SentenceInputDecoder decoder, bool? synchronous)
+            UiStatePublisher uiStatePublisher, SentenceInputDecoder decoder, bool? synchronous,
+            bool enableSentenceService = true)
         {
             _uiCommandCallback = uiCommandCallback;
             _state = state ?? throw new ArgumentNullException(nameof(state));
             _uiStatePublisher = uiStatePublisher;
             _engine = new InputMethodEngine(_state, decoder, synchronous);
-            _sentenceRerankClient = new SentenceRerankClient(
+            _sentenceRerankClient = enableSentenceService ? new SentenceRerankClient(
                 _state,
                 new ProcessLauncher(),
-                OnSentenceRerankResult);
+                OnSentenceRerankResult) : null;
             _engine.SetSentenceRerankService(_sentenceRerankClient);
             _engine.SetSentenceDecodeCompletedCallback(PublishUiState);
             _engine.SetChinese(_state.GetDefaultChinese(), out _);
@@ -186,6 +189,8 @@ namespace TigerClaw.Core
                 _learningReceiptConfigVersion = _state.ConfigVersion;
             }
             string type = ConvertToString(msg.GetValue("type"));
+            if (type != "key" && type != "caret" && type != "query_state" && type != "get_schema_list")
+                Interlocked.Exchange(ref _candidateBackgroundUntil, 0);
             int seq = ConvertToInt(msg.GetValue("seq"), 0);
 
             switch (type)
@@ -421,7 +426,6 @@ namespace TigerClaw.Core
                     {
                         string key = ConvertToString(msg.GetValue("key"));
                         string value = ConvertToString(msg.GetValue("value"));
-                        bool wasSmartSentence = _state.IsSmartSentenceInputActive();
                         bool ok = _state.TrySetConfigValue(key, value, out bool changed, out string reason);
                         bool lexOk = true;
                         if (ok && changed && IsLexiconConfigKey(key))
@@ -430,21 +434,13 @@ namespace TigerClaw.Core
                         }
 
                         bool success = ok && lexOk;
-                        bool rebuildSmartSentence = (wasSmartSentence || _state.IsSmartSentenceInputActive()) &&
-                            (IsSentenceInputConfigKey(key) || IsLexiconConfigKey(key) ||
-                             key?.Trim() == "最大码长" || key?.Trim() == "分号次选" || key?.Trim() == "引号三选");
-                        if (success && changed && rebuildSmartSentence)
-                        {
-                            _engine.RefreshCompositionAfterSchemaSwitch();
-                            ClearFreshCaretAwaitState();
-                        }
-                        if (success && changed && !rebuildSmartSentence &&
+                        if (success && changed &&
                             (IsUnlimitedMixedInputConfigKey(key) || IsSentenceInputConfigKey(key)))
                         {
                             _pendingFrontendCompositionReset |= _engine.ResetCompositionForConfigChange();
                             ClearFreshCaretAwaitState();
                         }
-                        if (success && changed && !rebuildSmartSentence &&
+                        if (success && changed &&
                             (IsSentenceInputConfigKey(key) || IsLexiconConfigKey(key)))
                         {
                             if (IsLexiconConfigKey(key))
@@ -605,8 +601,13 @@ namespace TigerClaw.Core
                 UpdateCaretAndCompleteCandidateAnchorRefresh(caretX, caretY, width, height);
             }
 
+            if (isKeyDown) Interlocked.Exchange(ref _candidateBackgroundUntil, 0);
             KeyEngineResult result = _engine.ProcessKey(vk, scan, action, shift, ctrl, alt, win, capsLock, numLock, repeat, extended);
             _engine.PostProcessKey(vk, action, result, shift, ctrl, alt, win, capsLock);
+            if (wasComposing && result.Handled && !result.IsComposing && result.IsChinese &&
+                wasChinese == result.IsChinese && !string.IsNullOrEmpty(result.TextToOutput) &&
+                !ctrl && !alt && !win && vk != 0x1B && vk != 0x14 && vk != 0x10)
+                Interlocked.Exchange(ref _candidateBackgroundUntil, Environment.TickCount64 + 2000);
             var learningEvents = _engine.TakeSentenceLearning(result, out var learningStore);
             string learningReceipt = ConvertToInt(msg.GetValue("learning_ack_version"), 0) == 1
                 ? _learningReceipts.Issue(ConvertToString(msg.GetValue("client_session")), learningStore, learningEvents) : null;
@@ -881,6 +882,9 @@ namespace TigerClaw.Core
 
         private void PublishUiState()
         {
+            // Covers set_config, reload_config and shortcut-driven schema changes.
+            // This only signals a background worker; it never loads on the key path.
+            _sentenceRerankClient?.RefreshConfiguration();
             if (_uiStatePublisher == null)
             {
                 return;
@@ -932,7 +936,8 @@ namespace TigerClaw.Core
                         SoundSeq = Interlocked.Read(ref _soundSeq),
                         SoundVk = _soundVk,
                         SoundVolumePercent = _soundVolumePercent,
-                        CandidateAnchorRevision = Interlocked.Read(ref _candidateAnchorRevision)
+                        CandidateAnchorRevision = Interlocked.Read(ref _candidateAnchorRevision),
+                        CandidateBackgroundUntil = Interlocked.Read(ref _candidateBackgroundUntil)
                     };
 
                     _uiStatePublisher.Publish(state);
@@ -1067,11 +1072,6 @@ namespace TigerClaw.Core
 
         private string BuildDisplayComposition(string prefix, string activeCode)
         {
-            string smartDisplay = _engine.GetSmartSentenceFormattedDisplay(MaskInputBufferForDisplay);
-            if (smartDisplay != null)
-            {
-                return smartDisplay;
-            }
             return (prefix ?? string.Empty) + MaskInputBufferForDisplay(activeCode ?? string.Empty);
         }
 

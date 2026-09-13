@@ -979,11 +979,6 @@ namespace TigerClaw.Dialog
             AboutCommitText.Text = string.IsNullOrWhiteSpace(BuildInfo.Commit) ? "dev" : BuildInfo.Commit;
             AboutBuildTimeText.Text = FormatUtcText(BuildInfo.BuildUtc);
 
-            string trialText = FormatUtcText(BuildInfo.TrialExpireUtc);
-            bool hasTrial = !string.IsNullOrWhiteSpace(trialText);
-            AboutTrialLabel.Visibility = hasTrial ? Visibility.Visible : Visibility.Collapsed;
-            AboutTrialText.Visibility = hasTrial ? Visibility.Visible : Visibility.Collapsed;
-            AboutTrialText.Text = trialText;
         }
 
         private void OnAboutCopyClick(object sender, RoutedEventArgs e)
@@ -1385,15 +1380,15 @@ namespace TigerClaw.Dialog
                 case "中英文不限长混合输入":
                     return "允许超过最大码长，暂存顶字上屏的候选字词，最后一起上屏。";
                 case "自动启用整句模式":
-                    return "方案名含“智能”时启用字词整句：空格、选重键及超出最大码长固定分段，双空格上屏；否则含“整句”时启用原整句自由切分。两者都由本地模型排序。";
+                    return "方案名含“整句”时启用整句输入：连续编码由本地模型自动切分并生成整句候选。";
                 case "整句神经重排":
                     return "使用独立 Qwen 推理进程重排前 5 个整句候选；不可用时自动保留三元模型结果。";
                 case "整句Tab自学习":
                     return "仅学习 Tab 明确纠正且目标应用确认成功上屏的片段；记录保存在当前方案目录，不改变原码表。关闭后保留记录但不参与排序。";
                 case "整句自动提前上屏":
-                    return "高置信度且连续稳定的前缀自动提前上屏。普通整句还支持空码顶屏；字词整句仅在已确定的分段边界上屏，并消耗分隔符，不因空码另行切分。默认关闭。";
+                    return "高置信度且连续稳定的前缀自动提前上屏；空码无法继续补全当前码段时也会顶上已确认的字并保留新键。默认关闭。";
                 case "保留最少编码数量":
-                    return "自动上屏后至少留下的码数。0 表示不额外限制；字词整句只计编码字母，不计空格和选重键，且概率提前上屏至少保留 3 码。";
+                    return "自动上屏后至少留在编码里的码数。0 表示不额外限制；大于 0 时，提前上屏（含空码顶屏）都必须留下这么多未上屏编码。";
                 case "高频字仅使用最优码组句":
                     return "前多少个高频单字组句时只使用最优码。默认 1500。0 或空表示不限制，码表里的全部编码都可参与切分。";
                 case "整句允许全码组句白名单":
@@ -1577,13 +1572,6 @@ namespace TigerClaw.Dialog
             {
                 sb.Append("构建时间：");
                 sb.AppendLine(buildText);
-            }
-
-            string trialText = FormatUtcText(BuildInfo.TrialExpireUtc);
-            if (!string.IsNullOrWhiteSpace(trialText))
-            {
-                sb.Append("试用到期：");
-                sb.AppendLine(trialText);
             }
 
             return sb.ToString().TrimEnd();

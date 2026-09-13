@@ -56,7 +56,6 @@ namespace TigerClawHookNative
         PipeClient _pipeClient;
         InputReplay _inputReplay;
         CoreLaunchHelper _coreLaunchHelper;
-        CoreIntegrity _startupIntegrity;
         HookState _state;
         bool _focusPublishPending = true;
         KeyboardHook _keyboardHook;

@@ -12,6 +12,9 @@ namespace TigerClaw.Core
 
         private static int Main(string[] args)
         {
+            // Before registration checks, singleton ownership, IPC or any UI:
+            // old TSF DLLs may still launch us from the SYSTEM logon desktop.
+            if (!CoreStartupContext.CanStart()) return 0;
 #if DEBUG
             Console.Title = RuntimeConstants.CoreProcessName;
 #endif

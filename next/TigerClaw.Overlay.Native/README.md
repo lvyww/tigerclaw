@@ -40,6 +40,12 @@ and `next/_native_build/`; it does not deploy or launch the Overlay.
 
 ## Build
 
+Pending sentence decoding retains an already published nonempty frame from the
+same `CandidateFrameSession`, including input/code-only frames after an empty
+decode. It does not show a placeholder, move the window or replay old candidates.
+Clear, session/focus changes and explicit hiding still invalidate the frame.
+Regression: `tests/test_pending_frame.py` with the real Core-generated trace.
+
 Candidate animations apply to every input mode and only interpolate geometry
 while the candidate window is already visible. Movement, growth and shrinkage
 share one duration (default 200 ms). Appearing publishes the full candidate

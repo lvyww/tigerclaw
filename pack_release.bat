@@ -6,7 +6,6 @@ set "ROOT=%~dp0"
 if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
 set "RELEASE_DIR=%ROOT%\release"
 set "STAGE_DIR=%RELEASE_DIR%\TigerClaw"
-set "CONFIG_PATH=%ROOT%\publish_config.txt"
 set "DIST_CONFIG=%ROOT%\dist_config.txt"
 set "SEVEN_Z=%RELEASE_DIR%\7z.exe"
 set "SENTENCE_LEXICON_SOURCE=%ROOT%\release_arm64"
@@ -20,9 +19,10 @@ if not exist "%DIST_CONFIG%" (
     exit /b 1
 )
 
+set "PACK_VERSION_LABEL=%~1"
+set "PACK_BUILD_INFO=%ROOT%\next\TigerClaw.Shared\BuildInfo.cs"
 set "PACK_RELEASE_DIR=%RELEASE_DIR%"
 set "PACK_STAGE_DIR=%STAGE_DIR%"
-set "PACK_CONFIG_PATH=%CONFIG_PATH%"
 set "PACK_DIST_CONFIG=%DIST_CONFIG%"
 set "PACK_SEVEN_Z=%SEVEN_Z%"
 set "PACK_SENTENCE_LEXICON_SOURCE=%SENTENCE_LEXICON_SOURCE%"
@@ -31,18 +31,18 @@ echo ====================================
 echo Pack TigerClaw Release
 echo ====================================
 echo ReleaseDir: %PACK_RELEASE_DIR%
-echo Config: %PACK_CONFIG_PATH%
 
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$ErrorActionPreference='Stop';" ^
   "$release=$env:PACK_RELEASE_DIR;" ^
   "$stage=$env:PACK_STAGE_DIR;" ^
-  "$configPath=$env:PACK_CONFIG_PATH;" ^
   "$distConfig=$env:PACK_DIST_CONFIG;" ^
   "$sevenZ=$env:PACK_SEVEN_Z;" ^
   "$armRelease=$env:PACK_SENTENCE_LEXICON_SOURCE;" ^
+  "$version = $env:PACK_VERSION_LABEL;" ^
+  "if([string]::IsNullOrWhiteSpace($version)){ $q=[char]34; $info=Get-Content -LiteralPath $env:PACK_BUILD_INFO -Raw; $match=[regex]::Match($info,('VersionLabel\s*=\s*'+$q+'([^'+$q+']+)'+$q)); if($match.Success){ $version=$match.Groups[1].Value } };" ^
+  "if([string]::IsNullOrWhiteSpace($version) -or $version -notmatch '^[A-Za-z0-9][A-Za-z0-9._+-]*$'){ throw 'Missing or invalid package version' };" ^
   "$imeName = -join ([char[]](0x864E,0x722A,0x8F93,0x5165,0x6CD5));" ^
-  "$limitTag = -join ([char[]](0x9650,0x671F));" ^
   "$installBat = (-join ([char[]](0x5B89,0x88C5))) + '.bat';" ^
   "$uninstallBat = (-join ([char[]](0x5378,0x8F7D))) + '.bat';" ^
   "$changelog = (-join ([char[]](0x66F4,0x65B0,0x65E5,0x5FD7))) + '.txt';" ^
@@ -64,12 +64,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "New-Item -Path $stage -ItemType Directory -Force | Out-Null;" ^
   "foreach($item in $items){ Copy-Item -LiteralPath (Join-Path $release $item) -Destination $stage -Recurse -Force };" ^
   "Copy-Item -LiteralPath $distConfig -Destination (Join-Path $stage 'config.txt') -Force;" ^
-  "$trialLine = Get-Content -LiteralPath $configPath -ErrorAction Stop | Where-Object { $_ -match '^\s*trial_expire_utc\s*=' -and $_ -notmatch '^\s*#' } | Select-Object -First 1;" ^
-  "if(-not $trialLine){ throw ('Missing trial_expire_utc: {0}' -f $configPath) };" ^
-  "$trialText = ($trialLine -split '=',2)[1].Trim();" ^
-  "if($trialText -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$'){ throw ('Invalid trial_expire_utc: {0}' -f $trialText) };" ^
-  "$expireDateText = $trialText.Substring(0,10) -replace '-','';" ^
-  "$fileName = '{0}-{1}{2}.7z' -f $imeName,$limitTag,$expireDateText;" ^
+  "$fileName = '{0}-{1}.7z' -f $imeName,$version;" ^
   "$archivePath = Join-Path $release $fileName;" ^
   "if(Test-Path -LiteralPath $archivePath){ Remove-Item -LiteralPath $archivePath -Force };" ^
   "Push-Location $release;" ^

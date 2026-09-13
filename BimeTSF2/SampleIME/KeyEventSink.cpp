@@ -9,6 +9,7 @@
 #include "Globals.h"
 #include "SampleIME.h"
 #include "Compartment.h"
+#include "ProtectedInput.h"
 #include "PipeClient.h"
 
 static volatile LONG s_pendingCapsCompensate = 0;
@@ -544,6 +545,8 @@ static BOOL IsShellTrayWindow(_In_opt_ HWND hwnd)
 
 BOOL CSampleIME::_IsKeyboardDisabled(_In_opt_ ITfContext *pContextHint)
 {
+    if (TigerClawInput::IsProtectedEnvironment(_IsSecureMode() != FALSE) ||
+        TigerClawInput::HasPasswordFocus()) return TRUE;
     ITfDocumentMgr* pDocMgrFocus = nullptr;
     ITfContext* pResolvedContext = nullptr;
     BOOL releaseResolvedContext = FALSE;
@@ -668,6 +671,19 @@ Exit:
     }
 
     return isDisabled;
+}
+
+BOOL CSampleIME::_BypassProtectedInput(_In_opt_ ITfContext *context)
+{
+    if (!_IsKeyboardDisabled(context)) return FALSE;
+    _failedKeyQueue.clear();
+    _ClearPendingResponseCache();
+    _ClearPendingKeyEvent();
+    _keyUpForwardBudget = 0;
+    _CancelCompositionRefresh();
+    if (_msgWndHandle) KillTimer(_msgWndHandle, kFailedKeyFlushTimerId);
+    ResetCapsCompensationState("protected_input");
+    return TRUE;
 }
 
 void CSampleIME::_ClearPendingResponseCache()
@@ -899,6 +915,7 @@ void CSampleIME::_EnqueueFailedKeyMessage(UINT vkCode,
                                           _In_z_ const char *reason,
                                           ULONGLONG eventId)
 {
+    if (_BypassProtectedInput(nullptr)) return;
     ULONGLONG nowTick = GetTickCount64();
     _PruneFailedKeyQueue(nowTick);
 
@@ -933,6 +950,7 @@ void CSampleIME::_EnqueueFailedKeyMessage(UINT vkCode,
 
 BOOL CSampleIME::_FlushFailedKeyQueue(_In_opt_ ITfContext *pContext, _In_z_ const char *stageTag)
 {
+    if (_BypassProtectedInput(pContext)) return FALSE;
     if (_failedKeyFlushActive)
     {
         _ScheduleFailedKeyFlush();
@@ -962,6 +980,7 @@ BOOL CSampleIME::_FlushFailedKeyQueue(_In_opt_ ITfContext *pContext, _In_z_ cons
 
     while (!_failedKeyQueue.empty())
     {
+        if (_BypassProtectedInput(pContext)) return FALSE;
         ULONGLONG elapsed = GetTickCount64() - started;
         if (elapsed >= kFailedKeyFlushBudgetMs || flushed >= kFailedKeyFlushBatchSize)
         {
@@ -1056,7 +1075,11 @@ void CSampleIME::_HandleFailedKeyFlush()
     {
         document->GetTop(&context);
     }
-    if (context != nullptr && !_trialExpired && !_IsStartupGuardActive() && !_IsKeyboardDisabled(context))
+    if (_BypassProtectedInput(context))
+    {
+        // Dropped locally; never replay into this context.
+    }
+    else if (context != nullptr && !_IsStartupGuardActive() && !_IsKeyboardDisabled(context))
     {
         _FlushFailedKeyQueue(context, "FailedKeyTimer");
     }
@@ -1080,6 +1103,12 @@ BOOL CSampleIME::_ApplyResponseAndSyncState(_In_opt_ ITfContext *pContext, _Inou
         return FALSE;
     }
 
+    if (_BypassProtectedInput(pContext))
+    {
+        if (pCommittedViaAnchor) *pCommittedViaAnchor = FALSE;
+        *pResponse = BimeResponse();
+        return FALSE;
+    }
     BOOL committedViaAnchor = _SyncCaretAnchorForResponse(pContext, pResponse);
 
     if (pResponse->compositionTracking)
@@ -1108,6 +1137,7 @@ BOOL CSampleIME::_ApplyResponseAndSyncState(_In_opt_ ITfContext *pContext, _Inou
 
 STDAPI CSampleIME::OnSetFocus(BOOL fForeground)
 {
+    if (fForeground) _BypassProtectedInput(nullptr);
     Global::LogToFileVerbose("KeySink OnSetFocus foreground=%d", fForeground);
     ResetCapsCompensationState(fForeground ? "OnSetFocus.foreground" : "OnSetFocus.background");
 
@@ -1128,6 +1158,13 @@ STDAPI CSampleIME::OnTestKeyDown(ITfContext *pContext, WPARAM wParam, LPARAM lPa
     if (pIsEaten == nullptr)
     {
         return E_INVALIDARG;
+    }
+
+    // Before modifier tracking, cached replies, diagnostics and any IPC.
+    if (_BypassProtectedInput(pContext))
+    {
+        *pIsEaten = FALSE;
+        return S_OK;
     }
 
     Global::UpdateModifiers(wParam, lParam);
@@ -1167,12 +1204,7 @@ STDAPI CSampleIME::OnTestKeyDown(ITfContext *pContext, WPARAM wParam, LPARAM lPa
     _ClearPendingResponseCache();
     _ClearPendingKeyEvent();
 
-    if (_trialExpired)
-    {
-        *pIsEaten = FALSE;
-        LogKeyDecision("OnTestKeyDown", vkCode, "skip=trial_expired");
-        return S_OK;
-    }
+
 
 
     if (_IsStartupGuardActive())
@@ -1314,16 +1346,18 @@ STDAPI CSampleIME::OnKeyDown(ITfContext *pContext, WPARAM wParam, LPARAM lParam,
         return E_INVALIDARG;
     }
 
+    // Before modifier tracking, cached replies, diagnostics and any IPC.
+    if (_BypassProtectedInput(pContext))
+    {
+        *pIsEaten = FALSE;
+        return S_OK;
+    }
+
     Global::UpdateModifiers(wParam, lParam);
 
     UINT vkCode = static_cast<UINT>(wParam);
 
-    if (_trialExpired)
-    {
-        *pIsEaten = FALSE;
-        LogKeyDecision("OnKeyDown", vkCode, "skip=trial_expired");
-        return S_OK;
-    }
+
 
 
     if (_IsStartupGuardActive())
@@ -1577,6 +1611,13 @@ STDAPI CSampleIME::OnTestKeyUp(ITfContext *pContext, WPARAM wParam, LPARAM lPara
         return E_INVALIDARG;
     }
 
+    // Before modifier tracking, cached replies, diagnostics and any IPC.
+    if (_BypassProtectedInput(pContext))
+    {
+        *pIsEaten = FALSE;
+        return S_OK;
+    }
+
     Global::UpdateModifiers(wParam, lParam);
 
     UINT vkCode = static_cast<UINT>(wParam);
@@ -1633,16 +1674,7 @@ STDAPI CSampleIME::OnTestKeyUp(ITfContext *pContext, WPARAM wParam, LPARAM lPara
         return S_OK;
     }
 
-    if (_trialExpired)
-    {
-        if (vkCode == VK_CAPITAL)
-        {
-            ResetCapsCompensationState("OnTestKeyUp.trial_expired");
-        }
-        *pIsEaten = FALSE;
-        LogKeyDecision("OnTestKeyUp", vkCode, "skip=trial_expired");
-        return S_OK;
-    }
+
 
 
     if (_IsStartupGuardActive())
@@ -1775,6 +1807,13 @@ STDAPI CSampleIME::OnKeyUp(ITfContext *pContext, WPARAM wParam, LPARAM lParam, B
         return E_INVALIDARG;
     }
 
+    // Before modifier tracking, cached replies, diagnostics and any IPC.
+    if (_BypassProtectedInput(pContext))
+    {
+        *pIsEaten = FALSE;
+        return S_OK;
+    }
+
     Global::UpdateModifiers(wParam, lParam);
 
     UINT vkCode = static_cast<UINT>(wParam);
@@ -1795,13 +1834,7 @@ STDAPI CSampleIME::OnKeyUp(ITfContext *pContext, WPARAM wParam, LPARAM lParam, B
         return S_OK;
     }
 
-    if (_trialExpired)
-    {
-        _AdvanceKeyUpWindow(wParam, lParam);
-        *pIsEaten = FALSE;
-        LogKeyDecision("OnKeyUp", vkCode, "skip=trial_expired");
-        return S_OK;
-    }
+
 
 
     if (_IsStartupGuardActive())

@@ -98,7 +98,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>bcrypt.lib;shcore.lib;uiautomationcore.lib;oleacc.lib;ole32.lib;user32.lib;advapi32.lib;psapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>shcore.lib;uiautomationcore.lib;oleacc.lib;ole32.lib;user32.lib;advapi32.lib;psapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -119,7 +119,7 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>bcrypt.lib;shcore.lib;uiautomationcore.lib;oleacc.lib;ole32.lib;user32.lib;advapi32.lib;psapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>shcore.lib;uiautomationcore.lib;oleacc.lib;ole32.lib;user32.lib;advapi32.lib;psapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">
@@ -135,7 +135,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>bcrypt.lib;shcore.lib;uiautomationcore.lib;oleacc.lib;ole32.lib;user32.lib;advapi32.lib;psapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>shcore.lib;uiautomationcore.lib;oleacc.lib;ole32.lib;user32.lib;advapi32.lib;psapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">
@@ -156,12 +156,11 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>bcrypt.lib;shcore.lib;uiautomationcore.lib;oleacc.lib;ole32.lib;user32.lib;advapi32.lib;psapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>shcore.lib;uiautomationcore.lib;oleacc.lib;ole32.lib;user32.lib;advapi32.lib;psapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClInclude Include="App\HookRuntime.h" />
-    <ClInclude Include="Common\CoreIntegrity.h" />
     <ClInclude Include="Common\Logger.h" />
     <ClInclude Include="Common\NativeHelpers.h" />
     <ClInclude Include="Common\CoreLaunchHelper.h" />
@@ -177,7 +176,6 @@
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="App\HookRuntime.cpp" />
-    <ClCompile Include="Common\CoreIntegrity.cpp" />
     <ClCompile Include="App\main.cpp" />
     <ClCompile Include="Common\CoreLaunchHelper.cpp" />
     <ClCompile Include="Common\Logger.cpp" />

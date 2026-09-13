@@ -151,6 +151,7 @@ public:
     BOOL _IsStoreAppMode(void) { return (_dwActivateFlags & TF_TMF_IMMERSIVEMODE) ? TRUE : FALSE; };
 private:
     BOOL _IsKeyboardDisabled(_In_opt_ ITfContext *pContextHint = nullptr);
+    BOOL _BypassProtectedInput(_In_opt_ ITfContext *context);
     BOOL _IsStartupGuardActive();
     BOOL _InitCtrlSpacePreservedKey();
     void _UninitCtrlSpacePreservedKey();
@@ -307,7 +308,6 @@ private:
     BOOL _ctrlSpacePreservedKeyRegistered;
     BOOL _keySinkUseForeground;
     BOOL _isImmersiveSession;
-    BOOL _trialExpired;
     ULONGLONG _lastCoreLaunchAttemptTick;
     volatile LONG _coreLaunchWorkerRunning;
     LONGLONG _lastFocusHwnd;

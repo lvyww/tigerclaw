@@ -195,50 +195,6 @@ BOOL CPipeClient::IsConnected() const
     return _isConnected;
 }
 
-BOOL CPipeClient::GetConnectedServerProcessPath(_Out_writes_(pathCount) WCHAR *path, size_t pathCount) const
-{
-    if (path == nullptr || pathCount < 2)
-    {
-        return FALSE;
-    }
-
-    path[0] = L'\0';
-
-    if (!_isConnected || _hPipe == INVALID_HANDLE_VALUE)
-    {
-        return FALSE;
-    }
-
-    ULONG serverProcessId = 0;
-    if (!GetNamedPipeServerProcessId(_hPipe, &serverProcessId) || serverProcessId == 0)
-    {
-        Global::LogToFile("CPipeClient: GetNamedPipeServerProcessId failed err=%lu", GetLastError());
-        return FALSE;
-    }
-
-    HANDLE processHandle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, serverProcessId);
-    if (processHandle == nullptr)
-    {
-        Global::LogToFile("CPipeClient: OpenProcess failed pid=%lu err=%lu", serverProcessId, GetLastError());
-        return FALSE;
-    }
-
-    DWORD imagePathCount = static_cast<DWORD>(pathCount);
-    BOOL ok = QueryFullProcessImageNameW(processHandle, 0, path, &imagePathCount);
-    DWORD err = ok ? ERROR_SUCCESS : GetLastError();
-    CloseHandle(processHandle);
-
-    if (!ok || imagePathCount == 0)
-    {
-        path[0] = L'\0';
-        Global::LogToFile("CPipeClient: QueryFullProcessImageNameW failed pid=%lu err=%lu", serverProcessId, err);
-        return FALSE;
-    }
-
-    Global::LogToFileVerbose("CPipeClient: connected_server pid=%lu path=%ls", serverProcessId, path);
-    return TRUE;
-}
-
 BOOL CPipeClient::TryConnect()
 {
     if (!WaitNamedPipe(BIME_PIPE_NAME, 0))

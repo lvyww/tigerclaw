@@ -119,19 +119,8 @@ namespace TigerClawHookNative
         return TrySendNotification(BuildHookDisabledJson(disabled), error);
     }
 
-    bool PipeClient::IsCommunicationBlocked() const
-    {
-        return _communicationBlocked;
-    }
-
     bool PipeClient::EnsureRequestPipe(std::wstring& error)
     {
-        if (_communicationBlocked)
-        {
-            error = L"Core communication blocked by integrity verification.";
-            return false;
-        }
-
         if (_requestPipe != INVALID_HANDLE_VALUE)
         {
             return true;
@@ -150,26 +139,11 @@ namespace TigerClawHookNative
             return false;
         }
 
-        std::wstring serverPath;
-        if (!_coreIntegrity.VerifyPipeServerExecutable(_requestPipe, serverPath, error))
-        {
-            DisconnectRequestPipe();
-            _communicationBlocked = true;
-            Logger::Info(L"integrity", std::wstring(L"blocked request pipe server=") + serverPath);
-            return false;
-        }
-
         return true;
     }
 
     bool PipeClient::EnsureNotifyPipe(std::wstring& error)
     {
-        if (_communicationBlocked)
-        {
-            error = L"Core communication blocked by integrity verification.";
-            return false;
-        }
-
         if (_notifyPipe != INVALID_HANDLE_VALUE)
         {
             return true;
@@ -185,15 +159,6 @@ namespace TigerClawHookNative
         if (_notifyPipe == INVALID_HANDLE_VALUE)
         {
             error = L"Notify pipe connect failed: " + GetLastErrorMessage(GetLastError());
-            return false;
-        }
-
-        std::wstring serverPath;
-        if (!_coreIntegrity.VerifyPipeServerExecutable(_notifyPipe, serverPath, error))
-        {
-            DisconnectNotifyPipe();
-            _communicationBlocked = true;
-            Logger::Info(L"integrity", std::wstring(L"blocked notify pipe server=") + serverPath);
             return false;
         }
 

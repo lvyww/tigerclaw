@@ -7,6 +7,9 @@
 #define private public
 #include "../BimeTSF2/SampleIME/PipeClient.h"
 #undef private
+static wchar_t connectionPipeName[128];
+#undef BIME_PIPE_NAME
+#define BIME_PIPE_NAME connectionPipeName
 #include "../BimeTSF2/SampleIME/PipeClient.cpp"
 
 namespace Global
@@ -56,6 +59,18 @@ static void CALLBACK Quit(HWND, UINT, UINT_PTR id, DWORD)
 
 int main()
 {
+    swprintf_s(connectionPipeName, L"\\\\.\\pipe\\TigerClaw.TsfConnectTest.%lu", GetCurrentProcessId());
+    for (int attempt = 0; attempt < 2; ++attempt)
+    {
+        HANDLE server = CreateNamedPipeW(connectionPipeName, PIPE_ACCESS_DUPLEX,
+            PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT, 1, 4096, 4096, 0, nullptr);
+        Check(server != INVALID_HANDLE_VALUE, "connection server");
+        CPipeClient client;
+        Check(client.Connect(), "connect arbitrary server executable");
+        Check(ConnectNamedPipe(server, nullptr) || GetLastError() == ERROR_PIPE_CONNECTED, "connection accepted");
+        client.Disconnect();
+        CloseHandle(server);
+    }
     {
         TestPipe pipe;
         Check(pipe.client.SendShowMenuAndWait(nullptr, 100) == E_INVALIDARG, "menu null response rejected");

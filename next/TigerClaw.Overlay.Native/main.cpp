@@ -33,7 +33,7 @@ namespace tiger::overlay
         Renderer candidateRenderer_, statusRenderer_, transitionRenderer_;
         FrameTransition transition_;
         bool transitionsEnabled_ = true;
-        bool frameHasCandidates_ = false;
+        bool frameCanBeHeld_ = false;
         Text candidateSession_, frameSession_;
         HMONITOR frameMonitor_ = nullptr;
         RECT frameWork_{};
@@ -50,9 +50,9 @@ namespace tiger::overlay
             explicit FrameGuard(bool& value) : active(value) { active = true; }
             ~FrameGuard() { active = false; }
         };
-        static bool IsCandidateFrame(DisplayMode mode)
+        static bool CanRetainFrame(const Display& display)
         {
-            return mode == DisplayMode::CandidatesOnly || mode == DisplayMode::CodeAndCandidates;
+            return display.mode != DisplayMode::Hidden && !display.text.empty();
         }
         void ObserveCandidateSession()
         {
@@ -67,16 +67,16 @@ namespace tiger::overlay
         }
         void PresentCandidate(Renderer& renderer, const POINT& destination, std::uint64_t revision)
         {
-            const bool previous = frameHasCandidates_;
-            // Invalidate BEFORE Present: it can reenter after publishing code-only
-            // pixels but before ShowCandidate acknowledges the complete frame.
-            if (!IsCandidateFrame(display_.mode)) frameHasCandidates_ = false;
+            const bool previous = frameCanBeHeld_;
+            // Retain already published input-only pixels too. An empty/hidden
+            // replacement must revoke eligibility before a reentrant Present.
+            if (!CanRetainFrame(display_)) frameCanBeHeld_ = false;
             try { renderer.Present(candidate_, &destination); }
             catch (...)
             {
                 // A failed publication leaves old pixels intact; a reentrant
                 // replacement/reset is never rolled back by this older call.
-                if (revision == visualRevision_) frameHasCandidates_ = previous;
+                if (revision == visualRevision_) frameCanBeHeld_ = previous;
                 throw;
             }
         }
@@ -87,7 +87,7 @@ namespace tiger::overlay
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW))
                 throw std::runtime_error("Candidate show failed");
             if (revision != visualRevision_ || !IsWindowVisible(candidate_)) return false;
-            frameHasCandidates_ = IsCandidateFrame(display_.mode);
+            frameCanBeHeld_ = CanRetainFrame(display_);
             frameSession_ = state_.candidateFrameSession;
             frameMonitor_ = MonitorFromPoint({state_.caretX, state_.caretY}, MONITOR_DEFAULTTONEAREST);
             MONITORINFO monitor{sizeof(monitor)};
@@ -98,12 +98,12 @@ namespace tiger::overlay
         void HideImmediately()
         {
             StopTransition();
-            frameHasCandidates_ = false;
+            frameCanBeHeld_ = false;
             ShowWindow(candidate_, SW_HIDE);
         }
         bool CanHoldCandidateFrame()
         {
-            if (!frameHasCandidates_ || state_.candidateFrameSession.empty() ||
+            if (!frameCanBeHeld_ || state_.candidateFrameSession.empty() ||
                 state_.candidateFrameSession != frameSession_ || !IsWindowVisible(candidate_) ||
                 !UsableCaret(state_.caretX, state_.caretY)) return false;
             const POINT caret{state_.caretX, state_.caretY};

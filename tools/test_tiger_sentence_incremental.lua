@@ -1032,7 +1032,9 @@ print("OK  high_freq_limit changes rebuild the index immediately")
 
 local original_user_dir = rime_api.get_user_data_dir
 local import_dir = repo .. "/rime/tiger_sentence/.test_import"
-os.execute("mkdir -p '" .. import_dir .. "'")
+local windows = package.config:sub(1, 1) == "\\"
+local quoted_import_dir = '"' .. import_dir .. '"'
+os.execute((windows and "mkdir " or "mkdir -p ") .. quoted_import_dir)
 local import_codes = io.open(import_dir .. "/tiger_sentence.codes.txt", "wb")
 import_codes:write(
     "# minimal imported table\n",
@@ -1042,6 +1044,7 @@ import_codes:write(
     "你们\tnm\r\n",
     "甲\tja\n",
     "乙\tja\n",
+    "整体\tjanm\n",
     "BAD\tu1\n"
 )
 import_codes:close()
@@ -1053,8 +1056,8 @@ local imported = sentence.data_status()
 if imported.codes_path ~= import_dir .. "/tiger_sentence.codes.txt" then
     fail("imported table was not preferred from the user directory")
 end
-if imported.codes_entries ~= 6 then
-    fail(string.format("imported table should keep 6 entries, got %d",
+if imported.codes_entries ~= 7 then
+    fail(string.format("imported table should keep 7 entries, got %d",
         imported.codes_entries))
 end
 if imported.isolation_enabled then
@@ -1082,8 +1085,31 @@ if not sentence.capture_empty_code_candidate("ja", "") or
     fail("disabled duplicate-single switch did not restore first-rank grouping")
 end
 sentence.set_allow_duplicate_single(nil)
+for _, automatic in ipairs({false, true}) do
+    local env, context, properties, commits, menu = fake_environment(automatic)
+    context.input = "ja"
+    menu.count = 2
+    sentence.processor(fake_key("Tab"), env)
+    if #commits ~= 0 then fail("Tab committed without continued input") end
+    sentence.processor(fake_key("n"), env)
+    if automatic and commits[1] ~= "乙" then fail("Tab lock did not submit confirmed prefix") end
+    if not automatic and #commits ~= 0 then fail("Tab lock ignored disabled early commit") end
+    sentence.processor(fake_key("m"), env)
+    local shown = {}
+    Candidate = function(_, _, _, text) return {text = text} end
+    yield = function(candidate) shown[#shown + 1] = candidate.text end
+    -- Real Rime owns distinct processor/translator environments.
+    sentence.translator(context.input, {start = 0, _end = #context.input}, {engine = env.engine})
+    Candidate, yield = old_candidate, old_yield
+    if shown[1] ~= (automatic and "你们" or "乙你们") then fail("Tab lock lost text/boundary across environments") end
+    sentence.processor(fake_key("BackSpace"), env)
+    sentence.processor(fake_key("BackSpace"), env)
+    if (properties.tiger_sentence_locks or "") ~= "" then fail("Backspace did not release lock") end
+    if context.input ~= (automatic and "" or "ja") then fail("Backspace crossed committed boundary") end
+end
+print("OK  Tab locks text/boundaries across separate environments and consumes committed raw")
 rime_api.get_user_data_dir = original_user_dir
-os.execute("rm -rf '" .. import_dir .. "'")
+os.execute((windows and "rmdir /s /q " or "rm -rf ") .. quoted_import_dir)
 sentence.apply_high_freq_limit(1500)
 local restored = sentence.data_status()
 if restored.codes_count ~= default_codes_count or

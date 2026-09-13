@@ -146,9 +146,6 @@ namespace TigerClaw.Core.Tests
             LearningCheck(first.Candidates[0].Text == "乙", "single correction changes sentence ranking");
             var prefix = new SentenceLockedPrefix("aa", first.Candidates[0].Text, first.Candidates[0].Boundary);decoder.SetLearning(null, "");
             var locked = decoder.Decode("aabb", lockedPrefix: prefix);LearningCheck(locked.Candidates[0].LearningScore == 0 && locked.Candidates[0].Text == "乙中", "lock no stale scores");
-            var smart = new SentenceInputDecoder(lexicon, NeutralSentenceLanguageModel.Instance, beamWidth: 1, isolationPenalty: SentenceIsolationPenalty.None, smartMaxCodeLength: 2);
-            smart.SetLearning(SentenceLearningSnapshot.Build(new[] { e }), e.Mode);var fixedEdges = smart.Decode("aabb", 20, true);
-            LearningCheck(fixedEdges.Candidates[0].Text == "乙中" && fixedEdges.LearningAffected, "smart fixed segments share learning policy");
         }
         private static void LearningEngineAndProtocol(string root)
         {

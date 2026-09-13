@@ -56,7 +56,6 @@ public:
     void Disconnect();
     BOOL IsConnected() const;
     BOOL IsBusy() const { return _requestActive != 0; }
-    BOOL GetConnectedServerProcessPath(_Out_writes_(pathCount) WCHAR *path, size_t pathCount) const;
 
     BOOL SendMessage(const char *jsonMessage);
     HRESULT SendMessageAndWait(const char *jsonMessage, _Out_ BimeResponse *pResponse, DWORD timeoutMs = BIME_DEFAULT_TIMEOUT_MS);

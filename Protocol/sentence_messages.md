@@ -11,8 +11,13 @@ links its llama.cpp scorer and has no managed-runtime or companion-DLL dependenc
 - Encoding: UTF-8 without BOM
 - Framing: one JSON object per line
 - Direction: Core is the client; Sentence is the server
-- Lifetime: Core starts Sentence lazily and passes `--parent-pid`; Sentence exits
-  when that parent exits
+- Lifetime: Core preloads Sentence in the background when the current schema
+  activates sentence input and neural reranking is enabled. Disabling either
+  condition cancels pending requests and releases the process started by Core
+  (shutdown first, forced exit if necessary). Re-enabling reloads after cleanup.
+  There is no idle release. Core passes `--parent-pid`; Sentence also exits when
+  that parent exits. Shutdown validates the pipe server PID against the owned
+  process; an independently started process is never terminated by name.
 
 ## Requests
 
@@ -49,8 +54,13 @@ Sentence returns neural log-probabilities in the same order:
 ```
 
 Core accepts a response only when `generation`, `raw_code`, and score count all
-still match the active composition. It combines scores as
-`ngram_score + 0.84 * qwen_total_log_probability`. Only the first five candidates
+still match the active composition and sentence/neural settings remain enabled.
+For a pre-Qwen winner of 2..6 text elements, Core uses
+`(1-alpha)*ngram_score + alpha*qwen_total_log_probability`, with each candidate's
+own length selecting alpha (2: 0.15; 3..6: 0.30; other lengths: the original
+lambda normalized as `lambda/(1+lambda)`). Outside that winner-length range,
+the original additive policy remains (lambda 0.30 for a one-character base
+winner, otherwise 0.84). Only the first five candidates
 are reordered; later n-gram candidates retain their original order. Missing
 executable/model, connection errors, timeouts, crashes, and stale responses leave
 the n-gram order unchanged.

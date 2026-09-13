@@ -100,7 +100,7 @@ struct CandidateFrameHoldProbe {
                     "New-input wait rendered or aged placement history");
                 p.Tick(1000);p.Drain();Check(!p.Visible(),"Late timer revived old-session frame");
                 p.Install(wire.at("new_"+name+"_ready"));p.Refresh();
-                Check(p.Visible() && p.app.frameHasCandidates_,"New-session result failed to show");
+                Check(p.Visible() && p.app.frameCanBeHeld_,"New-session result failed to show");
                 auto before=p.Rect();frames=published;records=p.app.placement_.RecordCount();
                 p.Install(wire.at("new_"+name+"_continuation"));p.Refresh();p.Held(before,frames,records);++cases;
             }
@@ -110,13 +110,14 @@ struct CandidateFrameHoldProbe {
                 if(codeOnly)code.hideCandidates=true;else code.candidates.clear();
                 p.Install(code);p.app.state_.fontSize=9;p.app.state_.animationEnabled=animation!=0;p.Refresh();
                 if(animation) {Check(p.app.transition_.Active(),"Code animation did not start");p.Tick(animation==1?50:250);}
-                Check(p.Visible() && !p.app.frameHasCandidates_,"Code replacement kept candidate eligibility");
+                Check(p.Visible() && p.app.frameCanBeHeld_,"Published code-only frame lost hold eligibility");
+                auto before=p.Rect();auto frames=published;auto records=p.app.placement_.RecordCount();
                 p.Install(wire.at("pending"));p.Refresh();p.Tick(1000);p.Drain();
-                Check(!p.Visible(),"Published code-only frame was retained during pending decode");++cases;
+                p.Held(before,frames,records);++cases;
             }
             {
                 CandidateFrameHoldProbe p(vertical);p.Install(wire.at("ready"));p.Refresh();
-                Check(p.Visible() && p.app.frameHasCandidates_,"Ready frame not published");
+                Check(p.Visible() && p.app.frameCanBeHeld_,"Ready frame not published");
                 auto before=p.Rect();auto frames=published;auto records=p.app.placement_.RecordCount();
                 p.Install(wire.at("pending"));p.Refresh();p.Held(before,frames,records);
                 for(unsigned i=0;i<101;++i) {p.app.Refresh(true);p.Tick();p.Held(before,frames,records);}
@@ -128,15 +129,16 @@ struct CandidateFrameHoldProbe {
             }
             {
                 CandidateFrameHoldProbe p(vertical);p.Install(wire.at("initial_pending"));p.Refresh();
-                Check(!p.Visible() && published==0 && !p.app.frameHasCandidates_,"First pending result showed a placeholder");
+                Check(!p.Visible() && published==0 && !p.app.frameCanBeHeld_,"First pending result showed a placeholder");
                 p.app.Message(p.app.candidate_,WM_TIMER,3,0);p.Tick();
                 Check(!p.Visible(),"Retry resurrected a first pending frame");
                 p.Install(wire.at("ready"));p.Refresh();Check(p.Visible(),"First result did not show");++cases;
             }
             {
                 CandidateFrameHoldProbe p(vertical);auto code=wire.at("ready");code.candidates.clear();code.showCode=true;
-                p.Install(code);p.Refresh();Check(p.Visible() && !p.app.frameHasCandidates_,"Code-only counted as real candidates");
-                p.Install(wire.at("pending"));p.Refresh();Check(!p.Visible(),"Code-only placeholder was held");++cases;
+                p.Install(code);p.Refresh();Check(p.Visible() && p.app.frameCanBeHeld_,"Published input-only frame was not eligible");
+                auto before=p.Rect();auto frames=published;auto records=p.app.placement_.RecordCount();
+                p.Install(wire.at("pending"));p.Refresh();p.Held(before,frames,records);++cases;
             }
             {
                 CandidateFrameHoldProbe p(vertical);p.Install(wire.at("ready"));p.Refresh();
@@ -148,7 +150,7 @@ struct CandidateFrameHoldProbe {
             for(const char* action:{"cancel","focus","inactive","english","disabled"}) {
                 CandidateFrameHoldProbe p(vertical);p.Install(wire.at("ready"));p.Refresh();
                 p.Install(wire.at("pending"));p.Refresh();p.Install(wire.at(action));p.Refresh();
-                Check(!p.Visible() && !p.app.frameHasCandidates_,"End/focus/deactivation did not hide pending frame");
+                Check(!p.Visible() && !p.app.frameCanBeHeld_,"End/focus/deactivation did not hide pending frame");
                 p.Install(wire.at("pending"));p.Refresh();p.Tick();p.Drain();
                 Check(!p.Visible(),"Old pending frame resurrected after hide");++cases;
             }
@@ -157,14 +159,16 @@ struct CandidateFrameHoldProbe {
             CandidateFrameHoldProbe p;p.Install(wire.at("ready"));p.Refresh();
             auto before=p.Rect();auto frames=published;auto records=p.app.placement_.RecordCount();
             auto code=wire.at("completed_empty");p.Install(code);failPresent=1;p.Refresh();
-            Check(p.app.frameHasCandidates_,"Failed code publication invalidated untouched candidate pixels");
+            Check(p.app.frameCanBeHeld_,"Failed code publication invalidated untouched candidate pixels");
             p.Install(wire.at("pending"));p.Refresh();p.Held(before,frames,records);++cases;
         }
         {
             CandidateFrameHoldProbe p;p.Install(wire.at("ready"));p.Refresh();
             p.Install(wire.at("completed_empty"));
             duringPresent=[&]{p.Install(wire.at("pending"));p.Refresh();};p.Refresh();p.Drain();
-            Check(!p.Visible() && !p.app.frameHasCandidates_,"Reentrant pending retained newly published code pixels");++cases;
+            Check(p.Visible() && p.app.frameCanBeHeld_,"Reentrant pending hid published code pixels");
+            auto before=p.Rect();auto frames=published;auto records=p.app.placement_.RecordCount();
+            p.Refresh();p.Held(before,frames,records);++cases;
         }
         {
             CandidateFrameHoldProbe p;p.Install(wire.at("previous_commit"));p.Refresh();
@@ -186,10 +190,27 @@ struct CandidateFrameHoldProbe {
             p.Tick(201);p.app.Message(p.app.candidate_,WM_TIMER,1,0);
             Check(p.Visible(),"Fresh session did not reveal candidates");++cases;
         }
+        {
+            CandidateFrameHoldProbe p;p.Install(wire.at("ready"));p.Refresh();
+            p.Install(wire.at("completed_empty"));p.Refresh();
+            Check(p.app.display_.mode==DisplayMode::InputOnly,"Expected real Core empty-result input frame");
+            auto before=p.Rect();auto frames=published;auto records=p.app.placement_.RecordCount();
+            p.Install(wire.at("pending_after_empty"));p.Refresh();p.Held(before,frames,records);
+            p.Install(wire.at("completed_candidates"));p.Refresh();
+            Check(p.Visible() && published>frames,"Input-only continuation did not refresh candidates");++cases;
+        }
+        for(bool clear:{false,true}) {
+            CandidateFrameHoldProbe p;p.Install(wire.at("completed_empty"));p.Refresh();
+            Check(p.Visible(),"Input-only reset fixture did not show");
+            if(clear) {p.Install(wire.at("cancel"));p.Refresh();p.Install(wire.at("pending"));}
+            else p.Install(wire.at("new_commit_pending"));
+            p.Refresh();p.Tick();p.Drain();
+            Check(!p.Visible(),"Input-only frame crossed clear/session boundary");++cases;
+        }
         for(unsigned failure:{0u,1u}) {
             CandidateFrameHoldProbe p;p.Install(wire.at("ready"));
             if(failure==0)failPresent=1;else failShow=1;p.Refresh();
-            Check(!p.Visible() && !p.app.frameHasCandidates_,"Failed first frame latched real presentation");
+            Check(!p.Visible() && !p.app.frameCanBeHeld_,"Failed first frame latched real presentation");
             p.Install(wire.at("pending"));p.Refresh();p.Tick();Check(!p.Visible(),"Failed first frame was resurrected");++cases;
         }
         {
@@ -212,7 +233,7 @@ struct CandidateFrameHoldProbe {
             CandidateFrameHoldProbe p;p.Install(wire.at("ready"));p.Refresh();
             auto many=wire.at("ready");many.candidates={u"one",u"two",u"three"};p.Install(many);
             duringPresent=[&] {p.Install(wire.at("cancel"));p.Refresh();};p.Refresh();p.Drain();
-            Check(!p.Visible() && !p.app.frameHasCandidates_,"Reentrant cancel retained pixels");++cases;
+            Check(!p.Visible() && !p.app.frameCanBeHeld_,"Reentrant cancel retained pixels");++cases;
         }
         for(unsigned invalid=0;invalid<4;++invalid) {
             CandidateFrameHoldProbe p;p.Install(wire.at("ready"));p.Refresh();p.Install(wire.at("pending"));
