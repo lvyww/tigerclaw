@@ -9,6 +9,7 @@
 #include "Globals.h"
 #include "SampleIME.h"
 #include "Compartment.h"
+#include "ProtectedInput.h"
 #include "PipeClient.h"
 
 static volatile LONG s_pendingCapsCompensate = 0;
@@ -16,6 +17,8 @@ static volatile LONG s_capsCompensateWorkerRunning = 0;
 static const ULONGLONG kFailedKeyQueueTtlMs = 5000;
 static const size_t kFailedKeyQueueMaxSize = 128;
 static const DWORD kPipeKeyResponseTimeoutMs = 60;
+static const DWORD kFailedKeyFlushBudgetMs = 60;
+static const size_t kFailedKeyFlushBatchSize = 8;
 static const UINT kKeyUpForwardBudgetMax = 20;
 
 static LONG GetPendingCapsCompensateFlag()
@@ -542,6 +545,8 @@ static BOOL IsShellTrayWindow(_In_opt_ HWND hwnd)
 
 BOOL CSampleIME::_IsKeyboardDisabled(_In_opt_ ITfContext *pContextHint)
 {
+    if (TigerClawInput::IsProtectedEnvironment(_IsSecureMode() != FALSE) ||
+        TigerClawInput::HasPasswordFocus()) return TRUE;
     ITfDocumentMgr* pDocMgrFocus = nullptr;
     ITfContext* pResolvedContext = nullptr;
     BOOL releaseResolvedContext = FALSE;
@@ -668,6 +673,19 @@ Exit:
     return isDisabled;
 }
 
+BOOL CSampleIME::_BypassProtectedInput(_In_opt_ ITfContext *context)
+{
+    if (!_IsKeyboardDisabled(context)) return FALSE;
+    _failedKeyQueue.clear();
+    _ClearPendingResponseCache();
+    _ClearPendingKeyEvent();
+    _keyUpForwardBudget = 0;
+    _CancelCompositionRefresh();
+    if (_msgWndHandle) KillTimer(_msgWndHandle, kFailedKeyFlushTimerId);
+    ResetCapsCompensationState("protected_input");
+    return TRUE;
+}
+
 void CSampleIME::_ClearPendingResponseCache()
 {
     _pendingResponseValid = FALSE;
@@ -682,6 +700,7 @@ void CSampleIME::_ClearPendingResponseCache()
     _pendingResponseCancelComposition = FALSE;
     _pendingResponseCompositionTracking = FALSE;
     _pendingResponseCompositionPending = FALSE;
+    _pendingResponseLearningReceipt.clear();
     _pendingResponseTextToOutput.clear();
     _pendingResponseInputBuffer.clear();
 }
@@ -700,6 +719,7 @@ void CSampleIME::_StorePendingResponseCache(BOOL isKeyDown, WPARAM wParam, UINT 
     _pendingResponseCancelComposition = response.cancelComposition;
     _pendingResponseCompositionTracking = response.compositionTracking;
     _pendingResponseCompositionPending = response.compositionPending;
+    _pendingResponseLearningReceipt = response.learningReceipt;
     _pendingResponseTextToOutput = response.textToOutput;
     _pendingResponseInputBuffer = response.inputBuffer;
     Global::LogToFileVerbose("KeySink pending_store msg=%s wParam=%llu scan=%u ext=%d handled=%d text_len=%u input_len=%u",
@@ -798,6 +818,7 @@ BOOL CSampleIME::_TryConsumePendingResponseCache(BOOL isKeyDown, WPARAM wParam, 
     pResponse->cancelComposition = _pendingResponseCancelComposition;
     pResponse->compositionTracking = _pendingResponseCompositionTracking;
     pResponse->compositionPending = _pendingResponseCompositionPending;
+    pResponse->learningReceipt = _pendingResponseLearningReceipt;
     pResponse->textToOutput = _pendingResponseTextToOutput;
     pResponse->inputBuffer = _pendingResponseInputBuffer;
 
@@ -894,6 +915,7 @@ void CSampleIME::_EnqueueFailedKeyMessage(UINT vkCode,
                                           _In_z_ const char *reason,
                                           ULONGLONG eventId)
 {
+    if (_BypassProtectedInput(nullptr)) return;
     ULONGLONG nowTick = GetTickCount64();
     _PruneFailedKeyQueue(nowTick);
 
@@ -917,6 +939,7 @@ void CSampleIME::_EnqueueFailedKeyMessage(UINT vkCode,
     _failedKeyQueue.push_back(message);
 
     _PruneFailedKeyQueue(nowTick);
+    _ScheduleFailedKeyFlush();
 
     Global::LogToFileVerbose("KeyFailQueue: enqueue size=%u vk=%u action=%s reason=%s",
                              static_cast<unsigned>(_failedKeyQueue.size()),
@@ -927,7 +950,21 @@ void CSampleIME::_EnqueueFailedKeyMessage(UINT vkCode,
 
 BOOL CSampleIME::_FlushFailedKeyQueue(_In_opt_ ITfContext *pContext, _In_z_ const char *stageTag)
 {
+    if (_BypassProtectedInput(pContext)) return FALSE;
+    if (_failedKeyFlushActive)
+    {
+        _ScheduleFailedKeyFlush();
+        return FALSE;
+    }
+    struct FlushScope
+    {
+        bool &active;
+        explicit FlushScope(bool &value) : active(value) { active = true; }
+        ~FlushScope() { active = false; }
+    } scope(_failedKeyFlushActive);
     ULONGLONG nowTick = GetTickCount64();
+    const ULONGLONG started = nowTick;
+    size_t flushed = 0;
     _PruneFailedKeyQueue(nowTick);
     if (_failedKeyQueue.empty())
     {
@@ -936,13 +973,21 @@ BOOL CSampleIME::_FlushFailedKeyQueue(_In_opt_ ITfContext *pContext, _In_z_ cons
 
     if (!_EnsurePipeConnected())
     {
+        _ScheduleFailedKeyFlush();
         Global::LogToFileVerbose("KeyFailQueue: flush skipped disconnected size=%u", static_cast<unsigned>(_failedKeyQueue.size()));
         return FALSE;
     }
 
     while (!_failedKeyQueue.empty())
     {
-        const FailedKeyMessage &message = _failedKeyQueue.front();
+        if (_BypassProtectedInput(pContext)) return FALSE;
+        ULONGLONG elapsed = GetTickCount64() - started;
+        if (elapsed >= kFailedKeyFlushBudgetMs || flushed >= kFailedKeyFlushBatchSize)
+        {
+            _ScheduleFailedKeyFlush();
+            return FALSE;
+        }
+        const FailedKeyMessage message = _failedKeyQueue.front();
         ULONGLONG age = (nowTick >= message.tick) ? (nowTick - message.tick) : 0;
         if (age > kFailedKeyQueueTtlMs)
         {
@@ -968,10 +1013,11 @@ BOOL CSampleIME::_FlushFailedKeyQueue(_In_opt_ ITfContext *pContext, _In_z_ cons
                                                   message.caretX,
                                                   message.caretY,
                                                   &response,
-                                                  kPipeKeyResponseTimeoutMs,
+                                                  static_cast<DWORD>(kFailedKeyFlushBudgetMs - elapsed),
                                                   message.eventId);
         if (FAILED(hr))
         {
+            _ScheduleFailedKeyFlush();
             Global::LogToFile("KeyFailQueue: flush failed hr=0x%08X vk=%u action=%s size=%u",
                               static_cast<unsigned>(hr),
                               message.vkCode,
@@ -980,6 +1026,11 @@ BOOL CSampleIME::_FlushFailedKeyQueue(_In_opt_ ITfContext *pContext, _In_z_ cons
             return FALSE;
         }
 
+        // Focus notifications dispatched during the wait invalidate queued keys.
+        if (_failedKeyQueue.empty() || _failedKeyQueue.front().eventId != message.eventId)
+        {
+            return FALSE;
+        }
         BOOL committedViaAnchor = FALSE;
         _ApplyResponseAndSyncState(pContext, &response, stageTag, &committedViaAnchor);
         if (message.isKeyDown)
@@ -994,11 +1045,51 @@ BOOL CSampleIME::_FlushFailedKeyQueue(_In_opt_ ITfContext *pContext, _In_z_ cons
                                  message.isKeyDown ? "down" : "up",
                                  response.handled,
                                  committedViaAnchor);
+        if (_failedKeyQueue.empty() || _failedKeyQueue.front().eventId != message.eventId)
+        {
+            return FALSE;
+        }
         _failedKeyQueue.pop_front();
+        ++flushed;
         nowTick = GetTickCount64();
     }
 
     return TRUE;
+}
+
+void CSampleIME::_ScheduleFailedKeyFlush()
+{
+    if (_msgWndHandle != nullptr && !_failedKeyQueue.empty())
+    {
+        SetTimer(_msgWndHandle, kFailedKeyFlushTimerId, 30, nullptr);
+    }
+}
+
+void CSampleIME::_HandleFailedKeyFlush()
+{
+    KillTimer(_msgWndHandle, kFailedKeyFlushTimerId);
+    if (_failedKeyQueue.empty()) return;
+    ITfDocumentMgr *document = nullptr;
+    ITfContext *context = nullptr;
+    if (_pThreadMgr != nullptr && SUCCEEDED(_pThreadMgr->GetFocus(&document)) && document != nullptr)
+    {
+        document->GetTop(&context);
+    }
+    if (_BypassProtectedInput(context))
+    {
+        // Dropped locally; never replay into this context.
+    }
+    else if (context != nullptr && !_IsStartupGuardActive() && !_IsKeyboardDisabled(context))
+    {
+        _FlushFailedKeyQueue(context, "FailedKeyTimer");
+    }
+    else
+    {
+        _PruneFailedKeyQueue(GetTickCount64());
+        _ScheduleFailedKeyFlush();
+    }
+    if (context != nullptr) context->Release();
+    if (document != nullptr) document->Release();
 }
 
 BOOL CSampleIME::_ApplyResponseAndSyncState(_In_opt_ ITfContext *pContext, _Inout_ BimeResponse *pResponse, _In_z_ const char *stageTag, _Out_opt_ BOOL *pCommittedViaAnchor)
@@ -1012,6 +1103,12 @@ BOOL CSampleIME::_ApplyResponseAndSyncState(_In_opt_ ITfContext *pContext, _Inou
         return FALSE;
     }
 
+    if (_BypassProtectedInput(pContext))
+    {
+        if (pCommittedViaAnchor) *pCommittedViaAnchor = FALSE;
+        *pResponse = BimeResponse();
+        return FALSE;
+    }
     BOOL committedViaAnchor = _SyncCaretAnchorForResponse(pContext, pResponse);
 
     if (pResponse->compositionTracking)
@@ -1040,6 +1137,7 @@ BOOL CSampleIME::_ApplyResponseAndSyncState(_In_opt_ ITfContext *pContext, _Inou
 
 STDAPI CSampleIME::OnSetFocus(BOOL fForeground)
 {
+    if (fForeground) _BypassProtectedInput(nullptr);
     Global::LogToFileVerbose("KeySink OnSetFocus foreground=%d", fForeground);
     ResetCapsCompensationState(fForeground ? "OnSetFocus.foreground" : "OnSetFocus.background");
 
@@ -1062,6 +1160,13 @@ STDAPI CSampleIME::OnTestKeyDown(ITfContext *pContext, WPARAM wParam, LPARAM lPa
         return E_INVALIDARG;
     }
 
+    // Before modifier tracking, cached replies, diagnostics and any IPC.
+    if (_BypassProtectedInput(pContext))
+    {
+        *pIsEaten = FALSE;
+        return S_OK;
+    }
+
     Global::UpdateModifiers(wParam, lParam);
 
     UINT vkCode = static_cast<UINT>(wParam);
@@ -1079,6 +1184,7 @@ STDAPI CSampleIME::OnTestKeyDown(ITfContext *pContext, WPARAM wParam, LPARAM lPa
         cachedResponse.cancelComposition = _pendingResponseCancelComposition;
         cachedResponse.compositionTracking = _pendingResponseCompositionTracking;
         cachedResponse.compositionPending = _pendingResponseCompositionPending;
+        cachedResponse.learningReceipt = _pendingResponseLearningReceipt;
         cachedResponse.textToOutput = _pendingResponseTextToOutput;
         cachedResponse.inputBuffer = _pendingResponseInputBuffer;
 
@@ -1098,12 +1204,7 @@ STDAPI CSampleIME::OnTestKeyDown(ITfContext *pContext, WPARAM wParam, LPARAM lPa
     _ClearPendingResponseCache();
     _ClearPendingKeyEvent();
 
-    if (_trialExpired)
-    {
-        *pIsEaten = FALSE;
-        LogKeyDecision("OnTestKeyDown", vkCode, "skip=trial_expired");
-        return S_OK;
-    }
+
 
 
     if (_IsStartupGuardActive())
@@ -1245,16 +1346,18 @@ STDAPI CSampleIME::OnKeyDown(ITfContext *pContext, WPARAM wParam, LPARAM lParam,
         return E_INVALIDARG;
     }
 
+    // Before modifier tracking, cached replies, diagnostics and any IPC.
+    if (_BypassProtectedInput(pContext))
+    {
+        *pIsEaten = FALSE;
+        return S_OK;
+    }
+
     Global::UpdateModifiers(wParam, lParam);
 
     UINT vkCode = static_cast<UINT>(wParam);
 
-    if (_trialExpired)
-    {
-        *pIsEaten = FALSE;
-        LogKeyDecision("OnKeyDown", vkCode, "skip=trial_expired");
-        return S_OK;
-    }
+
 
 
     if (_IsStartupGuardActive())
@@ -1508,6 +1611,13 @@ STDAPI CSampleIME::OnTestKeyUp(ITfContext *pContext, WPARAM wParam, LPARAM lPara
         return E_INVALIDARG;
     }
 
+    // Before modifier tracking, cached replies, diagnostics and any IPC.
+    if (_BypassProtectedInput(pContext))
+    {
+        *pIsEaten = FALSE;
+        return S_OK;
+    }
+
     Global::UpdateModifiers(wParam, lParam);
 
     UINT vkCode = static_cast<UINT>(wParam);
@@ -1525,6 +1635,7 @@ STDAPI CSampleIME::OnTestKeyUp(ITfContext *pContext, WPARAM wParam, LPARAM lPara
         cachedResponse.cancelComposition = _pendingResponseCancelComposition;
         cachedResponse.compositionTracking = _pendingResponseCompositionTracking;
         cachedResponse.compositionPending = _pendingResponseCompositionPending;
+        cachedResponse.learningReceipt = _pendingResponseLearningReceipt;
         cachedResponse.textToOutput = _pendingResponseTextToOutput;
         cachedResponse.inputBuffer = _pendingResponseInputBuffer;
 
@@ -1563,16 +1674,7 @@ STDAPI CSampleIME::OnTestKeyUp(ITfContext *pContext, WPARAM wParam, LPARAM lPara
         return S_OK;
     }
 
-    if (_trialExpired)
-    {
-        if (vkCode == VK_CAPITAL)
-        {
-            ResetCapsCompensationState("OnTestKeyUp.trial_expired");
-        }
-        *pIsEaten = FALSE;
-        LogKeyDecision("OnTestKeyUp", vkCode, "skip=trial_expired");
-        return S_OK;
-    }
+
 
 
     if (_IsStartupGuardActive())
@@ -1705,6 +1807,13 @@ STDAPI CSampleIME::OnKeyUp(ITfContext *pContext, WPARAM wParam, LPARAM lParam, B
         return E_INVALIDARG;
     }
 
+    // Before modifier tracking, cached replies, diagnostics and any IPC.
+    if (_BypassProtectedInput(pContext))
+    {
+        *pIsEaten = FALSE;
+        return S_OK;
+    }
+
     Global::UpdateModifiers(wParam, lParam);
 
     UINT vkCode = static_cast<UINT>(wParam);
@@ -1725,13 +1834,7 @@ STDAPI CSampleIME::OnKeyUp(ITfContext *pContext, WPARAM wParam, LPARAM lParam, B
         return S_OK;
     }
 
-    if (_trialExpired)
-    {
-        _AdvanceKeyUpWindow(wParam, lParam);
-        *pIsEaten = FALSE;
-        LogKeyDecision("OnKeyUp", vkCode, "skip=trial_expired");
-        return S_OK;
-    }
+
 
 
     if (_IsStartupGuardActive())

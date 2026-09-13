@@ -15,16 +15,12 @@
 #include "TipCandidateList.h"
 #include "TipCandidateString.h"
 #include "EmbeddedBuildInfo.h"
-
-#ifndef BIME_EMBED_CORE_HASH_VERIFY_ENABLED
-#define BIME_EMBED_CORE_HASH_VERIFY_ENABLED 1
-#endif
+#include "CoreLaunchContext.h"
+#include "ProtectedInput.h"
 
 #include <stdio.h>
 #include <string.h>
-#include <bcrypt.h>
 
-#pragma comment(lib, "bcrypt.lib")
 
 static const ULONGLONG kCoreLaunchThrottleMs = 2000;
 static const WCHAR kCoreInstallRegKey[] = L"Software\\TigerClaw\\Install";
@@ -33,20 +29,6 @@ static const WCHAR kCoreRunRegKey[] = L"Software\\Microsoft\\Windows\\CurrentVer
 static const WCHAR kCoreRunValueName[] = L"TigerClawCore";
 static const WCHAR kCoreExeFileName[] = L"TigerClaw.Core.exe";
 
-static BOOL g_coreHashCacheReady = FALSE;
-static BOOL g_coreHashCachedOk = FALSE;
-static WCHAR g_coreHashCachedPath[MAX_PATH] = {};
-static FILETIME g_coreHashCachedLastWrite = {};
-static char g_coreHashCachedExpected[65] = {};
-static char g_coreHashCachedActual[65] = {};
-
-static BOOL g_embeddedTrialInitialized = FALSE;
-static BOOL g_embeddedTrialValid = FALSE;
-static char g_embeddedTrialExpireUtc[64] = {};
-
-static BOOL g_embeddedCoreHashInitialized = FALSE;
-static BOOL g_embeddedCoreHashValid = FALSE;
-static char g_embeddedCoreHashValue[65] = {};
 
 static BOOL IsRegularFilePath(_In_ const WCHAR *path)
 {
@@ -228,426 +210,6 @@ static BOOL TryResolveBimeCorePathFromRegistry(_Out_writes_(pathCount) WCHAR *pa
     return FALSE;
 }
 
-static BOOL TryParseTrialExpireUtc(_In_ const char *text, _Out_ FILETIME *pFileTime)
-{
-    if (text == nullptr || pFileTime == nullptr)
-    {
-        return FALSE;
-    }
-
-    int year = 0;
-    int month = 0;
-    int day = 0;
-    int hour = 0;
-    int minute = 0;
-    int second = 0;
-
-    if (sscanf_s(text, "%4d-%2d-%2dT%2d:%2d:%2dZ", &year, &month, &day, &hour, &minute, &second) != 6)
-    {
-        return FALSE;
-    }
-
-    SYSTEMTIME st = {};
-    st.wYear = static_cast<WORD>(year);
-    st.wMonth = static_cast<WORD>(month);
-    st.wDay = static_cast<WORD>(day);
-    st.wHour = static_cast<WORD>(hour);
-    st.wMinute = static_cast<WORD>(minute);
-    st.wSecond = static_cast<WORD>(second);
-
-    return SystemTimeToFileTime(&st, pFileTime);
-}
-
-static BYTE ComputeEmbeddedMask(size_t index)
-{
-    const BYTE keys[] = {BIME_EMBED_XOR_KEY0, BIME_EMBED_XOR_KEY1, BIME_EMBED_XOR_KEY2, BIME_EMBED_XOR_KEY3};
-    return static_cast<BYTE>(keys[index % ARRAYSIZE(keys)] ^ ((index * 13 + 0x5A) & 0xFF));
-}
-
-static BOOL DecodeEmbeddedAscii(_In_reads_(encryptedLen) const unsigned char *encrypted,
-                                size_t encryptedLen,
-                                _Out_writes_(outputCount) char *output,
-                                size_t outputCount)
-{
-    if (encrypted == nullptr || output == nullptr)
-    {
-        return FALSE;
-    }
-
-    if (outputCount == 0 || encryptedLen + 1 > outputCount)
-    {
-        return FALSE;
-    }
-
-    for (size_t i = 0; i < encryptedLen; ++i)
-    {
-        output[i] = static_cast<char>(encrypted[i] ^ ComputeEmbeddedMask(i));
-    }
-
-    output[encryptedLen] = '\0';
-    return TRUE;
-}
-
-static BOOL TryGetEmbeddedTrialExpireUtc(_Out_writes_(textCount) char *text, size_t textCount)
-{
-    if (text == nullptr || textCount < 2)
-    {
-        return FALSE;
-    }
-
-    if (!g_embeddedTrialInitialized)
-    {
-        g_embeddedTrialInitialized = TRUE;
-        g_embeddedTrialValid = FALSE;
-        g_embeddedTrialExpireUtc[0] = '\0';
-
-        char decoded[64] = {};
-        if (DecodeEmbeddedAscii(BIME_EMBED_TRIAL_EXPIRE_UTC_ENC,
-                                static_cast<size_t>(BIME_EMBED_TRIAL_EXPIRE_UTC_LEN),
-                                decoded,
-                                ARRAYSIZE(decoded)))
-        {
-            FILETIME parsed = {};
-            if (TryParseTrialExpireUtc(decoded, &parsed))
-            {
-                StringCchCopyA(g_embeddedTrialExpireUtc, ARRAYSIZE(g_embeddedTrialExpireUtc), decoded);
-                g_embeddedTrialValid = TRUE;
-            }
-            else
-            {
-                Global::LogToFile("Trial: invalid decoded embedded expire utc: %s", decoded);
-            }
-        }
-        else
-        {
-            Global::LogToFile("Trial: decode embedded expire utc failed");
-        }
-    }
-
-    if (!g_embeddedTrialValid)
-    {
-        return FALSE;
-    }
-
-    StringCchCopyA(text, textCount, g_embeddedTrialExpireUtc);
-    return TRUE;
-}
-
-static BOOL ComputeTrialExpiredNow(_Out_ BOOL *pExpired, _Out_writes_(textCount) char *resolvedExpireUtcText, size_t textCount)
-{
-    if (pExpired == nullptr || resolvedExpireUtcText == nullptr || textCount < 2)
-    {
-        return FALSE;
-    }
-
-    *pExpired = FALSE;
-    if (!TryGetEmbeddedTrialExpireUtc(resolvedExpireUtcText, textCount))
-    {
-        return FALSE;
-    }
-
-    FILETIME expireUtcFt = {};
-    if (!TryParseTrialExpireUtc(resolvedExpireUtcText, &expireUtcFt))
-    {
-        Global::LogToFile("Trial: parse embedded expire utc failed: %s", resolvedExpireUtcText);
-        return FALSE;
-    }
-
-    FILETIME nowUtcFt = {};
-    GetSystemTimeAsFileTime(&nowUtcFt);
-
-    *pExpired = (CompareFileTime(&nowUtcFt, &expireUtcFt) >= 0) ? TRUE : FALSE;
-    return TRUE;
-}
-
-#if !defined(_DEBUG)
-static BOOL IsValidSha256Hex(_In_ const char *text)
-{
-    if (text == nullptr || strlen(text) != 64)
-    {
-        return FALSE;
-    }
-
-    for (size_t i = 0; i < 64; ++i)
-    {
-        char c = text[i];
-        BOOL isHexDigit = ((c >= '0' && c <= '9') ||
-                           (c >= 'a' && c <= 'f') ||
-                           (c >= 'A' && c <= 'F')) ? TRUE : FALSE;
-        if (!isHexDigit)
-        {
-            return FALSE;
-        }
-    }
-
-    return TRUE;
-}
-#endif
-
-static BOOL TryGetFileLastWriteTime(_In_ const WCHAR *path, _Out_ FILETIME *pFileTime)
-{
-    if (path == nullptr || pFileTime == nullptr)
-    {
-        return FALSE;
-    }
-
-    WIN32_FILE_ATTRIBUTE_DATA attrData = {};
-    if (!GetFileAttributesExW(path, GetFileExInfoStandard, &attrData))
-    {
-        return FALSE;
-    }
-
-    *pFileTime = attrData.ftLastWriteTime;
-    return TRUE;
-}
-
-static BOOL TryGetExpectedCoreHash(_Out_writes_(hashCount) char *hashValue, size_t hashCount)
-{
-    if (hashValue == nullptr || hashCount < 65)
-    {
-        return FALSE;
-    }
-
-    hashValue[0] = '\0';
-
-#if defined(_DEBUG)
-    Global::LogToFileVerbose("CoreIntegrity: skip hash enforcement in debug build");
-    return FALSE;
-#else
-    if (!g_embeddedCoreHashInitialized)
-    {
-        g_embeddedCoreHashInitialized = TRUE;
-        g_embeddedCoreHashValid = FALSE;
-        g_embeddedCoreHashValue[0] = '\0';
-
-        char decoded[65] = {};
-        if (DecodeEmbeddedAscii(BIME_EMBED_CORE_SHA256_ENC,
-                                static_cast<size_t>(BIME_EMBED_CORE_SHA256_LEN),
-                                decoded,
-                                ARRAYSIZE(decoded)) &&
-            IsValidSha256Hex(decoded))
-        {
-            StringCchCopyA(g_embeddedCoreHashValue, ARRAYSIZE(g_embeddedCoreHashValue), decoded);
-            g_embeddedCoreHashValid = TRUE;
-        }
-        else
-        {
-            Global::LogToFile("CoreIntegrity: invalid embedded core hash");
-        }
-    }
-
-    if (!g_embeddedCoreHashValid)
-    {
-        return FALSE;
-    }
-
-    StringCchCopyA(hashValue, hashCount, g_embeddedCoreHashValue);
-    return TRUE;
-#endif
-}
-
-static BOOL ComputeFileSha256Hex(_In_ const WCHAR *filePath, _Out_writes_(outCount) char *outHex, size_t outCount)
-{
-    if (filePath == nullptr || outHex == nullptr || outCount < 65)
-    {
-        return FALSE;
-    }
-
-    outHex[0] = '\0';
-
-    BCRYPT_ALG_HANDLE hAlgorithm = nullptr;
-    BCRYPT_HASH_HANDLE hHash = nullptr;
-    PUCHAR hashObject = nullptr;
-    PUCHAR hashBuffer = nullptr;
-    ULONG hashObjectSize = 0;
-    ULONG hashSize = 0;
-    ULONG cbData = 0;
-    FILE *fp = nullptr;
-    BOOL success = FALSE;
-
-    NTSTATUS status = BCryptOpenAlgorithmProvider(&hAlgorithm, BCRYPT_SHA256_ALGORITHM, nullptr, 0);
-    if (!BCRYPT_SUCCESS(status))
-    {
-        goto Exit;
-    }
-
-    status = BCryptGetProperty(hAlgorithm, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&hashObjectSize), sizeof(hashObjectSize), &cbData, 0);
-    if (!BCRYPT_SUCCESS(status) || hashObjectSize == 0)
-    {
-        goto Exit;
-    }
-
-    status = BCryptGetProperty(hAlgorithm, BCRYPT_HASH_LENGTH, reinterpret_cast<PUCHAR>(&hashSize), sizeof(hashSize), &cbData, 0);
-    if (!BCRYPT_SUCCESS(status) || hashSize == 0)
-    {
-        goto Exit;
-    }
-
-    hashObject = static_cast<PUCHAR>(HeapAlloc(GetProcessHeap(), 0, hashObjectSize));
-    hashBuffer = static_cast<PUCHAR>(HeapAlloc(GetProcessHeap(), 0, hashSize));
-    if (hashObject == nullptr || hashBuffer == nullptr)
-    {
-        goto Exit;
-    }
-
-    status = BCryptCreateHash(hAlgorithm, &hHash, hashObject, hashObjectSize, nullptr, 0, 0);
-    if (!BCRYPT_SUCCESS(status))
-    {
-        goto Exit;
-    }
-
-    if (_wfopen_s(&fp, filePath, L"rb") != 0 || fp == nullptr)
-    {
-        goto Exit;
-    }
-
-    BYTE readBuffer[64 * 1024] = {};
-    while (true)
-    {
-        size_t bytesRead = fread(readBuffer, 1, sizeof(readBuffer), fp);
-        if (bytesRead == 0)
-        {
-            break;
-        }
-
-        status = BCryptHashData(hHash, readBuffer, static_cast<ULONG>(bytesRead), 0);
-        if (!BCRYPT_SUCCESS(status))
-        {
-            goto Exit;
-        }
-    }
-
-    if (ferror(fp) != 0)
-    {
-        goto Exit;
-    }
-
-    status = BCryptFinishHash(hHash, hashBuffer, hashSize, 0);
-    if (!BCRYPT_SUCCESS(status))
-    {
-        goto Exit;
-    }
-
-    if (outCount <= static_cast<size_t>(hashSize) * 2)
-    {
-        goto Exit;
-    }
-
-    const char *hex = "0123456789abcdef";
-    for (ULONG i = 0; i < hashSize; ++i)
-    {
-        BYTE value = hashBuffer[i];
-        outHex[i * 2] = hex[(value >> 4) & 0x0F];
-        outHex[i * 2 + 1] = hex[value & 0x0F];
-    }
-    outHex[hashSize * 2] = '\0';
-    success = TRUE;
-
-Exit:
-    if (fp != nullptr)
-    {
-        fclose(fp);
-    }
-    if (hHash != nullptr)
-    {
-        BCryptDestroyHash(hHash);
-    }
-    if (hashBuffer != nullptr)
-    {
-        HeapFree(GetProcessHeap(), 0, hashBuffer);
-    }
-    if (hashObject != nullptr)
-    {
-        HeapFree(GetProcessHeap(), 0, hashObject);
-    }
-    if (hAlgorithm != nullptr)
-    {
-        BCryptCloseAlgorithmProvider(hAlgorithm, 0);
-    }
-
-    if (!success)
-    {
-        outHex[0] = '\0';
-    }
-    return success;
-}
-
-static BOOL IsCoreHashVerifyEnabled()
-{
-#if (BIME_EMBED_CORE_HASH_VERIFY_ENABLED == 0)
-    return FALSE;
-#else
-    return TRUE;
-#endif
-}
-
-static BOOL VerifyCoreExecutableHashCached(_In_ const WCHAR *serverProcessPath)
-{
-    if (serverProcessPath == nullptr || serverProcessPath[0] == L'\0')
-    {
-        return FALSE;
-    }
-
-    if (!IsCoreHashVerifyEnabled())
-    {
-        Global::LogToFileVerbose("CoreIntegrity: bypass=embedded_config server=%ls", serverProcessPath);
-        return TRUE;
-    }
-
-    char expectedSha256[65] = {};
-    if (!TryGetExpectedCoreHash(expectedSha256, ARRAYSIZE(expectedSha256)))
-    {
-#if defined(_DEBUG)
-        Global::LogToFileVerbose("CoreIntegrity: skip due to debug embedded hash policy");
-        return TRUE;
-#else
-        return FALSE;
-#endif
-    }
-
-    FILETIME lastWrite = {};
-    if (!TryGetFileLastWriteTime(serverProcessPath, &lastWrite))
-    {
-        Global::LogToFile("CoreIntegrity: get_last_write_failed server=%ls err=%lu", serverProcessPath, GetLastError());
-        return FALSE;
-    }
-
-    if (g_coreHashCacheReady &&
-        _wcsicmp(g_coreHashCachedPath, serverProcessPath) == 0 &&
-        CompareFileTime(&g_coreHashCachedLastWrite, &lastWrite) == 0 &&
-        strcmp(g_coreHashCachedExpected, expectedSha256) == 0)
-    {
-        return g_coreHashCachedOk;
-    }
-
-    char actualSha256[65] = {};
-    if (!ComputeFileSha256Hex(serverProcessPath, actualSha256, ARRAYSIZE(actualSha256)))
-    {
-        Global::LogToFile("CoreIntegrity: hash_compute_failed server=%ls", serverProcessPath);
-        return FALSE;
-    }
-
-    BOOL hashMatched = (strcmp(actualSha256, expectedSha256) == 0) ? TRUE : FALSE;
-
-    StringCchCopyW(g_coreHashCachedPath, ARRAYSIZE(g_coreHashCachedPath), serverProcessPath);
-    g_coreHashCachedLastWrite = lastWrite;
-    StringCchCopyA(g_coreHashCachedExpected, ARRAYSIZE(g_coreHashCachedExpected), expectedSha256);
-    StringCchCopyA(g_coreHashCachedActual, ARRAYSIZE(g_coreHashCachedActual), actualSha256);
-    g_coreHashCachedOk = hashMatched;
-    g_coreHashCacheReady = TRUE;
-
-    if (!hashMatched)
-    {
-        Global::LogToFile("CoreIntegrity: mismatch server=%ls expected=%s actual=%s", serverProcessPath, expectedSha256, actualSha256);
-    }
-    else
-    {
-        Global::LogToFileVerbose("CoreIntegrity: verified server=%ls", serverProcessPath);
-    }
-
-    return hashMatched;
-}
-
 static TfGuidAtom g_caretAnchorInputDisplayAttributeAtom = TF_INVALID_GUIDATOM;
 
 static HRESULT EnsureInputDisplayAttributeAtom(_Out_ TfGuidAtom *pAtom)
@@ -800,6 +362,17 @@ LRESULT CALLBACK CSampleIME_WindowProc(HWND wndHandle, UINT uMsg, WPARAM wParam,
     case WM_TIMER:
         if (pTextService != nullptr)
         {
+            // ReadResponse pumps timers. Keep our timers armed, but defer their
+            // pipe work until the active request has returned.
+            if (pTextService->_pPipeClient != nullptr && pTextService->_pPipeClient->IsBusy())
+            {
+                return 0;
+            }
+            if (wParam == kFailedKeyFlushTimerId)
+            {
+                pTextService->_HandleFailedKeyFlush();
+                return 0;
+            }
             if (wParam == kCaretCoalesceTimerId)
             {
                 pTextService->_FlushPendingCaretMessage(FALSE);
@@ -851,6 +424,7 @@ LRESULT CALLBACK CSampleIME_WindowProc(HWND wndHandle, UINT uMsg, WPARAM wParam,
             KillTimer(wndHandle, kFocusQueryStateTimerId);
             KillTimer(wndHandle, kImeActivePublishRetryTimerId);
             KillTimer(wndHandle, kCompositionRefreshTimerId);
+            KillTimer(wndHandle, kFailedKeyFlushTimerId);
             pTextService->_ClearDeferredCaretAnchorReopen();
             pTextService->_caretTrackingPrimePending = FALSE;
             pTextService->_msgWndHandle = nullptr;
@@ -931,7 +505,6 @@ CSampleIME::CSampleIME()
     _ctrlSpacePreservedKeyRegistered = FALSE;
     _keySinkUseForeground = TRUE;
     _isImmersiveSession = FALSE;
-    _trialExpired = FALSE;
     _lastCoreLaunchAttemptTick = 0;
     _coreLaunchWorkerRunning = 0;
     _lastFocusHwnd = 0;
@@ -1148,18 +721,6 @@ STDAPI CSampleIME::ActivateEx(ITfThreadMgr *pThreadMgr, TfClientId tfClientId, D
     _hasSentImeActive = FALSE;
     _imeActivePublishRetryCount = 0;
 
-    char trialExpireUtc[64] = {};
-    BOOL trialExpired = FALSE;
-    if (ComputeTrialExpiredNow(&trialExpired, trialExpireUtc, ARRAYSIZE(trialExpireUtc)))
-    {
-        _trialExpired = trialExpired;
-    }
-    else
-    {
-        _trialExpired = FALSE;
-        StringCchCopyA(trialExpireUtc, ARRAYSIZE(trialExpireUtc), "embedded_invalid");
-    }
-    Global::LogToFileVerbose("Trial: expire_utc=%s expired=%d", trialExpireUtc, _trialExpired);
     if (!_InitCaretCoalesceWindow())
     {
         Global::LogToFile("ActivateEx: _InitCaretCoalesceWindow failed");
@@ -1305,7 +866,6 @@ STDAPI CSampleIME::Deactivate()
     _ctrlSpacePreservedKeyRegistered = FALSE;
     _keySinkUseForeground = TRUE;
     _isImmersiveSession = FALSE;
-    _trialExpired = FALSE;
     _lastCoreLaunchAttemptTick = 0;
     _coreLaunchWorkerRunning = 0;
     _lastFocusHwnd = 0;
@@ -2548,7 +2108,7 @@ BOOL CSampleIME::_SyncCaretAnchorForResponse(_In_opt_ ITfContext *pContext, _Ino
             {
                 WCHAR oneChar[2] = { commitText[i], L'\0' };
                 hrCommit = _CommitAndEndCaretAnchorComposition(pEffectiveContext, oneChar);
-                if (FAILED(hrCommit))
+                if (hrCommit != S_OK)
                 {
                     break;
                 }
@@ -2564,7 +2124,15 @@ BOOL CSampleIME::_SyncCaretAnchorForResponse(_In_opt_ ITfContext *pContext, _Ino
             hrCommit = _CommitAndEndCaretAnchorComposition(pEffectiveContext, commitText.c_str());
         }
 
-        if (SUCCEEDED(hrCommit))
+        // S_FALSE means the synchronous TSF edit was not applied. Neither it
+        // nor an asynchronous/scheduled request is evidence of committed text.
+        if (!pResponse->learningReceipt.empty())
+        {
+            if (_pPipeClient != nullptr)
+                _pPipeClient->SendLearningCommit(pResponse->learningReceipt, hrCommit == S_OK);
+            pResponse->learningReceipt.clear();
+        }
+        if (hrCommit == S_OK)
         {
             compositionApplied = TRUE;
             pResponse->textToOutput.clear();
@@ -3008,6 +2576,7 @@ void CSampleIME::_UninitCaretCoalesceWindow()
         KillTimer(_msgWndHandle, kFocusQueryStateTimerId);
         KillTimer(_msgWndHandle, kImeActivePublishRetryTimerId);
         KillTimer(_msgWndHandle, kCompositionRefreshTimerId);
+        KillTimer(_msgWndHandle, kFailedKeyFlushTimerId);
         DestroyWindow(_msgWndHandle);
         _msgWndHandle = nullptr;
     }
@@ -3223,6 +2792,11 @@ BOOL CSampleIME::_ResolveBimeCoreRelativePath(_Out_writes_(pathCount) WCHAR *pat
 
 BOOL CSampleIME::_TryLaunchBimeCore()
 {
+    if (!TigerClawStartup::CanLaunchCore())
+    {
+        Global::LogToFileVerbose("PipeBridge: launch_core skip=non_user_desktop");
+        return FALSE;
+    }
     WCHAR corePath[MAX_PATH] = {};
     if (!_ResolveBimeCoreRelativePath(corePath, ARRAYSIZE(corePath)))
     {
@@ -3277,6 +2851,7 @@ DWORD WINAPI CSampleIME::_LaunchCoreWorkerProc(_In_ LPVOID param)
 
 void CSampleIME::_ScheduleCoreLaunch()
 {
+    if (!TigerClawStartup::CanLaunchCore()) return;
     if (_pPipeClient != nullptr && _pPipeClient->IsConnected())
     {
         return;
@@ -3317,7 +2892,9 @@ void CSampleIME::_ScheduleCoreLaunch()
 
 BOOL CSampleIME::_EnsurePipeConnected()
 {
-    if (_pPipeClient == nullptr)
+    if (TigerClawInput::IsProtectedEnvironment(_IsSecureMode() != FALSE) ||
+        TigerClawInput::HasPasswordFocus()) return FALSE;
+    if (_pPipeClient == nullptr || _pPipeClient->IsBusy())
     {
         return FALSE;
     }
@@ -3331,26 +2908,6 @@ BOOL CSampleIME::_EnsurePipeConnected()
     if (!_pPipeClient->Connect())
     {
         _ScheduleCoreLaunch();
-        return FALSE;
-    }
-
-    WCHAR serverPath[MAX_PATH] = {};
-    if (!_pPipeClient->GetConnectedServerProcessPath(serverPath, ARRAYSIZE(serverPath)))
-    {
-        if (!_isImmersiveSession)
-        {
-            Global::LogToFile("CoreIntegrity: failed_to_resolve_pipe_server");
-            _pPipeClient->Disconnect();
-            _ScheduleCoreLaunch();
-            return FALSE;
-        }
-
-        Global::LogToFile("CoreIntegrity: skip_verify_no_server_path_immersive");
-    }
-    else if (!VerifyCoreExecutableHashCached(serverPath))
-    {
-        Global::LogToFile("CoreIntegrity: blocked server=%ls", serverPath);
-        _pPipeClient->Disconnect();
         return FALSE;
     }
 

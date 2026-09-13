@@ -14,8 +14,6 @@ set "SHARED_BUILD_INFO=%ROOT%\next\TigerClaw.Shared\BuildInfo.cs"
 set "PACK_SCRIPT=%ROOT%\pack_release.bat"
 set "SENTENCE_NATIVE_BUILD=%ROOT%\next\build_sentence_native.bat"
 set "TEXT_LOG_ENABLED=0"
-set "CORE_HASH_VERIFY_ENABLED=1"
-set "TRIAL_EXPIRE_UTC="
 set "BUILD_VERSION_LABEL="
 set "BUILD_COMMIT="
 set "BUILD_UTC="
@@ -28,13 +26,8 @@ set "DOTNET_ADD_GLOBAL_TOOLS_TO_PATH=0"
 
 if exist "%CONFIG_FILE%" (
     for /f "usebackq delims=" %%I in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$cfg = '%CONFIG_FILE%'; $v = '0'; if (Test-Path -LiteralPath $cfg) { $line = Get-Content -LiteralPath $cfg -ErrorAction SilentlyContinue | Where-Object { $_ -match '^\s*text_log_enabled\s*=' -and $_ -notmatch '^\s*#' } | Select-Object -First 1; if ($line) { $vv = ($line -split '=', 2)[1].Trim(); if ($vv -match '^[01]$') { $v = $vv } } }; Write-Output $v"`) do set "TEXT_LOG_ENABLED=%%I"
-    for /f "usebackq delims=" %%I in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$cfg = '%CONFIG_FILE%'; $v = '1'; if (Test-Path -LiteralPath $cfg) { $line = Get-Content -LiteralPath $cfg -ErrorAction SilentlyContinue | Where-Object { $_ -match '^\s*core_hash_verify_enabled\s*=' -and $_ -notmatch '^\s*#' } | Select-Object -First 1; if ($line) { $vv = ($line -split '=', 2)[1].Trim(); if ($vv -match '^[01]$') { $v = $vv } } }; Write-Output $v"`) do set "CORE_HASH_VERIFY_ENABLED=%%I"
-    for /f "usebackq delims=" %%I in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$cfg = '%CONFIG_FILE%'; $v = ''; if (Test-Path -LiteralPath $cfg) { $line = Get-Content -LiteralPath $cfg -ErrorAction SilentlyContinue | Where-Object { $_ -match '^\s*trial_expire_utc\s*=' -and $_ -notmatch '^\s*#' } | Select-Object -First 1; if ($line) { $vv = ($line -split '=', 2)[1].Trim(); if ($vv -match '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$') { $v = $vv } } }; Write-Output $v"`) do set "TRIAL_EXPIRE_UTC=%%I"
 )
-if not defined TRIAL_EXPIRE_UTC (
-    echo ERROR: Missing or invalid trial_expire_utc in %CONFIG_FILE%
-    exit /b 1
-)
+
 
 for /f "delims=" %%I in ('where.exe dotnet.exe 2^>nul') do if not defined DOTNET set "DOTNET=%%~fI"
 if not defined DOTNET if exist "%ProgramFiles%\dotnet\dotnet.exe" set "DOTNET=%ProgramFiles%\dotnet\dotnet.exe"
@@ -58,7 +51,7 @@ if not defined MSBUILD (
 )
 
 set "CORE_PROJECT=%ROOT%\next\TigerClaw.Core\TigerClaw.Core.csproj"
-set "OVERLAY_PROJECT=%ROOT%\next\TigerClaw.Overlay\TigerClaw.Overlay.csproj"
+set "OVERLAY_PROJECT=%ROOT%\next\build_overlay.bat"
 set "DIALOG_PROJECT=%ROOT%\next\TigerClaw.Dialog\TigerClaw.Dialog.csproj"
 set "HOOK_NATIVE_PROJECT=%ROOT%\next\TigerClaw.Hook.Native\TigerClaw.Hook.Native.vcxproj"
 set "TSF_PROJECT=%ROOT%\BimeTSF2\SampleIME\BimeTSF2.vcxproj"
@@ -93,7 +86,6 @@ if not exist "%SENTENCE_NATIVE_BUILD%" (
 )
 
 set "CORE_OUT=%ROOT%\next\_run\Release\core-x64"
-set "CORE_EXE_FOR_HASH=%CORE_OUT%\TigerClaw.Core.exe"
 set "OVERLAY_OUT=%ROOT%\next\_run\Release\net48"
 set "DIALOG_OUT=%ROOT%\next\_run\Release\net48"
 set "SENTENCE_OUT=%ROOT%\next\_run\Release\sentence"
@@ -102,9 +94,9 @@ set "SENTENCE_NGRAM_MODEL=%SENTENCE_MODEL_ROOT%\sentence-ngram-v2.bin"
 set "SENTENCE_QWEN_MODEL=C:\Archive\tigerclaw_sentence_ml\qwen3-0.6b-gguf\downloaded\Qwen3-0.6B-Base-Q8_0.gguf"
 set "SENTENCE_QWEN_LICENSE=C:\Archive\tigerclaw_sentence_ml\qwen3-0.6b-base\LICENSE"
 set "HOOK_NATIVE_OUT=%ROOT%\next\_run\Release\native"
-set "TSF_X64_DLL=%ROOT%\BimeTSF2\SampleIME\x64\Release\TigerClaw.dll"
-set "TSF_X86_DLL=%ROOT%\BimeTSF2\SampleIME\Win32\Release\TigerClaw.dll"
-if not exist "%TSF_X86_DLL%" set "TSF_X86_DLL=%ROOT%\BimeTSF2\SampleIME\Release\TigerClaw.dll"
+set "TSF_BUILD_ROOT=%ROOT%\next\_run\Release\tsf"
+set "TSF_X64_DLL=%TSF_BUILD_ROOT%\x64\TigerClaw.dll"
+set "TSF_X86_DLL=%TSF_BUILD_ROOT%\Win32\TigerClaw.dll"
 
 set "RELEASE_DIR=%ROOT%\release"
 set "RELEASE_TSF_X64=%RELEASE_DIR%\x64"
@@ -157,8 +149,6 @@ if not exist "%DIST_SELECTION_KEYS_TEMPLATE%" (
     exit /b 1
 )
 echo   text_log_enabled=%TEXT_LOG_ENABLED%
-echo   core_hash_verify_enabled=%CORE_HASH_VERIFY_ENABLED%
-echo   trial_expire_utc=%TRIAL_EXPIRE_UTC%
 
 echo.
 echo [2/13] Update Shared BuildInfo.cs
@@ -171,7 +161,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "$version = '%BUILD_VERSION_LABEL%';" ^
   "$commit = '%BUILD_COMMIT%';" ^
   "$buildUtc = '%BUILD_UTC%';" ^
-  "$trialUtc = '%TRIAL_EXPIRE_UTC%';" ^
   "$lines = @(" ^
   "  'namespace TigerClaw.Shared'," ^
   "  '{'," ^
@@ -180,7 +169,6 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "  ('        public const string VersionLabel = \"' + $version + '\";')," ^
   "  ('        public const string Commit = \"' + $commit + '\";')," ^
   "  ('        public const string BuildUtc = \"' + $buildUtc + '\";')," ^
-  "  ('        public const string TrialExpireUtc = \"' + $trialUtc + '\";')," ^
   "  '    }'," ^
   "  '}'" ^
   ");" ^
@@ -204,7 +192,7 @@ if errorlevel 1 (
 
 echo.
 echo [4/13] Build TigerClaw.Overlay Release
-"%DOTNET%" msbuild /m /nr:false "%OVERLAY_PROJECT%" /restore /p:Configuration=Release /p:Platform=AnyCPU /p:OutDir="%OVERLAY_OUT%\\" /v:minimal
+call "%OVERLAY_PROJECT%" x64 "%OVERLAY_OUT%" Release
 if errorlevel 1 (
     echo ERROR: TigerClaw.Overlay Release build failed.
     exit /b 1
@@ -232,38 +220,7 @@ call :RequireFile "%SENTENCE_NGRAM_MODEL%" "sentence n-gram model" || exit /b 1
 
 echo.
 echo [8/13] Update EmbeddedBuildInfo.h
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$path = '%EMBED_INFO%';" ^
-  "$coreExe = '%CORE_EXE_FOR_HASH%';" ^
-  "$enabled = '%TEXT_LOG_ENABLED%';" ^
-  "$verifyEnabled = '%CORE_HASH_VERIFY_ENABLED%';" ^
-  "$trialUtc = '%TRIAL_EXPIRE_UTC%';" ^
-  "if (-not (Test-Path -LiteralPath $coreExe)) { throw ('Core exe not found: ' + $coreExe) };" ^
-  "if ($verifyEnabled -notmatch '^[01]$') { throw ('Invalid core_hash_verify_enabled: ' + $verifyEnabled) };" ^
-  "if ($trialUtc -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$') { throw ('Invalid trial_expire_utc: ' + $trialUtc) };" ^
-  "$coreHash = (Get-FileHash -LiteralPath $coreExe -Algorithm SHA256).Hash.ToLowerInvariant();" ^
-  "if ($coreHash -notmatch '^[0-9a-f]{64}$') { throw ('Invalid core sha256: ' + $coreHash) };" ^
-  "$raw = Get-Content -LiteralPath $path -Raw -ErrorAction Stop;" ^
-  "if (-not [regex]::IsMatch($raw, '(?m)^#define\s+BIME_EMBED_TEXT_LOG_ENABLED\s+\d+\s*$')) { throw 'Missing BIME_EMBED_TEXT_LOG_ENABLED in EmbeddedBuildInfo.h' };" ^
-  "if (-not [regex]::IsMatch($raw, '(?m)^#define\s+BIME_EMBED_VERBOSE_LOG_ENABLED\s+\d+\s*$')) { throw 'Missing BIME_EMBED_VERBOSE_LOG_ENABLED in EmbeddedBuildInfo.h' };" ^
-  "if (-not [regex]::IsMatch($raw, '(?m)^#define\s+BIME_EMBED_CORE_HASH_VERIFY_ENABLED\s+\d+\s*$')) { throw 'Missing BIME_EMBED_CORE_HASH_VERIFY_ENABLED in EmbeddedBuildInfo.h' };" ^
-  "$getKey = { param([string]$name) $m = [regex]::Match($raw, '(?m)^#define\s+' + [regex]::Escape($name) + '\s+0x([0-9A-Fa-f]{1,2})\s*$'); if (-not $m.Success) { throw ('Missing key: ' + $name) }; [Convert]::ToInt32($m.Groups[1].Value, 16) };" ^
-  "$keys = @((& $getKey 'BIME_EMBED_XOR_KEY0'), (& $getKey 'BIME_EMBED_XOR_KEY1'), (& $getKey 'BIME_EMBED_XOR_KEY2'), (& $getKey 'BIME_EMBED_XOR_KEY3'));" ^
-  "$encode = { param([string]$text) $src = [System.Text.Encoding]::ASCII.GetBytes($text); $dst = New-Object byte[] $src.Length; for ($i = 0; $i -lt $src.Length; $i++) { $mask = ($keys[$i %% $keys.Count] -bxor (($i * 13 + 0x5A) -band 0xFF)); $dst[$i] = ($src[$i] -bxor $mask) }; return ,$dst };" ^
-  "$fmt = { param([byte[]]$arr) (($arr | ForEach-Object { '0x{0:X2}' -f $_ }) -join ', ') };" ^
-  "$trialEnc = & $encode $trialUtc;" ^
-  "$coreEnc = & $encode $coreHash;" ^
-  "$raw = [regex]::Replace($raw, '(?m)^#define\s+BIME_EMBED_TEXT_LOG_ENABLED\s+\d+\s*$', '#define BIME_EMBED_TEXT_LOG_ENABLED ' + $enabled);" ^
-  "$raw = [regex]::Replace($raw, '(?m)^#define\s+BIME_EMBED_VERBOSE_LOG_ENABLED\s+\d+\s*$', '#define BIME_EMBED_VERBOSE_LOG_ENABLED ' + $enabled);" ^
-  "$raw = [regex]::Replace($raw, '(?m)^#define\s+BIME_EMBED_CORE_HASH_VERIFY_ENABLED\s+\d+\s*$', '#define BIME_EMBED_CORE_HASH_VERIFY_ENABLED ' + $verifyEnabled);" ^
-  "$raw = [regex]::Replace($raw, '(?m)^static const unsigned char BIME_EMBED_TRIAL_EXPIRE_UTC_ENC\[\]\s*=\s*\{[^}]*\};\s*$', 'static const unsigned char BIME_EMBED_TRIAL_EXPIRE_UTC_ENC[] = { ' + (& $fmt $trialEnc) + ' };');" ^
-  "$raw = [regex]::Replace($raw, '(?m)^static const unsigned int BIME_EMBED_TRIAL_EXPIRE_UTC_LEN\s*=\s*\d+u;\s*$', 'static const unsigned int BIME_EMBED_TRIAL_EXPIRE_UTC_LEN = ' + $trialEnc.Length + 'u;');" ^
-  "$raw = [regex]::Replace($raw, '(?m)^static const unsigned char BIME_EMBED_CORE_SHA256_ENC\[\]\s*=\s*\{[^}]*\};\s*$', 'static const unsigned char BIME_EMBED_CORE_SHA256_ENC[] = { ' + (& $fmt $coreEnc) + ' };');" ^
-  "$raw = [regex]::Replace($raw, '(?m)^static const unsigned int BIME_EMBED_CORE_SHA256_LEN\s*=\s*\d+u;\s*$', 'static const unsigned int BIME_EMBED_CORE_SHA256_LEN = ' + $coreEnc.Length + 'u;');" ^
-  "Set-Content -LiteralPath $path -Value $raw -Encoding Ascii -NoNewline;" ^
-  "Write-Host ('  embedded core_hash_verify_enabled=' + $verifyEnabled);" ^
-  "Write-Host ('  embedded trial_expire_utc=' + $trialUtc);" ^
-  "Write-Host ('  embedded core_sha256=' + $coreHash)"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\tools\update_embedded_build_info.ps1" -Path "%EMBED_INFO%" -TextLogEnabled "%TEXT_LOG_ENABLED%"
 if errorlevel 1 (
     echo ERROR: Failed to update EmbeddedBuildInfo.h
     exit /b 1
@@ -302,6 +259,7 @@ if not exist "%RELEASE_MODELS%" mkdir "%RELEASE_MODELS%"
 
 call :RequireFile "%CORE_OUT%\TigerClaw.Core.exe" "TigerClaw.Core.exe" || exit /b 1
 call :RequireFile "%OVERLAY_OUT%\TigerClaw.Overlay.exe" "TigerClaw.Overlay.exe" || exit /b 1
+for %%F in (Overlay-THIRD-PARTY-NOTICES.txt sounds\KeyNormal.wav sounds\KeySpace.wav sounds\KeyFunc.wav) do call :RequireFile "%OVERLAY_OUT%\%%F" "%%F" || exit /b 1
 call :RequireFile "%DIALOG_OUT%\TigerClaw.Dialog.exe" "TigerClaw.Dialog.exe" || exit /b 1
 call :RequireFile "%SENTENCE_OUT%\TigerClaw.Sentence.exe" "TigerClaw.Sentence.exe" || exit /b 1
 call :RequireFile "%SENTENCE_NGRAM_MODEL%" "sentence n-gram model" || exit /b 1
@@ -311,12 +269,17 @@ call :RequireFile "%SENTENCE_QWEN_LICENSE%" "Qwen license" || exit /b 1
 call :RequireFile "%HOOK_NATIVE_OUT%\TigerClaw.Hook.Native.exe" "TigerClaw.Hook.Native.exe" || exit /b 1
 call :RequireFile "%TSF_X64_DLL%" "TigerClaw.dll x64" || exit /b 1
 call :RequireFile "%TSF_X86_DLL%" "TigerClaw.dll Win32" || exit /b 1
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\tools\verify_tsf_artifact.ps1" -Source "%TSF_X64_DLL%" -Architecture x64 || exit /b 1
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\tools\verify_tsf_artifact.ps1" -Source "%TSF_X86_DLL%" -Architecture Win32 || exit /b 1
 
 call :CopyFileStrict "%CORE_OUT%\TigerClaw.Core.exe" "%RELEASE_DIR%\TigerClaw.Core.exe" || exit /b 1
 if exist "%RELEASE_DIR%\TigerClaw.Core.exe.config" del /q "%RELEASE_DIR%\TigerClaw.Core.exe.config"
 if exist "%CORE_OUT%\TigerClaw.Core.pdb" del /q "%RELEASE_DIR%\TigerClaw.Core.pdb" >nul 2>&1
 
 call :CopyFileStrict "%OVERLAY_OUT%\TigerClaw.Overlay.exe" "%RELEASE_DIR%\TigerClaw.Overlay.exe" || exit /b 1
+if not exist "%OVERLAY_OUT%\TigerClaw.Overlay.exe.config" if exist "%RELEASE_DIR%\TigerClaw.Overlay.exe.config" del /q "%RELEASE_DIR%\TigerClaw.Overlay.exe.config"
+if not exist "%RELEASE_DIR%\sounds" mkdir "%RELEASE_DIR%\sounds"
+for %%F in (Overlay-THIRD-PARTY-NOTICES.txt sounds\KeyNormal.wav sounds\KeySpace.wav sounds\KeyFunc.wav) do call :CopyFileStrict "%OVERLAY_OUT%\%%F" "%RELEASE_DIR%\%%F" || exit /b 1
 if exist "%OVERLAY_OUT%\TigerClaw.Overlay.exe.config" call :CopyFileStrict "%OVERLAY_OUT%\TigerClaw.Overlay.exe.config" "%RELEASE_DIR%\TigerClaw.Overlay.exe.config" || exit /b 1
 if exist "%OVERLAY_OUT%\TigerClaw.Overlay.pdb" del /q "%RELEASE_DIR%\TigerClaw.Overlay.pdb" >nul 2>&1
 
@@ -347,9 +310,11 @@ call :CopyFileStrict "%HOOK_NATIVE_OUT%\TigerClaw.Hook.Native.exe" "%RELEASE_DIR
 if exist "%HOOK_NATIVE_OUT%\TigerClaw.Hook.Native.pdb" del /q "%RELEASE_DIR%\TigerClaw.pdb" >nul 2>&1
 
 if exist "%ROOT%\next\TigerClaw.Dialog\bime.ico" call :CopyFileStrict "%ROOT%\next\TigerClaw.Dialog\bime.ico" "%RELEASE_DIR%\bime.ico" || exit /b 1
-call :CopyFileStrict "%OVERLAY_OUT%\TigerClaw.Shared.dll" "%RELEASE_DIR%\TigerClaw.Shared.dll" || exit /b 1
+call :CopyFileStrict "%DIALOG_OUT%\TigerClaw.Shared.dll" "%RELEASE_DIR%\TigerClaw.Shared.dll" || exit /b 1
 call :CopyFileStrict "%TSF_X64_DLL%" "%RELEASE_TSF_X64%\TigerClaw.dll" || exit /b 1
 call :CopyFileStrict "%TSF_X86_DLL%" "%RELEASE_TSF_X86%\TigerClaw.dll" || exit /b 1
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\tools\verify_tsf_artifact.ps1" -Source "%TSF_X64_DLL%" -Architecture x64 -Destination "%RELEASE_TSF_X64%\TigerClaw.dll" || exit /b 1
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\tools\verify_tsf_artifact.ps1" -Source "%TSF_X86_DLL%" -Architecture Win32 -Destination "%RELEASE_TSF_X86%\TigerClaw.dll" || exit /b 1
 if defined CHANGELOG_NAME if exist "%CHANGELOG_FILE%" call :CopyFileStrict "%CHANGELOG_FILE%" "%RELEASE_DIR%\!CHANGELOG_NAME!" || exit /b 1
 
 call :CopyFileStrict "%DIST_INSTALL_TEMPLATE%" "%RELEASE_DIR%\!INSTALL_SCRIPT!" || exit /b 1
@@ -360,7 +325,7 @@ if exist "%RELEASE_DIR%\uninstall.bat" del /q "%RELEASE_DIR%\uninstall.bat" >nul
 
 echo.
 echo [12/13] Package release archive
-call "%PACK_SCRIPT%"
+call "%PACK_SCRIPT%" "%BUILD_VERSION_LABEL%"
 if errorlevel 1 (
     echo ERROR: Release packaging failed.
     exit /b 1
@@ -412,6 +377,7 @@ if defined TSF_TOOLSET_ARGS (
     echo   TSF platform=%TSF_PLATFORM% toolset=%TSF_TOOLSET_ARGS%
 )
 
-"%MSBUILD%" /m /nr:false "%TSF_PROJECT%" /p:Configuration=Release /p:Platform=%TSF_PLATFORM% /p:WholeProgramOptimization=false /v:minimal %TSF_TOOLSET_ARGS%
+"%MSBUILD%" /m /nr:false "%TSF_PROJECT%" /t:Rebuild /p:Configuration=Release /p:Platform=%TSF_PLATFORM% /p:OutDir="%TSF_BUILD_ROOT%\%TSF_PLATFORM%\\" /p:IntDir="%ROOT%\BimeTSF2\SampleIME\obj\publish-x64-tsf\%TSF_PLATFORM%\\" /p:WholeProgramOptimization=false /v:minimal %TSF_TOOLSET_ARGS%
 if errorlevel 1 exit /b 1
-exit /b 0
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\tools\verify_tsf_artifact.ps1" -Source "%TSF_BUILD_ROOT%\%TSF_PLATFORM%\TigerClaw.dll" -Architecture "%TSF_PLATFORM%"
+exit /b %errorlevel%

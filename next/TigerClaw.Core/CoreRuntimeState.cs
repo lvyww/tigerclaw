@@ -14,6 +14,8 @@ using System.Text;
 
 using Microsoft.Win32;
 
+using TigerClaw.Shared;
+
 
 
 namespace TigerClaw.Core
@@ -39,6 +41,10 @@ namespace TigerClaw.Core
 
         private const string KeyCtrlEqualAddCi = "Ctrl+\u7b49\u53f7\u624b\u52a8\u52a0\u8bcd";
         private const string KeyCtrlMSwitchSchema = "Ctrl+m\u5207\u6362\u6700\u8fd1\u7801\u8868"; // Ctrl+m switch recent code table
+        private const string KeyManualAddWordShortcut = "\u624b\u52a8\u52a0\u8bcd\u5feb\u6377\u952e"; // 手动加词快捷键
+        private const string KeySwitchRecentSchemaShortcut = "\u5207\u6362\u6700\u8fd1\u7801\u8868\u5feb\u6377\u952e"; // 切换最近码表快捷键
+        private const string DefaultManualAddWordShortcut = "Ctrl+VK_OEM_PLUS";
+        private const string DefaultSwitchRecentSchemaShortcut = "Ctrl+VK_M";
         // Internal/persisted record of the two most-recently-used code tables (for Ctrl+m), stored
         // as "name|name". Persisted so the pair survives a restart; hidden from the settings dialog.
         private const string KeyRecentSchemas = "\u6700\u8fd1\u7801\u8868\u5bf9"; // unicode: \u6700\u8fd1\u7801\u8868\u5bf9
@@ -151,7 +157,11 @@ namespace TigerClaw.Core
 
             new KeyValuePair<string, string>(KeyCtrlEqualAddCi, Yes),
 
+            new KeyValuePair<string, string>(KeyManualAddWordShortcut, DefaultManualAddWordShortcut),
+
             new KeyValuePair<string, string>(KeyCtrlMSwitchSchema, No),
+
+            new KeyValuePair<string, string>(KeySwitchRecentSchemaShortcut, DefaultSwitchRecentSchemaShortcut),
 
             new KeyValuePair<string, string>(KeyRecentSchemas, string.Empty),
 
@@ -170,6 +180,8 @@ namespace TigerClaw.Core
             new KeyValuePair<string, string>(KeyShowSplit, No),
 
             new KeyValuePair<string, string>(KeyCandidateExpandDelayMs, string.Empty),
+            new KeyValuePair<string, string>("候选窗动效", Yes),
+            new KeyValuePair<string, string>("候选窗动效时间(毫秒)", "200"),
 
             new KeyValuePair<string, string>(KeyAnnotationExpandDelayMs, string.Empty),
 
@@ -196,6 +208,7 @@ namespace TigerClaw.Core
             new KeyValuePair<string, string>(KeyUnlimitedMixedChineseEnglishInput, No),
 
             new KeyValuePair<string, string>(KeyAutoEnableSentenceBySchema, Yes),
+            new KeyValuePair<string, string>("整句Tab自学习", Yes),
 
             new KeyValuePair<string, string>(KeySentenceNeuralRerank, Yes),
 
@@ -238,9 +251,9 @@ namespace TigerClaw.Core
 
         private readonly Dictionary<string, string> _config = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
-        private Dictionary<string, List<string>> _lexicon = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        private CompactLexicon _lexicon = CompactLexicon.Empty;
 
-        private Dictionary<string, List<string>> _pinyinLexicon = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        private CompactLexicon _pinyinLexicon = CompactLexicon.Empty;
 
         private Dictionary<string, string> _commentMap = new Dictionary<string, string>(StringComparer.Ordinal);
 
@@ -275,8 +288,7 @@ namespace TigerClaw.Core
         // A fully-loaded code table: the bundle ReloadLexicon assigns to the live fields all at once.
         private sealed class LexiconSnapshot
         {
-            public Dictionary<string, List<string>> Lexicon;
-            public Dictionary<string, List<string>> PinyinLexicon;
+            public CompactLexicon Lexicon;
             public Dictionary<string, string> CommentMap;
             public Dictionary<string, string> SplitMap;
             public Dictionary<string, string> FullCodeMap;
@@ -468,7 +480,13 @@ namespace TigerClaw.Core
                 // A full disk reload of the current table invalidates the Ctrl+m snapshot cache.
                 lock (_lock) { _lexiconCache.Clear(); }
 
-                ApplyLexiconSnapshot(BuildLexiconSnapshot(mbDir));
+                var snapshot = BuildLexiconSnapshot(mbDir);
+                var pinyin = CompactLexicon.Build(LoadPinyinLexicon());
+                lock (_lock)
+                {
+                    _pinyinLexicon = pinyin;
+                    ApplyLexiconSnapshot(snapshot);
+                }
 
                 return true;
 
@@ -613,7 +631,6 @@ namespace TigerClaw.Core
 
                 }
 
-                Dictionary<string, List<string>> pyMap = LoadPinyinLexicon();
 
                 Dictionary<string, string> commentMap = LoadCommentMap(mbDir);
 
@@ -639,8 +656,7 @@ namespace TigerClaw.Core
 
                 return new LexiconSnapshot
                 {
-                    Lexicon = map,
-                    PinyinLexicon = pyMap,
+                    Lexicon = CompactLexicon.Build(map),
                     CommentMap = commentMap,
                     SplitMap = splitMap,
                     FullCodeMap = fullCodeMap,
@@ -664,7 +680,6 @@ namespace TigerClaw.Core
             lock (_lock)
             {
                 _lexicon = s.Lexicon;
-                _pinyinLexicon = s.PinyinLexicon;
                 _commentMap = s.CommentMap;
                 _splitMap = s.SplitMap;
                 _fullCodeMap = s.FullCodeMap;
@@ -690,7 +705,6 @@ namespace TigerClaw.Core
                 return new LexiconSnapshot
                 {
                     Lexicon = _lexicon,
-                    PinyinLexicon = _pinyinLexicon,
                     CommentMap = _commentMap,
                     SplitMap = _splitMap,
                     FullCodeMap = _fullCodeMap,
@@ -727,7 +741,7 @@ namespace TigerClaw.Core
 
             if (c.Length == 0) { return null; }
 
-            lock (_lock) { return _lexicon.TryGetValue(c, out List<string> v) ? new List<string>(v) : null; }
+            lock (_lock) { return _lexicon.TryGetValue(c, out var v) ? new List<string>(v) : null; }
 
         }
 
@@ -736,7 +750,7 @@ namespace TigerClaw.Core
             lock (_lock)
             {
                 var snapshot = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
-                foreach (KeyValuePair<string, List<string>> pair in _lexicon)
+                foreach (var pair in _lexicon)
                 {
                     if (string.IsNullOrWhiteSpace(pair.Key) || pair.Value == null || pair.Value.Count == 0)
                     {
@@ -801,7 +815,7 @@ namespace TigerClaw.Core
 
 
 
-        public List<string> GetPinyinCandidates(string code)
+        public IReadOnlyList<string> GetPinyinCandidates(string code)
 
         {
 
@@ -809,7 +823,7 @@ namespace TigerClaw.Core
 
             if (c.Length == 0) { return null; }
 
-            lock (_lock) { return _pinyinLexicon.TryGetValue(c, out List<string> v) ? new List<string>(v) : null; }
+            lock (_lock) { return _pinyinLexicon.TryGetValue(c, out var v) ? v : null; }
 
         }
 
@@ -833,7 +847,7 @@ namespace TigerClaw.Core
 
             if (c.Length == 0) { return false; }
 
-            lock (_lock) { return _lexicon.TryGetValue(c, out List<string> v) && v != null && v.Count > 0; }
+            lock (_lock) { return _lexicon.TryGetValue(c, out var v) && v.Count > 0; }
 
         }
 
@@ -874,6 +888,31 @@ namespace TigerClaw.Core
         public bool GetCtrlEqualAddCiEnabled() => GetBool(KeyCtrlEqualAddCi, true);
 
         public bool GetCtrlMSwitchSchemaEnabled() => GetBool(KeyCtrlMSwitchSchema, false);
+
+        public ShortcutGesture GetManualAddWordShortcut() =>
+            GetShortcutGesture(KeyManualAddWordShortcut, DefaultManualAddWordShortcut);
+
+        public ShortcutGesture GetSwitchRecentSchemaShortcut() =>
+            GetShortcutGesture(KeySwitchRecentSchemaShortcut, DefaultSwitchRecentSchemaShortcut);
+
+        private ShortcutGesture GetShortcutGesture(string key, string defaultValue)
+        {
+            string value;
+            lock (_lock)
+            {
+                value = _config.TryGetValue(key, out string configured)
+                    ? configured
+                    : defaultValue;
+            }
+
+            if (ShortcutGesture.TryParse(value, out ShortcutGesture gesture))
+            {
+                return gesture;
+            }
+
+            ShortcutGesture.TryParse(defaultValue, out gesture);
+            return gesture;
+        }
 
 
 
@@ -969,19 +1008,13 @@ namespace TigerClaw.Core
 
                 {
 
-                    if (!_lexicon.TryGetValue(c, out List<string> list))
-
-                    {
-
-                        list = new List<string>();
-
-                        _lexicon[c] = list;
-
-                    }
+                    var list = _lexicon.TryGetValue(c, out var existing) ? new List<string>(existing) : new List<string>();
 
                     list.RemoveAll(x => CandidateIdentityEquals(x, t));
 
                     list.Add(t);
+
+                    _lexicon = _lexicon.WithCandidates(c, list);
 
                     RebuildMeta(_lexicon, out _unique, out _nonTerminal);
 
@@ -1037,7 +1070,7 @@ namespace TigerClaw.Core
 
                 {
 
-                    if (!_lexicon.TryGetValue(c, out List<string> list) || list == null || list.Count == 0)
+                    if (!_lexicon.TryGetValue(c, out var existing) || existing.Count == 0)
 
                     {
 
@@ -1047,6 +1080,7 @@ namespace TigerClaw.Core
 
 
 
+                    var list = new List<string>(existing);
                     int before = list.Count;
 
                     list.RemoveAll(x => CandidateIdentityEquals(x, t));
@@ -1056,6 +1090,8 @@ namespace TigerClaw.Core
                     if (changed)
 
                     {
+
+                        _lexicon = _lexicon.WithCandidates(c, list);
 
                         RebuildMeta(_lexicon, out _unique, out _nonTerminal);
 
@@ -1121,15 +1157,7 @@ namespace TigerClaw.Core
 
                 {
 
-                    if (!_lexicon.TryGetValue(c, out List<string> list))
-
-                    {
-
-                        list = new List<string>();
-
-                        _lexicon[c] = list;
-
-                    }
+                    var list = _lexicon.TryGetValue(c, out var existing) ? new List<string>(existing) : new List<string>();
 
 
 
@@ -1152,6 +1180,8 @@ namespace TigerClaw.Core
 
 
                         list.Insert(0, stored);
+
+                        _lexicon = _lexicon.WithCandidates(c, list);
 
                         changed = true;
 
@@ -1219,10 +1249,11 @@ namespace TigerClaw.Core
 
                 {
 
-                    if (_lexicon.TryGetValue(c, out List<string> list) && list != null)
+                    if (_lexicon.TryGetValue(c, out var existing))
 
                     {
 
+                        var list = new List<string>(existing);
                         int idx = list.FindIndex(x => CandidateIdentityEquals(x, t));
 
                         if (idx > 0)
@@ -1234,6 +1265,8 @@ namespace TigerClaw.Core
                             list.RemoveAt(idx);
 
                             list.Insert(idx - 1, stored);
+
+                            _lexicon = _lexicon.WithCandidates(c, list);
 
                             changed = true;
 
@@ -1342,6 +1375,8 @@ namespace TigerClaw.Core
         }
 
         public bool GetSentenceNeuralRerankEnabled() => GetBool(KeySentenceNeuralRerank, true);
+
+        public bool GetSentenceLearningEnabled() => GetBool("整句Tab自学习", true);
 
         public bool GetSentenceAutoCommitEnabled() => GetBool(KeySentenceAutoCommit, false);
 
@@ -1455,6 +1490,18 @@ namespace TigerClaw.Core
         public bool GetShowComment() => GetBool(KeyShowComment, true);
 
         public bool GetShowSplit() => GetBool(KeyShowSplit, false);
+
+        public bool GetCandidateAnimationEnabled() => GetBool("候选窗动效", true);
+        public int GetCandidateAnimationDurationMs() => GetAnimationDuration("候选窗动效时间(毫秒)", 200);
+
+        private int GetAnimationDuration(string key, int fallback)
+        {
+            lock (_lock)
+            {
+                return _config.TryGetValue(key, out string raw) && int.TryParse(raw, out int value)
+                    ? Math.Clamp(value, 0, 60000) : fallback;
+            }
+        }
 
         public int GetCandidateExpandDelayMs()
         {
@@ -1611,23 +1658,16 @@ namespace TigerClaw.Core
 
                 {
 
-                    if (TryCollectByTextElements(word, _splitMap, splitList) &&
-
-                        TryCollectByTextElements(word, _fullCodeMap, codeList))
-
-                    {
-
-                        return string.Join("\u00B7", splitList) + " | " + string.Join("\u00B7", codeList); // unicode: 路
-
-                    }
-
-
-
+                    // Reverse lookup must not depend on display preferences or on
+                    // the presence of the other annotation resource.
+                    _ = TryCollectByTextElements(word, _splitMap, splitList);
+                    _ = TryCollectByTextElements(word, _fullCodeMap, codeList);
+                    var parts = new List<string>();
                     if (splitList.Count > 0)
 
                     {
 
-                        return string.Join("\u00B7", splitList); // unicode: 路
+                        parts.Add(string.Join("\u00B7", splitList));
 
                     }
 
@@ -1637,13 +1677,24 @@ namespace TigerClaw.Core
 
                     {
 
-                        return string.Join("\u00B7", codeList); // unicode: 路
+                        parts.Add(string.Join("\u00B7", codeList));
 
                     }
 
 
 
-                    return string.Empty;
+                    if (_commentMap.TryGetValue(word, out string reverseComment) &&
+                        !string.IsNullOrEmpty(reverseComment))
+
+                    {
+
+                        parts.Add(reverseComment);
+
+                    }
+
+
+
+                    return string.Join(" | ", parts);
 
                 }
 
@@ -2654,7 +2705,7 @@ namespace TigerClaw.Core
 
         {
 
-            foreach (string file in Directory.GetFiles(dir, "*.txt", SearchOption.TopDirectoryOnly))
+            foreach (string file in GetOrderedLexiconFiles(dir))
 
             {
 
@@ -2682,14 +2733,23 @@ namespace TigerClaw.Core
 
             }
 
-            foreach (string file in Directory.GetFiles(dir, "*.dict.yaml", SearchOption.TopDirectoryOnly))
+        }
+        internal static string[] GetOrderedLexiconFiles(string dir)
+        {
+            string schemaName = new DirectoryInfo(dir).Name;
+            return Directory.GetFiles(dir, "*.txt", SearchOption.TopDirectoryOnly)
+                .Concat(Directory.GetFiles(dir, "*.dict.yaml", SearchOption.TopDirectoryOnly))
+                .Where(file => !SentenceLearning.IsReservedFile(Path.GetFileName(file)))
+                .OrderBy(file => IsSchemaNamedLexiconFile(file, schemaName) ? 0 : 1)
+                .ThenBy(file => Path.GetFileName(file), StringComparer.CurrentCulture)
+                .ToArray();
+        }
 
-            {
-
-                ParseMbFile(file, codedRows, noCodeRows);
-
-            }
-
+        private static bool IsSchemaNamedLexiconFile(string path, string schemaName)
+        {
+            string fileName = Path.GetFileName(path);
+            return string.Equals(fileName, schemaName + ".txt", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(fileName, schemaName + ".dict.yaml", StringComparison.OrdinalIgnoreCase);
         }
 
         internal static bool IsSentenceSupplementFile(string path)
@@ -2763,7 +2823,14 @@ namespace TigerClaw.Core
 
             bool body = !path.EndsWith(".dict.yaml", StringComparison.OrdinalIgnoreCase);
 
-            foreach (string raw in File.ReadLines(path, enc))
+            ParseMbLines(File.ReadLines(path, enc), body, outCodedRows, outNoCodeRows);
+        }
+
+        private static void ParseMbLines(IEnumerable<string> lines, bool body,
+            List<(string code, string text, int freq)> outCodedRows,
+            List<(string text, int freq)> outNoCodeRows)
+        {
+            foreach (string raw in lines)
 
             {
 
@@ -2975,7 +3042,24 @@ namespace TigerClaw.Core
 
 
 
+        private static IEnumerable<KeyValuePair<string, IReadOnlyList<string>>> ReadOnlyEntries(Dictionary<string, List<string>> map)
+        {
+            return map.Select(pair => new KeyValuePair<string, IReadOnlyList<string>>(pair.Key, pair.Value));
+        }
+
+        internal IReadOnlyList<string> GetCandidateView(string code)
+        {
+            string normalized = NormalizeCode(code);
+            if (normalized.Length == 0) return null;
+            lock (_lock) { return _lexicon.TryGetValue(normalized, out var values) ? values : null; }
+        }
+
         private static void RebuildMeta(Dictionary<string, List<string>> map, out HashSet<string> unique, out HashSet<string> nonTerminal)
+        {
+            RebuildMeta(ReadOnlyEntries(map), out unique, out nonTerminal);
+        }
+
+        private static void RebuildMeta(IEnumerable<KeyValuePair<string, IReadOnlyList<string>>> map, out HashSet<string> unique, out HashSet<string> nonTerminal)
 
         {
 
@@ -3012,6 +3096,12 @@ namespace TigerClaw.Core
 
 
         private static void RebuildShortSymbolMeta(Dictionary<string, List<string>> map,
+            out bool semicolon, out bool slash, out bool bracket, out bool z, out HashSet<string> symbols)
+        {
+            RebuildShortSymbolMeta(ReadOnlyEntries(map), out semicolon, out slash, out bracket, out z, out symbols);
+        }
+
+        private static void RebuildShortSymbolMeta(IEnumerable<KeyValuePair<string, IReadOnlyList<string>>> map,
 
                                                    out bool shortSemicolon,
 
@@ -3041,7 +3131,7 @@ namespace TigerClaw.Core
 
             bool zIsCode = false;
 
-            foreach (KeyValuePair<string, List<string>> kv in map)
+            foreach (var kv in map)
 
             {
 
@@ -3093,11 +3183,11 @@ namespace TigerClaw.Core
 
 
 
-            var symbolMap = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+            var symbolMap = new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase);
 
             var countMap = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
-            foreach (KeyValuePair<string, List<string>> kv in map)
+            foreach (var kv in map)
 
             {
 
@@ -3139,7 +3229,7 @@ namespace TigerClaw.Core
 
 
 
-            foreach (KeyValuePair<string, List<string>> kv in symbolMap)
+            foreach (var kv in symbolMap)
 
             {
 
@@ -3149,7 +3239,7 @@ namespace TigerClaw.Core
 
                     string prefix = kv.Key.Substring(0, i + 1);
 
-                    if (symbolMap.TryGetValue(prefix, out List<string> prefixCandidates))
+                    if (symbolMap.TryGetValue(prefix, out var prefixCandidates))
 
                     {
 
@@ -3278,7 +3368,7 @@ namespace TigerClaw.Core
 
 
             string commentGlob = "*." + "\u6CE8\u91CA"; // 注释
-            foreach (string file in Directory.GetFiles(mbDir, commentGlob, SearchOption.TopDirectoryOnly))
+            foreach (string file in Directory.GetFiles(mbDir, commentGlob, SearchOption.TopDirectoryOnly).Where(path => !SentenceLearning.IsReservedFile(Path.GetFileName(path))))
 
             {
 
@@ -3371,7 +3461,7 @@ namespace TigerClaw.Core
 
 
             string splitGlob = "*." + "\u62C6\u5206"; // 拆分
-            foreach (string file in Directory.GetFiles(mbDir, splitGlob, SearchOption.TopDirectoryOnly))
+            foreach (string file in Directory.GetFiles(mbDir, splitGlob, SearchOption.TopDirectoryOnly).Where(path => !SentenceLearning.IsReservedFile(Path.GetFileName(path))))
 
             {
 

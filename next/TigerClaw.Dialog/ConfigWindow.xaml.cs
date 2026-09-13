@@ -27,6 +27,14 @@ namespace TigerClaw.Dialog
         private const string KeyTheme = "主题";
         private const string KeyCurrentSchema = "当前码表";
         private const string KeyKeySoundVolume = "按键音量0~100";
+        private const string KeyManualAddWordEnabled = "Ctrl+等号手动加词";
+        private const string KeySwitchRecentSchemaEnabled = "Ctrl+m切换最近码表";
+        private const string KeyAnimation = "候选窗动效";
+        private const string KeyAnimationDuration = "候选窗动效时间(毫秒)";
+        private const string KeyManualAddWordShortcut = "手动加词快捷键";
+        private const string KeySwitchRecentSchemaShortcut = "切换最近码表快捷键";
+        private const string DefaultManualAddWordShortcut = "Ctrl+VK_OEM_PLUS";
+        private const string DefaultSwitchRecentSchemaShortcut = "Ctrl+VK_M";
         private const string Yes = "是";
         private const string No = "否";
 
@@ -37,6 +45,7 @@ namespace TigerClaw.Dialog
         private const string SectionCandidate = "candidate";
         private const string SectionNative = "native";
         private const string SectionAbout = "about";
+        private const string SectionDonate = "donate";
         private const string StatesFileName = "states.json";
 
         private static readonly string[] ThemeNames =
@@ -142,6 +151,28 @@ namespace TigerClaw.Dialog
             SetupSchemaEditor(config);
             RegisterFixedRows();
             SetupDynamicEditors(config);
+            SortSettingRows();
+        }
+
+        private void SortSettingRows()
+        {
+            // Fixed XAML rows join the dynamic rows without recreating their controls
+            // or event handlers. On reload the panels are cleared before registration.
+            foreach (var section in _filterEntries.Where(entry => entry.Section != SectionAbout && entry.Section != SectionDonate)
+                .GroupBy(entry => entry.Section))
+            {
+                Panel panel = GetSectionPanel(section.Key);
+                foreach (FilterEntry entry in section
+                    .OrderBy(item => ConfigSettingOrder.GetRank(item.Key))
+                    .ThenBy(item => item.Key, StringComparer.OrdinalIgnoreCase))
+                {
+                    if (entry.Container.Parent is Panel parent)
+                    {
+                        parent.Children.Remove(entry.Container);
+                    }
+                    panel.Children.Add(entry.Container);
+                }
+            }
         }
 
         private void RegisterFixedRows()
@@ -151,7 +182,8 @@ namespace TigerClaw.Dialog
             RegisterFilterEntry(SectionCodeInput, KeyCurrentSchema, SchemaRow, DescribeSetting(KeyCurrentSchema));
             RegisterFilterEntry(SectionKeys, KeyPageKey, PageKeyRow, DescribeSetting(KeyPageKey));
             RegisterFilterEntry(SectionKeys, KeySelectionKeys, SelectionKeysRow, DescribeSetting(KeySelectionKeys));
-            RegisterFilterEntry(SectionAbout, "关于", AboutCard, "版本、提交、构建时间和支持入口。");
+            RegisterFilterEntry(SectionAbout, "关于", AboutCard, "版本、提交、构建时间和项目主页。");
+            RegisterFilterEntry(SectionDonate, "赞赏支持", DonateCard, "免费软件、微信扫码、赞赏、支持持续开发。");
         }
 
         private void SetupFontEditor(Dictionary<string, string> config)
@@ -299,12 +331,19 @@ namespace TigerClaw.Dialog
 
         private void SetupDynamicEditors(Dictionary<string, string> config)
         {
+            if (!config.ContainsKey("开启打字音效(娱乐)")) config["开启打字音效(娱乐)"] = No;
+            if (!config.ContainsKey(KeyKeySoundVolume)) config[KeyKeySoundVolume] = "30";
+            if (!config.ContainsKey(KeyAnimation)) config[KeyAnimation] = Yes;
+            if (!config.ContainsKey(KeyAnimationDuration)) config[KeyAnimationDuration] = "200";
             foreach (KeyValuePair<string, string> kv in config)
             {
+                if (kv.Key == KeyAnimationDuration || kv.Key == "候选窗出现时间(毫秒)" || kv.Key == "候选窗消失时间(毫秒)" || kv.Key == KeyKeySoundVolume) continue;
                 if (string.Equals(kv.Key, KeyFont, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(kv.Key, KeyPageKey, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(kv.Key, KeyTheme, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(kv.Key, KeyCurrentSchema, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(kv.Key, KeyManualAddWordEnabled, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(kv.Key, KeySwitchRecentSchemaEnabled, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(kv.Key, "任务栏显示", StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(kv.Key, "最近码表对", StringComparison.OrdinalIgnoreCase))
                 {
@@ -312,17 +351,89 @@ namespace TigerClaw.Dialog
                 }
 
                 string description = DescribeSetting(kv.Key);
-                string section = ResolveSection(kv.Key);
-                FrameworkElement editor = CreateDynamicEditor(kv.Key, kv.Value);
-                Border container = CreateDynamicRow(kv.Key, description, editor);
+                string section = kv.Key == KeyAnimation ? SectionCandidate : ResolveSection(kv.Key);
+                if (kv.Key == "开启打字音效(娱乐)") description = "输入时播放按键音效，音量 0 表示静音。";
+                FrameworkElement editor = kv.Key == KeyAnimation ? CreateAnimationEditor(config) :
+                    kv.Key == "开启打字音效(娱乐)" ? CreateSoundEditor(config) : CreateDynamicEditor(kv.Key, kv.Value);
+                Border container = kv.Key == KeyAnimation
+                    ? new Border { Style = (Style)FindResource("SettingRowStyle"), Child = editor }
+                    : CreateDynamicRow(kv.Key, description, editor);
 
                 GetSectionPanel(section).Children.Add(container);
                 _dynamicEntries.Add(new EditorEntry(kv.Key, editor));
                 RegisterFilterEntry(section, kv.Key, container, description);
             }
         }
+        private sealed class AnimationEditorState
+        {
+            public CheckBox Enabled;
+            public TextBox Duration;
+        }
+
+        private sealed class SoundEditorState
+        {
+            public CheckBox Enabled;
+            public Slider Volume;
+        }
+
+        private FrameworkElement CreateSoundEditor(Dictionary<string, string> config)
+        {
+            var enabled = new CheckBox { Content = "启用", Foreground = Foreground,
+                IsChecked = IsSettingEnabled(config, "开启打字音效(娱乐)", false),
+                VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) };
+            var volumeEditor = CreateDynamicEditor(KeyKeySoundVolume, config[KeyKeySoundVolume]);
+            var slider = (Slider)volumeEditor.Tag;
+            var grid = new Grid { Tag = new SoundEditorState { Enabled = enabled, Volume = slider },
+                VerticalAlignment = VerticalAlignment.Center };
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            grid.Children.Add(enabled);
+            var label = new TextBlock { Text = "音量", FontSize = 13, Foreground = Foreground,
+                VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 8, 0) };
+            Grid.SetColumn(label, 1);
+            grid.Children.Add(label);
+            Grid.SetColumn(volumeEditor, 2);
+            grid.Children.Add(volumeEditor);
+            enabled.Checked += OnAnyEditorChanged;
+            enabled.Unchecked += OnAnyEditorChanged;
+            return grid;
+        }
+
+        private FrameworkElement CreateAnimationEditor(Dictionary<string, string> config)
+        {
+            var controls = new AnimationEditorState
+            {
+                Enabled = new CheckBox { IsChecked = IsSettingEnabled(config, KeyAnimation, true),
+                    Foreground = Foreground, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) },
+                Duration = new TextBox { Text = config[KeyAnimationDuration], Style = (Style)FindResource("FieldTextStyle"), MinWidth = 0, Width = 65 }
+            };
+            var row = new Grid { Tag = controls, MinHeight = 32,
+                ToolTip = "时间单位：毫秒（0～60000）。候选窗移动、扩大和收缩共用此时长，出现和消失立即完成；0 为立即变化。" };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(210) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.Children.Add(new TextBlock { Text = "动效", Style = (Style)FindResource("RowTitleStyle"),
+                VerticalAlignment = VerticalAlignment.Center });
+            var panel = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
+            panel.Children.Add(controls.Enabled);
+            panel.Children.Add(new TextBlock { Text = "时间（毫秒）", FontSize = 13,
+                Foreground = controls.Duration.Foreground, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 6, 0) });
+            panel.Children.Add(controls.Duration);
+            Grid.SetColumn(panel, 1);
+            row.Children.Add(panel);
+            controls.Enabled.Checked += OnAnyEditorChanged;
+            controls.Enabled.Unchecked += OnAnyEditorChanged;
+            controls.Duration.TextChanged += OnAnyEditorChanged;
+            return row;
+        }
+
         private FrameworkElement CreateDynamicEditor(string key, string value)
         {
+            if (IsShortcutSetting(key))
+            {
+                return CreateShortcutEditor(key, value);
+            }
+
             if (string.Equals(value, Yes, StringComparison.OrdinalIgnoreCase) ||
                 string.Equals(value, No, StringComparison.OrdinalIgnoreCase))
             {
@@ -358,8 +469,10 @@ namespace TigerClaw.Dialog
 
                 var valueText = new TextBlock
                 {
-                    Width = 44,
-                    Margin = new Thickness(12, 0, 0, 0),
+                    Width = 28,
+                    FontSize = 13,
+                    TextAlignment = TextAlignment.Right,
+                    Margin = new Thickness(8, 0, 0, 0),
                     VerticalAlignment = VerticalAlignment.Center,
                     Foreground = Foreground,
                     Text = volume.ToString(CultureInfo.InvariantCulture)
@@ -373,7 +486,7 @@ namespace TigerClaw.Dialog
                     IsSnapToTickEnabled = false,
                     SmallChange = 1,
                     LargeChange = 10,
-                    Width = 260,
+                    MinWidth = 60,
                     Value = volume,
                     VerticalAlignment = VerticalAlignment.Center
                 };
@@ -383,12 +496,14 @@ namespace TigerClaw.Dialog
                     OnAnyEditorChanged(sender, args);
                 };
 
-                var host = new StackPanel
+                var host = new Grid
                 {
-                    Orientation = Orientation.Horizontal,
                     VerticalAlignment = VerticalAlignment.Center,
                     Tag = slider
                 };
+                host.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                host.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+                Grid.SetColumn(valueText, 1);
                 host.Children.Add(slider);
                 host.Children.Add(valueText);
                 return host;
@@ -455,6 +570,69 @@ namespace TigerClaw.Dialog
             return textBox;
         }
 
+        private FrameworkElement CreateShortcutEditor(string key, string value)
+        {
+            string defaultValue = GetDefaultShortcut(key);
+            if (!ShortcutGesture.TryParse(value, out ShortcutGesture gesture))
+            {
+                ShortcutGesture.TryParse(defaultValue, out gesture);
+            }
+
+            var display = new TextBox
+            {
+                IsReadOnly = true,
+                IsReadOnlyCaretVisible = false,
+                Style = (Style)FindResource("FieldTextStyle"),
+                Width = 140,
+                MinWidth = 140,
+                MaxWidth = 140,
+                Text = gesture?.ToDisplayString() ?? string.Empty
+            };
+            bool enabled = IsSettingEnabled(_original, GetShortcutEnabledKey(key),
+                string.Equals(key, KeyManualAddWordShortcut, StringComparison.OrdinalIgnoreCase));
+            var state = new ShortcutEditorState(display, gesture?.ToConfigString() ?? defaultValue);
+            if (!enabled)
+            {
+                state.Clear();
+            }
+
+            var recordButton = new Button
+            {
+                Content = "修改",
+                Width = 72,
+                Height = 28,
+                Margin = new Thickness(8, 0, 0, 0),
+                Style = (Style)FindResource("ActionButtonStyle")
+            };
+            recordButton.Click += (sender, args) =>
+            {
+                var window = new RecordKeyWindow(recordShortcut: true, defaultShortcut: defaultValue) { Owner = this };
+                if (window.ShowDialog() != true)
+                {
+                    return;
+                }
+                if (window.ShortcutCleared)
+                {
+                    state.Clear();
+                }
+                else if (ShortcutGesture.TryParse(window.Result?.Token, out ShortcutGesture recorded))
+                {
+                    state.Set(recorded);
+                }
+                OnAnyEditorChanged(sender, args);
+            };
+
+            var panel = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                VerticalAlignment = VerticalAlignment.Center,
+                Tag = state
+            };
+            panel.Children.Add(display);
+            panel.Children.Add(recordButton);
+            return panel;
+        }
+
         private Border CreateDynamicRow(string key, string description, FrameworkElement editor)
         {
             var border = new Border
@@ -472,7 +650,7 @@ namespace TigerClaw.Dialog
             };
             leftPanel.Children.Add(new TextBlock
             {
-                Text = key,
+                Text = GetSettingDisplayName(key),
                 Style = (Style)FindResource("RowTitleStyle")
             });
             leftPanel.Children.Add(new TextBlock
@@ -515,7 +693,7 @@ namespace TigerClaw.Dialog
         private void RegisterFilterEntry(string section, string key, FrameworkElement container, string description)
         {
             string searchText = NormalizeText(key + " " + (description ?? string.Empty));
-            _filterEntries.Add(new FilterEntry(section, container, searchText));
+            _filterEntries.Add(new FilterEntry(section, key, container, searchText));
         }
 
         private void ApplySearchFilter()
@@ -528,6 +706,7 @@ namespace TigerClaw.Dialog
             int candidateVisible = 0;
             int nativeVisible = 0;
             int aboutVisible = 0;
+            int donateVisible = 0;
 
             foreach (FilterEntry entry in _filterEntries)
             {
@@ -561,6 +740,9 @@ namespace TigerClaw.Dialog
                     case SectionAbout:
                         aboutVisible++;
                         break;
+                    case SectionDonate:
+                        donateVisible++;
+                        break;
                 }
             }
 
@@ -572,7 +754,8 @@ namespace TigerClaw.Dialog
                 [SectionKeys] = keysVisible,
                 [SectionCandidate] = candidateVisible,
                 [SectionNative] = nativeVisible,
-                [SectionAbout] = aboutVisible
+                [SectionAbout] = aboutVisible,
+                [SectionDonate] = donateVisible
             };
 
             if (query.Length > 0 && counts[_activeSection] == 0)
@@ -588,6 +771,7 @@ namespace TigerClaw.Dialog
             SetSectionVisibility(CandidateSection, SectionCandidate, counts, query);
             SetSectionVisibility(NativeSection, SectionNative, counts, query);
             SetSectionVisibility(AboutSection, SectionAbout, counts, query);
+            SetSectionVisibility(DonateSection, SectionDonate, counts, query);
             EmptySearchText.Visibility = hasAnyResult ? Visibility.Collapsed : Visibility.Visible;
             UpdateNavigationState(counts, query.Length > 0);
         }
@@ -648,6 +832,10 @@ namespace TigerClaw.Dialog
             else if (sender == AboutNavButton)
             {
                 _activeSection = SectionAbout;
+            }
+            else if (sender == DonateNavButton)
+            {
+                _activeSection = SectionDonate;
             }
 
             ApplySearchFilter();
@@ -711,6 +899,21 @@ namespace TigerClaw.Dialog
         private bool TrySaveChanges(bool showNoChangeStatus, bool ignoreEmptyTextChanges, out bool changedAny)
         {
             Dictionary<string, string> current = CollectCurrentValues();
+            changedAny = false;
+            foreach (string key in new[] { KeyAnimationDuration })
+            {
+                if (current.TryGetValue(key, out string duration) && !string.IsNullOrWhiteSpace(duration) &&
+                    (!int.TryParse(duration, out int milliseconds) || milliseconds < 0 || milliseconds > 60000))
+                {
+                    StatusText.Text = "状态：动效时间请输入 0～60000 的整数（毫秒），留空使用默认值。";
+                    return false;
+                }
+            }
+            if (!TryValidateShortcutBindings(current, out string shortcutError))
+            {
+                StatusText.Text = "状态：快捷键冲突 - " + shortcutError;
+                return false;
+            }
             List<KeyValuePair<string, string>> changedPairs = new List<KeyValuePair<string, string>>();
 
             foreach (KeyValuePair<string, string> kv in current)
@@ -776,11 +979,6 @@ namespace TigerClaw.Dialog
             AboutCommitText.Text = string.IsNullOrWhiteSpace(BuildInfo.Commit) ? "dev" : BuildInfo.Commit;
             AboutBuildTimeText.Text = FormatUtcText(BuildInfo.BuildUtc);
 
-            string trialText = FormatUtcText(BuildInfo.TrialExpireUtc);
-            bool hasTrial = !string.IsNullOrWhiteSpace(trialText);
-            AboutTrialLabel.Visibility = hasTrial ? Visibility.Visible : Visibility.Collapsed;
-            AboutTrialText.Visibility = hasTrial ? Visibility.Visible : Visibility.Collapsed;
-            AboutTrialText.Text = trialText;
         }
 
         private void OnAboutCopyClick(object sender, RoutedEventArgs e)
@@ -910,9 +1108,19 @@ namespace TigerClaw.Dialog
 
             foreach (EditorEntry entry in _dynamicEntries)
             {
-                if (entry.Editor is CheckBox cb)
+                if (entry.Editor.Tag is AnimationEditorState animation)
+                {
+                    map[KeyAnimation] = animation.Enabled.IsChecked == true ? Yes : No;
+                    map[KeyAnimationDuration] = animation.Duration.Text ?? string.Empty;
+                }
+                else if (entry.Editor is CheckBox cb)
                 {
                     map[entry.Key] = cb.IsChecked == true ? Yes : No;
+                }
+                else if (entry.Editor.Tag is SoundEditorState sound)
+                {
+                    map[entry.Key] = sound.Enabled.IsChecked == true ? Yes : No;
+                    map[KeyKeySoundVolume] = ((int)Math.Round(sound.Volume.Value)).ToString(CultureInfo.InvariantCulture);
                 }
                 else if (entry.Editor.Tag is Slider slider)
                 {
@@ -921,6 +1129,11 @@ namespace TigerClaw.Dialog
                 else if (entry.Editor.Tag is TextBox taggedTextBox)
                 {
                     map[entry.Key] = taggedTextBox.Text ?? string.Empty;
+                }
+                else if (entry.Editor.Tag is ShortcutEditorState shortcutEditor)
+                {
+                    map[entry.Key] = shortcutEditor.ConfigText;
+                    map[GetShortcutEnabledKey(entry.Key)] = shortcutEditor.Enabled ? Yes : No;
                 }
                 else if (entry.Editor is TextBox tb)
                 {
@@ -1155,9 +1368,13 @@ namespace TigerClaw.Dialog
                 case "Ctrl+空格切换中英文":
                     return "允许使用 Ctrl+空格 切换中英文状态。";
                 case "Ctrl+等号手动加词":
-                    return "快捷触发手动加词流程。";
+                    return "是否启用手动加词快捷键，实际组合可在下一项录制。";
                 case "Ctrl+m切换最近码表":
-                    return "记录最近使用的两个码表，按 Ctrl+m 在这两个码表之间切换。";
+                    return "是否启用最近码表切换快捷键，实际组合可在下一项录制。";
+                case KeyManualAddWordShortcut:
+                    return "修改手动加词组合键；清空可停用，弹窗内可恢复默认。";
+                case KeySwitchRecentSchemaShortcut:
+                    return "修改切换最近两个码表的组合键；清空可停用，弹窗内可恢复默认。";
                 case "回车清屏":
                     return "回车键是否立即清掉编码串。";
                 case "中英文不限长混合输入":
@@ -1166,6 +1383,8 @@ namespace TigerClaw.Dialog
                     return "方案名含“整句”时启用整句输入：连续编码由本地模型自动切分并生成整句候选。";
                 case "整句神经重排":
                     return "使用独立 Qwen 推理进程重排前 5 个整句候选；不可用时自动保留三元模型结果。";
+                case "整句Tab自学习":
+                    return "仅学习 Tab 明确纠正且目标应用确认成功上屏的片段；记录保存在当前方案目录，不改变原码表。关闭后保留记录但不参与排序。";
                 case "整句自动提前上屏":
                     return "高置信度且连续稳定的前缀自动提前上屏；空码无法继续补全当前码段时也会顶上已确认的字并保留新键。默认关闭。";
                 case "保留最少编码数量":
@@ -1201,7 +1420,7 @@ namespace TigerClaw.Dialog
                 case "隐藏候选":
                     return "隐藏候选窗口，只保留输入中的文字变化。";
                 case "候选窗动效":
-                    return "控制候选窗弹出时的轻微上浮位移动画。";
+                    return "动效时间控制候选窗移动、扩大和收缩，出现和消失立即完成，单位毫秒。";
                 case "编码伪装":
                     return "对展示编码做轻度伪装处理。";
                 case "空码自动清屏":
@@ -1267,6 +1486,7 @@ namespace TigerClaw.Dialog
 
                 case "自动启用整句模式":
                 case "整句神经重排":
+                case "整句Tab自学习":
                 case "整句自动提前上屏":
                 case "保留最少编码数量":
                 case "高频字仅使用最优码组句":
@@ -1279,6 +1499,8 @@ namespace TigerClaw.Dialog
                 case "Ctrl+空格切换中英文":
                 case "Ctrl+等号手动加词":
                 case "Ctrl+m切换最近码表":
+                case KeyManualAddWordShortcut:
+                case KeySwitchRecentSchemaShortcut:
                 case "分号次选":
                 case "引号三选":
                 case "回车清屏":
@@ -1350,13 +1572,6 @@ namespace TigerClaw.Dialog
             {
                 sb.Append("构建时间：");
                 sb.AppendLine(buildText);
-            }
-
-            string trialText = FormatUtcText(BuildInfo.TrialExpireUtc);
-            if (!string.IsNullOrWhiteSpace(trialText))
-            {
-                sb.Append("试用到期：");
-                sb.AppendLine(trialText);
             }
 
             return sb.ToString().TrimEnd();
@@ -1497,7 +1712,8 @@ namespace TigerClaw.Dialog
                    string.Equals(section, SectionKeys, StringComparison.Ordinal) ||
                    string.Equals(section, SectionCandidate, StringComparison.Ordinal) ||
                    string.Equals(section, SectionNative, StringComparison.Ordinal) ||
-                   string.Equals(section, SectionAbout, StringComparison.Ordinal);
+                   string.Equals(section, SectionAbout, StringComparison.Ordinal) ||
+                   string.Equals(section, SectionDonate, StringComparison.Ordinal);
         }
 
         private static bool ContainsAny(string text, params string[] tokens)
@@ -1553,6 +1769,8 @@ namespace TigerClaw.Dialog
                     return "外挂版";
                 case SectionAbout:
                     return "关于";
+                case SectionDonate:
+                    return "赞赏支持";
                 default:
                     return "系统";
             }
@@ -1582,6 +1800,7 @@ namespace TigerClaw.Dialog
             UpdateNavigationButton(CandidateNavButton, SectionCandidate, counts, hasQuery);
             UpdateNavigationButton(NativeNavButton, SectionNative, counts, hasQuery);
             UpdateNavigationButton(AboutNavButton, SectionAbout, counts, hasQuery);
+            UpdateNavigationButton(DonateNavButton, SectionDonate, counts, hasQuery);
         }
 
         private void UpdateNavigationButton(Button button, string section, Dictionary<string, int> counts, bool hasQuery)
@@ -1722,6 +1941,121 @@ namespace TigerClaw.Dialog
             return -1;
         }
 
+        private static bool IsShortcutSetting(string key)
+        {
+            return string.Equals(key, KeyManualAddWordShortcut, StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(key, KeySwitchRecentSchemaShortcut, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string GetDefaultShortcut(string key)
+        {
+            return string.Equals(key, KeySwitchRecentSchemaShortcut, StringComparison.OrdinalIgnoreCase)
+                ? DefaultSwitchRecentSchemaShortcut
+                : DefaultManualAddWordShortcut;
+        }
+
+        private static string GetShortcutEnabledKey(string key)
+        {
+            return string.Equals(key, KeySwitchRecentSchemaShortcut, StringComparison.OrdinalIgnoreCase)
+                ? KeySwitchRecentSchemaEnabled : KeyManualAddWordEnabled;
+        }
+
+        private static string GetSettingDisplayName(string key)
+        {
+            if (string.Equals(key, KeyManualAddWordEnabled, StringComparison.OrdinalIgnoreCase))
+            {
+                return "启用手动加词快捷键";
+            }
+            if (string.Equals(key, KeySwitchRecentSchemaEnabled, StringComparison.OrdinalIgnoreCase))
+            {
+                return "启用切换最近码表快捷键";
+            }
+            return key;
+        }
+
+        private static bool TryValidateShortcutBindings(
+            Dictionary<string, string> values,
+            out string error)
+        {
+            error = string.Empty;
+            if (!TryReadShortcut(values, KeyManualAddWordShortcut, out ShortcutGesture addWord) ||
+                !TryReadShortcut(values, KeySwitchRecentSchemaShortcut, out ShortcutGesture switchSchema))
+            {
+                error = "快捷键格式无效。";
+                return false;
+            }
+
+            bool addEnabled = IsSettingEnabled(values, KeyManualAddWordEnabled, true);
+            bool switchEnabled = IsSettingEnabled(values, KeySwitchRecentSchemaEnabled, false);
+            if (addEnabled && switchEnabled && addWord.Equals(switchSchema))
+            {
+                error = "手动加词与切换最近码表不能使用同一组合键。";
+                return false;
+            }
+
+            if (addEnabled && TryGetReservedShortcutName(addWord, values, out string addConflict))
+            {
+                error = "手动加词与“" + addConflict + "”冲突。";
+                return false;
+            }
+            if (switchEnabled && TryGetReservedShortcutName(switchSchema, values, out string switchConflict))
+            {
+                error = "切换最近码表与“" + switchConflict + "”冲突。";
+                return false;
+            }
+
+            return true;
+        }
+
+        private static bool TryReadShortcut(
+            Dictionary<string, string> values,
+            string key,
+            out ShortcutGesture gesture)
+        {
+            gesture = null;
+            return values.TryGetValue(key, out string value) &&
+                   ShortcutGesture.TryParse(value, out gesture);
+        }
+
+        private static bool IsSettingEnabled(
+            Dictionary<string, string> values,
+            string key,
+            bool defaultValue)
+        {
+            return values.TryGetValue(key, out string value)
+                ? string.Equals(value, Yes, StringComparison.OrdinalIgnoreCase)
+                : defaultValue;
+        }
+
+        private static bool TryGetReservedShortcutName(
+            ShortcutGesture gesture,
+            Dictionary<string, string> values,
+            out string name)
+        {
+            name = string.Empty;
+            ShortcutConflictKind conflict = ShortcutBindingRules.GetReservedConflict(
+                gesture,
+                IsSettingEnabled(values, "Ctrl+空格切换中英文", true),
+                IsSettingEnabled(values, "Alt+\\启用或禁用外挂版", true));
+            switch (conflict)
+            {
+                case ShortcutConflictKind.CtrlSpace:
+                    name = "Ctrl+空格切换中英文";
+                    return true;
+                case ShortcutConflictKind.NativeHookAltBackslash:
+                    name = "Alt+\\启用或禁用外挂版";
+                    return true;
+                case ShortcutConflictKind.CtrlDigitReorder:
+                    name = "Ctrl+数字调序";
+                    return true;
+                case ShortcutConflictKind.AltDigitReorder:
+                    name = "Alt+数字调序";
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
         private sealed class EditorEntry
         {
             public EditorEntry(string key, FrameworkElement editor)
@@ -1734,16 +2068,44 @@ namespace TigerClaw.Dialog
             public FrameworkElement Editor { get; }
         }
 
+        private sealed class ShortcutEditorState
+        {
+            public ShortcutEditorState(TextBox display, string configText)
+            {
+                Display = display;
+                ConfigText = configText ?? string.Empty;
+            }
+
+            public TextBox Display { get; }
+            public string ConfigText { get; private set; }
+            public bool Enabled { get; private set; } = true;
+
+            public void Clear()
+            {
+                Enabled = false;
+                Display.Text = "清空";
+            }
+
+            public void Set(ShortcutGesture gesture)
+            {
+                Enabled = true;
+                ConfigText = gesture?.ToConfigString() ?? string.Empty;
+                Display.Text = gesture?.ToDisplayString() ?? string.Empty;
+            }
+        }
+
         private sealed class FilterEntry
         {
-            public FilterEntry(string section, FrameworkElement container, string searchText)
+            public FilterEntry(string section, string key, FrameworkElement container, string searchText)
             {
                 Section = section;
+                Key = key;
                 Container = container;
                 SearchText = searchText;
             }
 
             public string Section { get; }
+            public string Key { get; }
             public FrameworkElement Container { get; }
             public string SearchText { get; }
         }

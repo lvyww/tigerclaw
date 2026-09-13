@@ -1,0 +1,63 @@
+name: Tab correction learning
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: tab-learning-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  core:
+    name: Core learning and existing regressions
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Test learning record maintenance
+        shell: pwsh
+        run: |
+          python tests/test_learning_maintenance.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Test full Core (includes learning rules, real engine and receipt protocol)
+        shell: pwsh
+        run: |
+          dotnet run --project next/TigerClaw.Core.Tests -c Release -p:PublishAot=false
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Compile Native AOT Core
+        shell: pwsh
+        run: |
+          dotnet publish next/TigerClaw.Core -c Release -r win-x64 --output "$env:RUNNER_TEMP/learning-core"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Compile settings dialog including the learning switch
+        shell: pwsh
+        run: |
+          dotnet build next/TigerClaw.Dialog/TigerClaw.Dialog.csproj -c Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  bridge:
+    name: TSF receipt bridge ${{ matrix.platform }}
+    runs-on: windows-2025
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [x64, Win32, ARM64]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Compile production TSF bridge
+        shell: pwsh
+        env:
+          TEST_PLATFORM: ${{ matrix.platform }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.Component.MSBuild -property installationPath
+          if (!$vs) { throw 'MSBuild unavailable' }
+          & "$vs\MSBuild\Current\Bin\MSBuild.exe" BimeTSF2/SampleIME/BimeTSF2.vcxproj /nr:false /m:2 /p:Configuration=Release "/p:Platform=$env:TEST_PLATFORM" /p:PlatformToolset=v145 /v:minimal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

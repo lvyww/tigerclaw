@@ -226,6 +226,10 @@
                             Content="关于"
                             Style="{StaticResource NavButtonStyle}"
                             Click="OnSectionNavClick" />
+                    <Button x:Name="DonateNavButton"
+                            Content="赞赏支持"
+                            Style="{StaticResource NavButtonStyle}"
+                            Click="OnSectionNavClick" />
                 </StackPanel>
             </Border>
 
@@ -479,7 +483,7 @@
                         <StackPanel>
                             <TextBlock Text="关于"
                                        Style="{StaticResource SectionTitleStyle}" />
-                            <TextBlock Text="版本、构建信息和支持入口。"
+                            <TextBlock Text="版本、构建信息和项目主页。"
                                        Style="{StaticResource SectionSubtitleStyle}"
                                        Margin="0,4,0,14" />
 
@@ -492,7 +496,6 @@
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
                                     <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto" />
                                         <RowDefinition Height="Auto" />
                                         <RowDefinition Height="Auto" />
                                         <RowDefinition Height="Auto" />
@@ -544,18 +547,6 @@
                                                FontSize="13"
                                                Foreground="#34251B" />
 
-                                    <TextBlock x:Name="AboutTrialLabel"
-                                               Grid.Row="4"
-                                               Grid.Column="0"
-                                               Margin="0,10,0,0"
-                                               Text="试用到期"
-                                               Style="{StaticResource RowTitleStyle}" />
-                                    <TextBlock x:Name="AboutTrialText"
-                                               Grid.Row="4"
-                                               Grid.Column="1"
-                                               Margin="0,10,0,0"
-                                               FontSize="13"
-                                               Foreground="#34251B" />
 
                                 </Grid>
                             </Border>
@@ -574,6 +565,15 @@
                                         Click="OnAboutOfficialClick" />
                             </StackPanel>
 
+                        </StackPanel>
+                    </Border>
+
+                    <Border x:Name="DonateSection"
+                            Style="{StaticResource SectionBorderStyle}"
+                            Padding="12"
+                            Visibility="Collapsed">
+                        <StackPanel>
+                            <TextBlock Text="赞赏支持" Style="{StaticResource SectionTitleStyle}" />
                             <Border x:Name="DonateCard"
                                     Style="{StaticResource SettingRowStyle}"
                                     Padding="14,12"

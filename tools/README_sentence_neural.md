@@ -15,6 +15,7 @@ Transformer 和 ONNX 流程只保留作历史实验，不进入当前运行时�
 - `convert_sentence_ngram_mobile.py`：把 V2 无损重排成移动端 TCSKNM02。
 - `export_tiger_sentence_rime.py`：导出 Rime 虎整句码表和排名数据。
 - `benchmark_sentence_gram.py`：离线比较 n-gram/搭配实验。
+- `SentenceLengthEval/`：原虎整句按 2～6 字分档、真实 ARM64 Q8 scorer 的配对准确率评测；口径与运行方式见其 README。
 - `prepare_sentence_benchmark_cases.py`：生成非重叠验证集。
 - `test_sentence_qwen.py`：单独检查 Qwen 候选文本概率。
 - `evaluate_sentence_decoder.py`、`evaluate_sentence_neural_pools.py`：候选池评测。

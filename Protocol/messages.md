@@ -5,16 +5,27 @@
 
 ## 传输
 
+Overlay 的共享内存发布协议见 [ui_state.md](ui_state.md)，独立于此命名管道。
+
 - 命名管道：`\\.\pipe\BimeIPC`
 - UTF-8 JSON，每行一个对象
 - 需要响应的请求携带 `seq`；响应使用相同 `seq`
 - 通知不返回内容
 - Core 是中英文状态、composition 和候选的唯一权威
 
-TSF `key` 请求可携带 `client_session` + `event_id`。同一次物理按键超时重试必须
+TSF 与 Native Hook 的 `key` 请求可携带 `client_session` + `event_id`。同一次物理按键超时重试必须
 复用这两个值；Core 返回首次缓存响应，不再次执行按键。
 
 ## 消息清单
+
+`show_menu` 不增加 JSON 字段。TSF 在发送前通过连接的管道取得 Core PID，
+调用 `AllowSetForegroundWindow` 传递本次点击的前台权限；Core 在触发菜单事件前
+只向路径匹配的同套 Overlay 传递权限，不使用 `ASFW_ANY`。
+Native Overlay 尝试取得前台，但菜单显示不以授权成功为前提；菜单存续期间
+使用独立的外部点击／Esc 检测补齐后台菜单的关闭行为，关闭后停止检测。
+所有菜单使用独立的临时透明宿主，避免状态更新隐藏浮窗时中断菜单。
+收到菜单事件后立即显示，不等待 `get_schema_list`；方案列表后台刷新，
+展开方案子菜单时固定本次显示列表与命令 ID 的对应关系。
 
 | 类型 | 主要调用方 | 响应 | 用途 |
 |---|---|---:|---|
@@ -37,6 +48,7 @@ TSF `key` 请求可携带 `client_session` + `event_id`。同一次物理按键�
 | `exit_core` | Overlay | 是 | 回复后退出 Core |
 | `focus` / `caret` / `ime_active` | TSF | 否 | 窗口、光标和激活状态 |
 | `composition_canceled` | TSF/Hook | 否 | 前端已取消 composition |
+| `learning_commit` | TSF | 否 | 整句 Tab 改选的文档上屏结果回执 |
 | `hook_native_disabled` | Hook | 否 | Native Hook 禁用状态 |
 
 未知消息返回 `success:false` 的普通 `response`，不使用独立错误消息类型。
@@ -57,6 +69,7 @@ TSF `key` 请求可携带 `client_session` + `event_id`。同一次物理按键�
 - `caret_x/y/width/height`：可选的按键时新鲜光标位置。
 - `frontend`：`tsf`、Hook Native 标识或省略。
 - `client_session/event_id`：可选幂等身份。
+- `learning_ack_version`：可选；`1` 表示前端支持文档上屏结果回执。缺失或其它版本不产生学习回执。
 
 Core 以 `handled` 决定前端是否吞键，以 `commit_text` 要求前端上屏。
 
@@ -72,6 +85,19 @@ Core 以 `handled` 决定前端是否吞键，以 `commit_text` 要求前端上�
 
 焦点变化会清理按键/chord 临时状态。`ime_active` 只表示 TigerClaw profile 当前激活，
 用于状态窗显隐；它不替代 Core 的 `keyboard_open` 中英状态。
+
+### 整句自学习回执
+
+```json
+{"type":"learning_commit","client_session":"1234-1","learning_receipt":"0123456789abcdef0123456789abcdef","applied":true}
+```
+
+Core 仅在支持回执的按键响应中携带可选 `learning_receipt`（32 个小写十六进制字符）。
+生成响应不写入学习记录；TSF 同步提交返回 `S_OK` 后才发送 `applied:true`，失败则发送
+`false`。`S_FALSE` 或仅调度异步编辑不代表上屏成功。通知没有响应，避免污染按键回复流。
+令牌绑定 `client_session`，有效期 30 秒，最多保留 128 个；成功或失败确认均只消费一次。
+按键重试沿用缓存的同一令牌。焦点、外部 composition 取消和配置版本变化会作废待确认令牌；
+关闭自学习时不接受确认。旧前端和未实现回执的 Native Hook 仍可正常输入，但不会学习。
 
 ## 统一响应
 

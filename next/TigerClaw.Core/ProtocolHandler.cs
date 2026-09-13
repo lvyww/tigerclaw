@@ -24,6 +24,8 @@ namespace TigerClaw.Core
         private readonly UiStatePublisher _uiStatePublisher;
         private readonly SentenceRerankClient _sentenceRerankClient;
         private readonly KeyRequestReplayCache _keyRequestReplayCache = new KeyRequestReplayCache();
+        private readonly SentenceLearningReceipts _learningReceipts = new SentenceLearningReceipts();
+        private int _learningReceiptConfigVersion = -1;
         private readonly object _keyRequestLock = new object();
         private readonly object _publishLock = new object();
         private readonly AutoResetEvent _deferredUiPublishSignal;
@@ -39,21 +41,34 @@ namespace TigerClaw.Core
         private int _soundVk;
         private int _soundVolumePercent;
         private long _candidateAnchorRevision;
+        private long _candidateBackgroundUntil;
         private bool _candidateAnchorRefreshPending;
         private bool _awaitingFreshCaretForComposition;
         private long _awaitingFreshCaretDeadlineTick;
         private bool _pendingFrontendCompositionReset;
+        // Focus/deactivation can precede the host's composition-cancel message.
+        // Never retain an old frame for that gap. A new physical key re-enables
+        // the pending-frame hint; this is not a TSF identity or direction epoch.
+        private volatile bool _candidateFrameHoldBlocked;
 
-        public ProtocolHandler(Action<CoreUiCommand> uiCommandCallback, CoreRuntimeState state, UiStatePublisher uiStatePublisher)
+        public ProtocolHandler(Action<CoreUiCommand> uiCommandCallback, CoreRuntimeState state, UiStatePublisher uiStatePublisher,
+            bool enableSentenceService = true)
+            : this(uiCommandCallback, state, uiStatePublisher, null, null, enableSentenceService)
+        {
+        }
+
+        internal ProtocolHandler(Action<CoreUiCommand> uiCommandCallback, CoreRuntimeState state,
+            UiStatePublisher uiStatePublisher, SentenceInputDecoder decoder, bool? synchronous,
+            bool enableSentenceService = true)
         {
             _uiCommandCallback = uiCommandCallback;
             _state = state ?? throw new ArgumentNullException(nameof(state));
             _uiStatePublisher = uiStatePublisher;
-            _engine = new InputMethodEngine(_state);
-            _sentenceRerankClient = new SentenceRerankClient(
+            _engine = new InputMethodEngine(_state, decoder, synchronous);
+            _sentenceRerankClient = enableSentenceService ? new SentenceRerankClient(
                 _state,
                 new ProcessLauncher(),
-                OnSentenceRerankResult);
+                OnSentenceRerankResult) : null;
             _engine.SetSentenceRerankService(_sentenceRerankClient);
             _engine.SetSentenceDecodeCompletedCallback(PublishUiState);
             _engine.SetChinese(_state.GetDefaultChinese(), out _);
@@ -167,11 +182,26 @@ namespace TigerClaw.Core
                 return BuildResponseWithUiState(0, false, false);
             }
 
+            // Configuration/scheme changes invalidate old commit capabilities.
+            if (_learningReceiptConfigVersion != _state.ConfigVersion)
+            {
+                _learningReceipts.Cancel();
+                _learningReceiptConfigVersion = _state.ConfigVersion;
+            }
             string type = ConvertToString(msg.GetValue("type"));
+            if (type != "key" && type != "caret" && type != "query_state" && type != "get_schema_list")
+                Interlocked.Exchange(ref _candidateBackgroundUntil, 0);
             int seq = ConvertToInt(msg.GetValue("seq"), 0);
 
             switch (type)
             {
+                case "learning_commit":
+                    if (_state.GetSentenceLearningEnabled())
+                        _learningReceipts.Acknowledge(ConvertToString(msg.GetValue("client_session")),
+                            ConvertToString(msg.GetValue("learning_receipt")), ConvertToBool(msg.GetValue("applied"), false));
+                    else _learningReceipts.Cancel();
+                    return null;
+
                 case "hello":
                     MarkFrontendMode(ConvertToString(msg.GetValue("frontend")));
                     PublishUiState();
@@ -413,7 +443,14 @@ namespace TigerClaw.Core
                         if (success && changed &&
                             (IsSentenceInputConfigKey(key) || IsLexiconConfigKey(key)))
                         {
-                            _engine.ReloadSentenceResources();
+                            if (IsLexiconConfigKey(key))
+                            {
+                                _engine.RefreshCompositionAfterSchemaSwitch();
+                            }
+                            else
+                            {
+                                _engine.ReloadSentenceResources();
+                            }
                         }
                         string extra = ",\"changed\":" + (changed ? "true" : "false") + ",\"config_version\":" + _state.ConfigVersion + ",\"lexicon_version\":" + _state.LexiconVersion;
                         if (!success && !string.IsNullOrWhiteSpace(reason))
@@ -459,12 +496,15 @@ namespace TigerClaw.Core
                     return null;
 
                 case "focus":
+                    _learningReceipts.Cancel();
                     MarkFrontendMode(ConvertToString(msg.GetValue("frontend")));
                     HandleFocusMessage(msg);
                     PublishUiState();
                     return null;
 
                 case "composition_canceled":
+                    _learningReceipts.Cancel();
+                    _candidateFrameHoldBlocked = true;
                     MarkFrontendMode(ConvertToString(msg.GetValue("frontend")));
                     _engine.OnExternalCompositionCanceled();
                     _candidateAnchorRefreshPending = false;
@@ -477,6 +517,7 @@ namespace TigerClaw.Core
                     _hookNativeDisabled = ConvertToBool(msg.GetValue("disabled"), false);
                     if (_hookNativeDisabled)
                     {
+                        _candidateFrameHoldBlocked = true;
                         _engine.OnExternalCompositionCanceled();
                         _candidateAnchorRefreshPending = false;
                         ClearFreshCaretAwaitState();
@@ -489,6 +530,8 @@ namespace TigerClaw.Core
                     _imeActive = ConvertToBool(msg.GetValue("active"), false);
                     if (!_imeActive)
                     {
+                        _engine.InvalidateCandidateFrame();
+                        _candidateFrameHoldBlocked = true;
                         _candidateAnchorRefreshPending = false;
                     }
                     PublishUiState();
@@ -540,6 +583,7 @@ namespace TigerClaw.Core
             bool isKeyDown = string.Equals(action, "down", StringComparison.OrdinalIgnoreCase) ||
                              string.Equals(action, "key_down", StringComparison.OrdinalIgnoreCase);
             bool hasKeyCaret = caretXRaw != null && caretYRaw != null;
+            if (isKeyDown) _candidateFrameHoldBlocked = false;
             if (isKeyDown && _state.GetKeySoundEnabled())
             {
                 _soundVk = vk;
@@ -557,8 +601,16 @@ namespace TigerClaw.Core
                 UpdateCaretAndCompleteCandidateAnchorRefresh(caretX, caretY, width, height);
             }
 
+            if (isKeyDown) Interlocked.Exchange(ref _candidateBackgroundUntil, 0);
             KeyEngineResult result = _engine.ProcessKey(vk, scan, action, shift, ctrl, alt, win, capsLock, numLock, repeat, extended);
             _engine.PostProcessKey(vk, action, result, shift, ctrl, alt, win, capsLock);
+            if (wasComposing && result.Handled && !result.IsComposing && result.IsChinese &&
+                wasChinese == result.IsChinese && !string.IsNullOrEmpty(result.TextToOutput) &&
+                !ctrl && !alt && !win && vk != 0x1B && vk != 0x14 && vk != 0x10)
+                Interlocked.Exchange(ref _candidateBackgroundUntil, Environment.TickCount64 + 2000);
+            var learningEvents = _engine.TakeSentenceLearning(result, out var learningStore);
+            string learningReceipt = ConvertToInt(msg.GetValue("learning_ack_version"), 0) == 1
+                ? _learningReceipts.Issue(ConvertToString(msg.GetValue("client_session")), learningStore, learningEvents) : null;
             if (result.IsComposing && !string.IsNullOrEmpty(result.TextToOutput))
             {
                 _candidateAnchorRefreshPending = true;
@@ -578,6 +630,7 @@ namespace TigerClaw.Core
             _pendingFrontendCompositionReset = false;
             bool languageStateChanged = wasChinese != result.IsChinese;
             string extraJsonPairs = BuildHookNativeConfigExtraJson(frontend) + BuildCompositionStatusExtraJson();
+            if (learningReceipt != null) extraJsonPairs += ",\"learning_receipt\":" + Quote(learningReceipt);
             if (isKeyDown)
             {
                 bool expectKeyUp = _engine.ShouldExpectKeyUp(vk, scan, extended);
@@ -673,6 +726,7 @@ namespace TigerClaw.Core
 
             if (focusChanged)
             {
+                _candidateFrameHoldBlocked = true;
                 _engine.OnFocusChanged();
             }
 
@@ -828,6 +882,9 @@ namespace TigerClaw.Core
 
         private void PublishUiState()
         {
+            // Covers set_config, reload_config and shortcut-driven schema changes.
+            // This only signals a background worker; it never loads on the key path.
+            _sentenceRerankClient?.RefreshConfiguration();
             if (_uiStatePublisher == null)
             {
                 return;
@@ -838,7 +895,8 @@ namespace TigerClaw.Core
                 lock (_publishLock)
                 {
                     int pageSize = _state.GetPageSize();
-                    EngineUiSnapshot engineState = _engine.GetUiSnapshot(pageSize);
+                    EngineUiSnapshot engineState = _engine.GetUiSnapshot(pageSize, out bool sentenceDecodePending, out string candidateFrameSession);
+                    bool candidateVisible = ShouldShowCandidate(engineState, sentenceDecodePending, out bool holdCandidateFrame);
                     _state.GetCaret(out int caretX, out int caretY, out _, out int caretHeight);
                     bool hideStatusBar = _state.GetHideStatusBar() || (!_isNativeHookStatus && !_imeActive);
 
@@ -848,7 +906,9 @@ namespace TigerClaw.Core
                         IsNativeHook = _isNativeHookStatus,
                         IsChinese = engineState.IsChinese,
                         StatusText = _hookNativeDisabled ? "\u7981" : (engineState.IsChinese ? "\u4e2d" : "EN"),
-                        CandidateVisible = ShouldShowCandidate(engineState),
+                        CandidateVisible = candidateVisible,
+                        CandidateHoldWhilePending = holdCandidateFrame,
+                        CandidateFrameSession = candidateFrameSession,
                         InputCode = BuildDisplayComposition(engineState),
                         Candidates = engineState.Candidates ?? Array.Empty<string>(),
                         CandidateAnnotations = engineState.CandidateAnnotations ?? Array.Empty<string>(),
@@ -862,7 +922,11 @@ namespace TigerClaw.Core
                         HideCandidateItems = _state.GetHideCandidateItems(),
                         ShowInputCodeInCandidateWindow = _state.GetShowInputCodeInCandidateWindow(),
                         CandidateExpandDelayMs = _state.GetCandidateExpandDelayMs(),
-                        AnnotationExpandDelayMs = _state.GetAnnotationExpandDelayMs(),
+                        CandidateAnimationEnabled = _state.GetCandidateAnimationEnabled(),
+                        CandidateAnimationDurationMs = _state.GetCandidateAnimationDurationMs(),
+                        // Temporary pinyin is a reverse lookup: show its hints immediately.
+                        AnnotationExpandDelayMs = engineState.CompositionState == 4
+                            ? 0 : _state.GetAnnotationExpandDelayMs(),
                         // Native Hook owns its status visibility; TSF mode still follows ime_active.
                         HideStatusBar = hideStatusBar,
                         CodeMasking = _state.GetCodeMasking(),
@@ -872,7 +936,8 @@ namespace TigerClaw.Core
                         SoundSeq = Interlocked.Read(ref _soundSeq),
                         SoundVk = _soundVk,
                         SoundVolumePercent = _soundVolumePercent,
-                        CandidateAnchorRevision = Interlocked.Read(ref _candidateAnchorRevision)
+                        CandidateAnchorRevision = Interlocked.Read(ref _candidateAnchorRevision),
+                        CandidateBackgroundUntil = Interlocked.Read(ref _candidateBackgroundUntil)
                     };
 
                     _uiStatePublisher.Publish(state);
@@ -883,32 +948,34 @@ namespace TigerClaw.Core
             }
         }
 
-        private bool ShouldShowCandidate(EngineUiSnapshot engineState)
+        private bool ShouldShowCandidate(EngineUiSnapshot engineState, bool sentenceDecodePending,
+            out bool holdCandidateFrame)
         {
+            holdCandidateFrame = false;
             if (!engineState.IsComposing)
             {
                 ClearFreshCaretAwaitState();
                 return false;
             }
 
-            if ((engineState.Candidates == null || engineState.Candidates.Length == 0) &&
-                _engine.IsSentenceDecodePending)
+            // A pending-frame hint must not bypass the existing fresh-caret gate.
+            if (_awaitingFreshCaretForComposition)
             {
+                if (GetNowMs() < _awaitingFreshCaretDeadlineTick) return false;
+                ClearFreshCaretAwaitState();
+            }
+
+            if ((engineState.Candidates == null || engineState.Candidates.Length == 0) &&
+                sentenceDecodePending)
+            {
+                // Older overlays still hide. New Native overlays may retain an
+                // already visible candidate frame, but never create a placeholder.
+                holdCandidateFrame = engineState.IsChinese && !_hookNativeDisabled &&
+                    (_isNativeHookStatus || _imeActive) && !_candidateFrameHoldBlocked;
                 return false;
             }
 
-            if (!_awaitingFreshCaretForComposition)
-            {
-                return true;
-            }
-
-            if (GetNowMs() >= _awaitingFreshCaretDeadlineTick)
-            {
-                ClearFreshCaretAwaitState();
-                return true;
-            }
-
-            return false;
+            return true;
         }
 
         private void UpdateFreshCaretAwaitState(bool wasComposing, KeyEngineResult result, bool isKeyDown, bool hasKeyCaret)

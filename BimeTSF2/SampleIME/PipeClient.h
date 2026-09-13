@@ -15,6 +15,7 @@ struct BimeResponse
     BOOL success;
     BOOL handled;
     BOOL expectKeyUp;
+    std::wstring learningReceipt; // Opaque commit receipt; never user text.
     std::wstring textToOutput;
     std::wstring inputBuffer;
     BOOL hasProtocolVersion;
@@ -54,7 +55,7 @@ public:
     BOOL Connect();
     void Disconnect();
     BOOL IsConnected() const;
-    BOOL GetConnectedServerProcessPath(_Out_writes_(pathCount) WCHAR *path, size_t pathCount) const;
+    BOOL IsBusy() const { return _requestActive != 0; }
 
     BOOL SendMessage(const char *jsonMessage);
     HRESULT SendMessageAndWait(const char *jsonMessage, _Out_ BimeResponse *pResponse, DWORD timeoutMs = BIME_DEFAULT_TIMEOUT_MS);
@@ -89,6 +90,7 @@ public:
     BOOL SendFocusMessage(LONGLONG hwnd, DWORD processId);
     BOOL SendCaretMessage(LONG x, LONG y, LONG width = 2, LONG height = 20);
     BOOL SendCompositionCanceledMessage();
+    BOOL SendLearningCommit(const std::wstring& receipt, BOOL applied);
     BOOL SendImeActiveMessage(BOOL active);
 
 private:
@@ -98,6 +100,7 @@ private:
     LONGLONG _keyEventSeq;
     char _clientSession[64];
     BOOL _helloDone;
+    volatile LONG _requestActive = 0;
 
     BOOL TryConnect();
     BOOL WriteMessageOverlapped(const char *data, size_t len, DWORD timeoutMs);

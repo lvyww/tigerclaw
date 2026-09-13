@@ -335,6 +335,20 @@ local function build_lexicon_index(entries, character_ranks, high_freq_limit, wh
         end
     end
 
+    local optimal_input = {}
+    for character, codes in pairs(codes_by_character) do
+        local chosen
+        for index = 1, #codes do
+            local code = codes[index]
+            if not chosen or #code < #chosen then
+                chosen = code
+            end
+        end
+        if chosen then
+            optimal_input[character] = chosen
+        end
+    end
+
     local filtered = {}
     local length_values = {}
     local max_len = 1
@@ -350,7 +364,11 @@ local function build_lexicon_index(entries, character_ranks, high_freq_limit, wh
                 or not common[text]
                 or whitelist[text] == true
             if allow_non_primary or primary[text] == code then
-                allowed[#allowed + 1] = { t = text, r = index }
+                allowed[#allowed + 1] = {
+                    t = text,
+                    r = index,
+                    optimal_single = optimal_input[text] == code
+                }
             end
         end
         if #allowed > 0 then
@@ -683,6 +701,7 @@ end
 
 local function load_mobile(path)
     local file = assert(io.open(path, "rb"), "cannot open n-gram: " .. path)
+    local function read_model()
     local header = file:read(MOBILE_HEADER_SIZE)
     assert(header and #header == MOBILE_HEADER_SIZE, "truncated mobile n-gram: " .. path)
     assert(header:sub(1, 8) == "TCSKNM02", "not a TCSKNM02 model: " .. path)
@@ -708,6 +727,13 @@ local function load_mobile(path)
     local bi_index = read_at(bi_index_off, bi_index_count * 16)
     local tri_index = read_at(tri_index_off, tri_index_count * 16)
     local unknown = string.unpack("<f", unigrams, 5)
+    -- Small resident section: decode once instead of binary-searching and
+    -- unpacking it for every uncached trigram probability.
+    local unigram_values = {}
+    for position = 1, #unigrams, 8 do
+        local key, probability = string.unpack("<i4f", unigrams, position)
+        unigram_values[key] = probability
+    end
 
     local cache = {}
     local cache_bytes = 0
@@ -795,19 +821,7 @@ local function load_mobile(path)
     end
 
     local function lookup_unigram(key, fallback)
-        local low, high = 0, uni_count
-        while low < high do
-            local middle = low + math.floor((high - low) / 2)
-            local value = string.unpack("<i4", unigrams, middle * 8 + 1)
-            if value < key then low = middle + 1 else high = middle end
-        end
-        if low < uni_count then
-            local at = low * 8 + 1
-            if string.unpack("<i4", unigrams, at) == key then
-                return string.unpack("<f", unigrams, at + 4)
-            end
-        end
-        return fallback
+        return unigram_values[key] or fallback
     end
 
     local function lookup_context(kind, index_data, index_count, context_count, section_end, key, target)
@@ -917,8 +931,17 @@ local function load_mobile(path)
         cache_limit_bytes = MOBILE_CACHE_BYTES,
         logp = logp,
         has_observed_bigram = has_observed_bigram,
-        close = function() file:close() end
+        close = function()
+            if file then file:close(); file = nil end
+        end
     }
+    end
+    local ok, model = pcall(read_model)
+    if not ok then
+        if file then file:close() end
+        error(model, 0)
+    end
+    return model
 end
 
 function kn_reader.load(path)
@@ -1113,6 +1136,7 @@ local candidate_limit = 20
 local max_raw_length = 128
 local rank_penalty = 0.03
 local emitted_character_reward = 2.0
+local whole_input_single_character_reward = 5.0
 local isolation_threshold = 3000
 local isolation_lambda = 2.0
 local early_commit_minimum_share = 0.995
@@ -1131,6 +1155,24 @@ local BOS = kn_reader.BOS
 local EOS = kn_reader.EOS
 local kn_model = false
 local kn_load_error = nil
+local model_generation = 0
+local model_failure = {} -- Only model-operation failures may trigger decode retry.
+
+local function call_model(model, operation, ...)
+    local ok, value = pcall(model[operation], ...)
+    if ok and (operation ~= "logp" or
+        (type(value) == "number" and value == value and math.abs(value) < math.huge)) then
+        return value
+    end
+    model_failure.reason = ok and "non-finite model probability" or tostring(value)
+    error(model_failure, 0)
+end
+
+local function close_model()
+    local previous = kn_model
+    kn_model = nil
+    if previous and previous.close then pcall(previous.close) end
+end
 -- Test/frontend hook: force-disable the n-gram model so the no-model
 -- fallback ordering can be exercised deterministically.
 local model_disabled = false
@@ -1183,6 +1225,7 @@ end
 -- it does not emit a Rime property update (and a redundant UI refresh) for
 -- every physical key. The old properties are cleared once for live migration.
 local state_keys = {
+    locks = "tiger_sentence_locks",
     committed = "tiger_sentence_committed",
     -- Read once during migration from the old two-property format.
     committed_text = "tiger_sentence_committed_text",
@@ -1201,7 +1244,8 @@ local function fresh_transient_state()
         last_auto_commit_raw_length = 0,
         suspended = false,
         empty_code_pending = nil,
-        continuation_after_auto_commit = false
+        continuation_after_auto_commit = false,
+        model_generation = model_generation
     }
 end
 
@@ -1232,6 +1276,48 @@ local function parse_committed_property(value)
     return value:sub(1, separator - 1), value:sub(separator + 1)
 end
 
+-- Length framing keeps arbitrary candidate text intact and shares locks with
+-- the translator's separate environment without retaining model objects.
+local function read_locks(context)
+    local data = context:get_property(state_keys.locks) or ""
+    local fields, offset = {}, 1
+    while offset <= #data do
+        local colon = data:find(":", offset, true)
+        local length = colon and tonumber(data:sub(offset, colon - 1))
+        if not length or length < 0 or colon + length > #data then return {} end
+        fields[#fields + 1] = data:sub(colon + 1, colon + length)
+        offset = colon + length + 1
+    end
+    local locks = {}
+    for i = 1, #fields - 2, 3 do
+        locks[#locks + 1] = { raw = fields[i], text = fields[i + 1], boundaries = fields[i + 2] }
+    end
+    return locks
+end
+
+local function save_locks(context, locks)
+    local fields = {}
+    for _, lock in ipairs(locks or {}) do
+        for _, field in ipairs({lock.raw, lock.text, lock.boundaries}) do
+            fields[#fields + 1] = tostring(#field) .. ":" .. field
+        end
+    end
+    set_property_if_changed(context, state_keys.locks, table.concat(fields))
+end
+
+local function active_lock(state)
+    return state.locks and state.locks[#state.locks]
+end
+
+local function synchronize_model_state(state)
+    if state.model_generation == model_generation then return false end
+    state.model_generation = model_generation
+    state.trackers = {}
+    state.last_seen_raw = ""
+    state.empty_code_pending = nil
+    return true
+end
+
 local function sentence_state(context, env)
     local transient = transient_state(context, env)
     local combined = context:get_property(state_keys.committed) or ""
@@ -1248,8 +1334,10 @@ local function sentence_state(context, env)
             set_property_if_changed(context, state_keys.committed_text, "")
         end
     end
+    synchronize_model_state(transient)
     transient.committed_text = committed_text
     transient.committed_raw = committed_raw
+    transient.locks = read_locks(context)
     transient.trackers = transient.trackers or {}
     transient.last_seen_raw = transient.last_seen_raw or ""
     transient.last_auto_commit_raw_length = transient.last_auto_commit_raw_length or 0
@@ -1273,6 +1361,7 @@ local function save_transient_state(context, state, env)
 end
 
 local function save_sentence_state(context, state, env)
+    save_locks(context, state.locks)
     set_property_if_changed(context, state_keys.committed,
         (state.committed_raw or "") .. "\t" .. (state.committed_text or ""))
     save_transient_state(context, state, env)
@@ -1335,7 +1424,7 @@ local function logp(prev2, prev1, target)
     local model = ensure_kn()
     local value = 0
     if model then
-        value = model.logp(prev2, prev1, target)
+        value = call_model(model, "logp", prev2, prev1, target)
     end
     local old_key = logp_cache_keys[logp_cache_next]
     if old_key then
@@ -1438,7 +1527,7 @@ local function has_observed_bigram(previous, target)
     end
     local model = ensure_kn()
     local value = model and model.has_observed_bigram and
-        model.has_observed_bigram(previous, target) or false
+        call_model(model, "has_observed_bigram", previous, target) or false
     local old_key = observed_cache_keys[observed_cache_next]
     if old_key then
         observed_cache[old_key] = nil
@@ -1482,6 +1571,40 @@ local function isolation_penalty(text)
     return penalty
 end
 
+-- Evaluate only published/scored paths, never during Beam expansion. Appending
+-- an edge can change the old final character's right neighbour, but cannot
+-- change any earlier character's isolation status.
+local function path_isolation_penalty(item)
+    local model = ensure_kn()
+    if not item or not model or not model.has_observed_bigram or
+        not lexicon_state.isolation_enabled then return 0 end
+    if item._isolation_penalty ~= nil then
+        performance.isolation_hits = performance.isolation_hits + 1
+        return item._isolation_penalty
+    end
+    performance.isolation_misses = performance.isolation_misses + 1
+    local previous = item.previous
+    local penalty = path_isolation_penalty(previous)
+    local last_char = previous and previous._isolation_last_char
+    local last_isolated = previous and previous._isolation_last_isolated or false
+    local chars = item.edge_chars or {}
+    for i = 1, #chars do
+        local ch = chars[i]
+        local rank = lexicon_state.character_ranks[ch] or lexicon_state.unknown_character_rank
+        local rare = rank > isolation_threshold
+        local linked = last_char and (last_isolated or rare) and
+            has_observed_bigram(last_char, ch)
+        if last_isolated and linked then penalty = penalty - isolation_lambda end
+        last_isolated = rare and not linked
+        if last_isolated then penalty = penalty + isolation_lambda end
+        last_char = ch
+    end
+    item._isolation_penalty = penalty
+    item._isolation_last_char = last_char
+    item._isolation_last_isolated = last_isolated
+    return penalty
+end
+
 local function parse_selector(raw, code_end)
     local next_index = code_end + 1
     if next_index > #raw then
@@ -1522,14 +1645,14 @@ local function advance_required_prefix(required, matched_length, candidate_text)
     return math.min(#required, matched_length + #candidate_text)
 end
 
-local function has_complete_candidate(raw_code, required_text_prefix)
+local function has_complete_candidate(raw_code, required_text_prefix, excluded_text, group_eligible_only, locked)
     local raw = normalize(raw_code)
     if raw == "" or not has_letter(raw) then
         return false
     end
 
     local required = required_text_prefix or ""
-    if required == "" then
+    if required == "" and not excluded_text and not group_eligible_only and not locked then
         local reachable = { [0] = true }
         for position = 0, #raw - 1 do
             if reachable[position] then
@@ -1553,10 +1676,21 @@ local function has_complete_candidate(raw_code, required_text_prefix)
         return reachable[#raw] or false
     end
 
+    local first_ranks_only = group_eligible_only and not raw:find("[;'0-9]")
+    local stride = excluded_text and (#excluded_text + 2) or 1
     local states = {}
     for index = 0, #raw do states[index] = {} end
-    states[0][0] = true
-    for position = 0, #raw - 1 do
+    local start, matched, excluded = 0, 0, 0
+    if locked then
+        local prefix = normalize(locked.raw)
+        matched = math.min(#required, #locked.text)
+        if raw:sub(1, #prefix) ~= prefix or required:sub(1, matched) ~= locked.text:sub(1, matched) then return false end
+        start = #prefix
+        if excluded_text then excluded = excluded_text:sub(1, #locked.text) == locked.text and #locked.text or #excluded_text + 1 end
+        if start == #raw then return matched == #required and (not excluded_text or excluded ~= #excluded_text) end
+    end
+    states[start][matched * stride + excluded] = true
+    for position = start, #raw - 1 do
         if next(states[position]) then
             for i = 1, #lexicon_state.lengths do
                 local code_length = lexicon_state.lengths[i]
@@ -1570,14 +1704,30 @@ local function has_complete_candidate(raw_code, required_text_prefix)
                             local selected = eligible_candidates(
                                 candidates, selected_rank, whole_input_edge,
                                 active_allow_duplicate_single)
-                            for matched_length in pairs(states[position]) do
+                            for packed in pairs(states[position]) do
+                                local matched_length = math.floor(packed / stride)
                                 for candidate_index = 1, #selected do
+                                    local candidate = selected[candidate_index]
                                     local next_matched = advance_required_prefix(
                                         required,
                                         matched_length,
-                                        selected[candidate_index].t)
-                                    if next_matched then
-                                        states[consumed_end][next_matched] = true
+                                        candidate.t)
+                                    if next_matched and (not first_ranks_only or candidate.r == 1 or
+                                        (active_allow_duplicate_single and candidate_is_single(candidate))) then
+                                        local next_excluded = packed % stride
+                                        if excluded_text and next_excluded <= #excluded_text then
+                                            if excluded_text:sub(next_excluded + 1,
+                                                next_excluded + #candidate.t) == candidate.t then
+                                                next_excluded = next_excluded + #candidate.t
+                                            else
+                                                next_excluded = #excluded_text + 1
+                                            end
+                                        end
+                                        if consumed_end == #raw and next_matched == #required and
+                                            (not excluded_text or next_excluded ~= #excluded_text) then
+                                            return true
+                                        end
+                                        states[consumed_end][next_matched * stride + next_excluded] = true
                                     end
                                 end
                             end
@@ -1587,7 +1737,7 @@ local function has_complete_candidate(raw_code, required_text_prefix)
             end
         end
     end
-    return states[#raw][#required] or false
+    return false
 end
 
 local function state_better_rank_first(left, right)
@@ -1854,6 +2004,11 @@ local function expand_range(raw, states, from_pos, length, minimum_consumed_end)
                             local selected_candidates = eligible_candidates(
                                 candidates, selected_rank, whole_input_edge,
                                 active_allow_duplicate_single)
+                            -- A descendant cannot recover probability mass
+                            -- already discarded at an earlier lattice boundary.
+                            if #selected_candidates > 0 and current._truncated then
+                                states[consumed_end]._truncated = true
+                            end
                             for c = 1, #current do
                                 local item = current[c]
                                 for k = 1, #selected_candidates do
@@ -1882,11 +2037,19 @@ local function expand_range(raw, states, from_pos, length, minimum_consumed_end)
                                         end
                                         score = score - rank_penalty * candidate._log_rank
                                     end
+                                    local whole_input_single_character_reward_added = 0.0
+                                    if whole_input_edge and selected_rank == 0 and
+                                        candidate.optimal_single and candidate_is_single(candidate) then
+                                        whole_input_single_character_reward_added =
+                                            whole_input_single_character_reward
+                                        score = score + whole_input_single_character_reward_added
+                                    end
                                     local text = item.text .. candidate.t
                                     add_state(states[consumed_end], {
                                         score = score,
                                         mass_score = (item.mass_score or item.score) +
-                                            score - item.score - supplement_added,
+                                            score - item.score - supplement_added -
+                                            whole_input_single_character_reward_added,
                                         text = text,
                                         prev2 = prev2,
                                         prev1 = prev1,
@@ -1895,6 +2058,7 @@ local function expand_range(raw, states, from_pos, length, minimum_consumed_end)
                                         supplement_score = (item.supplement_score or 0.0) +
                                             supplement_added,
                                         previous = item,
+                                        edge_chars = chars,
                                         text_length = #text,
                                         raw_length = consumed_end,
                                         edge_count = (item.edge_count or 0) + 1
@@ -1928,9 +2092,19 @@ local function segmented_from_path(raw, path)
     return table.concat(pieces, " ")
 end
 
+local candidate_display_meta = {
+    __index = function(item, key)
+        if key == "segmented" then
+            local value = segmented_from_path(item._raw, item.path)
+            rawset(item, key, value)
+            return value
+        end
+    end
+}
+
 local function evaluate_state(item)
     local ending_adjustment = logp(item.prev2, item.prev1, EOS) -
-        isolation_penalty(item.text)
+        path_isolation_penalty(item)
     return {
         score = item.score + ending_adjustment,
         confidence_score = (item.mass_score or item.score) + ending_adjustment,
@@ -2227,8 +2401,13 @@ local function emit(raw, states, length, include_early_commit, required_text_pre
             or state_better_rank_first
     end
     local result = select_exact_top(all_candidates, candidate_limit, better)
+    result._completed_truncated = completed._truncated or false
+    -- Display Top-K is not the probability pool. Retain the scored beam for
+    -- evidence upgrades and empty-code confidence, including off-menu outputs.
+    result._confidence_candidates = all_candidates
     for i = 1, #result do
-        result[i].segmented = segmented_from_path(raw, result[i].path)
+        result[i]._raw = raw
+        setmetatable(result[i], candidate_display_meta)
     end
     result.early_commit_evidence = {
         prefixes = {},
@@ -2241,14 +2420,11 @@ local function emit(raw, states, length, include_early_commit, required_text_pre
         confidence_truncated = completed._truncated or false
     }
     if include_early_commit then
-        -- The full-code path only needs the already-selected top candidates
-        -- (`result`); widening to the whole beam (`all_candidates`) only
-        -- matters once an incomplete tail is merged in, so defer that cost
-        -- to build_early_commit_evidence instead of paying it every key.
+        -- Menu truncation must not inflate prefix/boundary confidence.
         result.early_commit_evidence = build_early_commit_evidence(
             raw,
             states,
-            result,
+            all_candidates,
             completed._truncated or false,
             required_text_prefix or "")
     end
@@ -2343,10 +2519,45 @@ local function decode_full(raw_code, include_early_commit, required_text_prefix)
     return result
 end
 
-local function decode(raw_code, include_early_commit, required_text_prefix)
+local function decode(raw_code, include_early_commit, required_text_prefix, locked)
     ensure_lexicon(nil)
     local raw = normalize(raw_code)
     required_text_prefix = required_text_prefix or ""
+    if locked then
+        local prefix = normalize(locked.raw)
+        if prefix == "" or raw:sub(1, #prefix) ~= prefix then return {} end
+        local states = new_states(#raw)
+        -- Reconstruct confirmed boundaries and score their text as context,
+        -- without re-searching or allowing an edge to cross the lock.
+        local seed = { text = "", prev2 = BOS, prev1 = BOS, score = 0, mass_score = 0,
+            max_rank = 1, supplement_state = 1, supplement_score = 0,
+            raw_length = 0, text_length = 0, edge_count = 0 }
+        for r, t in locked.boundaries:gmatch("(%d+),(%d+);") do
+            r, t = tonumber(r), tonumber(t)
+            local chars = utf_chars(locked.text:sub(seed.text_length + 1, t))
+            local item = { text = locked.text:sub(1, t), previous = seed, edge_chars = chars,
+                raw_length = r, text_length = t, edge_count = seed.edge_count + 1,
+                prev2 = seed.prev2, prev1 = seed.prev1, score = seed.score,
+                supplement_state = seed.supplement_state, supplement_score = seed.supplement_score, max_rank = 1 }
+            for _, ch in ipairs(chars) do
+                item.score = item.score + logp(item.prev2, item.prev1, ch) + emitted_character_reward
+                if has_supplements then
+                    local reward
+                    item.supplement_state, reward = supplement.advance(supplement_matcher, item.supplement_state, ch)
+                    item.score = item.score + reward
+                    item.supplement_score = item.supplement_score + reward
+                end
+                item.prev2, item.prev1 = item.prev1, ch
+            end
+            item.mass_score = item.score - item.supplement_score
+            seed = item
+        end
+        if seed.raw_length ~= #prefix or seed.text ~= locked.text then return {} end
+        states[0] = new_bucket()
+        add_state(states[#prefix], seed)
+        expand_range(raw, states, #prefix, #raw)
+        return emit(raw, states, #raw, include_early_commit or false, required_text_prefix)
+    end
     if raw == "" or not has_letter(raw) then
         decode_cache.raw = raw
         decode_cache.states = nil
@@ -2376,6 +2587,19 @@ local function decode(raw_code, include_early_commit, required_text_prefix)
         -- lattice with early-commit evidence before accepting the next key.
         -- Reuse the lattice; rebuilding a long composition here caused the
         -- visible pause after roughly forty uncommitted keys.
+        -- Only evidence is missing/different. Keep final scoring, Top-K and
+        -- lazily generated display strings for this exact generation.
+        local result = decode_cache.result
+        if result then
+            result.early_commit_evidence = build_early_commit_evidence(
+                raw, old_states, result._confidence_candidates,
+                result._completed_truncated,
+                required_text_prefix)
+            decode_cache.includes_early_commit = true
+            decode_cache.required_text_prefix = required_text_prefix
+            record_decode(started)
+            return result
+        end
         states = old_states
     elseif old_states and type(old_raw) == "string" and old_raw ~= "" then
         local old_n = #old_raw
@@ -2420,6 +2644,29 @@ local function decode(raw_code, include_early_commit, required_text_prefix)
     record_decode(started)
     return result
 end
+
+-- A model read can fail after push_input has already changed the composition.
+-- Retry the entire decode with one coherent no-model scoring policy, never just
+-- substitute zero for a failed probability in a partially scored lattice.
+-- Non-model/programming errors still propagate normally.
+local function guarded_decode(operation)
+    return function(...)
+        local ok, result = pcall(operation, ...)
+        if ok then return result end
+        if result ~= model_failure then error(result, 0) end
+        kn_load_error = "runtime n-gram failure: " .. model_failure.reason
+        close_model()
+        model_generation = model_generation + 1
+        clear_model_dependent_caches()
+        if log and type(log.error) == "function" then
+            pcall(log.error, "tiger_sentence: " .. kn_load_error .. "; using no-model fallback")
+        end
+        return operation(...)
+    end
+end
+
+decode = guarded_decode(decode)
+decode_full = guarded_decode(decode_full)
 
 local function trim_segmented_after_raw_prefix(segmented, raw_prefix_length)
     if not segmented or segmented == "" or raw_prefix_length <= 0 then
@@ -2553,9 +2800,11 @@ local function implicit_rank_allowed(candidate, raw, continuation_after_auto_com
     if not continuation_after_auto_commit then
         return true
     end
-    -- Continuations after empty-code auto commit keep implicit first ranks
-    -- only; an explicit selector suffix still unlocks any rank.
-    return has_selection_suffix(raw) or (candidate.max_rank or 1) <= 1
+    -- Segmented paths already passed decoder eligibility. Do not discard
+    -- legal duplicate singles when empty-code commit fixes an earlier prefix.
+    local previous = candidate.path and candidate.path.previous
+    return has_selection_suffix(raw) or (candidate.max_rank or 1) <= 1 or
+        (active_allow_duplicate_single and previous and (previous.text or "") ~= "")
 end
 
 local function strong_empty_code_candidate(candidate, eligible, visible_top, pool_truncated)
@@ -2590,26 +2839,30 @@ end
 -- Mirrors InputMethodEngine.GetEmptyCodeAutoCommitCandidate: accept exactly
 -- one group-eligible candidate, or a group-eligible visible top whose
 -- untruncated confidence share reaches the strong threshold.
-local function capture_empty_code_candidate(full_before, committed_text)
-    local decoded = decode(full_before, false, committed_text)
+local function capture_empty_code_candidate(full_before, committed_text, locked)
+    local decoded = decode(full_before, false, committed_text, locked)
     if #decoded == 0 then
         return nil
     end
     local visible_top = decoded[1]
-    local eligible = {}
     local restrict = not has_selection_suffix(full_before)
+    local function is_eligible(candidate)
+        local previous = candidate.path and candidate.path.previous
+        return not restrict or (candidate.max_rank or 1) <= 1 or
+            (active_allow_duplicate_single and
+             ((previous and (previous.text or "") ~= "") or utf_length(candidate.text) == 1))
+    end
+    -- Preserve the displayed choice, but assess its confidence against all
+    -- group-eligible beam outputs rather than just the visible twenty.
+    local first
     for i = 1, #decoded do
-        -- Whole-input non-first ranks are visible for explicit selection, but
-        -- are not legal implicit segments after the appended key makes the
-        -- edge dead, so they never join the empty-code eligible group.
-        if not restrict or (decoded[i].max_rank or 1) <= 1 then
-            eligible[#eligible + 1] = decoded[i]
-        end
+        if is_eligible(decoded[i]) then first = decoded[i]; break end
     end
-    if #eligible == 0 then
-        return nil
+    if not first then return nil end
+    local eligible = {}
+    for _, candidate in ipairs(decoded._confidence_candidates or decoded) do
+        if is_eligible(candidate) then eligible[#eligible + 1] = candidate end
     end
-    local first = eligible[1]
     if not first.text or first.text == "" or
         first.text:sub(1, #committed_text) ~= committed_text or
         #first.text <= #committed_text then
@@ -2624,6 +2877,7 @@ local function capture_empty_code_candidate(full_before, committed_text)
     local previous = first.path and first.path.previous
     return {
         candidate_text = first.text,
+        requires_uniqueness_check = #eligible == 1,
         committed_text = committed_text,
         base_raw_length = #full_before,
         last_segment_start = previous and previous.raw_length or 0
@@ -2637,7 +2891,11 @@ local function cycle_candidate_highlight(context, step)
     local segment = composition:back()
     local menu = segment and segment.menu
     if not menu then return false end
-    local count = menu:candidate_count()
+    -- candidate_count() is only the materialized prefix of a lazy Rime menu.
+    -- Our translator emits at most candidate_limit items: prepare that bounded
+    -- list before deciding where cyclic navigation should wrap.
+    local count = type(menu.prepare) == "function"
+        and menu:prepare(candidate_limit) or menu:candidate_count()
     if not count or count <= 0 then return false end
     local selected = segment.selected_index or 0
     local target = (selected + step) % count
@@ -2699,6 +2957,32 @@ local function restore_composition_input(context, value)
     end
 end
 
+-- Rime uses a byte offset in the raw input, not an index in displayed text.
+-- Old frontend/test contexts without caret_pos retain end-append behaviour.
+local function input_caret(context)
+    local length = #(context.input or "")
+    local caret = context.caret_pos
+    if type(caret) ~= "number" then return length end
+    return math.max(0, math.min(length, math.floor(caret)))
+end
+
+local function invalidate_edit_state(context, state, env, first_changed, full_length)
+    state.tab_pending = false
+    state.trackers = {}
+    state.last_seen_raw = ""
+    state.empty_code_pending = nil
+    -- Editing a locked but uncommitted range invalidates that lock and every
+    -- subsequent one. Reaching its boundary by deletion also unlocks it.
+    -- Never discard a lock for text already committed to the application.
+    while active_lock(state) and #active_lock(state).raw > #state.committed_raw and
+        (first_changed < #active_lock(state).raw or
+         full_length <= #active_lock(state).raw) do
+        table.remove(state.locks)
+    end
+    save_sentence_state(context, state, env)
+    reset_decode_cache()
+end
+
 local function get_min_retained_raw_length(env)
     local schema = env and env.engine and env.engine.schema
     local config = schema and schema.config
@@ -2747,9 +3031,27 @@ local function try_empty_code_commit(env, state, full_before, appended_letter)
         save_transient_state(context, state, env)
         return false
     end
+    if synchronize_model_state(state) then
+        save_transient_state(context, state, env)
+        return false
+    end
+    local generation = model_generation
     local pending = state.empty_code_pending or
-        capture_empty_code_candidate(full_before, state.committed_text)
-    local full_raw = full_before .. appended_letter
+        capture_empty_code_candidate(full_before, state.committed_text, active_lock(state))
+    if generation ~= model_generation then
+        synchronize_model_state(state)
+        save_transient_state(context, state, env)
+        return false
+    end
+    local full_raw = state.committed_raw .. (context.input or "")
+    -- push_input inserts at the caret. Even callers other than processor must
+    -- not turn a middle insertion (or a reentrant edit) into an imagined append.
+    if full_raw ~= full_before .. appended_letter or
+        input_caret(context) ~= #(context.input or "") then
+        state.empty_code_pending = nil
+        save_transient_state(context, state, env)
+        return false
+    end
     state.empty_code_pending = pending
 
     if not pending then
@@ -2757,7 +3059,7 @@ local function try_empty_code_commit(env, state, full_before, appended_letter)
         return false
     end
 
-    if has_complete_candidate(full_raw, state.committed_text) then
+    if has_complete_candidate(full_raw, state.committed_text, nil, false, active_lock(state)) then
         state.empty_code_pending = nil
         save_transient_state(context, state, env)
         return false
@@ -2785,6 +3087,13 @@ local function try_empty_code_commit(env, state, full_before, appended_letter)
         return false
     end
 
+    if pending.requires_uniqueness_check and has_complete_candidate(
+        full_raw:sub(1, pending.base_raw_length), pending.committed_text,
+        pending.candidate_text, true, active_lock(state)) then
+        state.empty_code_pending = nil
+        save_transient_state(context, state, env)
+        return false
+    end
     local commit = pending.candidate_text:sub(#pending.committed_text + 1)
     local retained_raw = full_raw:sub(pending.base_raw_length + 1)
     -- Preserve the committed prefix as decoder context. Restarting from only
@@ -2866,7 +3175,8 @@ local function try_early_commit(env)
     local state = sentence_state(context, env)
     local live_raw = context.input or ""
 
-    if not context:get_option("tiger_sentence_early_commit") or state.suspended then
+    if input_caret(context) ~= #live_raw or
+        not context:get_option("tiger_sentence_early_commit") or state.suspended then
         reset_early_evidence(state)
         save_transient_state(context, state, env)
         return
@@ -2880,7 +3190,13 @@ local function try_early_commit(env)
         return
     end
 
-    local decoded = decode(full_raw, true, state.committed_text)
+    local generation = model_generation
+    local decoded = decode(full_raw, true, state.committed_text, active_lock(state))
+    if generation ~= model_generation then
+        synchronize_model_state(state)
+        save_transient_state(context, state, env)
+        return
+    end
     local early_commit_evidence = decoded.early_commit_evidence or {}
     if early_commit_evidence.confidence_truncated then
         reset_early_evidence(state)
@@ -3008,7 +3324,7 @@ local function processor(key_event, env)
         if not context:is_composing() and
             (state.committed_raw ~= "" or state.last_seen_raw ~= "" or
              next(state.trackers or {}) ~= nil or state.suspended or
-             state.continuation_after_auto_commit) then
+             state.continuation_after_auto_commit or active_lock(state) or state.tab_pending) then
             reset_sentence_state(context, env)
             state = sentence_state(context, env)
         end
@@ -3037,7 +3353,57 @@ local function processor(key_event, env)
             return 1
         end
         local is_letter = ch:match("^[a-z]$") ~= nil
-        local full_before = state.committed_raw .. (context.input or "")
+        local live_before = context.input or ""
+        local caret = input_caret(context)
+        local full_before = state.committed_raw .. live_before
+        if caret ~= #live_before then
+            invalidate_edit_state(context, state, env,
+                #state.committed_raw + caret, #full_before + #ch)
+            -- Keep Rime's real insertion/caret semantics. This edit is not
+            -- evidence for either append-only auto-commit path or a Tab lock.
+            context:push_input(ch)
+            return 1
+        end
+        local confirm = state.tab_pending and is_letter
+        state.tab_pending = false
+        if confirm then
+            local composition = context.composition
+            local segment = composition and not composition:empty() and composition:back()
+            local target = segment and segment.selected_index or 0
+            local decoded = decode(full_before, false, state.committed_text, active_lock(state))
+            local selected, visible = nil, 0
+            for _, item in ipairs(decoded) do
+                if implicit_rank_allowed(item, full_before, state.continuation_after_auto_commit) and
+                    item.text:sub(1, #state.committed_text) == state.committed_text and
+                    #item.text > #state.committed_text then
+                    if visible == target then selected = item; break end
+                    visible = visible + 1
+                end
+            end
+            if selected and selected.path and selected.path.raw_length > #state.committed_raw then
+                local boundaries, node = {}, selected.path
+                while node and node.raw_length > 0 do
+                    table.insert(boundaries, 1, tostring(node.raw_length) .. "," .. tostring(node.text_length) .. ";")
+                    node = node.previous
+                end
+                state.locks[#state.locks + 1] = { raw = full_before:sub(1, selected.path.raw_length),
+                    text = selected.text, boundaries = table.concat(boundaries) }
+                local commit
+                if context:get_option("tiger_sentence_early_commit") then
+                    commit = selected.text:sub(#state.committed_text + 1)
+                    state.committed_text = selected.text
+                    state.committed_raw = full_before:sub(1, selected.path.raw_length)
+                end
+                reset_early_evidence(state)
+                state.empty_code_pending = nil
+                state.suspended = false
+                state.continuation_after_auto_commit = false
+                save_sentence_state(context, state, env)
+                if commit then env.engine:commit_text(commit) end
+                restore_composition_input(context, full_before:sub(#state.committed_raw + 1) .. ch)
+                return 1
+            end
+        end
         if not is_letter then
             state.empty_code_pending = nil
             save_transient_state(context, state, env)
@@ -3070,6 +3436,41 @@ local function processor(key_event, env)
         return 1
     end
     if repr == "BackSpace" or repr == "Delete" then
+        state.tab_pending = false
+        reset_early_evidence(state)
+        state.empty_code_pending = nil
+        if active_lock(state) then
+            local raw = context.input or ""
+            local caret = input_caret(context)
+            local first = repr == "BackSpace" and caret - 1 or caret
+            if first < 0 or first >= #raw then
+                save_transient_state(context, state, env)
+                return 2
+            end
+            local remaining = raw:sub(1, first) .. raw:sub(first + 2)
+            invalidate_edit_state(context, state, env,
+                #state.committed_raw + first, #state.committed_raw + #remaining)
+            if remaining == "" then
+                context:clear()
+                reset_sentence_state(context, env)
+            else
+                local edit = repr == "BackSpace" and context.pop_input or context.delete_input
+                if type(edit) == "function" then
+                    edit(context, 1)
+                else
+                    restore_composition_input(context, remaining)
+                    if type(context.caret_pos) == "number" then context.caret_pos = first end
+                end
+            end
+            return 1
+        end
+        save_transient_state(context, state, env)
+        return 2
+    end
+    if repr == "Left" or repr == "Right" or repr == "Home" or repr == "End" then
+        -- Let navigator move the caret; old append evidence and a pending Tab
+        -- confirmation do not survive manual cursor navigation.
+        state.tab_pending = false
         reset_early_evidence(state)
         state.empty_code_pending = nil
         save_transient_state(context, state, env)
@@ -3081,6 +3482,8 @@ local function processor(key_event, env)
         state.empty_code_pending = nil
         save_transient_state(context, state, env)
         if cycle_candidate_highlight(context, repr == "Tab" and 1 or -1) then
+            state.tab_pending = true
+            save_transient_state(context, state, env)
             return 1
         end
         -- Without a usable menu, leave the key to the schema's Down/Up
@@ -3112,7 +3515,7 @@ local function translator(input, seg, env)
     local committed_text = state.committed_text
     local committed_raw = state.committed_raw
     local raw = committed_raw .. input
-    local results = decode(raw)
+    local results = decode(raw, false, committed_text, active_lock(state))
     local yielded = 0
     for i = 1, #results do
         local item = results[i]
@@ -3185,6 +3588,10 @@ M.lexicon_data_view = function()
     }
 end
 M.capture_empty_code_candidate = capture_empty_code_candidate
+-- Independent full-text oracle for regression tests of lazy path scoring.
+M.reference_isolation_penalty = isolation_penalty
+M.path_isolation_penalty = path_isolation_penalty
+M.has_complete_candidate = has_complete_candidate
 M.set_allow_duplicate_single = set_allow_duplicate_single
 M.build_prefix_evidence = build_prefix_evidence
 M.find_prefix_evidence = find_prefix_evidence
@@ -3196,6 +3603,8 @@ M.set_model_enabled = function(enabled)
         return
     end
     model_disabled = disabled
+    close_model()
+    model_generation = model_generation + 1
     kn_model = false
     kn_load_error = nil
     clear_model_dependent_caches()

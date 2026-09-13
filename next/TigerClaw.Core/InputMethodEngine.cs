@@ -7,10 +7,11 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using TigerClaw.Shared;
 
 namespace TigerClaw.Core
 {
-    internal sealed class InputMethodEngine : IDisposable
+    internal sealed partial class InputMethodEngine : IDisposable
     {
         private enum CompositionState
         {
@@ -60,9 +61,9 @@ namespace TigerClaw.Core
         private const int VK_NUMPAD0 = 0x60;
         private const int VK_NUMPAD9 = 0x69;
         private const int VK_A = 0x41;
-        private const int VK_M = 0x4D;
         private const int VK_Z = 0x5A;
         private const double SentenceEmittedCharacterReward = 2.0;
+        private const double SentenceWholeInputSingleCharacterReward = 5.0;
         private const double SentenceNeuralWeight = 0.84;
         private const double SentenceShortNeuralWeight = 0.30;
         private const int SentenceShortNeuralMaximumLength = 2;
@@ -96,6 +97,7 @@ namespace TigerClaw.Core
             public string CommittedText { get; set; }
             public int BaseRawLength { get; set; }
             public int LastSegmentStart { get; set; }
+            public bool RequiresUniquenessCheck { get; set; }
         }
 
         private readonly object _lock = new object();
@@ -131,6 +133,12 @@ namespace TigerClaw.Core
         private string _sentenceNeuralAcceptedRaw = string.Empty;
         private string _sentenceNeuralTopText = string.Empty;
         private long _sentenceGeneration;
+        private long _sentenceManualSelectionGeneration = -1;
+        private bool _sentenceTabSelectionPending;
+        private readonly List<SentenceLockedPrefix> _sentenceLockedPrefixes = new List<SentenceLockedPrefix>();
+        private SentenceLockedPrefix ActiveSentenceLockedPrefix =>
+            _sentenceLockedPrefixes.Count == 0 ? null : _sentenceLockedPrefixes[_sentenceLockedPrefixes.Count - 1];
+        private long _sentenceAppliedGeneration = -1;
         private ISentenceRerankService _sentenceRerankService;
         private Action _sentenceDecodeCompletedCallback;
         private bool _sentenceDecodeWorkerRunning;
@@ -227,6 +235,12 @@ namespace TigerClaw.Core
         // key-downs and the TSF test+commit double dispatch all carry repeat==1, so this gate (not
         // the repeat count) is what stops a single press from re-firing the action rapidly.
         private int _oneShotActionKey;
+        private int _shortcutConfigVersion = -1;
+        private ShortcutGesture _manualAddWordShortcut;
+        private ShortcutGesture _switchRecentSchemaShortcut;
+        private bool _manualAddWordShortcutAvailable;
+        private bool _switchRecentSchemaShortcutAvailable;
+        private bool _schemaSwitchShortcutAwaitingModifierRelease;
         private DateTime _lastCtrlUpUtc = DateTime.MinValue;
         private static readonly TimeSpan CtrlSpaceGrace = TimeSpan.FromMilliseconds(250);
         private bool _leftSingleQuote = true;
@@ -312,8 +326,10 @@ namespace TigerClaw.Core
                     lexicon,
                     _sentenceLanguageModel,
                     emittedCharacterReward: SentenceEmittedCharacterReward,
+                    wholeInputSingleCharacterReward: SentenceWholeInputSingleCharacterReward,
                     supplementMatcher: supplementMatcher,
                     allowDuplicateSingleCharacters: allowDuplicateSingleCharacters);
+                ConfigureSentenceLearning();
                 _sentenceDecodedLexiconVersion = _state.LexiconVersion;
                 _sentenceDecodedOptimalCodeLimit = optimalCodeLimit;
                 _sentenceDecodedFullCodeWhitelist = fullCodeWhitelistText;
@@ -323,12 +339,16 @@ namespace TigerClaw.Core
 
         public void Dispose()
         {
+            System.Threading.Tasks.Task pendingLearning;
             lock (_lock)
             {
                 _sentenceInputDecoder = null;
                 DisposeSentenceLanguageModel();
                 _sentenceLanguageModel = null;
+                pendingLearning = _learningStore?.FlushAsync();
             }
+            // Only orderly shutdown may wait; never wait on the per-key lock.
+            try { pendingLearning?.Wait(TimeSpan.FromSeconds(2)); } catch (Exception) { }
         }
 
         private void DisposeSentenceLanguageModel()
@@ -361,8 +381,10 @@ namespace TigerClaw.Core
             {
                 SentenceCandidate[] candidates = _sentenceDecodeResult.Candidates ?? Array.Empty<SentenceCandidate>();
                 int rerankCount = Math.Min(5, candidates.Length);
-                if (_compositionState != CompositionState.CnSentence ||
+                if (!_state.IsSentenceInputActive() || !_state.GetSentenceNeuralRerankEnabled() ||
+                    _compositionState != CompositionState.CnSentence ||
                     generation != _sentenceGeneration ||
+                    generation == _sentenceManualSelectionGeneration ||
                     !string.Equals(rawCode, _sentenceRawBuffer.ToString(), StringComparison.Ordinal) ||
                     scores == null || scores.Length != rerankCount)
                 {
@@ -370,17 +392,18 @@ namespace TigerClaw.Core
                 }
 
                 bool preferScoreOverLexiconRank =
-                    ShouldPreferSentenceScoreOverLexiconRank(candidates, rerankCount);
-                double neuralWeight = GetSentenceNeuralWeight(
+                    ShouldPreferSentenceScoreOverLexiconRank(candidates, rerankCount) || candidates.Take(rerankCount).Any(c => c.LearningScore > 0);
+                int baseTopLength = GetSentenceNeuralBaseTopLength(
                     candidates,
                     rerankCount,
                     preferScoreOverLexiconRank);
                 for (int index = 0; index < rerankCount; index++)
                 {
-                    candidates[index].FinalScore = CombineSentenceNeuralScore(
+                    candidates[index].FinalScore = CombineSentenceNeuralCandidateScore(
                         candidates[index].BaseScore,
                         scores[index],
-                        neuralWeight);
+                        baseTopLength,
+                        new StringInfo(candidates[index].Text ?? string.Empty).LengthInTextElements) + candidates[index].LearningScore;
                 }
                 Array.Sort(
                     candidates,
@@ -397,7 +420,7 @@ namespace TigerClaw.Core
             }
         }
 
-        private static double GetSentenceNeuralWeight(
+        internal static int GetSentenceNeuralBaseTopLength(
             SentenceCandidate[] candidates,
             int candidateCount,
             bool preferScoreOverLexiconRank)
@@ -415,10 +438,9 @@ namespace TigerClaw.Core
                 }
             }
 
-            int baseTopLength = baseTop == null || string.IsNullOrEmpty(baseTop.Text)
+            return baseTop == null || string.IsNullOrEmpty(baseTop.Text)
                 ? 0
                 : new StringInfo(baseTop.Text).LengthInTextElements;
-            return GetSentenceNeuralWeight(baseTopLength);
         }
 
         private bool ShouldPreferSentenceScoreOverLexiconRank(
@@ -476,6 +498,32 @@ namespace TigerClaw.Core
             double neuralWeight)
         {
             return baseScore + neuralWeight * neuralScore;
+        }
+
+        internal static double GetSentenceNeuralAlpha(int candidateLength)
+        {
+            // Candidate-length convex calibration, not the previous base-winner buckets.
+            if (candidateLength == 2) return 0.15;
+            if (candidateLength >= 3 && candidateLength <= 6) return 0.30;
+            double weight = GetSentenceNeuralWeight(candidateLength);
+            return weight / (1.0 + weight);
+        }
+
+        internal static double CombineSentenceNeuralCandidateScore(
+            double baseScore,
+            double neuralScore,
+            int baseTopLength,
+            int candidateLength)
+        {
+            // Do not extrapolate this short-text experiment to single-character
+            // or long base winners. Preserve the original whole-set policy there.
+            if (baseTopLength < 2 || baseTopLength > 6)
+            {
+                return CombineSentenceNeuralScore(baseScore, neuralScore, GetSentenceNeuralWeight(baseTopLength));
+            }
+
+            double alpha = GetSentenceNeuralAlpha(candidateLength);
+            return (1.0 - alpha) * baseScore + alpha * neuralScore;
         }
 
         public bool IsChinese
@@ -546,6 +594,10 @@ namespace TigerClaw.Core
         {
             lock (_lock)
             {
+                _pendingLearning.Clear(); _readyLearning.Clear(); _learningBaseline = null;
+                if (_sentenceRawBuffer.Length > 0) _learningContextValid = false;
+                InvalidateCandidateFrame();
+                ResetOneShotActionState();
                 ResetCtrlSpaceState();
                 ResetShiftToggleState();
                 ResetCandidatePageTracker();
@@ -560,6 +612,7 @@ namespace TigerClaw.Core
                 ClearCompositionInput();
                 _compositionState = _isChinese ? CompositionState.CnIdle : CompositionState.En;
                 ResetCandidatePageTracker();
+                ResetOneShotActionState();
                 ResetCtrlSpaceState();
                 ResetShiftToggleState();
                 _dotAfterDigitArmed = false;
@@ -718,6 +771,7 @@ namespace TigerClaw.Core
         {
             lock (_lock)
             {
+                _readyLearning.Clear(); _learningOutput = null;
                 bool isDown = string.Equals(action, "down", StringComparison.OrdinalIgnoreCase) ||
                               string.Equals(action, "key_down", StringComparison.OrdinalIgnoreCase);
                 bool isUp = string.Equals(action, "up", StringComparison.OrdinalIgnoreCase) ||
@@ -727,6 +781,11 @@ namespace TigerClaw.Core
                 if (!isDown && !isUp)
                 {
                     return KeyEngineResult.Pass(_isChinese);
+                }
+
+                if (isUp && IsModifierKey(resolvedVk) && !shift && !ctrl && !alt && !win)
+                {
+                    _schemaSwitchShortcutAwaitingModifierRelease = false;
                 }
 
                 if (isDown && resolvedVk != VK_OEM_7 && resolvedVk != VK_BACK && !IsModifierKey(resolvedVk))
@@ -807,6 +866,71 @@ namespace TigerClaw.Core
                     // no-op here; escape is handled in state processors.
                 }
 
+                RefreshActionShortcuts();
+                bool matchesManualAddWord = _manualAddWordShortcutAvailable &&
+                                            _manualAddWordShortcut.Matches(resolvedVk, shift, ctrl, alt, win);
+                bool matchesSwitchRecentSchema = _switchRecentSchemaShortcutAvailable &&
+                                                 _switchRecentSchemaShortcut.Matches(resolvedVk, shift, ctrl, alt, win);
+                if (_schemaSwitchShortcutAwaitingModifierRelease &&
+                    (matchesManualAddWord || matchesSwitchRecentSchema))
+                {
+                    // Treat one modifier hold as one schema-switch chord. This prevents a fast
+                    // rollover (for example Ctrl+J followed by E before Ctrl-up is observed) from
+                    // being misread as the independently configured Ctrl+E add-word shortcut.
+                    bool composing = HasCompositionInput();
+                    return KeyEngineResult.CreateHandled(
+                        _compositionState != CompositionState.En,
+                        null,
+                        composing ? _inputBuffer.ToString() : null,
+                        composing);
+                }
+
+                if (matchesManualAddWord)
+                {
+                    if (_oneShotActionKey == resolvedVk)
+                    {
+                        return KeyEngineResult.CreateHandled(_compositionState != CompositionState.En, null, null, false);
+                    }
+                    _oneShotActionKey = resolvedVk;
+                    return KeyEngineResult.CreateHandled(
+                        _compositionState != CompositionState.En,
+                        null,
+                        null,
+                        false,
+                        openAddCiWindow: true);
+                }
+
+                if (matchesSwitchRecentSchema)
+                {
+                    bool composing = _inputBuffer.Length > 0 &&
+                                     (_compositionState == CompositionState.CnComposing ||
+                                      _compositionState == CompositionState.CnPinyin ||
+                                      _compositionState == CompositionState.CnUpperCase ||
+                                      _compositionState == CompositionState.CnSentence);
+
+                    if (_oneShotActionKey == resolvedVk)
+                    {
+                        return KeyEngineResult.CreateHandled(
+                            _compositionState != CompositionState.En,
+                            null,
+                            _inputBuffer.ToString(),
+                            composing);
+                    }
+
+                    if (_state.TrySwitchRecentSchema(out _))
+                    {
+                        _oneShotActionKey = resolvedVk;
+                        _schemaSwitchShortcutAwaitingModifierRelease = true;
+                        RefreshCompositionAfterSchemaSwitch();
+                        GetKeyState(out _, out composing);
+                        return KeyEngineResult.CreateHandled(
+                            _compositionState != CompositionState.En,
+                            null,
+                            _inputBuffer.ToString(),
+                            composing);
+                    }
+                }
+
                 if (alt)
                 {
                     bool isBareAltKey = resolvedVk == VK_MENU || resolvedVk == VK_LMENU || resolvedVk == VK_RMENU;
@@ -830,7 +954,7 @@ namespace TigerClaw.Core
                         }
 
                         string currentCode = _inputBuffer.ToString();
-                        List<string> allCandidates = ResolveCandidates(currentCode);
+                        var allCandidates = ResolveCandidates(currentCode);
                         List<string> candidates = GetCandidatePage(currentCode, CompositionState.CnComposing, allCandidates, out _);
                         int index = resolvedVk - VK_1;
                         if (candidates != null && index >= 0 && index < candidates.Count)
@@ -851,52 +975,6 @@ namespace TigerClaw.Core
 
                 if (ctrl)
                 {
-                    if (resolvedVk == VK_OEM_PLUS && _state.GetCtrlEqualAddCiEnabled())
-                    {
-                        if (_oneShotActionKey == resolvedVk)
-                        {
-                            // Auto-repeat / duplicate dispatch of a held Ctrl+=: consume it without
-                            // reopening the add-word window (matches the post-open empty composition).
-                            return KeyEngineResult.CreateHandled(_compositionState != CompositionState.En, null, null, false);
-                        }
-                        _oneShotActionKey = resolvedVk;
-                        return KeyEngineResult.CreateHandled(_compositionState != CompositionState.En, null, null, false, openAddCiWindow: true);
-                    }
-
-                    if (resolvedVk == VK_M && !alt && !win && !shift && _state.GetCtrlMSwitchSchemaEnabled())
-                    {
-                        bool composing = _inputBuffer.Length > 0 &&
-                                         (_compositionState == CompositionState.CnComposing ||
-                                          _compositionState == CompositionState.CnPinyin ||
-                                          _compositionState == CompositionState.CnUpperCase ||
-                                          _compositionState == CompositionState.CnSentence);
-
-                        // One switch per physical press (see _oneShotActionKey). A single Ctrl+m reaches
-                        // Core through the TSF test phase plus key-down, and a held key auto-repeats many
-                        // key-downs (each repeat==1); without the gate every message would flip the schema
-                        // again, producing the back-and-forth oscillation.
-                        if (_oneShotActionKey == resolvedVk)
-                        {
-                            return KeyEngineResult.CreateHandled(_compositionState != CompositionState.En, null, _inputBuffer.ToString(), composing);
-                        }
-
-                        if (_state.TrySwitchRecentSchema(out _))
-                        {
-                            _oneShotActionKey = resolvedVk;
-                            ReloadSentenceResources();
-                            if (IsMixedInputSession())
-                            {
-                                _mixedInputDecoder.ClearCache();
-                                RebuildMixedInput();
-                            }
-                            // Keep the in-flight code; the new code table re-resolves candidates on the
-                            // next UI snapshot. Reset paging because the candidate list changed.
-                            ResetCandidatePageTracker();
-                            return KeyEngineResult.CreateHandled(_compositionState != CompositionState.En, null, _inputBuffer.ToString(), composing);
-                        }
-                        // Could not switch (fewer than two code tables): fall through to normal Ctrl handling.
-                    }
-
                     if (!alt && !win &&
                         _compositionState == CompositionState.CnComposing &&
                         resolvedVk >= VK_1 && resolvedVk <= VK_9)
@@ -909,7 +987,7 @@ namespace TigerClaw.Core
                         }
 
                         string currentCode = _inputBuffer.ToString();
-                        List<string> allCandidates = ResolveCandidates(currentCode);
+                        var allCandidates = ResolveCandidates(currentCode);
                         List<string> candidates = GetCandidatePage(currentCode, CompositionState.CnComposing, allCandidates, out _);
                         int index = resolvedVk - VK_1;
                         if (candidates != null && index >= 0 && index < candidates.Count)
@@ -1156,7 +1234,7 @@ namespace TigerClaw.Core
         private KeyEngineResult ProcessCnComposingKeyDown(int vk, bool shift)
         {
             string currentCode = _inputBuffer.ToString();
-            List<string> allCandidates = ResolveCandidates(currentCode);
+            var allCandidates = ResolveCandidates(currentCode);
             List<string> candidates = GetCandidatePage(currentCode, CompositionState.CnComposing, allCandidates, out _);
             bool hasAnyCandidate = allCandidates != null && allCandidates.Count > 0;
             bool hasPageCandidate = candidates != null && candidates.Count > 0;
@@ -1432,6 +1510,7 @@ namespace TigerClaw.Core
             {
                 ResetSentenceAutoCommitEvidence();
                 ResetSentenceEmptyCodePending();
+                _sentenceTabSelectionPending = false;
                 // The raw buffer retains the committed prefix so the decoder
                 // can keep its full context, but that prefix no longer belongs
                 // to the active TSF composition. Backspace must consume only
@@ -1449,13 +1528,15 @@ namespace TigerClaw.Core
                 if (_sentenceRawBuffer.Length > 0)
                 {
                     _sentenceRawBuffer.Length -= 1;
+                    _learningBaseline = null;
+                    _pendingLearning.RemoveAll(e => _sentenceRawBuffer.Length <= e.RawEnd);
                 }
 
-                if (_sentenceCommittedRawLength > _sentenceRawBuffer.Length)
+                while (ActiveSentenceLockedPrefix != null &&
+                    ActiveSentenceLockedPrefix.RawCode.Length > _sentenceCommittedRawLength &&
+                    _sentenceRawBuffer.Length <= ActiveSentenceLockedPrefix.RawCode.Length)
                 {
-                    // The host cannot retract committed text. Keep it excluded
-                    // from the remaining composition and stop proposing more.
-                    _sentenceCommittedRawLength = _sentenceRawBuffer.Length;
+                    _sentenceLockedPrefixes.RemoveAt(_sentenceLockedPrefixes.Count - 1);
                 }
 
                 if (_sentenceRawBuffer.Length == 0)
@@ -1478,11 +1559,7 @@ namespace TigerClaw.Core
 
             if (vk == VK_RETURN)
             {
-                string remainingRaw = _sentenceRawBuffer.ToString();
-                if (_sentenceCommittedRawLength > 0 && _sentenceCommittedRawLength <= remainingRaw.Length)
-                {
-                    remainingRaw = remainingRaw.Substring(_sentenceCommittedRawLength);
-                }
+                string remainingRaw = GetUncommittedSentenceRawCode();
                 string output = _state.GetEnterClear() ? string.Empty : remainingRaw;
                 ClearCompositionInput();
                 _compositionState = CompositionState.CnIdle;
@@ -1496,7 +1573,9 @@ namespace TigerClaw.Core
                 if (HasSentenceCandidates())
                 {
                     _sentenceAutoCommitSuspended = true;
+                    if (!_sentenceTabSelectionPending) _learningBaseline = _sentenceDecodeResult.Candidates[0];
                     MoveSentenceSelection(shift ? -1 : 1);
+                    _sentenceTabSelectionPending = true;
                     return KeyEngineResult.CreateHandled(true, null, GetSentenceDisplayCode(), true);
                 }
 
@@ -1587,7 +1666,7 @@ namespace TigerClaw.Core
         {
             string currentCode = _inputBuffer.ToString();
             string pinyinCode = currentCode.Length > 0 ? currentCode.Substring(1) : string.Empty;
-            List<string> allCandidates = ResolvePinyinCandidates(pinyinCode);
+            var allCandidates = ResolvePinyinCandidates(pinyinCode);
             List<string> candidates = GetCandidatePage(currentCode, CompositionState.CnPinyin, allCandidates, out _);
             bool hasAnyCandidate = allCandidates != null && allCandidates.Count > 0;
             bool hasPageCandidate = candidates != null && candidates.Count > 0;
@@ -1879,7 +1958,7 @@ namespace TigerClaw.Core
                 case CompositionState.CnComposing:
                     {
                         string code = _inputBuffer.ToString();
-                        List<string> allCandidates = ResolveCandidates(code);
+                        var allCandidates = ResolveCandidates(code);
                         List<string> candidates = GetCandidatePage(code, CompositionState.CnComposing, allCandidates, out _);
                         if (candidates != null && candidates.Count > 0)
                         {
@@ -1903,7 +1982,7 @@ namespace TigerClaw.Core
                     {
                         string code = _inputBuffer.ToString();
                         string pyCode = code.Length > 0 ? code.Substring(1) : string.Empty;
-                        List<string> allCandidates = ResolvePinyinCandidates(pyCode);
+                        var allCandidates = ResolvePinyinCandidates(pyCode);
                         List<string> candidates = GetCandidatePage(code, CompositionState.CnPinyin, allCandidates, out _);
                         if (candidates != null && candidates.Count > 0)
                         {
@@ -2258,7 +2337,7 @@ namespace TigerClaw.Core
         {
             if (_sentenceRawBuffer.Length > 0)
             {
-                return _sentenceRawBuffer.ToString();
+                return GetUncommittedSentenceRawCode();
             }
 
             if (_mixedRawBuffer.Length > 0)
@@ -2288,14 +2367,8 @@ namespace TigerClaw.Core
         private void RestartSentenceInput(string rawCode, bool continuationAfterAutoCommit = false)
         {
             ClearCompositionInput();
-            _sentenceCommittedText = string.Empty;
-            _sentenceCommittedRawLength = 0;
-            _sentenceLastAutoCommitRawLength = 0;
-            _sentenceAutoCommitSuspended = false;
             _sentenceContinuationAfterAutoCommit = continuationAfterAutoCommit;
-            _sentenceNeuralAcceptedRaw = string.Empty;
-            _sentenceNeuralTopText = string.Empty;
-            _sentenceRawBuffer.Append((rawCode ?? string.Empty).ToLowerInvariant());
+            _sentenceRawBuffer.Append(rawCode ?? string.Empty);
             RebuildSentenceInput();
         }
 
@@ -2308,8 +2381,65 @@ namespace TigerClaw.Core
 
             char normalizedValue = char.ToLowerInvariant(value);
             bool isLetter = normalizedValue >= 'a' && normalizedValue <= 'z';
+            // Rank selectors still edit the current segment; only a new code
+            // letter confirms the Tab-highlighted candidate as a fixed prefix.
+            bool confirmTabSelection = _sentenceTabSelectionPending && isLetter;
+            if (confirmTabSelection) CaptureSentenceLearning(_sentenceSelectedIndex);
+            _sentenceTabSelectionPending = false;
+            if (confirmTabSelection)
+            {
+                EnsureSentenceDecodeCurrent();
+                SentenceCandidate selected = (_sentenceDecodeResult.Candidates ?? Array.Empty<SentenceCandidate>())
+                    .ElementAtOrDefault(_sentenceSelectedIndex);
+                if (selected?.Boundary != null && selected.Boundary.RawLength > _sentenceCommittedRawLength &&
+                    selected.Boundary.RawLength <= _sentenceRawBuffer.Length)
+                {
+                    var prefix = new SentenceLockedPrefix(
+                        _sentenceRawBuffer.ToString(0, selected.Boundary.RawLength), selected.Text, selected.Boundary);
+                    _sentenceLockedPrefixes.Add(prefix);
+                    string commit = null;
+                    if (_state.GetSentenceAutoCommitEnabled())
+                    {
+                        commit = selected.Text.Substring(_sentenceCommittedText.Length);
+                        ReleaseSentenceLearning(selected.Text, selected.Boundary.RawLength, commit);
+                        _sentenceCommittedText = selected.Text;
+                        _sentenceCommittedRawLength = selected.Boundary.RawLength;
+                        _sentenceLastAutoCommitRawLength = selected.Boundary.RawLength;
+                    }
+                    _sentenceContinuationAfterAutoCommit = false;
+                    _sentenceAutoCommitSuspended = false;
+                    ResetSentenceAutoCommitEvidence();
+                    ResetSentenceEmptyCodePending();
+                    _sentenceDecodeResult = new SentenceDecodeResult
+                    {
+                        RawCode = _sentenceDecodeResult.RawCode,
+                        Candidates = new[] { selected },
+                        EarlyCommitEvidence = SentenceEarlyCommitEvidence.Empty
+                    };
+                    _sentenceRawBuffer.Append(normalizedValue);
+                    RebuildSentenceInput();
+                    return commit;
+                }
+            }
+            if (_sentenceDecodeResult.LearningAffected || (!_state.GetSentenceAutoCommitEnabled() && !IsSentenceEmptyCodeAutoCommitActive()))
+            {
+                // Keep disabled-mode edits off both automatic-commit paths. Reset once when
+                // necessary so a live setting change cannot leave evidence for a later re-enable.
+                if (_sentenceEmptyCodePending != null)
+                {
+                    ResetSentenceEmptyCodePending();
+                }
+                if (_sentenceAutoCommitLastSeenRaw.Length > 0 || _sentenceAutoCommitTrackers.Count > 0)
+                {
+                    ResetSentenceAutoCommitEvidence();
+                }
+                _sentenceRawBuffer.Append(normalizedValue);
+                RebuildSentenceInput();
+                return null;
+            }
+            bool requiresUniquenessCheck = false;
             SentenceCandidate emptyCodeCommitCandidate = isLetter && _sentenceEmptyCodePending == null
-                ? GetEmptyCodeAutoCommitCandidate()
+                ? GetEmptyCodeAutoCommitCandidate(out requiresUniquenessCheck)
                 : null;
             if (!isLetter)
             {
@@ -2318,7 +2448,7 @@ namespace TigerClaw.Core
             _sentenceRawBuffer.Append(normalizedValue);
             if (isLetter)
             {
-                string emptyCodeCommit = ResolveEmptyCodeAutoCommit(emptyCodeCommitCandidate);
+                string emptyCodeCommit = ResolveEmptyCodeAutoCommit(emptyCodeCommitCandidate, requiresUniquenessCheck);
                 if (emptyCodeCommit != null)
                 {
                     return emptyCodeCommit;
@@ -2338,8 +2468,10 @@ namespace TigerClaw.Core
             return TryAutoCommitSentencePrefix();
         }
 
-        private SentenceCandidate GetEmptyCodeAutoCommitCandidate()
+        private SentenceCandidate GetEmptyCodeAutoCommitCandidate(out bool requiresUniquenessCheck)
         {
+            requiresUniquenessCheck = false;
+            if (_sentenceDecodeResult.LearningAffected) return null;
             if (!IsSentenceEmptyCodeAutoCommitActive() ||
                 _sentenceAutoCommitSuspended ||
                 _sentenceResultLexiconVersion != _state.LexiconVersion ||
@@ -2357,11 +2489,15 @@ namespace TigerClaw.Core
             if (!_sentenceRawBuffer.ToString().Any(character =>
                     char.IsDigit(character) || character == ';' || character == '\''))
             {
-                // Whole-input non-first ranks are visible for explicit
-                // selection, but are not legal implicit sentence segments
-                // after the appended letter makes that edge dead.
+                // Non-first words need explicit selection. Duplicate singles
+                // remain possible next-sentence prefixes and must contribute
+                // to both uniqueness and strong-confidence comparisons.
                 candidates = candidates
-                    .Where(candidate => candidate != null && candidate.MaxLexiconRank <= 1)
+                    .Where(candidate => candidate != null &&
+                        (candidate.MaxLexiconRank <= 1 ||
+                         (_state.GetSentenceAllowDuplicateSingleCharacters() &&
+                          (candidate.Boundary?.Previous != null ||
+                           new StringInfo(candidate.Text ?? string.Empty).LengthInTextElements == 1))))
                     .ToArray();
             }
             if (candidates.Length == 0 ||
@@ -2378,6 +2514,7 @@ namespace TigerClaw.Core
                 return null;
             }
 
+            requiresUniquenessCheck = candidates.Length == 1;
             return candidates[0];
         }
 
@@ -2411,7 +2548,7 @@ namespace TigerClaw.Core
                 candidateMass / total >= SentenceEarlyCommitStrongShare;
         }
 
-        private string ResolveEmptyCodeAutoCommit(SentenceCandidate capturedCandidate)
+        private string ResolveEmptyCodeAutoCommit(SentenceCandidate capturedCandidate, bool requiresUniquenessCheck)
         {
             if (_sentenceEmptyCodePending == null && capturedCandidate == null)
             {
@@ -2425,7 +2562,7 @@ namespace TigerClaw.Core
             }
 
             string fullRaw = _sentenceRawBuffer.ToString();
-            if (_sentenceInputDecoder.HasCompleteCandidate(fullRaw, _sentenceCommittedText))
+            if (_sentenceInputDecoder.HasCompleteCandidate(fullRaw, _sentenceCommittedText, lockedPrefix: ActiveSentenceLockedPrefix))
             {
                 ResetSentenceEmptyCodePending();
                 return null;
@@ -2440,7 +2577,8 @@ namespace TigerClaw.Core
                     CandidateText = capturedCandidate.Text,
                     CommittedText = _sentenceCommittedText,
                     BaseRawLength = fullRaw.Length - 1,
-                    LastSegmentStart = lastSegmentStart
+                    LastSegmentStart = lastSegmentStart,
+                    RequiresUniquenessCheck = requiresUniquenessCheck
                 };
             }
 
@@ -2464,6 +2602,14 @@ namespace TigerClaw.Core
             if (requiredRetain > 0 &&
                 fullRaw.Length - pending.BaseRawLength < requiredRetain)
             {
+                return null;
+            }
+
+            if (pending.RequiresUniquenessCheck && _sentenceInputDecoder.HasCompleteCandidate(
+                    fullRaw.Substring(0, pending.BaseRawLength), pending.CommittedText,
+                    excludedText: pending.CandidateText, groupEligibleOnly: true, lockedPrefix: ActiveSentenceLockedPrefix))
+            {
+                ResetSentenceEmptyCodePending();
                 return null;
             }
 
@@ -2499,7 +2645,7 @@ namespace TigerClaw.Core
 
         private string TryAutoCommitSentencePrefix()
         {
-            if (!_state.GetSentenceAutoCommitEnabled() || _sentenceAutoCommitSuspended)
+            if (_sentenceDecodeResult.LearningAffected || !_state.GetSentenceAutoCommitEnabled() || _sentenceAutoCommitSuspended)
             {
                 ResetSentenceAutoCommitEvidence();
                 return null;
@@ -2842,6 +2988,7 @@ namespace TigerClaw.Core
             {
                 return null;
             }
+            ReleaseSentenceLearning(selected.Text, selected.RawLength, commit);
             _sentenceCommittedText = selected.Text;
             _sentenceCommittedRawLength = selected.RawLength;
             _sentenceLastAutoCommitRawLength = selected.RawLength;
@@ -2850,9 +2997,8 @@ namespace TigerClaw.Core
             // model. Keep those paths eligible after committing their common
             // prefix; otherwise a valid non-first single-character segment in
             // the retained suffix disappears on the next decode. The stricter
-            // first-rank-only continuation rule is only for empty-code commit,
-            // where a standalone whole-input non-first candidate must not turn
-            // into an implicit segmented choice.
+            // whole-input non-first continuation restriction is only for empty-code
+            // commit. Decoder-approved segmented duplicate singles remain legal.
             _sentenceContinuationAfterAutoCommit = false;
             ResetSentenceAutoCommitEvidence();
             _sentenceDecodeResult = FilterSentenceDecodeResultForCommittedPrefix(_sentenceDecodeResult);
@@ -2886,6 +3032,7 @@ namespace TigerClaw.Core
 
         private void RebuildSentenceInput()
         {
+            _learningBaseline = null;
             EnsureSentenceDecoderCurrent();
             _sentenceSelectedIndex = 0;
             _sentenceGeneration++;
@@ -2903,7 +3050,7 @@ namespace TigerClaw.Core
                         _sentenceRawBuffer.ToString(),
                         20,
                         ShouldCollectSentenceCommitEvidence(),
-                        _sentenceCommittedText) ?? SentenceDecodeResult.Empty);
+                        _sentenceCommittedText, ActiveSentenceLockedPrefix) ?? SentenceDecodeResult.Empty);
                 return;
             }
 
@@ -2931,6 +3078,7 @@ namespace TigerClaw.Core
                 SentenceInputDecoder decoder;
                 bool includeEarlyCommitEvidence;
                 string requiredTextPrefix;
+                SentenceLockedPrefix lockedPrefix;
 
                 lock (_lock)
                 {
@@ -2946,6 +3094,7 @@ namespace TigerClaw.Core
                     decoder = _sentenceInputDecoder;
                     includeEarlyCommitEvidence = ShouldCollectSentenceCommitEvidence();
                     requiredTextPrefix = _sentenceCommittedText;
+                    lockedPrefix = ActiveSentenceLockedPrefix;
                 }
 
                 SentenceDecodeResult result;
@@ -2955,7 +3104,7 @@ namespace TigerClaw.Core
                         rawCode,
                         20,
                         includeEarlyCommitEvidence,
-                        requiredTextPrefix) ?? SentenceDecodeResult.Empty;
+                        requiredTextPrefix, lockedPrefix) ?? SentenceDecodeResult.Empty;
                 }
                 catch
                 {
@@ -2997,6 +3146,27 @@ namespace TigerClaw.Core
 
         private void ApplySentenceDecodeResult(long generation, string rawCode, int lexiconVersion, SentenceDecodeResult result)
         {
+            // A key-path completion may have already published the worker's generation.
+            // Reapplying it would reset manual selection and enqueue Qwen a second time.
+            if (_sentenceAppliedGeneration == generation &&
+                _sentenceResultLexiconVersion == lexiconVersion &&
+                string.Equals(_sentenceDecodeResult.RawCode, rawCode, StringComparison.Ordinal))
+            {
+                return;
+            }
+            _sentenceAppliedGeneration = generation;
+            // Decoder lookup normalizes casing; engine identity and literal commits retain raw.
+            if (result != null)
+            {
+                result = new SentenceDecodeResult
+                {
+                    RawCode = rawCode,
+                    Candidates = result.Candidates,
+                    EarlyCommitEvidence = result.EarlyCommitEvidence,
+                    LearningAffected = result.LearningAffected, LearningMode = result.LearningMode,
+                ExpandedStates = result.ExpandedStates
+                };
+            }
             _sentenceDecodeResult = FilterSentenceDecodeResultForImplicitRanks(
                 FilterSentenceDecodeResultForCommittedPrefix(
                     result ?? SentenceDecodeResult.Empty),
@@ -3044,7 +3214,7 @@ namespace TigerClaw.Core
                     rawCode,
                     20,
                     ShouldCollectSentenceCommitEvidence(),
-                    _sentenceCommittedText) ?? SentenceDecodeResult.Empty);
+                    _sentenceCommittedText, ActiveSentenceLockedPrefix) ?? SentenceDecodeResult.Empty);
         }
 
         private bool ShouldCollectSentenceCommitEvidence()
@@ -3054,6 +3224,7 @@ namespace TigerClaw.Core
 
         private void EnsureSentenceDecoderCurrent()
         {
+            ConfigureSentenceLearning();
             if (_sentenceDecoderExternallyProvided ||
                 (_sentenceInputDecoder != null &&
                  _sentenceDecodedLexiconVersion == _state.LexiconVersion &&
@@ -3076,6 +3247,7 @@ namespace TigerClaw.Core
             int visibleCount = Math.Min(count, Math.Min(Math.Max(_state.GetPageSize(), 1), 10));
             if (visibleCount > 0)
             {
+                _sentenceManualSelectionGeneration = _sentenceGeneration;
                 _sentenceSelectedIndex = (_sentenceSelectedIndex + delta + visibleCount) % visibleCount;
             }
         }
@@ -3094,6 +3266,7 @@ namespace TigerClaw.Core
                 return KeyEngineResult.CreateHandled(true, null, GetSentenceDisplayCode(), true);
             }
 
+            CaptureSentenceLearning(index);
             string output = candidates[index].Text;
             if (_sentenceCommittedText.Length > 0 &&
                 !output.StartsWith(_sentenceCommittedText, StringComparison.Ordinal))
@@ -3104,6 +3277,7 @@ namespace TigerClaw.Core
             {
                 output = output.Substring(_sentenceCommittedText.Length);
             }
+            ReleaseSentenceLearning(candidates[index].Text, _sentenceRawBuffer.Length, output);
             ClearCompositionInput();
             _compositionState = CompositionState.CnIdle;
             ResetCandidatePageTracker();
@@ -3126,16 +3300,19 @@ namespace TigerClaw.Core
             {
                 output = output.Substring(_sentenceCommittedText.Length);
             }
+            CaptureSentenceLearning(_sentenceSelectedIndex);
             output += suffix ?? string.Empty;
+            if (candidates.Length > 0 && _sentenceSelectedIndex < candidates.Length)
+                ReleaseSentenceLearning(candidates[_sentenceSelectedIndex].Text, _sentenceRawBuffer.Length, output);
             ClearCompositionInput();
             _compositionState = CompositionState.CnIdle;
             ResetCandidatePageTracker();
             return KeyEngineResult.CreateHandled(true, output, string.Empty, false);
         }
 
-        private string GetUncommittedSentenceRawCode()
+        private string GetUncommittedSentenceRawCode(string raw = null)
         {
-            string raw = _sentenceRawBuffer.ToString();
+            raw ??= _sentenceRawBuffer.ToString();
             return _sentenceCommittedRawLength > 0 &&
                    _sentenceCommittedRawLength <= raw.Length
                 ? raw.Substring(_sentenceCommittedRawLength)
@@ -3223,6 +3400,8 @@ namespace TigerClaw.Core
 
         private void ClearCompositionInput()
         {
+            _pendingLearning.Clear(); _learningBaseline = null; _learningContextValid = true;
+            InvalidateCandidateFrame();
             if (_sentenceRawBuffer.Length > 0)
             {
                 _sentenceInputDecoder?.CompleteComposition();
@@ -3234,6 +3413,8 @@ namespace TigerClaw.Core
             _mixedDecodedLexiconVersion = -1;
             _mixedDecodedMaxCodeLength = -1;
             _sentenceRawBuffer.Clear();
+            _sentenceTabSelectionPending = false;
+            _sentenceLockedPrefixes.Clear();
             _sentenceDecodeResult = SentenceDecodeResult.Empty;
             _sentenceResultLexiconVersion = -1;
             _sentenceSelectedIndex = 0;
@@ -3263,7 +3444,7 @@ namespace TigerClaw.Core
             if (_compositionState == CompositionState.CnPinyin)
             {
                 string pyCode = code != null && code.Length > 0 ? code.Substring(1) : string.Empty;
-                List<string> py = ResolvePinyinCandidates(pyCode);
+                var py = ResolvePinyinCandidates(pyCode);
                 if (py != null && py.Count > 0 && !string.IsNullOrEmpty(py[0]))
                 {
                     return GetCandidateOutputText(py[0]);
@@ -3275,7 +3456,7 @@ namespace TigerClaw.Core
             return ResolveCommitText(code);
         }
 
-        private List<string> ResolvePinyinCandidates(string code)
+        private IReadOnlyList<string> ResolvePinyinCandidates(string code)
         {
             if (string.IsNullOrEmpty(code))
             {
@@ -3299,7 +3480,7 @@ namespace TigerClaw.Core
                 return string.Empty;
             }
 
-            List<string> candidates = ResolveCandidates(code);
+            var candidates = ResolveCandidates(code);
             if (candidates != null && candidates.Count > 0 && !string.IsNullOrEmpty(candidates[0]))
             {
                 return GetCandidateOutputText(candidates[0]);
@@ -3308,7 +3489,7 @@ namespace TigerClaw.Core
             return code;
         }
 
-        private List<string> ResolveCandidates(string code)
+        private IReadOnlyList<string> ResolveCandidates(string code)
         {
             if (string.IsNullOrEmpty(code))
             {
@@ -3317,7 +3498,7 @@ namespace TigerClaw.Core
 
             try
             {
-                return _state.GetCandidates(code);
+                return _state.GetCandidateView(code);
             }
             catch
             {
@@ -3409,7 +3590,7 @@ namespace TigerClaw.Core
             _candidatePageState = CompositionState.CnIdle;
         }
 
-        private List<string> GetCandidatePage(string code, CompositionState state, List<string> allCandidates, out int pageIndex)
+        private List<string> GetCandidatePage(string code, CompositionState state, IReadOnlyList<string> allCandidates, out int pageIndex)
         {
             string normalizedCode = code ?? string.Empty;
             if (_candidatePageState != state || !string.Equals(_candidatePageCode, normalizedCode, StringComparison.Ordinal))
@@ -3456,10 +3637,12 @@ namespace TigerClaw.Core
             }
 
             pageIndex = _candidatePageIndex;
-            return allCandidates.GetRange(start, count);
+            var page = new List<string>(count);
+            for (int i = 0; i < count; i++) page.Add(allCandidates[start + i]);
+            return page;
         }
 
-        private void MoveCandidatePage(string code, CompositionState state, List<string> allCandidates, int delta)
+        private void MoveCandidatePage(string code, CompositionState state, IReadOnlyList<string> allCandidates, int delta)
         {
             if (delta == 0)
             {
@@ -3810,7 +3993,7 @@ namespace TigerClaw.Core
             }
 
             string currentCode = _inputBuffer.ToString();
-            List<string> allCandidates;
+            IReadOnlyList<string> allCandidates;
             List<string> candidates;
             if (_compositionState == CompositionState.CnPinyin)
             {
@@ -4270,6 +4453,102 @@ namespace TigerClaw.Core
                    vk == VK_CAPITAL;
         }
 
+        private bool IsReservedCustomShortcut(ShortcutGesture gesture)
+        {
+            return gesture == null ||
+                   ShortcutBindingRules.GetReservedConflict(
+                       gesture,
+                       _state.GetCtrlSpaceToggleEnabled(),
+                       _state.GetNativeHookAltBackslashToggleEnabled()) != ShortcutConflictKind.None;
+        }
+
+        public void RefreshCompositionAfterSchemaSwitch()
+        {
+            lock (_lock)
+            {
+                bool convertible = _compositionState == CompositionState.CnSentence ||
+                                   _compositionState == CompositionState.CnComposing;
+                if (!convertible)
+                {
+                    ReloadSentenceResources();
+                    ResetCandidatePageTracker();
+                    return;
+                }
+
+                string rawCode = _compositionState == CompositionState.CnSentence
+                    ? GetUncommittedSentenceRawCode()
+                    : IsMixedInputSession() ? _mixedRawBuffer.ToString() : _inputBuffer.ToString();
+                ClearCompositionInput();
+                ReloadSentenceResources();
+                if (rawCode.Length == 0)
+                {
+                    _compositionState = CompositionState.CnIdle;
+                }
+                else if (_state.IsSentenceInputActive() && _sentenceInputDecoder != null)
+                {
+                    _compositionState = CompositionState.CnSentence;
+                    RestartSentenceInput(rawCode);
+                }
+                else
+                {
+                    _compositionState = CompositionState.CnComposing;
+                    // Long imported compositions need a temporary mixed session to avoid
+                    // discarding raw keys. Short ones obey the target's normal input setting.
+                    if (_state.GetUnlimitedMixedChineseEnglishInput() || rawCode.Length > GetSafeMaxCodeLen())
+                    {
+                        _mixedRawBuffer.Append(rawCode);
+                        _mixedInputDecoder.ClearCache();
+                        RebuildMixedInput();
+                    }
+                    else
+                    {
+                        _inputBuffer.Append(rawCode);
+                    }
+                }
+                ResetCandidatePageTracker();
+            }
+        }
+
+        private void RefreshActionShortcuts()
+        {
+            int configVersion = _state.ConfigVersion;
+            if (_shortcutConfigVersion == configVersion)
+            {
+                return;
+            }
+
+            _manualAddWordShortcut = _state.GetManualAddWordShortcut();
+            _switchRecentSchemaShortcut = _state.GetSwitchRecentSchemaShortcut();
+            _manualAddWordShortcutAvailable =
+                _state.GetCtrlEqualAddCiEnabled() &&
+                !IsReservedCustomShortcut(_manualAddWordShortcut);
+            _switchRecentSchemaShortcutAvailable =
+                _state.GetCtrlMSwitchSchemaEnabled() &&
+                !IsReservedCustomShortcut(_switchRecentSchemaShortcut);
+            if (_manualAddWordShortcutAvailable &&
+                _switchRecentSchemaShortcutAvailable &&
+                _switchRecentSchemaShortcut.Equals(_manualAddWordShortcut))
+            {
+                // The settings UI rejects this, but config.txt is user-editable. Never resolve an
+                // ambiguous action by silently preferring add-word: a key intended for schema
+                // switching must not unexpectedly open a dialog.
+                _manualAddWordShortcutAvailable = false;
+                _switchRecentSchemaShortcutAvailable = false;
+            }
+            _shortcutConfigVersion = configVersion;
+        }
+
+        private void ResetOneShotActionState()
+        {
+            // An action such as opening the add-word dialog can move focus before its physical
+            // key-up reaches this TSF instance. Focus/cancellation is therefore also a release
+            // boundary; otherwise that shortcut remains suppressed indefinitely.
+            _oneShotActionKey = 0;
+            _schemaSwitchShortcutAwaitingModifierRelease = false;
+            _handledModifierSelectionKeys.Clear();
+            _quoteDownSeen = false;
+        }
+
         private bool TryHandleCtrlSpaceChord(int vk, bool isDown, bool isUp, int repeat, bool shift, bool alt, bool win, out KeyEngineResult result)
         {
             result = null;
@@ -4503,8 +4782,8 @@ namespace TigerClaw.Core
                                    _compositionState == CompositionState.CnUpperCase ||
                                    _compositionState == CompositionState.CnSentence;
 
-                List<string> allList = null;
-                List<string> list = null;
+                IReadOnlyList<string> allList = null;
+                IReadOnlyList<string> list = null;
                 if (_compositionState == CompositionState.CnComposing)
                 {
                     allList = ResolveCandidates(inputCode);
@@ -4590,33 +4869,11 @@ namespace TigerClaw.Core
                 return Array.Empty<SentenceCandidate>();
             }
 
-            if (string.Equals(_sentenceDecodeResult.RawCode, sentenceRawCode, StringComparison.Ordinal))
-            {
-                if (_sentenceCommittedText.Length == 0)
-                {
-                    return current;
-                }
-
-                return current
-                    .Where(candidate => candidate.Text.StartsWith(_sentenceCommittedText, StringComparison.Ordinal))
-                    .Select(candidate => new SentenceCandidate
-                    {
-                        Text = candidate.Text.Substring(_sentenceCommittedText.Length),
-                        SegmentedCode = candidate.SegmentedCode,
-                        BaseScore = candidate.BaseScore,
-                        FinalScore = candidate.FinalScore,
-                        ConfidenceScore = candidate.ConfidenceScore,
-                        SupplementScore = candidate.SupplementScore,
-                        Boundary = candidate.Boundary,
-                        MaxLexiconRank = candidate.MaxLexiconRank
-                    })
-                    .Where(candidate => candidate.Text.Length > 0)
-                    .ToArray();
-            }
-
             // Decode is still catching up. Keep the last list so Overlay does not
-            // collapse to a one-row code window between keys.
-            if (sentenceRawCode.Length > 0 && current.Length > 0)
+            // collapse to a one-row code window between keys. Both current and
+            // pending results use the same committed-prefix projection below.
+            if (string.Equals(_sentenceDecodeResult.RawCode, sentenceRawCode, StringComparison.Ordinal) ||
+                (sentenceRawCode.Length > 0 && current.Length > 0))
             {
                 if (_sentenceCommittedText.Length == 0)
                 {
@@ -4646,11 +4903,7 @@ namespace TigerClaw.Core
         private string GetSentenceDisplayCode()
         {
             string fullRawCode = _sentenceRawBuffer.ToString();
-            string rawCode = fullRawCode;
-            if (_sentenceCommittedRawLength > 0 && _sentenceCommittedRawLength <= fullRawCode.Length)
-            {
-                rawCode = fullRawCode.Substring(_sentenceCommittedRawLength);
-            }
+            string rawCode = GetUncommittedSentenceRawCode(fullRawCode);
             if (_sentenceResultLexiconVersion != _state.LexiconVersion)
             {
                 return rawCode;
@@ -4665,6 +4918,15 @@ namespace TigerClaw.Core
             {
                 return rawCode;
             }
+
+            var casedSegmented = new StringBuilder(segmented.Length);
+            int rawIndex = 0;
+            foreach (char mark in segmented)
+            {
+                casedSegmented.Append(mark == ' ' || rawIndex >= fullRawCode.Length
+                    ? mark : fullRawCode[rawIndex++]);
+            }
+            segmented = casedSegmented.ToString();
 
             string decodedRawCode = _sentenceDecodeResult.RawCode ?? string.Empty;
             string fullDisplayCode;
@@ -4771,6 +5033,7 @@ namespace TigerClaw.Core
                 RawCode = result.RawCode,
                 Candidates = filtered,
                 EarlyCommitEvidence = result.EarlyCommitEvidence,
+                LearningAffected = result.LearningAffected, LearningMode = result.LearningMode,
                 ExpandedStates = result.ExpandedStates
             };
         }
@@ -4788,7 +5051,13 @@ namespace TigerClaw.Core
 
             SentenceCandidate[] candidates = result.Candidates ?? Array.Empty<SentenceCandidate>();
             SentenceCandidate[] filtered = candidates
-                .Where(candidate => candidate != null && candidate.MaxLexiconRank <= 1)
+                .Where(candidate => candidate != null &&
+                    // Segmented paths already passed the decoder's single-character,
+                    // optimal-code and word-rank eligibility checks. Keep them after
+                    // empty-code commit; only whole-input non-first edges need hiding.
+                    (candidate.MaxLexiconRank <= 1 ||
+                     (_state.GetSentenceAllowDuplicateSingleCharacters() &&
+                      candidate.Boundary?.Previous != null && candidate.Boundary.Previous.TextLength > 0)))
                 .ToArray();
             if (filtered.Length == candidates.Length)
             {
@@ -4800,6 +5069,7 @@ namespace TigerClaw.Core
                 RawCode = result.RawCode,
                 Candidates = filtered,
                 EarlyCommitEvidence = result.EarlyCommitEvidence,
+                LearningAffected = result.LearningAffected, LearningMode = result.LearningMode,
                 ExpandedStates = result.ExpandedStates
             };
         }

@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using TigerClaw.Shared;
 
 namespace TigerClaw.Core
@@ -8,6 +9,11 @@ namespace TigerClaw.Core
     internal sealed class ProcessLauncher
     {
         private readonly string _baseDir;
+        // Accessed only by the Sentence lifecycle worker. Never adopt by name.
+        private Process _ownedSentence;
+
+        internal bool HasOwnedSentence => _ownedSentence != null;
+        internal int OwnedSentenceId => _ownedSentence != null && !_ownedSentence.HasExited ? _ownedSentence.Id : 0;
 
         public ProcessLauncher()
         {
@@ -33,15 +39,70 @@ namespace TigerClaw.Core
             return Start(exePath, args);
         }
 
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool AllowSetForegroundWindow(uint processId);
+
+        public void AllowOverlayForeground()
+        {
+            // Only the sibling runtime receives the permission passed by TSF.
+            string expected = Path.GetFullPath(ResolveSiblingExe(RuntimeConstants.OverlayProcessName + ".exe"));
+            Process[] processes;
+            try { processes = Process.GetProcessesByName(RuntimeConstants.OverlayProcessName); }
+            catch { return; }
+            foreach (Process process in processes)
+            {
+                using (process)
+                {
+                    try
+                    {
+                        if (string.Equals(process.MainModule?.FileName, expected, StringComparison.OrdinalIgnoreCase))
+                            AllowSetForegroundWindow((uint)process.Id);
+                    }
+                    catch { /* Exited or inaccessible: do not broaden permission. */ }
+                }
+            }
+        }
+
         public bool TryLaunchSentence(string arguments)
         {
+            if (_ownedSentence != null)
+            {
+                if (!_ownedSentence.HasExited) return true;
+                _ownedSentence.Dispose();
+                _ownedSentence = null;
+            }
             if (IsProcessRunning(RuntimeConstants.SentenceProcessName))
             {
                 return true;
             }
 
             string exePath = ResolveSiblingExe(RuntimeConstants.SentenceProcessName + ".exe");
-            return Start(exePath, arguments, createNoWindow: true);
+            if (!File.Exists(exePath)) return false;
+            try
+            {
+                _ownedSentence = Process.Start(new ProcessStartInfo
+                {
+                    FileName = exePath, Arguments = arguments ?? string.Empty,
+                    WorkingDirectory = Path.GetDirectoryName(exePath),
+                    UseShellExecute = false, CreateNoWindow = true
+                });
+                return _ownedSentence != null;
+            }
+            catch { return false; }
+        }
+
+        internal void StopOwnedSentence()
+        {
+            if (_ownedSentence == null) return;
+            if (!_ownedSentence.WaitForExit(500))
+            {
+                _ownedSentence.Kill();
+                if (!_ownedSentence.WaitForExit(1000))
+                    throw new TimeoutException("Owned Sentence process has not exited");
+            }
+            _ownedSentence.Dispose();
+            _ownedSentence = null;
         }
 
         public bool HasPublishedNativeHook()
@@ -66,7 +127,10 @@ namespace TigerClaw.Core
             try
             {
                 Process[] processes = Process.GetProcessesByName(processName);
-                return processes != null && processes.Length > 0;
+                bool found = processes != null && processes.Length > 0;
+                if (processes != null)
+                    foreach (Process process in processes) process.Dispose();
+                return found;
             }
             catch
             {

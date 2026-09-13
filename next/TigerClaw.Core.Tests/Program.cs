@@ -11,6 +11,8 @@ using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using TigerClaw.Core;
+using TigerClaw.Overlay;
+using TigerClaw.Shared;
 
 namespace TigerClaw.Core.Tests
 {
@@ -20,6 +22,53 @@ namespace TigerClaw.Core.Tests
         {
             try
             {
+                if (args.Length == 1 && args[0] == "--startup-context-tests")
+                {
+                    RunStartupContextTests();
+                    return 0;
+                }
+                RunStartupContextTests();
+                if (args.Length == 2 && args[0] == "--native-core-config-defaults")
+                    return ExportNativeCoreConfigDefaults(args[1]);
+                if (args.Length == 2 && args[0] == "--native-core-digit-table") return ExportNativeCoreLetterTable(args[1], true);
+                if (args.Length == 2 && args[0] == "--native-core-letter-table")
+                    return ExportNativeCoreLetterTable(args[1]);
+                if (args.Length == 2 && args[0] == "--native-core-grapheme-table")
+                    return ExportNativeCoreGraphemeTable(args[1]);
+                if (args.Length == 2 && args[0] == "--native-core-case-table")
+                    return ExportNativeCoreCaseTable(args[1]);
+                if (args.Length == 1 && args[0] == "--native-core-text-stdio")
+                    return RunNativeCoreTextProbe();
+                if (args.Length == 1 && args[0] == "--native-core-replay-stdio")
+                    return RunNativeCoreReplayProbe();
+                if (args.Length == 2 && args[0] == "--native-core-lexicon-fixtures")
+                    return ExportNativeCoreLexiconFixtures(args[1]);
+                if (args.Length == 2 && args[0] == "--compact-lexicon-bench")
+                    return RunCompactLexiconBench(args[1]);
+                if (args.Length == 1 && args[0] == "--compact-lexicon-tests")
+                {
+                    RunCompactLexiconTests();
+                    return 0;
+                }
+                if (args.Length == 1 && args[0] == "--learning-tests") return RunLearningTests();
+                if (args.Length == 4 && args[0] == "--learning-worker") return RunLearningWorker(args[1], args[2], int.Parse(args[3]));
+                if (args.Length == 2 && args[0] == "--ui-publish-stdio")
+                    return RunUiPublisherProbe(args[1]);
+                if (args.Length == 1 && args[0] == "--ui-snapshot-tests")
+                {
+                    RunUiSnapshotTests();
+                    return 0;
+                }
+                if (args.Length == 1 && args[0] == "--overlay-format-stdio")
+                {
+                    return RunOverlayFormatProbe();
+                }
+                if (args.Length == 1 && args[0] == "--sentence-lifecycle-tests")
+                {
+                    RunSentenceLifecycleTests();
+                    Console.WriteLine("Sentence lifecycle tests passed.");
+                    return 0;
+                }
                 if (args.Length == 2 &&
                     string.Equals(args[0], "--core-diff-stdio", StringComparison.OrdinalIgnoreCase))
                 {
@@ -144,6 +193,7 @@ namespace TigerClaw.Core.Tests
                 UsesCurrentPageCandidateAsSoftHint();
                 BackspaceRebuildsFromRawCode();
                 InvalidatesLookupCacheByLexiconVersion();
+                LexiconFilesPrioritizeSchemaAndUseCurrentCulture();
                 ComposesChineseAndRawCommitTextSeparately();
                 EngineKeepsRawCodeSeparateFromSurface();
                 EngineCommitsRawCodeWhenSwitchingToEnglish();
@@ -159,6 +209,7 @@ namespace TigerClaw.Core.Tests
                 SentenceDecoderAllowsSegmentedSingleDuplicatesWhenEnabled();
                 SentenceDecoderLetsSegmentedSingleDuplicatesCompeteWhenEnabled();
                 SentenceDecoderAppliesCharacterRewardInsideBeam();
+                SentenceDecoderRewardsOptimalWholeInputSingleCharacter();
                 SentenceSupplementParsesPerSchemaFile();
                 SentenceSupplementMatchesOverlapsAndRepeatedSingleCharacters();
                 SentenceSupplementRewardsInsideBeamWithoutChangingConfidence();
@@ -188,6 +239,10 @@ namespace TigerClaw.Core.Tests
                 SentenceEngineHonorsSelectionSymbolSettings();
                 SentenceEngineKeepsArrowSelectionInPlace();
                 SentenceEngineUsesTabToTraverseCandidates();
+                RunLearningTests();
+                SentenceTabSelectionLocksOnContinuedInput();
+                SentenceTabLocksStackAndPreserveSelectors();
+                SentenceEmptyCodeCountsDuplicateSingles();
                 SentenceEnginePassesCtrlNumberShortcut();
                 SentenceEngineCommitsSmartQuoteAfterCandidate();
                 SentenceMinRetainedRawLengthDefaultsToZeroAndClamps();
@@ -198,9 +253,17 @@ namespace TigerClaw.Core.Tests
                 SentenceEmptyCodeAutoCommitDefersCompletableLastSegment();
                 SentenceEmptyCodeAutoCommitWorksWithAsyncDecode();
                 SentenceAutoCommitContinuationUsesFirstRanksOnly();
+                SentenceEmptyCodeContinuationPreservesDuplicateSingles();
                 EngineLightweightKeyStateMatchesUiSnapshot();
                 SentenceEngineRejectsStaleNeuralResult();
+                SentenceManualSelectionRejectsLateRerank();
+                SentencePathCheckMatchesFullDecode();
+                SentenceEmptyCodeDoesNotTreatPrunedCandidateAsUnique();
+                SentenceAutoCommitExitKeepsOnlyLiveTail();
+                TemporaryPinyinAlwaysShowsReverseLookupAnnotations();
+                SettingsOrderIsIndependentOfConfigurationOrder();
                 SentenceNeuralWeightPreservesShortNgramWinner();
+                SentenceNeuralMixedLengthsUseConvexWeights();
                 SentenceEngineReranksOnlyTopFive();
                 SentenceNeuralRerankLetsSegmentedSingleDuplicatesCompete();
                 SentenceAutoCommitRequiresConsecutiveAppendEvidence();
@@ -223,10 +286,16 @@ namespace TigerClaw.Core.Tests
                 SentenceAutoCommitAcceptsProbabilisticAlternatingSegmentation();
                 SentenceAutoCommitReplayPreservesOriginalCommit();
                 KeyReplayCacheReturnsOriginalResultWithCurrentSequence();
+                ShortcutGesturesParseAndMatch();
+                CustomActionShortcutsTriggerAndRearm();
+                CustomRecentSchemaShortcutSwitchesSchemas();
+                SchemaSwitchPreservesOnlyLiveRaw();
+                CandidateAnimationSettings();
                 KeyResponsesDeclareExpectedKeyUp();
                 CtrlSpaceStillTogglesWithExpectedKeyUpResponses();
                 KeyUpExpectationCoversReleaseDependentState();
                 TransportDefersOnlyKeyUiPublication();
+                NativeHookAlwaysShowsInputCodeInCandidateWindow();
                 SentenceEngineDecodesLongWorkOffTheKeyPath();
                 SentenceAutoCommitStaysOffTheKeyPath();
                 SentenceEngineHoldsPreviousCandidatesWhileDecodeIsPending();
@@ -234,6 +303,9 @@ namespace TigerClaw.Core.Tests
                 SentenceAutoEnableUsesSchemaNameWithoutChangingSwitch();
                 SentenceGoldenExportIsDeterministic();
                 SentenceGoldenCasesIncrementalMatchesFull();
+                RunSentenceLifecycleTests();
+                RunUiSnapshotTests();
+                RunCompactLexiconTests();
                 Console.WriteLine("TigerClaw.Core.Tests: all tests passed.");
                 return 0;
             }
@@ -251,13 +323,118 @@ namespace TigerClaw.Core.Tests
             }
         }
 
+        private static void NativeHookAlwaysShowsInputCodeInCandidateWindow()
+        {
+            var formatter = new CandidateTextFormatter();
+            var nativeState = new OverlayUiState
+            {
+                IsNativeHook = true,
+                CandidateVisible = true,
+                InputCode = "abcd",
+                Candidates = new[] { "candidate" },
+                ShowInputCodeInCandidateWindow = false
+            };
+
+            CandidateWindowViewModel nativeView = formatter.BuildViewModel(nativeState, showCandidates: true, includeAnnotations: false);
+            True(nativeView.Mode == CandidateDisplayMode.CodeAndCandidates,
+                nameof(NativeHookAlwaysShowsInputCodeInCandidateWindow) + ".native_mode");
+            True(nativeView.DisplayText.StartsWith("abcd", StringComparison.Ordinal),
+                nameof(NativeHookAlwaysShowsInputCodeInCandidateWindow) + ".native_text");
+
+            nativeState.HideCandidateItems = true;
+            CandidateWindowViewModel nativeCodeOnlyView = formatter.BuildViewModel(nativeState, showCandidates: false, includeAnnotations: false);
+            True(nativeCodeOnlyView.Mode == CandidateDisplayMode.CodeOnly,
+                nameof(NativeHookAlwaysShowsInputCodeInCandidateWindow) + ".native_code_only");
+            Equal("abcd", nativeCodeOnlyView.DisplayText,
+                nameof(NativeHookAlwaysShowsInputCodeInCandidateWindow) + ".native_code_only_text");
+
+            nativeState.IsNativeHook = false;
+            nativeState.HideCandidateItems = false;
+            CandidateWindowViewModel tsfView = formatter.BuildViewModel(nativeState, showCandidates: true, includeAnnotations: false);
+            True(tsfView.Mode == CandidateDisplayMode.CandidatesOnly,
+                nameof(NativeHookAlwaysShowsInputCodeInCandidateWindow) + ".tsf_mode");
+            True(!tsfView.DisplayText.Contains("abcd", StringComparison.Ordinal),
+                nameof(NativeHookAlwaysShowsInputCodeInCandidateWindow) + ".tsf_text");
+        }
+
+        private static void LexiconFilesPrioritizeSchemaAndUseCurrentCulture()
+        {
+            string root = Path.Combine(Path.GetTempPath(), "TigerClaw.Core.Tests", Guid.NewGuid().ToString("N"));
+            string schemaDir = Path.Combine(root, "虎整句");
+            CultureInfo previousCulture = CultureInfo.CurrentCulture;
+            try
+            {
+                Directory.CreateDirectory(schemaDir);
+                File.WriteAllText(Path.Combine(schemaDir, "快符.txt"), string.Empty);
+                File.WriteAllText(Path.Combine(schemaDir, "虎补充.txt"), string.Empty);
+                File.WriteAllText(Path.Combine(schemaDir, "虎整句.txt"), string.Empty);
+
+                CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("zh-CN");
+                string[] ordered = CoreRuntimeState.GetOrderedLexiconFiles(schemaDir)
+                    .Select(Path.GetFileName)
+                    .ToArray();
+
+                True(ordered.Length == 3,
+                    nameof(LexiconFilesPrioritizeSchemaAndUseCurrentCulture) + ".count");
+                Equal("虎整句.txt", ordered[0],
+                    nameof(LexiconFilesPrioritizeSchemaAndUseCurrentCulture) + ".schema_first");
+                Equal("虎补充.txt", ordered[1],
+                    nameof(LexiconFilesPrioritizeSchemaAndUseCurrentCulture) + ".culture_first");
+                Equal("快符.txt", ordered[2],
+                    nameof(LexiconFilesPrioritizeSchemaAndUseCurrentCulture) + ".culture_second");
+
+                string yamlSchemaDir = Path.Combine(root, "yaml方案");
+                Directory.CreateDirectory(yamlSchemaDir);
+                File.WriteAllText(Path.Combine(yamlSchemaDir, "普通.txt"), string.Empty);
+                File.WriteAllText(Path.Combine(yamlSchemaDir, "yaml方案.dict.yaml"), string.Empty);
+                string[] yamlOrdered = CoreRuntimeState.GetOrderedLexiconFiles(yamlSchemaDir)
+                    .Select(Path.GetFileName)
+                    .ToArray();
+                Equal("yaml方案.dict.yaml", yamlOrdered[0],
+                    nameof(LexiconFilesPrioritizeSchemaAndUseCurrentCulture) + ".yaml_schema_first");
+            }
+            finally
+            {
+                CultureInfo.CurrentCulture = previousCulture;
+                if (Directory.Exists(root))
+                {
+                    Directory.Delete(root, recursive: true);
+                }
+            }
+        }
+
+        private static void CandidateAnimationSettings()
+        {
+            string root = Path.Combine(Path.GetTempPath(), "TigerClaw-AnimationTest-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            try
+            {
+                var state = new CoreRuntimeState(root);
+                state.Initialize();
+                True(state.GetCandidateAnimationEnabled(), "animation enabled default");
+                True(state.GetCandidateAnimationDurationMs() == 200, "animation duration default");
+                state.TrySetConfigValue("候选窗动效", "否", out _, out _);
+                state.TrySetConfigValue("候选窗动效时间(毫秒)", "420", out _, out _);
+                True(!state.GetCandidateAnimationEnabled(), "animation disabled");
+                True(state.GetCandidateAnimationDurationMs() == 420, "animation custom duration");
+                state.TrySetConfigValue("候选窗动效时间(毫秒)", "", out _, out _);
+                True(state.GetCandidateAnimationDurationMs() == 200, "animation empty uses default");
+                state.TrySetConfigValue("候选窗动效时间(毫秒)", "0", out _, out _);
+                True(state.GetCandidateAnimationDurationMs() == 0, "animation zero means immediate");
+            }
+            finally
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+
         private static int RunCoreDifferentialAdapter(string root)
         {
             Directory.CreateDirectory(root);
             var state = new CoreRuntimeState(root);
             state.Initialize();
             string lastUiCommand = string.Empty;
-            using (var handler = new ProtocolHandler(command => lastUiCommand = command.ToString(), state, null))
+            using (var handler = new ProtocolHandler(command => lastUiCommand = command.ToString(), state, null, enableSentenceService: false))
             {
                 string line;
                 while ((line = Console.ReadLine()) != null)
@@ -3490,6 +3667,132 @@ namespace TigerClaw.Core.Tests
             Equal(second, Press(engine, 0x20).TextToOutput, nameof(SentenceEngineKeepsArrowSelectionInPlace) + ".commit");
         }
 
+        private static void SentenceTabSelectionLocksOnContinuedInput()
+        {
+            foreach (bool autoCommit in new[] { false, true })
+            foreach (bool synchronous in new[] { false, true })
+            {
+                var state = new CoreRuntimeState();
+                EnableSentenceMode(state);
+                state.TrySetConfigValue("整句自动提前上屏", autoCommit ? "是" : "否", out _, out _);
+                using (var engine = new InputMethodEngine(state, CreateSentenceDecoder(
+                    new Dictionary<string, List<string>>
+                    {
+                        ["ab"] = new List<string> { "甲", "乙乙" },
+                        ["cd"] = new List<string> { "丙", "戊戊" },
+                        ["abcd"] = new List<string> { "丁" }
+                    }), sentenceDecodeSynchronously: synchronous))
+                {
+                    void WaitForDecode() => True(SpinWait.SpinUntil(() => !engine.IsSentenceDecodePending, 3000),
+                        "tab_lock.decode_completed");
+                    TypeLetters(engine, "ab");
+                    WaitForDecode();
+                    Equal(null, Press(engine, 0x09).TextToOutput, "tab_lock.no_immediate_commit");
+                    True(engine.GetUiSnapshot(5).SelectedCandidateIndex == 1, "tab_lock.highlight");
+                    long oldGeneration = engine.GetDifferentialSnapshot(5).SentenceGeneration;
+                    Equal(autoCommit ? "乙乙" : null, Press(engine, 0x43).TextToOutput, "tab_lock.next_key_commit");
+                    True(!engine.ApplySentenceNeuralScores(oldGeneration, "ab", new[] { 0.0, -100.0 }),
+                        "tab_lock.old_rerank_rejected");
+                    Press(engine, 0x44);
+                    WaitForDecode();
+                    Equal(autoCommit ? "丙" : "乙乙丙", engine.GetUiSnapshot(5).Candidates[0], "tab_lock.fixed_boundary");
+                    Equal(autoCommit ? "丙" : "乙乙丙", Press(engine, 0x20).TextToOutput, "tab_lock.no_duplicate_commit");
+
+                    TypeLetters(engine, "ab"); Press(engine, 0x09); Press(engine, 0x43); Press(engine, 0x44);
+                    Press(engine, 0x08); Press(engine, 0x08);
+                    WaitForDecode();
+                    if (autoCommit)
+                        True(!engine.GetUiSnapshot(5).IsComposing, "tab_lock.committed_not_erasable");
+                    else
+                    {
+                        Equal("甲", engine.GetUiSnapshot(5).Candidates[0], "tab_lock.backspace_unlock");
+                        Equal("ab", engine.GetUiSnapshot(5).ActiveInputCode, "tab_lock.raw_restored");
+                    }
+                    Press(engine, 0x1b);
+                    TypeLetters(engine, "ab"); Press(engine, 0x09); Press(engine, 0x43); Press(engine, 0x44);
+                    Equal(autoCommit ? "cd" : "abcd", Press(engine, 0x0d).TextToOutput, "tab_lock.literal_exit");
+                }
+            }
+        }
+
+        private static void SentenceTabLocksStackAndPreserveSelectors()
+        {
+            var state = new CoreRuntimeState();
+            EnableSentenceMode(state);
+            var decoder = CreateSentenceDecoder(new Dictionary<string, List<string>>
+            {
+                ["ab"] = new List<string> { "甲", "乙乙" },
+                ["cd"] = new List<string> { "丙" },
+                ["ef"] = new List<string> { "丁" },
+                ["cdef"] = new List<string> { "戊" },
+                ["abcd"] = new List<string> { "己" }
+            });
+            using (var engine = new InputMethodEngine(state, decoder))
+            {
+                TypeLetters(engine, "ab");
+                Press(engine, 0x09);
+                TypeLetters(engine, "cd");
+                Press(engine, 0x09); // Even the only candidate can be confirmed.
+                TypeLetters(engine, "ef");
+                Equal("乙乙丙丁", engine.GetUiSnapshot(5).Candidates[0], "tab_lock.second_boundary");
+                Press(engine, 0x08); Press(engine, 0x08);
+                Equal("乙乙丙", engine.GetUiSnapshot(5).Candidates[0], "tab_lock.previous_lock_retained");
+                TypeLetters(engine, "ef");
+                True(engine.GetUiSnapshot(5).Candidates.Contains("乙乙戊"), "tab_lock.second_boundary_released");
+                Press(engine, 0x1b);
+                TypeLetters(engine, "abcd");
+                True(engine.GetUiSnapshot(5).Candidates.Contains("己"), "tab_lock.clear_resets_boundary");
+                Press(engine, 0x1b);
+                TypeLetters(engine, "ab");
+                Press(engine, 0x09);
+                Press(engine, 0x32);
+                Equal("乙乙", engine.GetUiSnapshot(5).Candidates[0], "tab_lock.selector_edits_current_segment");
+            }
+
+            SentenceCandidate selected = decoder.Decode("ab").Candidates.Single(candidate => candidate.Text == "乙乙");
+            var prefix = new SentenceLockedPrefix("ab", selected.Text, selected.Boundary);
+            True(decoder.HasCompleteCandidate("abcd", groupEligibleOnly: true, lockedPrefix: prefix),
+                "tab_lock.explicit_prefix_is_group_eligible");
+            True(!decoder.HasCompleteCandidate("abcd", excludedText: "乙乙丙", groupEligibleOnly: true, lockedPrefix: prefix),
+                "tab_lock.exact_query_excludes_crossing_path");
+            True(!decoder.HasCompleteCandidate("ab", excludedText: "乙乙", lockedPrefix: prefix),
+                "tab_lock.exact_query_excludes_fixed_text");
+            True(decoder.Decode("abcd", lockedPrefix: prefix).Candidates.All(candidate => candidate.Text == "乙乙丙"),
+                "tab_lock.decoder_fixed_text_and_boundary");
+        }
+
+        private static void SentenceEmptyCodeCountsDuplicateSingles()
+        {
+            foreach (bool duplicates in new[] { false, true })
+            foreach (int beam in new[] { 1, 100 })
+            {
+                var state = new CoreRuntimeState();
+                EnableSentenceEarlyCommit(state);
+                state.TrySetConfigValue("高频字仅使用最优码组句", "0", out _, out _);
+                state.TrySetConfigValue("允许单字重码组句", duplicates ? "是" : "否", out _, out _);
+                var decoder = new SentenceInputDecoder(SentenceLexiconIndex.Build(
+                    new Dictionary<string, List<string>>
+                    {
+                        ["ot"] = new List<string> { "是", "题", "多字词" },
+                        ["qm"] = new List<string> { "目" }
+                    }), new PrefersCharactersLanguageModel("题", "目"), beamWidth: beam,
+                    allowDuplicateSingleCharacters: duplicates);
+                True(decoder.HasCompleteCandidate("ot", excludedText: "是", groupEligibleOnly: true) == duplicates,
+                    "empty_code.duplicate_exact_ambiguity");
+                using (var engine = new InputMethodEngine(state, decoder))
+                {
+                    TypeLetters(engine, "ot");
+                    Equal(duplicates ? null : "是", Press(engine, 0x51).TextToOutput,
+                        "empty_code.otq_does_not_discard_ti");
+                    Press(engine, 0x4d);
+                    if (duplicates && beam == 100)
+                    {
+                        Equal("题目", engine.GetUiSnapshot(5).Candidates[0], "empty_code.otqm");
+                    }
+                }
+            }
+        }
+
         private static void SentenceEngineUsesTabToTraverseCandidates()
         {
             var state = new CoreRuntimeState();
@@ -3640,8 +3943,51 @@ namespace TigerClaw.Core.Tests
                 nameof(SentenceNeuralWeightPreservesShortNgramWinner));
             True(
                 Math.Abs(shortWeight - 0.30) < 1e-9 &&
-                Math.Abs(InputMethodEngine.GetSentenceNeuralWeight(3) - 0.84) < 1e-9,
+                Math.Abs(InputMethodEngine.GetSentenceNeuralWeight(3) - 0.84) < 1e-9 &&
+                Math.Abs(InputMethodEngine.GetSentenceNeuralWeight(1) - 0.30) < 1e-9 &&
+                Math.Abs(InputMethodEngine.GetSentenceNeuralWeight(7) - 0.84) < 1e-9 &&
+                Math.Abs(InputMethodEngine.GetSentenceNeuralWeight(0) - 0.84) < 1e-9,
                 nameof(SentenceNeuralWeightPreservesShortNgramWinner) + ".dynamic_weight");
+        }
+
+        private static void SentenceNeuralMixedLengthsUseConvexWeights()
+        {
+            var candidates = new[]
+            {
+                new SentenceCandidate { Text = "甲乙", BaseScore = -12, FinalScore = 100, MaxLexiconRank = 1 },
+                new SentenceCandidate { Text = "甲乙丙", BaseScore = -10, FinalScore = -100, MaxLexiconRank = 2 },
+                new SentenceCandidate { Text = "甲乙丙丁戊己", BaseScore = 0, MaxLexiconRank = 1 }
+            };
+            True(3 == InputMethodEngine.GetSentenceNeuralBaseTopLength(candidates, 2, true),
+                nameof(SentenceNeuralMixedLengthsUseConvexWeights) + ".base_not_final_or_outside_pool");
+            True(2 == InputMethodEngine.GetSentenceNeuralBaseTopLength(candidates, 2, false),
+                nameof(SentenceNeuralMixedLengthsUseConvexWeights) + ".lexicon_priority");
+            for (int length = 2; length <= 6; length++)
+            {
+                double alpha = length == 2 ? 0.15 : 0.30;
+                True(Math.Abs(InputMethodEngine.GetSentenceNeuralAlpha(length) - alpha) < 1e-9,
+                    nameof(SentenceNeuralMixedLengthsUseConvexWeights) + ".alpha");
+                True(Math.Abs(InputMethodEngine.CombineSentenceNeuralCandidateScore(-10, -30, 3, length)
+                    - ((1 - alpha) * -10 + alpha * -30)) < 1e-9,
+                    nameof(SentenceNeuralMixedLengthsUseConvexWeights) + ".sum_one");
+            }
+            // Equal model scores stay equal even across candidate lengths.
+            True(Math.Abs(InputMethodEngine.CombineSentenceNeuralCandidateScore(-20, -20, 3, 2)
+                - InputMethodEngine.CombineSentenceNeuralCandidateScore(-20, -20, 3, 3)) < 1e-9,
+                nameof(SentenceNeuralMixedLengthsUseConvexWeights) + ".equal_scores");
+            foreach (int baseLength in new[] { 0, 1, 7, 20 })
+            {
+                double expected = -10 + InputMethodEngine.GetSentenceNeuralWeight(baseLength) * -30;
+                True(Math.Abs(InputMethodEngine.CombineSentenceNeuralCandidateScore(-10, -30, baseLength, 2)
+                    - expected) < 1e-9, nameof(SentenceNeuralMixedLengthsUseConvexWeights) + ".legacy_outside_range");
+            }
+            foreach (int length in new[] { 1, 7 })
+            {
+                double weight = InputMethodEngine.GetSentenceNeuralWeight(length);
+                True(Math.Abs(InputMethodEngine.CombineSentenceNeuralCandidateScore(-10, -30, 3, length)
+                    - (-10 + weight * -30) / (1 + weight)) < 1e-9,
+                    nameof(SentenceNeuralMixedLengthsUseConvexWeights) + ".outside_candidate_normalized");
+            }
         }
 
         private static void SentenceEngineReranksOnlyTopFive()
@@ -3796,6 +4142,57 @@ namespace TigerClaw.Core.Tests
                 "甲乙丁",
                 rewarded.Decode("abcdef").Candidates[0].Text,
                 nameof(SentenceDecoderAppliesCharacterRewardInsideBeam) + ".rewarded");
+        }
+
+        private static void SentenceDecoderRewardsOptimalWholeInputSingleCharacter()
+        {
+            SentenceLexiconIndex lexicon = SentenceLexiconIndex.Build(
+                new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["ab"] = new List<string> { "甲" },
+                    ["cd"] = new List<string> { "乙" },
+                    ["abcd"] = new List<string> { "词语", "丙" },
+                    ["x"] = new List<string> { "丁" },
+                    ["ef"] = new List<string> { "戊" },
+                    ["gh"] = new List<string> { "己" },
+                    ["efgh"] = new List<string> { "丁" }
+                });
+            var baseline = new SentenceInputDecoder(
+                lexicon,
+                NeutralSentenceLanguageModel.Instance,
+                emittedCharacterReward: 2.0,
+                isolationPenalty: SentenceIsolationPenalty.None,
+                allowDuplicateSingleCharacters: true);
+            var rewarded = new SentenceInputDecoder(
+                lexicon,
+                NeutralSentenceLanguageModel.Instance,
+                emittedCharacterReward: 2.0,
+                wholeInputSingleCharacterReward: 5.0,
+                isolationPenalty: SentenceIsolationPenalty.None,
+                allowDuplicateSingleCharacters: true);
+
+            SentenceDecodeResult baselineResult = baseline.DecodeFull("abcd");
+            SentenceDecodeResult rewardedResult = rewarded.DecodeFull("abcd");
+            SentenceCandidate baselineSingle = baselineResult.Candidates.Single(candidate => candidate.Text == "丙");
+            SentenceCandidate rewardedSingle = rewardedResult.Candidates.Single(candidate => candidate.Text == "丙");
+            True(baselineResult.Candidates[0].Text != "丙",
+                nameof(SentenceDecoderRewardsOptimalWholeInputSingleCharacter) + ".baseline_loses");
+            Equal("丙", rewardedResult.Candidates[0].Text,
+                nameof(SentenceDecoderRewardsOptimalWholeInputSingleCharacter) + ".later_rank_rewarded");
+            True(Math.Abs((rewardedSingle.FinalScore - baselineSingle.FinalScore) - 5.0) < 1e-9,
+                nameof(SentenceDecoderRewardsOptimalWholeInputSingleCharacter) + ".reward_value");
+            True(Math.Abs(rewardedSingle.ConfidenceScore - baselineSingle.ConfidenceScore) < 1e-9,
+                nameof(SentenceDecoderRewardsOptimalWholeInputSingleCharacter) + ".confidence_unchanged");
+
+            SentenceDecodeResult nonOptimal = rewarded.DecodeFull("efgh");
+            Equal("戊己", nonOptimal.Candidates[0].Text,
+                nameof(SentenceDecoderRewardsOptimalWholeInputSingleCharacter) + ".non_optimal_not_rewarded");
+
+            rewarded.Decode("abcd");
+            AssertSentenceResultsEqual(
+                rewarded.Decode("abcdef"),
+                rewarded.DecodeFull("abcdef"),
+                nameof(SentenceDecoderRewardsOptimalWholeInputSingleCharacter) + ".incremental_append");
         }
 
         private static void SentenceSupplementParsesPerSchemaFile()
@@ -4290,7 +4687,7 @@ namespace TigerClaw.Core.Tests
         {
             InputMethodEngine engine = CreateAutoCommitSentenceEngine();
             TypeLetters(engine, "abcde");
-            Press(engine, 0x09);
+            Press(engine, 0x28);
             KeyEngineResult result = Press(engine, 0x46);
             Equal(null, result.TextToOutput,
                 nameof(SentenceAutoCommitSuspendsAfterManualNavigation));
@@ -4867,6 +5264,33 @@ namespace TigerClaw.Core.Tests
             return result;
         }
 
+        private static KeyEngineResult PressChord(
+            InputMethodEngine engine,
+            int vk,
+            bool shift = false,
+            bool ctrl = false,
+            bool alt = false,
+            bool win = false)
+        {
+            KeyEngineResult result = engine.ProcessKey(
+                vk, 0, "down", shift, ctrl, alt, win, false, false, 1, false);
+            engine.PostProcessKey(vk, "down", result, shift, ctrl, alt, win, false);
+            return result;
+        }
+
+        private static void ReleaseChord(
+            InputMethodEngine engine,
+            int vk,
+            bool shift = false,
+            bool ctrl = false,
+            bool alt = false,
+            bool win = false)
+        {
+            KeyEngineResult result = engine.ProcessKey(
+                vk, 0, "up", shift, ctrl, alt, win, false, false, 1, false);
+            engine.PostProcessKey(vk, "up", result, shift, ctrl, alt, win, false);
+        }
+
         private static KeyEngineResult SendKey(InputMethodEngine engine, int vk, string action, bool shift)
         {
             KeyEngineResult result = engine.ProcessKey(
@@ -5017,6 +5441,7 @@ namespace TigerClaw.Core.Tests
 
             var multipleState = new CoreRuntimeState();
             EnableSentenceEarlyCommit(multipleState);
+            multipleState.TrySetConfigValue("允许单字重码组句", "否", out _, out _);
             var multiple = new InputMethodEngine(multipleState, CreateSentenceDecoder(
                 new Dictionary<string, List<string>>
                 {
@@ -5138,6 +5563,36 @@ namespace TigerClaw.Core.Tests
             }
         }
 
+        private static void SentenceEmptyCodeContinuationPreservesDuplicateSingles()
+        {
+            foreach (string prefixCode in new[] { "xr", "xry" })
+            foreach (bool autoCommit in new[] { false, true })
+            foreach (bool duplicates in new[] { false, true })
+            {
+                var state = new CoreRuntimeState();
+                EnableSentenceMode(state);
+                state.TrySetConfigValue("整句自动提前上屏", autoCommit ? "是" : "否", out _, out _);
+                state.TrySetConfigValue("允许单字重码组句", duplicates ? "是" : "否", out _, out _);
+                var decoder = new SentenceInputDecoder(
+                    SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
+                    {
+                        ["xr"] = new List<string> { "反" },
+                        ["xry"] = new List<string> { "反" },
+                        ["xbj"] = new List<string> { "秉", "刍", "多字词" }
+                    }), new PrefersCharactersLanguageModel("刍", "多", "字", "词"),
+                    beamWidth: 100, allowDuplicateSingleCharacters: duplicates);
+                var engine = new InputMethodEngine(state, decoder);
+                TypeLetters(engine, prefixCode);
+                string prefix = Press(engine, 0x58).TextToOutput ?? string.Empty;
+                Equal(autoCommit ? "反" : string.Empty, prefix, "rumination.prefix");
+                TypeLetters(engine, "bj");
+                var view = engine.GetUiSnapshot(5);
+                Equal(duplicates ? "反刍" : "反秉", prefix + view.Candidates[0], "rumination.first");
+                True(!view.Candidates.Any(text => text.Contains("多字词")), "rumination.implicit_word_hidden");
+                Equal(duplicates ? "反刍" : "反秉", prefix + Press(engine, 0x20).TextToOutput, "rumination.commit");
+            }
+        }
+
         private static void SentenceAutoCommitContinuationUsesFirstRanksOnly()
         {
             var state = new CoreRuntimeState();
@@ -5255,8 +5710,36 @@ namespace TigerClaw.Core.Tests
         private static void KeyResponsesDeclareExpectedKeyUp()
         {
             var state = new CoreRuntimeState();
-            using (var handler = new ProtocolHandler(_ => { }, state, null))
+            using (var handler = new ProtocolHandler(_ => { }, state, null, enableSentenceService: false))
             {
+                var holdField = typeof(ProtocolHandler).GetField("_candidateBackgroundUntil",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                handler.Handle("{\"type\":\"key\",\"action\":\"down\",\"vk\":65}");
+                handler.Handle("{\"type\":\"key\",\"action\":\"down\",\"vk\":13}");
+                long deadline = (long)holdField.GetValue(handler);
+                True(deadline > 0 && deadline <= Environment.TickCount64 + 2000, "ordinary commit sets bounded background deadline");
+                handler.Handle("{\"type\":\"key\",\"action\":\"up\",\"vk\":13}");
+                True(deadline == (long)holdField.GetValue(handler), "keyup does not extend background deadline");
+                handler.Handle("{\"type\":\"composition_canceled\"}");
+                True(0L == (long)holdField.GetValue(handler), "explicit cancellation removes background hold");
+                // Seed each active mode without model/lexicon loading; Enter
+                // finishes its raw composition and exercises the same policy.
+                var privateFlags = System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+                var engine = typeof(ProtocolHandler).GetField("_engine", privateFlags).GetValue(handler);
+                var modeField = typeof(InputMethodEngine).GetField("_compositionState", privateFlags);
+                foreach (string mode in new[] { "CnPinyin", "CnSentence" })
+                {
+                    handler.Handle("{\"type\":\"key\",\"action\":\"down\",\"vk\":65}");
+                    modeField.SetValue(engine, Enum.Parse(modeField.FieldType, mode));
+                    if (mode == "CnSentence")
+                    {
+                        var raw = (StringBuilder)typeof(InputMethodEngine).GetField("_sentenceRawBuffer", privateFlags).GetValue(engine);
+                        raw.Clear(); raw.Append("ab");
+                    }
+                    handler.Handle("{\"type\":\"key\",\"action\":\"down\",\"vk\":13}");
+                    True((long)holdField.GetValue(handler) > 0, mode + " completed commit retains background");
+                    handler.Handle("{\"type\":\"composition_canceled\"}");
+                }
                 string letterResponse = handler.Handle(
                     "{\"type\":\"key\",\"seq\":1,\"client_session\":\"keyup-test\"," +
                     "\"event_id\":\"letter\",\"action\":\"down\",\"vk\":65}");
@@ -5275,6 +5758,211 @@ namespace TigerClaw.Core.Tests
                 True(replayedShift.Contains("\"seq\":3,") &&
                      replayedShift.Contains("\"expect_keyup\":true"),
                     nameof(KeyResponsesDeclareExpectedKeyUp) + ".replay");
+            }
+        }
+
+        private static void ShortcutGesturesParseAndMatch()
+        {
+            True(
+                ShortcutGesture.TryParse("shift+ctrl+alt+vk_oem_plus", out ShortcutGesture gesture),
+                nameof(ShortcutGesturesParseAndMatch) + ".parse");
+            Equal("Ctrl+Alt+Shift+VK_OEM_PLUS", gesture.ToConfigString(),
+                nameof(ShortcutGesturesParseAndMatch) + ".canonical");
+            Equal("Ctrl+Alt+Shift+=", gesture.ToDisplayString(),
+                nameof(ShortcutGesturesParseAndMatch) + ".display");
+            True(gesture.Matches(0xBB, true, true, true, false),
+                nameof(ShortcutGesturesParseAndMatch) + ".match");
+            True(!gesture.Matches(0xBB, false, true, true, false),
+                nameof(ShortcutGesturesParseAndMatch) + ".exact_modifiers");
+            True(!ShortcutGesture.TryParse("VK_K", out _),
+                nameof(ShortcutGesturesParseAndMatch) + ".reject_bare");
+            True(!ShortcutGesture.TryParse("Win+VK_K", out _),
+                nameof(ShortcutGesturesParseAndMatch) + ".reject_win");
+            True(!ShortcutGesture.TryParse("Ctrl+VK_CONTROL", out _),
+                nameof(ShortcutGesturesParseAndMatch) + ".reject_modifier_key");
+
+            ShortcutGesture.TryParse("Ctrl+VK_SPACE", out ShortcutGesture ctrlSpace);
+            True(
+                ShortcutBindingRules.GetReservedConflict(ctrlSpace, true, true) == ShortcutConflictKind.CtrlSpace,
+                nameof(ShortcutGesturesParseAndMatch) + ".ctrl_space_conflict");
+            True(
+                ShortcutBindingRules.GetReservedConflict(ctrlSpace, false, true) == ShortcutConflictKind.None,
+                nameof(ShortcutGesturesParseAndMatch) + ".disabled_ctrl_space_available");
+            ShortcutGesture.TryParse("Alt+VK_OEM_5", out ShortcutGesture altBackslash);
+            True(
+                ShortcutBindingRules.GetReservedConflict(altBackslash, true, true) == ShortcutConflictKind.NativeHookAltBackslash,
+                nameof(ShortcutGesturesParseAndMatch) + ".native_toggle_conflict");
+            ShortcutGesture.TryParse("Ctrl+VK_3", out ShortcutGesture ctrlDigit);
+            True(
+                ShortcutBindingRules.GetReservedConflict(ctrlDigit, true, true) == ShortcutConflictKind.CtrlDigitReorder,
+                nameof(ShortcutGesturesParseAndMatch) + ".ctrl_digit_conflict");
+            ShortcutGesture.TryParse("Ctrl+Shift+VK_3", out ShortcutGesture ctrlShiftDigit);
+            True(
+                ShortcutBindingRules.GetReservedConflict(ctrlShiftDigit, true, true) == ShortcutConflictKind.CtrlDigitReorder,
+                nameof(ShortcutGesturesParseAndMatch) + ".ctrl_shift_digit_conflict");
+        }
+
+        private static void CustomActionShortcutsTriggerAndRearm()
+        {
+            string root = Path.Combine(Path.GetTempPath(), "TigerClaw.Core.Tests", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            try
+            {
+                var state = new CoreRuntimeState(root);
+                state.Initialize();
+                True(state.TrySetConfigValue(
+                    "手动加词快捷键", "Ctrl+Alt+Shift+VK_K", out _, out _),
+                    nameof(CustomActionShortcutsTriggerAndRearm) + ".configure");
+                var engine = new InputMethodEngine(state);
+
+                KeyEngineResult oldDefault = PressChord(engine, 0xBB, ctrl: true);
+                True(!oldDefault.OpenAddCiWindow,
+                    nameof(CustomActionShortcutsTriggerAndRearm) + ".old_default_released");
+                KeyEngineResult wrongModifiers = PressChord(engine, 0x4B, ctrl: true, alt: true);
+                True(!wrongModifiers.OpenAddCiWindow,
+                    nameof(CustomActionShortcutsTriggerAndRearm) + ".exact_modifiers");
+
+                KeyEngineResult first = PressChord(engine, 0x4B, shift: true, ctrl: true, alt: true);
+                True(first.Handled && first.OpenAddCiWindow,
+                    nameof(CustomActionShortcutsTriggerAndRearm) + ".first");
+                KeyEngineResult repeated = PressChord(engine, 0x4B, shift: true, ctrl: true, alt: true);
+                True(repeated.Handled && !repeated.OpenAddCiWindow,
+                    nameof(CustomActionShortcutsTriggerAndRearm) + ".repeat_once");
+                engine.OnFocusChanged();
+                True(PressChord(engine, 0x4B, shift: true, ctrl: true, alt: true).OpenAddCiWindow,
+                    nameof(CustomActionShortcutsTriggerAndRearm) + ".focus_rearms");
+                ReleaseChord(engine, 0x4B, shift: true, ctrl: true, alt: true);
+                True(PressChord(engine, 0x4B, shift: true, ctrl: true, alt: true).OpenAddCiWindow,
+                    nameof(CustomActionShortcutsTriggerAndRearm) + ".rearmed");
+
+                state.TrySetConfigValue("Ctrl+等号手动加词", "否", out _, out _);
+                ReleaseChord(engine, 0x4B, shift: true, ctrl: true, alt: true);
+                True(!PressChord(engine, 0x4B, shift: true, ctrl: true, alt: true).OpenAddCiWindow,
+                    nameof(CustomActionShortcutsTriggerAndRearm) + ".disabled");
+
+                state.TrySetConfigValue("Ctrl+等号手动加词", "是", out _, out _);
+                state.TrySetConfigValue("手动加词快捷键", "invalid", out _, out _);
+                True(PressChord(engine, 0xBB, ctrl: true).OpenAddCiWindow,
+                    nameof(CustomActionShortcutsTriggerAndRearm) + ".invalid_falls_back");
+
+                ReleaseChord(engine, 0xBB, ctrl: true);
+                state.TrySetConfigValue("手动加词快捷键", "Ctrl+VK_J", out _, out _);
+                state.TrySetConfigValue("Ctrl+m切换最近码表", "是", out _, out _);
+                state.TrySetConfigValue("切换最近码表快捷键", "Ctrl+VK_J", out _, out _);
+                KeyEngineResult ambiguous = PressChord(engine, 0x4A, ctrl: true);
+                True(!ambiguous.OpenAddCiWindow,
+                    nameof(CustomActionShortcutsTriggerAndRearm) + ".ambiguous_never_adds");
+            }
+            finally
+            {
+                if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
+            }
+        }
+
+        private static void CustomRecentSchemaShortcutSwitchesSchemas()
+        {
+            string root = Path.Combine(Path.GetTempPath(), "TigerClaw.Core.Tests", Guid.NewGuid().ToString("N"));
+            string codeRoot = Path.Combine(root, "码表");
+            Directory.CreateDirectory(Path.Combine(codeRoot, "虎码字词"));
+            Directory.CreateDirectory(Path.Combine(codeRoot, "虎整句"));
+            File.WriteAllText(
+                Path.Combine(codeRoot, "虎码字词", "虎码字词.txt"),
+                "甲\tab\r\n乙\tcd\r\n{加词}\tef\r\n");
+            File.WriteAllText(
+                Path.Combine(codeRoot, "虎整句", "虎整句.txt"),
+                "你\tab\r\n好\tcd\r\n{加词}\tef\r\n");
+            try
+            {
+                var state = new CoreRuntimeState(root);
+                state.Initialize();
+                state.TrySetConfigValue("当前码表", "虎整句", out _, out _);
+                state.ReloadLexicon();
+                state.TrySetConfigValue("当前码表", "虎码字词", out _, out _);
+                state.ReloadLexicon();
+                state.TrySetConfigValue("最大码长", "2", out _, out _);
+                state.TrySetConfigValue("中英文不限长混合输入", "是", out _, out _);
+                state.TrySetConfigValue("最大码长无重自动上屏", "否", out _, out _);
+                state.TrySetConfigValue("手动加词快捷键", "Ctrl+VK_E", out _, out _);
+                state.TrySetConfigValue("Ctrl+m切换最近码表", "是", out _, out _);
+                state.TrySetConfigValue("切换最近码表快捷键", "Ctrl+VK_J", out _, out _);
+                var decoder = new SentenceInputDecoder(
+                    SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
+                    {
+                        ["ab"] = new List<string> { "你" },
+                        ["cd"] = new List<string> { "好" }
+                    }),
+                    NeutralSentenceLanguageModel.Instance,
+                    beamWidth: 20);
+                var engine = new InputMethodEngine(state, decoder, sentenceDecodeSynchronously: true);
+
+                TypeLetters(engine, "ab");
+                EngineUiSnapshot before = engine.GetUiSnapshot(5);
+                Equal("虎码字词", state.GetCurrentSchema(),
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".before");
+                Equal("甲", before.Candidates[0],
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".before_candidate");
+
+                KeyEngineResult switched = PressChord(engine, 0x4A, ctrl: true);
+                True(switched.Handled,
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".handled");
+                True(!switched.OpenAddCiWindow,
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".never_opens_add_word");
+                Equal("虎整句", state.GetCurrentSchema(),
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".sentence_schema");
+                True(engine.IsSentenceCompositionActive,
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".sentence_state");
+                EngineUiSnapshot sentence = engine.GetUiSnapshot(5);
+                Equal("ab", sentence.InputCode,
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".sentence_raw");
+                Equal("你", sentence.Candidates[0],
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".sentence_candidate");
+
+                KeyEngineResult rolledIntoAddWord = PressChord(engine, 0x45, ctrl: true);
+                True(rolledIntoAddWord.Handled && !rolledIntoAddWord.OpenAddCiWindow,
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".modifier_rollover_not_add_word");
+                Equal("虎整句", state.GetCurrentSchema(),
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".modifier_rollover_not_switch");
+
+                ReleaseChord(engine, 0x4A, ctrl: true);
+                ReleaseChord(engine, 0x11);
+                KeyEngineResult switchedBack = PressChord(engine, 0x4A, ctrl: true);
+                True(switchedBack.Handled,
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".back_handled");
+                True(!switchedBack.OpenAddCiWindow,
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".back_never_opens_add_word");
+                Equal("虎码字词", state.GetCurrentSchema(),
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".normal_schema");
+                True(!engine.IsSentenceCompositionActive,
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".normal_state");
+                EngineUiSnapshot normal = engine.GetUiSnapshot(5);
+                Equal("ab", normal.InputCode,
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".normal_raw");
+                Equal("甲", normal.Candidates[0],
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".normal_candidate");
+
+                TypeLetters(engine, "cd");
+                EngineUiSnapshot continued = engine.GetUiSnapshot(5);
+                Equal("abcd", engine.GetDifferentialSnapshot(5).RawInput,
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".continued_raw");
+                Equal("乙", continued.Candidates[0],
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".continued_candidate");
+
+                Press(engine, 0x1B);
+                TypeLetters(engine, "ef");
+                EngineUiSnapshot actionCandidate = engine.GetUiSnapshot(5);
+                True(actionCandidate.Candidates.Length > 0,
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".action_candidate_exists");
+                Equal("{加词}", actionCandidate.Candidates[0],
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".action_candidate_before_switch");
+                ReleaseChord(engine, 0x4A, ctrl: true);
+                ReleaseChord(engine, 0x11);
+                KeyEngineResult switchedWithActionCandidate = PressChord(engine, 0x4A, ctrl: true);
+                True(switchedWithActionCandidate.Handled && !switchedWithActionCandidate.OpenAddCiWindow,
+                    nameof(CustomRecentSchemaShortcutSwitchesSchemas) + ".action_candidate_not_committed");
+            }
+            finally
+            {
+                if (Directory.Exists(root)) Directory.Delete(root, recursive: true);
             }
         }
 
@@ -5310,7 +5998,7 @@ namespace TigerClaw.Core.Tests
         private static void CtrlSpaceStillTogglesWithExpectedKeyUpResponses()
         {
             var state = new CoreRuntimeState();
-            using (var handler = new ProtocolHandler(_ => { }, state, null))
+            using (var handler = new ProtocolHandler(_ => { }, state, null, enableSentenceService: false))
             {
                 string ctrlDown = handler.Handle(
                     "{\"type\":\"key\",\"seq\":1,\"client_session\":\"ctrl-space-test\"," +
@@ -5328,7 +6016,7 @@ namespace TigerClaw.Core.Tests
 
 
             var ctrlFirstState = new CoreRuntimeState();
-            using (var ctrlFirstHandler = new ProtocolHandler(_ => { }, ctrlFirstState, null))
+            using (var ctrlFirstHandler = new ProtocolHandler(_ => { }, ctrlFirstState, null, enableSentenceService: false))
             {
                 ctrlFirstHandler.Handle(
                     "{\"type\":\"key\",\"seq\":1,\"client_session\":\"ctrl-first-test\"," +
@@ -5351,7 +6039,7 @@ namespace TigerClaw.Core.Tests
         private static void TransportDefersOnlyKeyUiPublication()
         {
             var state = new CoreRuntimeState();
-            using (var handler = new ProtocolHandler(_ => { }, state, null))
+            using (var handler = new ProtocolHandler(_ => { }, state, null, enableSentenceService: false))
             {
                 string response = handler.HandleTransport(
                     "{\"type\":\"key\",\"seq\":1,\"client_session\":\"test\",\"event_id\":\"1\",\"action\":\"down\",\"vk\":65}",

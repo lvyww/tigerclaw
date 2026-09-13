@@ -57,6 +57,7 @@ namespace TigerClawHookNative
         bool _ctrlDown = false;
         bool _altDown = false;
         bool _winDown = false;
+        bool _modifierKeys[256] = {};
         bool _nativeHookAltBackslashToggleEnabled = true;
         bool _autoSwitchSystemLayoutEnabled = true;
         bool _useClipboardCommit = false;
@@ -69,31 +70,32 @@ namespace TigerClawHookNative
 
     inline void HookState::UpdateModifierState(UINT virtualKey, bool isKeyDown, bool isKeyUp)
     {
+        if (virtualKey >= 256 || (!isKeyDown && !isKeyUp)) return;
         switch (virtualKey)
         {
+        case VK_SHIFT:
         case VK_LSHIFT:
         case VK_RSHIFT:
-            if (isKeyDown) { _shiftDown = true; }
-            if (isKeyUp) { _shiftDown = false; }
-            break;
+        case VK_CONTROL:
         case VK_LCONTROL:
         case VK_RCONTROL:
-            if (isKeyDown) { _ctrlDown = true; }
-            if (isKeyUp) { _ctrlDown = false; }
-            break;
+        case VK_MENU:
         case VK_LMENU:
         case VK_RMENU:
-            if (isKeyDown) { _altDown = true; _activeAltVirtualKey = virtualKey; }
-            if (isKeyUp) { _altDown = false; }
-            break;
         case VK_LWIN:
         case VK_RWIN:
-            if (isKeyDown) { _winDown = true; }
-            if (isKeyUp) { _winDown = false; }
+            _modifierKeys[virtualKey] = isKeyDown && !isKeyUp;
             break;
         default:
-            break;
+            return;
         }
+        _shiftDown = _modifierKeys[VK_SHIFT] || _modifierKeys[VK_LSHIFT] || _modifierKeys[VK_RSHIFT];
+        _ctrlDown = _modifierKeys[VK_CONTROL] || _modifierKeys[VK_LCONTROL] || _modifierKeys[VK_RCONTROL];
+        _altDown = _modifierKeys[VK_MENU] || _modifierKeys[VK_LMENU] || _modifierKeys[VK_RMENU];
+        _winDown = _modifierKeys[VK_LWIN] || _modifierKeys[VK_RWIN];
+        if (_modifierKeys[VK_LMENU]) _activeAltVirtualKey = VK_LMENU;
+        else if (_modifierKeys[VK_RMENU]) _activeAltVirtualKey = VK_RMENU;
+        else _activeAltVirtualKey = VK_MENU;
     }
 
     inline void HookState::SetFocus(const FocusSnapshot& focus)
