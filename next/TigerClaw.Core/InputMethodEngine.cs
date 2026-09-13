@@ -332,6 +332,7 @@ namespace TigerClaw.Core
                     allowDuplicateSingleCharacters: allowDuplicateSingleCharacters,
                     smartMaxCodeLength: smartMaximum,
                     smartSelectionMask: SmartSelectionConfigMask);
+                ConfigureSentenceLearning();
                 _sentenceDecodedLexiconVersion = _state.LexiconVersion;
                 _sentenceDecodedOptimalCodeLimit = optimalCodeLimit;
                 _sentenceDecodedFullCodeWhitelist = fullCodeWhitelistText;
@@ -341,12 +342,16 @@ namespace TigerClaw.Core
 
         public void Dispose()
         {
+            System.Threading.Tasks.Task pendingLearning;
             lock (_lock)
             {
                 _sentenceInputDecoder = null;
                 DisposeSentenceLanguageModel();
                 _sentenceLanguageModel = null;
+                pendingLearning = _learningStore?.FlushAsync();
             }
+            // Only orderly shutdown may wait; never wait on the per-key lock.
+            try { pendingLearning?.Wait(TimeSpan.FromSeconds(2)); } catch (Exception) { }
         }
 
         private void DisposeSentenceLanguageModel()
@@ -389,7 +394,7 @@ namespace TigerClaw.Core
                 }
 
                 bool preferScoreOverLexiconRank =
-                    ShouldPreferSentenceScoreOverLexiconRank(candidates, rerankCount);
+                    ShouldPreferSentenceScoreOverLexiconRank(candidates, rerankCount) || candidates.Take(rerankCount).Any(c => c.LearningScore > 0);
                 double neuralWeight = GetSentenceNeuralWeight(
                     candidates,
                     rerankCount,
@@ -399,7 +404,7 @@ namespace TigerClaw.Core
                     candidates[index].FinalScore = CombineSentenceNeuralScore(
                         candidates[index].BaseScore,
                         scores[index],
-                        neuralWeight);
+                        neuralWeight) + candidates[index].LearningScore;
                 }
                 Array.Sort(
                     candidates,
@@ -566,6 +571,8 @@ namespace TigerClaw.Core
         {
             lock (_lock)
             {
+                _pendingLearning.Clear(); _readyLearning.Clear(); _learningBaseline = null;
+                if (_sentenceRawBuffer.Length > 0) _learningContextValid = false;
                 InvalidateCandidateFrame();
                 _smartSpaceArmed = false;
                 ResetOneShotActionState();
@@ -742,6 +749,7 @@ namespace TigerClaw.Core
         {
             lock (_lock)
             {
+                _readyLearning.Clear(); _learningOutput = null;
                 bool isDown = string.Equals(action, "down", StringComparison.OrdinalIgnoreCase) ||
                               string.Equals(action, "key_down", StringComparison.OrdinalIgnoreCase);
                 bool isUp = string.Equals(action, "up", StringComparison.OrdinalIgnoreCase) ||
@@ -1518,6 +1526,8 @@ namespace TigerClaw.Core
                 if (_sentenceRawBuffer.Length > 0)
                 {
                     _sentenceRawBuffer.Length -= 1;
+                    _learningBaseline = null;
+                    _pendingLearning.RemoveAll(e => _sentenceRawBuffer.Length <= e.RawEnd);
                 }
 
                 while (ActiveSentenceLockedPrefix != null &&
@@ -1561,6 +1571,7 @@ namespace TigerClaw.Core
                 if (HasSentenceCandidates())
                 {
                     _sentenceAutoCommitSuspended = true;
+                    if (!_sentenceTabSelectionPending) _learningBaseline = _sentenceDecodeResult.Candidates[0];
                     MoveSentenceSelection(shift ? -1 : 1);
                     _sentenceTabSelectionPending = true;
                     return KeyEngineResult.CreateHandled(true, null, GetSentenceDisplayCode(), true);
@@ -2379,6 +2390,7 @@ namespace TigerClaw.Core
             // Rank selectors still edit the current segment; only a new code
             // letter confirms the Tab-highlighted candidate as a fixed prefix.
             bool confirmTabSelection = _sentenceTabSelectionPending && isLetter;
+            if (confirmTabSelection) CaptureSentenceLearning(_sentenceSelectedIndex);
             _sentenceTabSelectionPending = false;
             if (confirmTabSelection)
             {
@@ -2395,6 +2407,7 @@ namespace TigerClaw.Core
                     if (_state.GetSentenceAutoCommitEnabled())
                     {
                         commit = selected.Text.Substring(_sentenceCommittedText.Length);
+                        ReleaseSentenceLearning(selected.Text, selected.Boundary.RawLength, commit);
                         _sentenceCommittedText = selected.Text;
                         _sentenceCommittedRawLength = selected.Boundary.RawLength;
                         _sentenceLastAutoCommitRawLength = selected.Boundary.RawLength;
@@ -2414,7 +2427,7 @@ namespace TigerClaw.Core
                     return commit;
                 }
             }
-            if (!_state.GetSentenceAutoCommitEnabled() && !IsSentenceEmptyCodeAutoCommitActive())
+            if (_sentenceDecodeResult.LearningAffected || (!_state.GetSentenceAutoCommitEnabled() && !IsSentenceEmptyCodeAutoCommitActive()))
             {
                 // Keep disabled-mode edits off both automatic-commit paths. Reset once when
                 // necessary so a live setting change cannot leave evidence for a later re-enable.
@@ -2464,6 +2477,7 @@ namespace TigerClaw.Core
         private SentenceCandidate GetEmptyCodeAutoCommitCandidate(out bool requiresUniquenessCheck)
         {
             requiresUniquenessCheck = false;
+            if (_sentenceDecodeResult.LearningAffected) return null;
             if (!IsSentenceEmptyCodeAutoCommitActive() ||
                 _sentenceAutoCommitSuspended ||
                 _sentenceResultLexiconVersion != _state.LexiconVersion ||
@@ -2637,7 +2651,7 @@ namespace TigerClaw.Core
 
         private string TryAutoCommitSentencePrefix()
         {
-            if (!_state.GetSentenceAutoCommitEnabled() || _sentenceAutoCommitSuspended)
+            if (_sentenceDecodeResult.LearningAffected || !_state.GetSentenceAutoCommitEnabled() || _sentenceAutoCommitSuspended)
             {
                 ResetSentenceAutoCommitEvidence();
                 return null;
@@ -2985,6 +2999,7 @@ namespace TigerClaw.Core
             {
                 return null;
             }
+            ReleaseSentenceLearning(selected.Text, selected.RawLength, commit);
             _sentenceCommittedText = selected.Text;
             _sentenceCommittedRawLength = selected.RawLength;
             _sentenceLastAutoCommitRawLength = selected.RawLength;
@@ -3028,6 +3043,7 @@ namespace TigerClaw.Core
 
         private void RebuildSentenceInput()
         {
+            _learningBaseline = null;
             EnsureSentenceDecoderCurrent();
             _sentenceSelectedIndex = 0;
             _sentenceGeneration++;
@@ -3158,7 +3174,8 @@ namespace TigerClaw.Core
                     RawCode = rawCode,
                     Candidates = result.Candidates,
                     EarlyCommitEvidence = result.EarlyCommitEvidence,
-                    ExpandedStates = result.ExpandedStates
+                    LearningAffected = result.LearningAffected, LearningMode = result.LearningMode,
+                ExpandedStates = result.ExpandedStates
                 };
             }
             _sentenceDecodeResult = FilterSentenceDecodeResultForImplicitRanks(
@@ -3224,6 +3241,7 @@ namespace TigerClaw.Core
 
         private void EnsureSentenceDecoderCurrent()
         {
+            ConfigureSentenceLearning();
             if (_sentenceDecoderExternallyProvided ||
                 (_sentenceInputDecoder != null &&
                  _sentenceInputDecoder.SmartMaxCodeLength == (_state.IsSmartSentenceInputActive() ? GetSafeMaxCodeLen() : 0) &&
@@ -3267,6 +3285,7 @@ namespace TigerClaw.Core
                 return KeyEngineResult.CreateHandled(true, null, GetSentenceDisplayCode(), true);
             }
 
+            CaptureSentenceLearning(index);
             string output = candidates[index].Text;
             if (_sentenceCommittedText.Length > 0 &&
                 !output.StartsWith(_sentenceCommittedText, StringComparison.Ordinal))
@@ -3277,6 +3296,7 @@ namespace TigerClaw.Core
             {
                 output = output.Substring(_sentenceCommittedText.Length);
             }
+            ReleaseSentenceLearning(candidates[index].Text, _sentenceRawBuffer.Length, output);
             ClearCompositionInput();
             _compositionState = CompositionState.CnIdle;
             ResetCandidatePageTracker();
@@ -3303,7 +3323,10 @@ namespace TigerClaw.Core
             {
                 output = output.Substring(_sentenceCommittedText.Length);
             }
+            CaptureSentenceLearning(_sentenceSelectedIndex);
             output += suffix ?? string.Empty;
+            if (candidates.Length > 0 && _sentenceSelectedIndex < candidates.Length)
+                ReleaseSentenceLearning(candidates[_sentenceSelectedIndex].Text, _sentenceRawBuffer.Length, output);
             ClearCompositionInput();
             _compositionState = CompositionState.CnIdle;
             ResetCandidatePageTracker();
@@ -3400,6 +3423,7 @@ namespace TigerClaw.Core
 
         private void ClearCompositionInput()
         {
+            _pendingLearning.Clear(); _learningBaseline = null; _learningContextValid = true;
             InvalidateCandidateFrame();
             if (_sentenceRawBuffer.Length > 0)
             {
@@ -5039,6 +5063,7 @@ namespace TigerClaw.Core
                 RawCode = result.RawCode,
                 Candidates = filtered,
                 EarlyCommitEvidence = result.EarlyCommitEvidence,
+                LearningAffected = result.LearningAffected, LearningMode = result.LearningMode,
                 ExpandedStates = result.ExpandedStates
             };
         }
@@ -5074,6 +5099,7 @@ namespace TigerClaw.Core
                 RawCode = result.RawCode,
                 Candidates = filtered,
                 EarlyCommitEvidence = result.EarlyCommitEvidence,
+                LearningAffected = result.LearningAffected, LearningMode = result.LearningMode,
                 ExpandedStates = result.ExpandedStates
             };
         }

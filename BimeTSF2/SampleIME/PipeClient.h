@@ -15,6 +15,7 @@ struct BimeResponse
     BOOL success;
     BOOL handled;
     BOOL expectKeyUp;
+    std::wstring learningReceipt; // Opaque commit receipt; never user text.
     std::wstring textToOutput;
     std::wstring inputBuffer;
     BOOL hasProtocolVersion;
@@ -90,6 +91,7 @@ public:
     BOOL SendFocusMessage(LONGLONG hwnd, DWORD processId);
     BOOL SendCaretMessage(LONG x, LONG y, LONG width = 2, LONG height = 20);
     BOOL SendCompositionCanceledMessage();
+    BOOL SendLearningCommit(const std::wstring& receipt, BOOL applied);
     BOOL SendImeActiveMessage(BOOL active);
 
 private:

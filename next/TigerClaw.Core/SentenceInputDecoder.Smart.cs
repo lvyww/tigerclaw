@@ -42,6 +42,7 @@ namespace TigerClaw.Core
         // intentionally not used here; only the scoring and mass helpers are shared.
         private SentenceDecodeResult DecodeSmart(string input, int limit, bool evidence, string requiredPrefix)
         {
+            _learningAffected = false;
             string raw = (input ?? string.Empty).ToLowerInvariant();
             var empty = new SentenceDecodeResult
             {
@@ -116,21 +117,27 @@ namespace TigerClaw.Core
                         {
                             continue;
                         }
+                        double learning = LearningReward(raw, text, segment.End, item, out double learningPotential);
+                        double learningAdded = learning - item.LearningScore;
+                        score += learningAdded;
                         bucket.Add(new BeamState
                         {
                             Score = score,
-                            LogMass = item.LogMass + score - item.Score - supplementAdded - singleReward,
+                            LogMass = item.LogMass + score - item.Score - supplementAdded - singleReward - learningAdded,
                             Text = text,
                             Previous2 = previous2,
                             Previous1 = previous1,
                             SupplementState = supplementState,
                             SupplementScore = item.SupplementScore + supplementAdded,
+                            LearningScore = learning,
+                            LearningPotential = learningPotential,
                             MaxLexiconRank = Math.Max(item.MaxLexiconRank, candidate.Rank),
                             Boundary = new SentencePathBoundary
                             {
                                 Previous = item.Boundary,
                                 TextLength = text.Length,
-                                RawLength = segment.End
+                                RawLength = segment.End,
+                                LearningScore = learning
                             }
                         });
                         expanded++;
@@ -161,7 +168,7 @@ namespace TigerClaw.Core
             }
 
             SentenceEarlyCommitEvidence early = SentenceEarlyCommitEvidence.Empty;
-            if (evidence)
+            if (evidence && !_learningAffected)
             {
                 var closed = new HashSet<int>(segments.Where(segment => segment.Closed).Select(segment => segment.End));
                 var prefixes = BuildPrefixEvidence(visible).Where(prefix => closed.Contains(prefix.RawLength)).ToArray();
@@ -179,6 +186,8 @@ namespace TigerClaw.Core
                 RawCode = raw,
                 Candidates = visible,
                 EarlyCommitEvidence = early,
+                LearningAffected = _learningAffected,
+                LearningMode = _learningMode,
                 ExpandedStates = expanded
             };
         }

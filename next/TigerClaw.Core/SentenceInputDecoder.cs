@@ -288,6 +288,7 @@ namespace TigerClaw.Core
         public double FinalScore { get; set; }
         public double ConfidenceScore { get; set; }
         public double SupplementScore { get; set; }
+        public double LearningScore { get; set; }
         public int MaxLexiconRank { get; set; }
         public SentencePathBoundary Boundary { get; set; }
 
@@ -335,6 +336,7 @@ namespace TigerClaw.Core
         public SentencePathBoundary Previous { get; set; }
         public int TextLength { get; set; }
         public int RawLength { get; set; }
+        public double LearningScore { get; set; }
     }
 
     internal sealed class SentenceDecodeResult
@@ -351,6 +353,8 @@ namespace TigerClaw.Core
         public SentenceCandidate[] Candidates { get; set; }
         public SentenceEarlyCommitEvidence EarlyCommitEvidence { get; set; }
         public int ExpandedStates { get; set; }
+        public bool LearningAffected { get; set; }
+        public string LearningMode { get; set; } = "";
     }
 
     internal sealed class SentenceEarlyCommitEvidence
@@ -401,6 +405,52 @@ namespace TigerClaw.Core
 
     internal sealed partial class SentenceInputDecoder
     {
+        private SentenceLearningSnapshot _learning = SentenceLearningSnapshot.Empty;
+        private string _learningMode = "";
+        private bool _learningAffected;
+        private sealed class LearningQuery
+        {
+            internal readonly SentenceLearningSnapshot Snapshot;
+            internal readonly string Mode;
+            internal LearningQuery(SentenceLearningSnapshot snapshot, string mode) { Snapshot = snapshot; Mode = mode; }
+        }
+        private LearningQuery _requestedLearning;
+        internal void SetLearning(SentenceLearningSnapshot snapshot, string mode)
+        {
+            snapshot ??= SentenceLearningSnapshot.Empty; mode ??= "";
+            var previous = Volatile.Read(ref _requestedLearning);
+            if (previous != null && ReferenceEquals(previous.Snapshot, snapshot) && previous.Mode == mode) return;
+            // Publishing from the key path must never wait for a running beam.
+            Volatile.Write(ref _requestedLearning, new LearningQuery(snapshot, mode));
+        }
+        private void PrepareLearning()
+        {
+            // Called only while owning _decodeLock, on the actual decode path.
+            var query = Volatile.Read(ref _requestedLearning);
+            if (query == null) return;
+            if (!ReferenceEquals(_learning, query.Snapshot) || _learningMode != query.Mode) ClearCache();
+            _learning = query.Snapshot; _learningMode = query.Mode;
+        }
+        private double LearningReward(string raw, string text, int end, BeamState previous, out double potential)
+        {
+            double best = previous.LearningScore; potential = 0;
+            if (_learning.IsEmpty) return best;
+            var start = previous.Boundary;
+            for (;;)
+            {
+                int rawStart = start?.RawLength ?? 0, textStart = start?.TextLength ?? 0;
+                string fragment = text.Substring(textStart);
+                if (SentenceLearning.Characters(fragment) > 16) break;
+                double reward = _learning.Score(_learningMode, raw.Substring(rawStart, end - rawStart), fragment,
+                    SentenceLearning.Context(text.Substring(0, textStart)));
+                double hint = _learning.PrefixScore(_learningMode, raw.Substring(rawStart, end - rawStart), fragment,
+                    SentenceLearning.Context(text.Substring(0, textStart)));
+                if (hint > 0) { potential = Math.Max(potential, hint); _learningAffected = true; }
+                if (reward > 0) { _learningAffected = true; best = Math.Max(best, (start?.LearningScore ?? 0) + reward); }
+                if (start == null) break; start = start.Previous;
+            }
+            return best;
+        }
         private const string Bos = "\x02";
         private const string Eos = "\x03";
         private const double EarlyCommitMinimumShare = 0.995;
@@ -446,6 +496,8 @@ namespace TigerClaw.Core
             public string Previous1;
             public int SupplementState;
             public double SupplementScore;
+            public double LearningScore;
+            public double LearningPotential;
             public int MaxLexiconRank;
             public SentencePathBoundary Boundary;
         }
@@ -522,7 +574,12 @@ namespace TigerClaw.Core
                 Comparison<BeamState> order = comparison ?? CompareBeamStatesByLexiconRankThenScore;
                 if (truncatedNow)
                 {
-                    values = SelectExactTop(values, boundedLimit, order);
+                    var kept = SelectExactTop(values, boundedLimit, order);
+                    // A retention hint is not a score: reserve at most four
+                    // additional legal paths until their learned span finishes.
+                    kept.AddRange(values.Where(v => v.LearningPotential > 0 && !kept.Contains(v))
+                        .OrderByDescending(v => v.Score + v.LearningPotential).Take(4));
+                    values = kept;
                 }
                 else
                 {
@@ -632,6 +689,7 @@ namespace TigerClaw.Core
         {
             lock (_decodeLock)
             {
+                PrepareLearning();
                 long started = Stopwatch.GetTimestamp();
                 long isolationHitsBefore = _isolationPenaltyCacheHits;
                 long isolationMissesBefore = _isolationPenaltyCacheMisses;
@@ -658,6 +716,9 @@ namespace TigerClaw.Core
             bool includeEarlyCommitEvidence = false,
             string requiredTextPrefix = null)
         {
+            lock (_decodeLock)
+            {
+                PrepareLearning();
             if (SmartMaxCodeLength > 0)
             {
                 lock (_decodeLock) return DecodeSmart(rawCode, candidateLimit, includeEarlyCommitEvidence, requiredTextPrefix);
@@ -668,6 +729,7 @@ namespace TigerClaw.Core
                 return SentenceDecodeResult.Empty;
             }
 
+            _learningAffected = false;
             BeamBucket[] states = CreateStates(normalized.Length);
             int expanded = ExpandRange(normalized, states, 0, normalized.Length);
             return Emit(
@@ -677,6 +739,7 @@ namespace TigerClaw.Core
                 expanded,
                 includeEarlyCommitEvidence,
                 requiredTextPrefix);
+            }
         }
 
         internal void ResetDecodeCache()
@@ -974,6 +1037,7 @@ namespace TigerClaw.Core
 
             if (states == null)
             {
+                _learningAffected = false;
                 states = CreateStates(length);
                 expanded = ExpandRange(normalized, states, 0, length);
             }
@@ -996,6 +1060,7 @@ namespace TigerClaw.Core
 
         private void ClearCache()
         {
+            _learningAffected = false;
             _cachedRaw = null;
             _cachedStates = null;
             _cachedResult = null;
@@ -1022,6 +1087,16 @@ namespace TigerClaw.Core
             return _languageModel.LogProbability(previous2, previous1, target);
         }
 
+        private static SentencePathBoundary CopyUnlearnedBoundary(SentencePathBoundary boundary)
+        {
+            var chain = new List<SentencePathBoundary>();
+            for (var b = boundary; b != null; b = b.Previous) chain.Add(b);
+            SentencePathBoundary result = null;
+            for (int i = chain.Count - 1; i >= 0; i--)
+                result = new SentencePathBoundary { Previous = result, RawLength = chain[i].RawLength, TextLength = chain[i].TextLength };
+            return result;
+        }
+
         private SentenceDecodeResult DecodeLockedPrefix(string rawCode, int limit, bool evidence,
             string requiredTextPrefix, SentenceLockedPrefix prefix)
         {
@@ -1039,7 +1114,7 @@ namespace TigerClaw.Core
                 Previous2 = Bos,
                 Previous1 = Bos,
                 MaxLexiconRank = 1,
-                Boundary = prefix.Boundary
+                Boundary = CopyUnlearnedBoundary(prefix.Boundary)
             };
             var elements = StringInfo.GetTextElementEnumerator(prefix.Text);
             while (elements.MoveNext())
@@ -1212,22 +1287,28 @@ namespace TigerClaw.Core
                                 score += wholeInputSingleCharacterRewardAdded;
                             }
 
+                            double learning = LearningReward(raw, item.Text + candidate.Text, consumedEnd, item, out double learningPotential);
+                            double learningAdded = learning - item.LearningScore;
+                            score += learningAdded;
                             states[consumedEnd].Add(new BeamState
                             {
                                 Score = score,
                                 LogMass = item.LogMass +
-                                    (score - item.Score - supplementAdded - wholeInputSingleCharacterRewardAdded),
+                                    (score - item.Score - supplementAdded - wholeInputSingleCharacterRewardAdded - learningAdded),
                                 Text = item.Text + candidate.Text,
                                 Previous2 = previous2,
                                 Previous1 = previous1,
                                 SupplementState = supplementState,
                                 SupplementScore = item.SupplementScore + supplementAdded,
+                                LearningScore = learning,
+                                LearningPotential = learningPotential,
                                 MaxLexiconRank = Math.Max(item.MaxLexiconRank, candidate.Rank),
                                 Boundary = new SentencePathBoundary
                                 {
                                     Previous = item.Boundary,
                                     TextLength = item.Text.Length + candidate.Text.Length,
-                                    RawLength = consumedEnd
+                                    RawLength = consumedEnd,
+                                    LearningScore = learning
                                 }
                             });
                             expandedStates++;
@@ -1310,7 +1391,7 @@ namespace TigerClaw.Core
             }
 
             SentenceEarlyCommitEvidence earlyCommitEvidence = SentenceEarlyCommitEvidence.Empty;
-            if (includeEarlyCommitEvidence)
+            if (includeEarlyCommitEvidence && !_learningAffected)
             {
                 // The complete-code path stays on the already-selected visible
                 // list. Dropped incomplete-tail states are merged only into the
@@ -1328,6 +1409,8 @@ namespace TigerClaw.Core
                 RawCode = normalized,
                 Candidates = visible,
                 EarlyCommitEvidence = earlyCommitEvidence,
+                LearningAffected = _learningAffected,
+                LearningMode = _learningMode,
                 ExpandedStates = expandedStates
             };
         }
@@ -1340,7 +1423,8 @@ namespace TigerClaw.Core
             return new SentenceCandidate
             {
                 Text = item.Text,
-                BaseScore = score,
+                BaseScore = score - item.LearningScore,
+                LearningScore = item.LearningScore,
                 FinalScore = score,
                 ConfidenceScore = item.LogMass + endingAdjustment,
                 SupplementScore = item.SupplementScore,
@@ -1703,6 +1787,8 @@ namespace TigerClaw.Core
 
         private static bool IsBetterDuplicate(BeamState item, BeamState previous)
         {
+            if (item.LearningScore > 0 || previous.LearningScore > 0 || item.LearningPotential > 0 || previous.LearningPotential > 0)
+                return item.Score + item.LearningPotential > previous.Score + previous.LearningPotential;
             return item.MaxLexiconRank < previous.MaxLexiconRank ||
                    (item.MaxLexiconRank == previous.MaxLexiconRank && item.Score > previous.Score);
         }
@@ -1725,6 +1811,7 @@ namespace TigerClaw.Core
 
         private bool PreferScoreOverLexiconRank(List<SentenceCandidate> values)
         {
+            if (values != null && values.Any(c => c.LearningScore > 0)) return true;
             if (!_allowDuplicateSingleCharacters || values == null)
             {
                 return false;
@@ -1744,7 +1831,7 @@ namespace TigerClaw.Core
 
         private Comparison<BeamState> GetBeamStateComparison()
         {
-            return _allowDuplicateSingleCharacters
+            return _allowDuplicateSingleCharacters || _learningAffected
                 ? CompareBeamStatesByScoreThenLexiconRank
                 : CompareBeamStatesByLexiconRankThenScore;
         }

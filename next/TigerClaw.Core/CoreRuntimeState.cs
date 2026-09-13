@@ -208,6 +208,7 @@ namespace TigerClaw.Core
             new KeyValuePair<string, string>(KeyUnlimitedMixedChineseEnglishInput, No),
 
             new KeyValuePair<string, string>(KeyAutoEnableSentenceBySchema, Yes),
+            new KeyValuePair<string, string>("整句Tab自学习", Yes),
 
             new KeyValuePair<string, string>(KeySentenceNeuralRerank, Yes),
 
@@ -1383,6 +1384,8 @@ namespace TigerClaw.Core
             (GetCurrentSchema() ?? string.Empty).IndexOf("\u667a\u80fd", StringComparison.Ordinal) >= 0;
 
         public bool GetSentenceNeuralRerankEnabled() => GetBool(KeySentenceNeuralRerank, true);
+
+        public bool GetSentenceLearningEnabled() => GetBool("整句Tab自学习", true);
 
         public bool GetSentenceAutoCommitEnabled() => GetBool(KeySentenceAutoCommit, false);
 
@@ -2745,6 +2748,7 @@ namespace TigerClaw.Core
             string schemaName = new DirectoryInfo(dir).Name;
             return Directory.GetFiles(dir, "*.txt", SearchOption.TopDirectoryOnly)
                 .Concat(Directory.GetFiles(dir, "*.dict.yaml", SearchOption.TopDirectoryOnly))
+                .Where(file => !SentenceLearning.IsReservedFile(Path.GetFileName(file)))
                 .OrderBy(file => IsSchemaNamedLexiconFile(file, schemaName) ? 0 : 1)
                 .ThenBy(file => Path.GetFileName(file), StringComparer.CurrentCulture)
                 .ToArray();
@@ -3343,7 +3347,7 @@ namespace TigerClaw.Core
 
 
             string commentGlob = "*." + "\u6CE8\u91CA"; // 注释
-            foreach (string file in Directory.GetFiles(mbDir, commentGlob, SearchOption.TopDirectoryOnly))
+            foreach (string file in Directory.GetFiles(mbDir, commentGlob, SearchOption.TopDirectoryOnly).Where(path => !SentenceLearning.IsReservedFile(Path.GetFileName(path))))
 
             {
 
@@ -3436,7 +3440,7 @@ namespace TigerClaw.Core
 
 
             string splitGlob = "*." + "\u62C6\u5206"; // 拆分
-            foreach (string file in Directory.GetFiles(mbDir, splitGlob, SearchOption.TopDirectoryOnly))
+            foreach (string file in Directory.GetFiles(mbDir, splitGlob, SearchOption.TopDirectoryOnly).Where(path => !SentenceLearning.IsReservedFile(Path.GetFileName(path))))
 
             {
 

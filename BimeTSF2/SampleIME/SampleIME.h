@@ -358,6 +358,7 @@ private:
     BOOL _pendingResponseCancelComposition;
     BOOL _pendingResponseCompositionTracking;
     BOOL _pendingResponseCompositionPending;
+    std::wstring _pendingResponseLearningReceipt;
     std::wstring _pendingResponseTextToOutput;
     std::wstring _pendingResponseInputBuffer;
     std::wstring _lastAnchorInputBuffer;

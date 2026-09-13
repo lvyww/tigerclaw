@@ -684,6 +684,7 @@ void CSampleIME::_ClearPendingResponseCache()
     _pendingResponseCancelComposition = FALSE;
     _pendingResponseCompositionTracking = FALSE;
     _pendingResponseCompositionPending = FALSE;
+    _pendingResponseLearningReceipt.clear();
     _pendingResponseTextToOutput.clear();
     _pendingResponseInputBuffer.clear();
 }
@@ -702,6 +703,7 @@ void CSampleIME::_StorePendingResponseCache(BOOL isKeyDown, WPARAM wParam, UINT 
     _pendingResponseCancelComposition = response.cancelComposition;
     _pendingResponseCompositionTracking = response.compositionTracking;
     _pendingResponseCompositionPending = response.compositionPending;
+    _pendingResponseLearningReceipt = response.learningReceipt;
     _pendingResponseTextToOutput = response.textToOutput;
     _pendingResponseInputBuffer = response.inputBuffer;
     Global::LogToFileVerbose("KeySink pending_store msg=%s wParam=%llu scan=%u ext=%d handled=%d text_len=%u input_len=%u",
@@ -800,6 +802,7 @@ BOOL CSampleIME::_TryConsumePendingResponseCache(BOOL isKeyDown, WPARAM wParam, 
     pResponse->cancelComposition = _pendingResponseCancelComposition;
     pResponse->compositionTracking = _pendingResponseCompositionTracking;
     pResponse->compositionPending = _pendingResponseCompositionPending;
+    pResponse->learningReceipt = _pendingResponseLearningReceipt;
     pResponse->textToOutput = _pendingResponseTextToOutput;
     pResponse->inputBuffer = _pendingResponseInputBuffer;
 
@@ -1144,6 +1147,7 @@ STDAPI CSampleIME::OnTestKeyDown(ITfContext *pContext, WPARAM wParam, LPARAM lPa
         cachedResponse.cancelComposition = _pendingResponseCancelComposition;
         cachedResponse.compositionTracking = _pendingResponseCompositionTracking;
         cachedResponse.compositionPending = _pendingResponseCompositionPending;
+        cachedResponse.learningReceipt = _pendingResponseLearningReceipt;
         cachedResponse.textToOutput = _pendingResponseTextToOutput;
         cachedResponse.inputBuffer = _pendingResponseInputBuffer;
 
@@ -1590,6 +1594,7 @@ STDAPI CSampleIME::OnTestKeyUp(ITfContext *pContext, WPARAM wParam, LPARAM lPara
         cachedResponse.cancelComposition = _pendingResponseCancelComposition;
         cachedResponse.compositionTracking = _pendingResponseCompositionTracking;
         cachedResponse.compositionPending = _pendingResponseCompositionPending;
+        cachedResponse.learningReceipt = _pendingResponseLearningReceipt;
         cachedResponse.textToOutput = _pendingResponseTextToOutput;
         cachedResponse.inputBuffer = _pendingResponseInputBuffer;
 

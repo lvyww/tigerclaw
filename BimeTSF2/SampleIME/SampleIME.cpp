@@ -2560,7 +2560,7 @@ BOOL CSampleIME::_SyncCaretAnchorForResponse(_In_opt_ ITfContext *pContext, _Ino
             {
                 WCHAR oneChar[2] = { commitText[i], L'\0' };
                 hrCommit = _CommitAndEndCaretAnchorComposition(pEffectiveContext, oneChar);
-                if (FAILED(hrCommit))
+                if (hrCommit != S_OK)
                 {
                     break;
                 }
@@ -2576,7 +2576,15 @@ BOOL CSampleIME::_SyncCaretAnchorForResponse(_In_opt_ ITfContext *pContext, _Ino
             hrCommit = _CommitAndEndCaretAnchorComposition(pEffectiveContext, commitText.c_str());
         }
 
-        if (SUCCEEDED(hrCommit))
+        // S_FALSE means the synchronous TSF edit was not applied. Neither it
+        // nor an asynchronous/scheduled request is evidence of committed text.
+        if (!pResponse->learningReceipt.empty())
+        {
+            if (_pPipeClient != nullptr)
+                _pPipeClient->SendLearningCommit(pResponse->learningReceipt, hrCommit == S_OK);
+            pResponse->learningReceipt.clear();
+        }
+        if (hrCommit == S_OK)
         {
             compositionApplied = TRUE;
             pResponse->textToOutput.clear();
