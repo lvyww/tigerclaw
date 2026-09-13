@@ -24,6 +24,8 @@ namespace TigerClaw.Core
         private readonly UiStatePublisher _uiStatePublisher;
         private readonly SentenceRerankClient _sentenceRerankClient;
         private readonly KeyRequestReplayCache _keyRequestReplayCache = new KeyRequestReplayCache();
+        private readonly SentenceLearningReceipts _learningReceipts = new SentenceLearningReceipts();
+        private int _learningReceiptConfigVersion = -1;
         private readonly object _keyRequestLock = new object();
         private readonly object _publishLock = new object();
         private readonly AutoResetEvent _deferredUiPublishSignal;
@@ -177,11 +179,24 @@ namespace TigerClaw.Core
                 return BuildResponseWithUiState(0, false, false);
             }
 
+            // Configuration/scheme changes invalidate old commit capabilities.
+            if (_learningReceiptConfigVersion != _state.ConfigVersion)
+            {
+                _learningReceipts.Cancel();
+                _learningReceiptConfigVersion = _state.ConfigVersion;
+            }
             string type = ConvertToString(msg.GetValue("type"));
             int seq = ConvertToInt(msg.GetValue("seq"), 0);
 
             switch (type)
             {
+                case "learning_commit":
+                    if (_state.GetSentenceLearningEnabled())
+                        _learningReceipts.Acknowledge(ConvertToString(msg.GetValue("client_session")),
+                            ConvertToString(msg.GetValue("learning_receipt")), ConvertToBool(msg.GetValue("applied"), false));
+                    else _learningReceipts.Cancel();
+                    return null;
+
                 case "hello":
                     MarkFrontendMode(ConvertToString(msg.GetValue("frontend")));
                     PublishUiState();
@@ -485,12 +500,14 @@ namespace TigerClaw.Core
                     return null;
 
                 case "focus":
+                    _learningReceipts.Cancel();
                     MarkFrontendMode(ConvertToString(msg.GetValue("frontend")));
                     HandleFocusMessage(msg);
                     PublishUiState();
                     return null;
 
                 case "composition_canceled":
+                    _learningReceipts.Cancel();
                     _candidateFrameHoldBlocked = true;
                     MarkFrontendMode(ConvertToString(msg.GetValue("frontend")));
                     _engine.OnExternalCompositionCanceled();
@@ -590,6 +607,9 @@ namespace TigerClaw.Core
 
             KeyEngineResult result = _engine.ProcessKey(vk, scan, action, shift, ctrl, alt, win, capsLock, numLock, repeat, extended);
             _engine.PostProcessKey(vk, action, result, shift, ctrl, alt, win, capsLock);
+            var learningEvents = _engine.TakeSentenceLearning(result, out var learningStore);
+            string learningReceipt = ConvertToInt(msg.GetValue("learning_ack_version"), 0) == 1
+                ? _learningReceipts.Issue(ConvertToString(msg.GetValue("client_session")), learningStore, learningEvents) : null;
             if (result.IsComposing && !string.IsNullOrEmpty(result.TextToOutput))
             {
                 _candidateAnchorRefreshPending = true;
@@ -609,6 +629,7 @@ namespace TigerClaw.Core
             _pendingFrontendCompositionReset = false;
             bool languageStateChanged = wasChinese != result.IsChinese;
             string extraJsonPairs = BuildHookNativeConfigExtraJson(frontend) + BuildCompositionStatusExtraJson();
+            if (learningReceipt != null) extraJsonPairs += ",\"learning_receipt\":" + Quote(learningReceipt);
             if (isKeyDown)
             {
                 bool expectKeyUp = _engine.ShouldExpectKeyUp(vk, scan, extended);

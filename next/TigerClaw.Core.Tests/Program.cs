@@ -22,6 +22,8 @@ namespace TigerClaw.Core.Tests
         {
             try
             {
+                if (args.Length == 1 && args[0] == "--learning-tests") return RunLearningTests();
+                if (args.Length == 4 && args[0] == "--learning-worker") return RunLearningWorker(args[1], args[2], int.Parse(args[3]));
                 if (args.Length == 2 && args[0] == "--ui-publish-stdio")
                     return RunUiPublisherProbe(args[1]);
                 if (args.Length == 1 && args[0] == "--ui-snapshot-tests")
@@ -203,6 +205,7 @@ namespace TigerClaw.Core.Tests
                 SentenceEngineHonorsSelectionSymbolSettings();
                 SentenceEngineKeepsArrowSelectionInPlace();
                 SentenceEngineUsesTabToTraverseCandidates();
+                RunLearningTests();
                 SentenceTabSelectionLocksOnContinuedInput();
                 SentenceTabLocksStackAndPreserveSelectors();
                 SentenceEmptyCodeCountsDuplicateSingles();

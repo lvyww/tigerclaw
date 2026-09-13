@@ -379,6 +379,7 @@ HRESULT CPipeClient::SendMessageAndWait(const char *jsonMessage, _Out_ BimeRespo
     pResponse->seq = -1;
     pResponse->success = FALSE;
     pResponse->handled = FALSE;
+    pResponse->learningReceipt.clear();
     pResponse->textToOutput.clear();
     pResponse->inputBuffer.clear();
     pResponse->hasProtocolVersion = FALSE;
@@ -530,7 +531,7 @@ HRESULT CPipeClient::SendKeyAndWait(UINT vkCode,
     {
         length = sprintf_s(message,
                            sizeof(message),
-                           "{\"type\":\"key\",\"seq\":%ld,\"client_session\":\"%s\",\"event_id\":\"%llu\",\"action\":\"%s\",\"vk\":%u,\"scan\":%u,"
+                           "{\"type\":\"key\",\"learning_ack_version\":1,\"seq\":%ld,\"client_session\":\"%s\",\"event_id\":\"%llu\",\"action\":\"%s\",\"vk\":%u,\"scan\":%u,"
                            "\"shift\":%s,\"ctrl\":%s,\"alt\":%s,\"win\":%s,\"capsLock\":%s,\"numLock\":%s,"
                            "\"repeat\":%u,\"extended\":%s,\"tsf_stage\":\"%s\",\"caret_x\":%ld,\"caret_y\":%ld}\n",
                            currentSeq,
@@ -555,7 +556,7 @@ HRESULT CPipeClient::SendKeyAndWait(UINT vkCode,
     {
         length = sprintf_s(message,
                            sizeof(message),
-                           "{\"type\":\"key\",\"seq\":%ld,\"client_session\":\"%s\",\"event_id\":\"%llu\",\"action\":\"%s\",\"vk\":%u,\"scan\":%u,"
+                           "{\"type\":\"key\",\"learning_ack_version\":1,\"seq\":%ld,\"client_session\":\"%s\",\"event_id\":\"%llu\",\"action\":\"%s\",\"vk\":%u,\"scan\":%u,"
                            "\"shift\":%s,\"ctrl\":%s,\"alt\":%s,\"win\":%s,\"capsLock\":%s,\"numLock\":%s,"
                            "\"repeat\":%u,\"extended\":%s,\"tsf_stage\":\"%s\"}\n",
                            currentSeq,
@@ -766,6 +767,26 @@ BOOL CPipeClient::SendCaretMessage(LONG x, LONG y, LONG width, LONG height)
     BOOL sent = SendMessage(message);
     Global::LogToFileVerbose("CPipeClient: caret sent=%d x=%ld y=%ld w=%ld h=%ld", sent, x, y, width, height);
     return sent;
+}
+
+BOOL CPipeClient::SendLearningCommit(const std::wstring& receipt, BOOL applied)
+{
+    // The server issues 32 lower-case hexadecimal characters. Validate before
+    // embedding in JSON; malformed/untrusted responses cannot inject a message.
+    if (receipt.size() != 32) return FALSE;
+    char token[33] = {};
+    for (size_t i = 0; i < receipt.size(); ++i)
+    {
+        const wchar_t c = receipt[i];
+        if (!((c >= L'0' && c <= L'9') || (c >= L'a' && c <= L'f'))) return FALSE;
+        token[i] = static_cast<char>(c);
+    }
+    char json[256] = {};
+    _snprintf_s(json, sizeof(json), _TRUNCATE,
+        "{\"type\":\"learning_commit\",\"client_session\":\"%s\",\"learning_receipt\":\"%s\",\"applied\":%s}\n",
+        _clientSession, token, applied ? "true" : "false");
+    // Notification only: Core must not emit a response into the key reply stream.
+    return SendMessage(json);
 }
 
 BOOL CPipeClient::SendCompositionCanceledMessage()
@@ -1114,6 +1135,7 @@ BOOL CPipeClient::ParseResponse(const char *json, _Out_ BimeResponse *pResponse)
     pResponse->cancelComposition = parseBool(json, "cancel_composition");
     pResponse->compositionTracking = parseBool(json, "composition_tracking");
     pResponse->compositionPending = parseBool(json, "composition_pending");
+    parseString(json, "learning_receipt", pResponse->learningReceipt);
     parseString(json, "commit_text", pResponse->textToOutput);
     parseString(json, "input_buffer", pResponse->inputBuffer);
     parseString(json, "core_build", pResponse->coreBuild);
