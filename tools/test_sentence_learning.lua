@@ -154,4 +154,92 @@ check(writes==before_taps+1,"disabled learning ignores taps")
 tap_config.enabled=true;tap_type();tap_press("Tab");tap_ctx:confirm_current_selection()
 check(writes==before_taps+2,"Tab followed by tap records one correction")
 sentence.processor_component.fini(tap_env)
+-- Runtime partitions must match an independent full journal replay, including
+-- competing choices, generalization, cap/decay, old snapshots and clock jumps.
+local real_time, clock = os.time, now
+os.time = function() return clock end
+local optimized = learning.open("incremental-index-equivalence")
+local function compare_index(actual, history, at)
+    local expected = learning.build(history, at)
+    check(table.concat(actual.codes, "|") == table.concat(expected.codes, "|"), "sorted learned codes")
+    for _, code in ipairs({"ab", "abcd", "abce", "bc", "zz"}) do
+        for _, mode in ipairs({"test", "other"}) do
+            for _, ctx in ipairs({"", "前", "后", "新", "😀"}) do
+                for _, text in ipairs({"甲乙", "甲丙", "甲", "乙", "😀乙"}) do
+                    check(math.abs(learning.score(actual,mode,code,text,ctx) -
+                        learning.score(expected,mode,code,text,ctx)) < 1e-9, "incremental exact score parity")
+                    check(math.abs(learning.prefix_score(actual,mode,code,text,ctx) -
+                        learning.prefix_score(expected,mode,code,text,ctx)) < 1e-9, "incremental prefix score parity")
+                end
+            end
+        end
+    end
+end
+local frozen, frozen_events, frozen_time
+for i = 1, 80 do
+    clock = clock + (i % 9 == 0 and 30 * 86400 or 73)
+    local e = {time=clock - i%4 * 86400, code=({"ab","abcd","abce","bc"})[i%4+1],
+        mode=i%5==0 and "other" or "test", text=({"甲乙","甲丙","乙","😀乙"})[i%4+1],
+        context=({"","前","后","😀"})[math.floor(i/4)%4+1]}
+    check(learning.confirm(optimized, {e}), "incremental confirmation accepted")
+    if i%8==0 then compare_index(optimized.index, optimized.events, clock) end
+    if i==20 then
+        frozen, frozen_time, frozen_events = optimized.index, clock, {}
+        for j, value in ipairs(optimized.events) do frozen_events[j] = value end
+    end
+    clock = clock + 61
+    learning.refresh_scores(optimized)
+    if i%8==0 then compare_index(optimized.index, optimized.events, clock) end
+end
+compare_index(frozen, frozen_events, frozen_time)
+local future = {time=clock+86400, mode="test", code="abcd", text="甲丙", context="前"}
+check(learning.confirm(optimized,{future}), "future timestamp confirmation")
+compare_index(optimized.index,optimized.events,clock)
+clock=clock+172800; learning.refresh_scores(optimized)
+compare_index(optimized.index,optimized.events,clock)
+clock=clock-259200; learning.refresh_scores(optimized)
+compare_index(optimized.index,optimized.events,clock)
+local snapshot = optimized.index
+fail_write=true
+check(not learning.confirm(optimized,{event("ab","乙")}), "failed write rejects runtime update")
+check(optimized.index==snapshot, "failed write retains snapshot identity")
+fail_write=false
+-- Decay refresh does not replay normal journals, even with 10,000 records.
+clock=now
+local many={}
+for i=1,10000 do many[i]={time=clock,mode="test",code="ab"..tostring(i),text="甲乙",context=""} end
+local large={db={update=function()return true end},events=many,index=learning.runtime_index(many,clock),
+    scored_at=clock,count=9999,sequence=9999,bytes=0}
+local runtime_index=learning.runtime_index
+learning.runtime_index=function() error("hot path replayed the journal") end
+check(learning.confirm(large,{{time=clock,mode="test",code="ab1",text="甲丙",context=""}}), "large history incremental update")
+clock=clock+61; learning.refresh_scores(large)
+check(learning.score(large.index,"test","ab1","甲丙","")>8.99, "lazy decay materialization")
+learning.runtime_index=runtime_index
+local capped=learning.open("runtime-cap-parity")
+for i=1,45 do
+    check(learning.confirm(capped,{{time=clock,mode="test",code="ab",text="甲乙",context="前"}}),"runtime cap confirmation")
+    check(math.abs(learning.score(capped.index,"test","ab","甲乙","前")-
+        learning.score(learning.build(capped.events,clock),"test","ab","甲乙","前"))<1e-9,"runtime cap parity")
+end
+local durable_update, accepted_count=capped.db.update,0
+capped.db.update=function(self,k,v)
+    accepted_count=accepted_count+1
+    if accepted_count==2 then return false end
+    return durable_update(self,k,v)
+end
+check(learning.confirm(capped,{{time=clock,mode="test",code="ab",text="甲丙",context="前"},
+    {time=clock,mode="test",code="ab",text="乙",context="前"}}),"partially accepted batch published")
+check(#capped.events==46,"rejected batch tail excluded")
+compare_index(capped.index,capped.events,clock)
+capped.db.update=durable_update
+-- Hash acceleration must never strand an existing per-schema database.
+local function legacy_hash(value)
+    local a,b=2166136261,5381
+    for i=1,#value do a=(a*65599+value:byte(i))%4294967296; b=(b*33+value:byte(i))%4294967296 end
+    return string.format("%08x%08x",a,b)
+end
+local bytes=""
+for i=0,255 do bytes=bytes..string.char(i); check(learning.hash(bytes)==legacy_hash(bytes),"hash byte parity") end
+os.time=real_time
 print(string.format('{"status":"passed","learning_checks":%d,"real_frontend":false}',checks))

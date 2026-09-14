@@ -42,9 +42,15 @@ local function unframe(value)
 end
 function M.hash(text)
     local a, b = 2166136261, 5381
-    for i = 1, #text do
-        a = (a * 65599 + text:byte(i)) % 4294967296
-        b = (b * 33 + text:byte(i)) % 4294967296
+    -- Read four bytes per C call, retaining the exact historical arithmetic
+    -- (including LuaJIT's double representation) and database namespace.
+    local byte = string.byte
+    for i = 1, #text, 4 do
+        local x, y, z, w = byte(text, i, i + 3)
+        a, b = (a * 65599 + x) % 4294967296, (b * 33 + x) % 4294967296
+        if y then a, b = (a * 65599 + y) % 4294967296, (b * 33 + y) % 4294967296 end
+        if z then a, b = (a * 65599 + z) % 4294967296, (b * 33 + z) % 4294967296 end
+        if w then a, b = (a * 65599 + w) % 4294967296, (b * 33 + w) % 4294967296 end
     end
     return string.format("%08x%08x", a, b)
 end
@@ -103,8 +109,120 @@ function M.build(events, now)
     return index
 end
 local function score(s, ctx) return s and math.max(s.general, s.exact[ctx] or 0) or 0 end
+
+-- Runtime snapshots keep event aggregates rather than replaying the journal on
+-- every correction/minute tick. Only the changed code partition is copied;
+-- score materialization is lazy and belongs to one immutable scoring epoch.
+-- M.build above deliberately remains the independent full-replay oracle.
+local function copy(source)
+    local result = {}
+    for k, v in pairs(source) do result[k] = v end
+    return result
+end
+local function valid_event(e)
+    return type(e.mode) == "string" and #e.mode > 0 and #e.mode <= 512 and
+        type(e.code) == "string" and #e.code > 0 and #e.code <= 128 and
+        type(e.text) == "string" and static(e.text) and type(e.context) == "string" and
+        (e.context == "" or #chars(e.context) > 0) and #chars(e.context) <= 2 and
+        type(e.time) == "number" and e.time >= 0
+end
+local function append_group(partition, e, now)
+    local k = key(e.mode, e.context)
+    local old = partition[k]
+    local g = {mode=e.mode, context=e.context, choices={}}
+    partition[k] = g
+    local time = math.min(now, e.time)
+    for text, c in pairs(old and old.choices or {}) do
+        g.choices[text] = {weight=c.weight * 2 ^ (-math.max(0, time - c.time) / (30 * 86400)) *
+            (text ~= e.text and 0.25 or 1), count=c.count, time=math.max(time, c.time)}
+    end
+    local c = g.choices[e.text] or {weight=0, count=0, time=time}
+    c.weight, c.count = math.min(math.exp(3.5), c.weight + 1), math.min(3, c.count + 1)
+    g.choices[e.text] = c
+end
+function M.runtime_index(events, now)
+    local index = {codes={}, partitions={}, cache={}, now=now or os.time(), future=0}
+    for _, e in ipairs(events) do
+        if valid_event(e) then
+            local p = index.partitions[e.code]
+            if not p then p = {}; index.partitions[e.code] = p; index.codes[#index.codes + 1] = e.code end
+            append_group(p, e, index.now)
+            index.future = math.max(index.future, e.time)
+        end
+    end
+    table.sort(index.codes)
+    return index
+end
+local function materialize(index, code)
+    if not index.partitions then return index end
+    local result = index.cache[code]
+    if result then return result end
+    local partition = index.partitions[code]
+    if not partition then return nil end -- don't cache arbitrary input misses
+    result = {exact={}, prefixes={}}
+    for _, g in pairs(partition) do
+        for text, c in pairs(g.choices) do
+            local k = key(code, g.mode, text)
+            local s = result.exact[k] or {mode=g.mode, text=text, exact={}, weight=0, count=0, contexts=0}
+            result.exact[k] = s
+            local weight = c.weight * 2 ^ (-math.max(0, index.now - c.time) / (30 * 86400))
+            s.exact[g.context] = math.max(0, math.min(16, 9 + 2 * math.log(math.max(0.001, weight))))
+            s.weight, s.count = s.weight + weight, math.min(3, s.count + c.count)
+            if g.context ~= "" and weight >= 0.1 then s.contexts = s.contexts + 1 end
+        end
+    end
+    for _, s in pairs(result.exact) do
+        local letters = chars(s.text)
+        s.general = #letters > 1 and s.count >= 3 and s.contexts >= 2 and 2 * math.min(1, s.weight / 3) or 0
+        local prefix = ""
+        for i = 1, #letters - 1 do
+            prefix = prefix .. letters[i]
+            local k = key(code, s.mode, prefix)
+            local p = result.prefixes[k] or {general=0, exact={}}
+            result.prefixes[k] = p
+            p.general = math.max(p.general, s.general)
+            for ctx, value in pairs(s.exact) do p.exact[ctx] = math.max(p.exact[ctx] or 0, value) end
+        end
+    end
+    index.cache[code] = result
+    return result
+end
+local function update_index(index, accepted, events, now)
+    -- Future timestamps were clamped during replay. Clock rollback/forward
+    -- across those timestamps needs a fresh replay to preserve old semantics.
+    if not index.partitions or now < index.now or index.future > index.now then
+        return M.runtime_index(events, now)
+    end
+    local next_index = {codes=index.codes, partitions=copy(index.partitions), cache={}, now=now, future=index.future}
+    local changed, new_codes = {}, {}
+    for _, e in ipairs(accepted) do
+        if valid_event(e) then
+            if not changed[e.code] then
+                local old = next_index.partitions[e.code]
+                next_index.partitions[e.code] = old and copy(old) or {}
+                changed[e.code] = true
+                if not old then new_codes[#new_codes + 1] = e.code end
+            end
+            append_group(next_index.partitions[e.code], e, now)
+            next_index.future = math.max(next_index.future, e.time)
+        end
+    end
+    if #new_codes > 0 then
+        next_index.codes = copy(index.codes)
+        for _, code in ipairs(new_codes) do
+            local lo, hi = 1, #next_index.codes + 1
+            while lo < hi do
+                local mid = math.floor((lo + hi) / 2)
+                if next_index.codes[mid] < code then lo = mid + 1 else hi = mid end
+            end
+            table.insert(next_index.codes, lo, code)
+        end
+    end
+    return next_index
+end
 function M.score(index, mode, code, text, ctx)
-    return score(index.exact[key(code, mode, text)], ctx)
+    local values = materialize(index, code)
+    return values and score(values.exact[key(code, mode, text)], ctx) or 0
 end
 function M.prefix_score(index, mode, code, text, ctx)
     if code == "" or text == "" then return 0 end
@@ -117,7 +235,10 @@ function M.prefix_score(index, mode, code, text, ctx)
     for i = lo, math.min(#codes, lo + 63) do
         local value = codes[i]
         if value:sub(1, #code) ~= code then break end
-        if #value > #code then best = math.max(best, score(index.prefixes[key(value, mode, text)], ctx)) end
+        if #value > #code then
+            local values = materialize(index, value)
+            best = math.max(best, score(values.prefixes[key(value, mode, text)], ctx))
+        end
     end
     return best
 end
@@ -175,7 +296,7 @@ end
 local stores = {}
 function M.open(name)
     if stores[name] then return stores[name] end
-    local store = {events={}, index=M.build({}), count=0, sequence=0, bytes=0, scored_at=os.time(), error=nil}
+    local store = {events={}, index=M.runtime_index({}), count=0, sequence=0, bytes=0, scored_at=os.time(), error=nil}
     stores[name] = store
     if type(LevelDb) ~= "function" then store.error = "LevelDb unavailable"; return store end
     local ok, err = pcall(function()
@@ -192,7 +313,7 @@ function M.open(name)
                 store.events[#store.events + 1] = {time=tonumber(f[1]), mode=f[2], code=f[3], text=f[4], context=f[5]}
             end
         end
-        store.index = M.build(store.events)
+        store.index = M.runtime_index(store.events)
     end)
     if not ok then
         if store.db then pcall(function() store.db:close() end) end
@@ -203,6 +324,7 @@ end
 function M.confirm(store, events)
     if not store or not store.db or #events == 0 then return false end
     local changed = false
+    local accepted_events = {}
     for _, e in ipairs(events) do
         if store.count >= 10000 then break end
         local k = string.format("e/%010d", store.sequence + 1)
@@ -213,15 +335,25 @@ function M.confirm(store, events)
         store.count, store.bytes = store.count + 1, store.bytes + #k + #value
         store.sequence = store.sequence + 1
         store.events[#store.events + 1] = e
+        accepted_events[#accepted_events + 1] = e
         changed = true
     end
-    if changed then store.index = M.build(store.events); store.scored_at = os.time() end
+    if changed then
+        store.scored_at = os.time()
+        store.index = update_index(store.index, accepted_events, store.events, store.scored_at)
+    end
     return changed
 end
 function M.refresh_scores(store)
-    if store and store.db and os.time() - store.scored_at >= 60 then
-        store.index = M.build(store.events)
-        store.scored_at = os.time()
+    local now = os.time()
+    if store and store.db and (now - store.scored_at >= 60 or now < store.scored_at) then
+        local index = store.index
+        if not index.partitions or now < index.now or index.future > index.now then
+            store.index = M.runtime_index(store.events, now)
+        else
+            store.index = {codes=index.codes, partitions=index.partitions, cache={}, now=now, future=index.future}
+        end
+        store.scored_at = now
     end
 end
 M.context = context

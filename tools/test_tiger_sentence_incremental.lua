@@ -798,6 +798,27 @@ if env_on.engine.context.clear_calls ~= 0 or
 end
 print("OK  probabilistic early commit restores input atomically")
 
+local env_buffer, context_buffer, properties_buffer, commits_buffer = fake_environment(true)
+local original_option = context_buffer.get_option
+function context_buffer:get_option(name)
+    if name == "tiger_sentence_early_commit_to_preedit" then return true end
+    return original_option(self, name)
+end
+for index = 1, #early_sample do
+    sentence.processor(fake_key(early_sample:sub(index, index)), env_buffer)
+end
+if #commits_buffer ~= 0 then fail("buffered probabilistic prefix reached application") end
+local pending = properties_buffer.tiger_sentence_buffered_text or ""
+if model.loaded and pending == "" then fail("real-model buffered prefix never matured") end
+if pending ~= "" then
+    local expected = pending .. context_buffer.input:sub(2)
+    sentence.processor(fake_key("Return"), env_buffer)
+    if #commits_buffer ~= 1 or commits_buffer[1] ~= expected then
+        fail("buffered probabilistic literal exit lost text or exposed marker")
+    end
+end
+print("OK  probabilistic early commit can remain in preedit until final submission")
+
 env_on._tiger_sentence_transient = {
     trackers = {
         ["旧" .. string.char(31) .. "2"] = {
@@ -1117,5 +1138,38 @@ if restored.codes_count ~= default_codes_count or
     fail("default pack data was not restored after the import test")
 end
 print("OK  foreign code table imports via plain-text files")
+
+local lock_base = sentence.decode("zhhbi")[1]
+local boundaries, node = {}, lock_base.path
+while node and node.raw_length > 0 do
+    table.insert(boundaries, 1, node.raw_length .. "," .. node.text_length .. ";")
+    node = node.previous
+end
+local cached_lock = {raw="zhhbi", text=lock_base.text, boundaries=table.concat(boundaries)}
+local suffix = "yxmiigvmeynvrlieueyfchllfpugvuegyuesagycbjbyfyrl"
+local probes = {"zhhbi"}
+for i=1,#suffix do probes[#probes+1]="zhhbi"..suffix:sub(1,i) end
+for i=#suffix-1,0,-1 do probes[#probes+1]="zhhbi"..suffix:sub(1,i) end
+probes[#probes+1]="zhhbituja"
+probes[#probes+1]="zhhbitu2ja"
+for _, raw in ipairs(probes) do
+    local incremental = sentence.decode(raw, false, cached_lock.text, cached_lock)
+    if sentence.decode(raw, false, cached_lock.text, cached_lock) ~= incremental then
+        fail("locked same-generation decode did not reuse result")
+    end
+    local evidence = sentence.decode(raw, true, cached_lock.text, cached_lock)
+    sentence.reset_decode_cache()
+    local rebuilt = sentence.decode(raw, true, cached_lock.text, cached_lock)
+    if not sentence.results_equal(evidence, rebuilt) then
+        fail("locked incremental/full mismatch at " .. raw)
+    end
+end
+local changed_lock = {raw=cached_lock.raw, text="虎娘", boundaries="5,6;"}
+local changed = sentence.decode("zhhbituja", true, changed_lock.text, changed_lock)
+sentence.reset_decode_cache()
+if not sentence.results_equal(changed, sentence.decode("zhhbituja", true, changed_lock.text, changed_lock)) then
+    fail("changed locked text reused stale lattice")
+end
+print("OK  locked lattice cache matches fresh decode on append, delete, edit and changed lock")
 
 print("all incremental checks matched full decode")

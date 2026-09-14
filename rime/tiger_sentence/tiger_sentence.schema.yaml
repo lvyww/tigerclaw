@@ -2,7 +2,7 @@
 schema:
   schema_id: tiger_sentence
   name: 虎整句
-  version: "1.2"
+  version: "1.3"
   author:
     - TigerClaw
   description: |
@@ -28,9 +28,12 @@ switches:
   - name: tiger_sentence_allow_duplicate_single
     reset: 1
     states: [ 单字重码组句关, 单字重码组句开 ]
+  - name: tiger_sentence_early_commit_to_preedit
+    reset: 0
+    states: [ 提前上屏至应用, 提前上屏至编码 ]
 engine:
   processors:
-    - ascii_composer
+    - lua_processor@tiger_sentence_ascii
     - recognizer
     - lua_processor@tiger_sentence_processor
     - key_binder
@@ -46,10 +49,12 @@ engine:
   translators:
     - punct_translator
     - lua_translator@tiger_sentence_translator
+  filters:
+    - lua_filter@tiger_sentence_buffer_filter
 
 speller:
-  alphabet: "zyxwvutsrqponmlkjihgfedcba;';0123456789"
-  initials: "abcdefghijklmnopqrstuvwxyz"
+  alphabet: "zyxwvutsrqponmlkjihgfedcba;';0123456789~"
+  initials: "abcdefghijklmnopqrstuvwxyz~"
   delimiter: " "
   auto_select: false
 

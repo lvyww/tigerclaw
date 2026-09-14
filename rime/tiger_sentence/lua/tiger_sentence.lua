@@ -271,48 +271,25 @@ local function build_lexicon_index(entries, character_ranks, high_freq_limit, wh
             texts = {}
             exact[code] = texts
         end
-        local duplicate = false
-        for j = 1, #texts do
-            if texts[j] == word then
-                duplicate = true
-                break
-            end
-        end
-        if not duplicate then
-            texts[#texts + 1] = word
-        end
+        -- parse_codes_content already deduplicates (word, code), in source
+        -- order. Don't scan the same candidate ranges a second time.
+        texts[#texts + 1] = word
         if is_single_character(word) then
             local character_codes = codes_by_character[word]
             if not character_codes then
                 character_codes = {}
                 codes_by_character[word] = character_codes
             end
-            local code_duplicate = false
-            for j = 1, #character_codes do
-                if character_codes[j] == code then
-                    code_duplicate = true
-                    break
-                end
-            end
-            if not code_duplicate then
-                character_codes[#character_codes + 1] = code
-            end
+            character_codes[#character_codes + 1] = code
         end
     end
 
     local common = nil
     if character_ranks and high_freq_limit > 0 then
-        local ordered = {}
-        for character, rank in pairs(character_ranks) do
-            ordered[#ordered + 1] = { character = character, rank = rank }
-        end
-        table.sort(ordered, function(a, b)
-            return a.rank < b.rank
-        end)
         common = {}
-        local count = math.min(high_freq_limit, #ordered)
-        for index = 1, count do
-            common[ordered[index].character] = true
+        -- parse_ranks_content assigns dense, unique 1-based source ranks.
+        for character, rank in pairs(character_ranks) do
+            if rank <= high_freq_limit then common[character] = true end
         end
     end
 
@@ -377,7 +354,7 @@ local function build_lexicon_index(entries, character_ranks, high_freq_limit, wh
         end
         if #allowed > 0 then
             filtered[code] = allowed
-            length_values[#length_values + 1] = #code
+            length_values[#code] = true
             if #code > max_len then
                 max_len = #code
             end
@@ -387,15 +364,11 @@ local function build_lexicon_index(entries, character_ranks, high_freq_limit, wh
         end
     end
 
-    table.sort(length_values)
     local lengths = {}
-    local previous = 0
-    for _, value in ipairs(length_values) do
-        if value ~= previous then
-            lengths[#lengths + 1] = value
-            previous = value
-        end
+    for value in pairs(length_values) do
+        lengths[#lengths + 1] = value
     end
+    table.sort(lengths)
 
     return {
         codes = filtered,
@@ -741,7 +714,7 @@ local function load_mobile(path)
         unigram_values[key] = probability
     end
 
-    local cache = {}
+    local cache = {b={}, t={}}
     local cache_bytes = 0
     local lru_head = nil
     local lru_tail = nil
@@ -798,8 +771,8 @@ local function load_mobile(path)
     end
 
     local function get_page(kind, index_data, index_count, page, section_end)
-        local cache_key = kind .. page
-        local entry = cache[cache_key]
+        local page_cache = cache[kind]
+        local entry = page_cache[page]
         if entry then
             touch(entry)
             return entry.data
@@ -813,14 +786,14 @@ local function load_mobile(path)
         local data = read_at(offset, next_offset - offset)
         performance.page_misses = performance.page_misses + 1
         performance.page_bytes = performance.page_bytes + #data
-        entry = { key = cache_key, data = data, bytes = #data }
-        cache[cache_key] = entry
+        entry = { kind = kind, page = page, data = data, bytes = #data }
+        page_cache[page] = entry
         cache_bytes = cache_bytes + entry.bytes
         touch(entry)
         while cache_bytes > MOBILE_CACHE_BYTES and lru_tail and lru_tail ~= entry do
             local victim = lru_tail
             unlink(victim)
-            cache[victim.key] = nil
+            cache[victim.kind][victim.page] = nil
             cache_bytes = cache_bytes - victim.bytes
         end
         return data
@@ -1203,6 +1176,7 @@ local decode_cache = {
     allow_duplicate = true
 }
 local state_separator = "\31"
+local locked_decode_cache = {}
 
 local function beam_limit_at(raw_length)
     if raw_length > long_input_full_beam_length then
@@ -1231,6 +1205,7 @@ end
 -- it does not emit a Rime property update (and a redundant UI refresh) for
 -- every physical key. The old properties are cleared once for live migration.
 local state_keys = {
+    buffered = "tiger_sentence_buffered_text",
     locks = "tiger_sentence_locks",
     committed = "tiger_sentence_committed",
     -- Read once during migration from the old two-property format.
@@ -1284,8 +1259,16 @@ end
 
 -- Length framing keeps arbitrary candidate text intact and shares locks with
 -- the translator's separate environment without retaining model objects.
+local last_lock_data, last_lock_fields = "", {}
 local function read_locks(context)
     local data = context:get_property(state_keys.locks) or ""
+    if data == last_lock_data then
+        -- Callers append/remove locks. Share only immutable entries, never the
+        -- mutable list, between processor/translator or different contexts.
+        local result = {}
+        for i = 1, #last_lock_fields do result[i] = last_lock_fields[i] end
+        return result
+    end
     local fields, offset = {}, 1
     while offset <= #data do
         local colon = data:find(":", offset, true)
@@ -1298,6 +1281,8 @@ local function read_locks(context)
     for i = 1, #fields - 2, 3 do
         locks[#locks + 1] = { raw = fields[i], text = fields[i + 1], boundaries = fields[i + 2] }
     end
+    last_lock_data, last_lock_fields = data, {}
+    for i = 1, #locks do last_lock_fields[i] = locks[i] end
     return locks
 end
 
@@ -1343,6 +1328,7 @@ local function sentence_state(context, env)
     synchronize_model_state(transient)
     transient.committed_text = committed_text
     transient.committed_raw = committed_raw
+    transient.buffered_text = context:get_property(state_keys.buffered) or ""
     transient.locks = read_locks(context)
     transient.trackers = transient.trackers or {}
     transient.last_seen_raw = transient.last_seen_raw or ""
@@ -1367,6 +1353,7 @@ local function save_transient_state(context, state, env)
 end
 
 local function save_sentence_state(context, state, env)
+    set_property_if_changed(context, state_keys.buffered, state.buffered_text or "")
     save_locks(context, state.locks)
     set_property_if_changed(context, state_keys.committed,
         (state.committed_raw or "") .. "\t" .. (state.committed_text or ""))
@@ -2157,26 +2144,18 @@ local function add_early_commit_pool_candidate(pool, pool_index, candidate)
         boundary = {}
         pool_index[raw_length] = boundary
     end
-    local previous = boundary[candidate.text]
-    if not previous then
-        previous = {
-            text = candidate.text,
-            raw_length = raw_length,
-            confidence_score = candidate.confidence_score,
-            path = candidate.path
-        }
-        boundary[candidate.text] = previous
-        pool[#pool + 1] = previous
+    local position = boundary[candidate.text]
+    if not position then
+        pool[#pool + 1] = candidate
+        boundary[candidate.text] = #pool
         return
     end
+    local previous = pool[position]
     local combined = logsumexp(previous.confidence_score, candidate.confidence_score)
-    if candidate.confidence_score > previous.confidence_score then
-        previous.text = candidate.text
-        previous.raw_length = raw_length
-        previous.confidence_score = candidate.confidence_score
-        previous.path = candidate.path
-    end
-    previous.confidence_score = combined
+    -- Copy only on a collision: completed candidates also belong to the menu
+    -- and must not have their probability mass changed by dropped-tail merges.
+    local best = candidate.confidence_score > previous.confidence_score and candidate or previous
+    pool[position] = {text=best.text, confidence_score=combined, path=best.path}
 end
 
 -- Per-(text prefix, raw boundary) evidence, mirroring
@@ -2246,15 +2225,12 @@ local function build_prefix_evidence(pool)
     for i = 1, #order do
         local entry = order[i]
         local boundary_share = (boundary_mass[entry.raw_length] or 0) / total
-        prefixes[#prefixes + 1] = {
-            text = entry.text,
-            raw_length = entry.raw_length,
-            share = entry.weight / total,
-            boundary_share = boundary_share,
-            boundary_closed = boundary_share >= early_commit_closed_boundary_share
-        }
+        entry.share = entry.weight / total
+        entry.boundary_share = boundary_share
+        entry.boundary_closed = boundary_share >= early_commit_closed_boundary_share
+        entry.weight = nil
     end
-    return prefixes
+    return order
 end
 
 local function has_low_confidence_completed_generation(candidates)
@@ -2352,6 +2328,7 @@ local function build_early_commit_evidence(
     local proposal = ""
     local proposal_share = 0.0
     local proposal_raw_length = 0
+    local proposal_chars = 0
     local raw_lengths = {}
     for i = 1, #prefixes do
         local prefix = prefixes[i]
@@ -2366,7 +2343,6 @@ local function build_early_commit_evidence(
                 local replace = proposal == ""
                 if not replace then
                     local prefix_chars = prefix.text_char_count or utf_length(prefix.text)
-                    local proposal_chars = utf_length(proposal)
                     if prefix_chars ~= proposal_chars then
                         replace = prefix_chars > proposal_chars
                     elseif prefix.share ~= proposal_share then
@@ -2379,6 +2355,7 @@ local function build_early_commit_evidence(
                     proposal = prefix.text
                     proposal_share = prefix.share
                     proposal_raw_length = prefix.raw_length
+                    proposal_chars = prefix.text_char_count or utf_length(prefix.text)
                 end
             end
         end
@@ -2561,44 +2538,80 @@ local function decode(raw_code, include_early_commit, required_text_prefix, lock
     local raw = normalize(raw_code)
     required_text_prefix = required_text_prefix or ""
     if locked then
-        learning_affected = false
         local prefix = normalize(locked.raw)
         if prefix == "" or raw:sub(1, #prefix) ~= prefix then return {} end
-        local states = new_states(#raw)
-        -- Reconstruct confirmed boundaries and score their text as context,
-        -- without re-searching or allowing an edge to cross the lock.
-        local seed = { text = "", prev2 = BOS, prev1 = BOS, score = 0, mass_score = 0,
-            max_rank = 1, supplement_state = 1, supplement_score = 0,
-            raw_length = 0, text_length = 0, edge_count = 0 }
-        for raw_boundary, text_boundary in locked.boundaries:gmatch("(%d+),(%d+);") do
-            local r, t = tonumber(raw_boundary), tonumber(text_boundary)
-            local chars = utf_chars(locked.text:sub(seed.text_length + 1, t))
-            local item = { text = locked.text:sub(1, t), previous = seed, edge_chars = chars,
-                raw_length = r, text_length = t, edge_count = seed.edge_count + 1,
-                prev2 = seed.prev2, prev1 = seed.prev1, score = seed.score,
-                supplement_state = seed.supplement_state, supplement_score = seed.supplement_score, max_rank = 1 }
-            for _, ch in ipairs(chars) do
-                item.score = item.score + logp(item.prev2, item.prev1, ch) + emitted_character_reward
-                if has_supplements then
-                    local reward
-                    item.supplement_state, reward = supplement.advance(supplement_matcher, item.supplement_state, ch)
-                    item.score = item.score + reward
-                    item.supplement_score = item.supplement_score + reward
-                end
-                item.prev2, item.prev1 = item.prev1, ch
-            end
-            item.mass_score = item.score - item.supplement_score - (seed.learning_score or 0)
-            local learned, potential = learning.reward(learning_index, learning_mode, raw, item.text, r, seed)
-            item.learning_score, item.learning_potential = learned, potential
-            item.score = item.score + learned - (seed.learning_score or 0)
-            if learned > 0 or potential > 0 then learning_affected = true end
-            seed = item
+        local started = os.clock()
+        local cache = locked_decode_cache
+        local compatible = cache.prefix == prefix and cache.text == locked.text and
+            cache.boundaries == locked.boundaries and cache.allow_duplicate == active_allow_duplicate_single
+        learning_affected = compatible and cache.learning_affected or false
+        if compatible and cache.raw == raw and cache.result and
+            (not include_early_commit or (cache.includes_early_commit and cache.required == required_text_prefix)) then
+            return cache.result
         end
-        if seed.raw_length ~= #prefix or seed.text ~= locked.text then return {} end
-        states[0] = new_bucket()
-        add_state(states[#prefix], seed)
-        expand_range(raw, states, #prefix, #raw)
-        return emit(raw, states, #raw, include_early_commit or false, required_text_prefix)
+        local states = compatible and cache.states or nil
+        if states and cache.raw == raw then
+            if cache.result and not cache.result.learning_affected then
+                cache.result.early_commit_evidence = build_early_commit_evidence(raw, states,
+                    cache.result._confidence_candidates, cache.result._completed_truncated, required_text_prefix)
+                cache.includes_early_commit, cache.required = true, required_text_prefix
+                record_decode(started)
+                return cache.result
+            end
+        elseif states and #raw > #cache.raw and raw:sub(1, #cache.raw) == cache.raw then
+            local old_n = #cache.raw
+            for i = old_n + 1, #raw do states[i] = new_bucket() end
+            local max_consume = lexicon_state.max_code_len + trailing_selector_span(raw)
+            expand_range(raw, states, math.max(#prefix, old_n + 1 - max_consume), #raw, old_n)
+        elseif states and #raw < #cache.raw and cache.raw:sub(1, #raw) == raw then
+            for i = #raw + 1, #cache.raw do states[i] = nil end
+        else
+            states = nil
+        end
+        if not states then
+            learning_affected = false
+            states = new_states(#raw)
+            -- Reconstruct confirmed boundaries and score their text as context,
+            -- without re-searching or allowing an edge to cross the lock.
+            local seed = { text = "", prev2 = BOS, prev1 = BOS, score = 0, mass_score = 0,
+                max_rank = 1, supplement_state = 1, supplement_score = 0,
+                raw_length = 0, text_length = 0, edge_count = 0 }
+            for raw_boundary, text_boundary in locked.boundaries:gmatch("(%d+),(%d+);") do
+                local r, t = tonumber(raw_boundary), tonumber(text_boundary)
+                local chars = utf_chars(locked.text:sub(seed.text_length + 1, t))
+                local item = { text = locked.text:sub(1, t), previous = seed, edge_chars = chars,
+                    raw_length = r, text_length = t, edge_count = seed.edge_count + 1,
+                    prev2 = seed.prev2, prev1 = seed.prev1, score = seed.score,
+                    supplement_state = seed.supplement_state, supplement_score = seed.supplement_score, max_rank = 1 }
+                for _, ch in ipairs(chars) do
+                    item.score = item.score + logp(item.prev2, item.prev1, ch) + emitted_character_reward
+                    if has_supplements then
+                        local reward
+                        item.supplement_state, reward = supplement.advance(supplement_matcher, item.supplement_state, ch)
+                        item.score = item.score + reward
+                        item.supplement_score = item.supplement_score + reward
+                    end
+                    item.prev2, item.prev1 = item.prev1, ch
+                end
+                item.mass_score = item.score - item.supplement_score - (seed.learning_score or 0)
+                local learned, potential = learning.reward(learning_index, learning_mode, raw, item.text, r, seed)
+                item.learning_score, item.learning_potential = learned, potential
+                item.score = item.score + learned - (seed.learning_score or 0)
+                if learned > 0 or potential > 0 then learning_affected = true end
+                seed = item
+            end
+            if seed.raw_length ~= #prefix or seed.text ~= locked.text then return {} end
+            states[0] = new_bucket()
+            add_state(states[#prefix], seed)
+            expand_range(raw, states, #prefix, #raw)
+        end
+        local result = emit(raw, states, #raw, include_early_commit or false, required_text_prefix)
+        locked_decode_cache = {prefix=prefix, text=locked.text, boundaries=locked.boundaries,
+            allow_duplicate=active_allow_duplicate_single, raw=raw, states=states, result=result,
+            includes_early_commit=include_early_commit or false, required=required_text_prefix,
+            learning_affected=result.learning_affected or false}
+        record_decode(started)
+        return result
     end
     if raw == "" or not has_letter(raw) then
         decode_cache.raw = raw
@@ -2955,6 +2968,7 @@ local function cycle_candidate_highlight(context, step)
 end
 
 reset_decode_cache = function()
+    locked_decode_cache = {}
     learning_affected = false
     decode_cache.raw = nil
     decode_cache.states = nil
@@ -2986,7 +3000,27 @@ end
 -- single change event carrying the final raw code. The set_input method hook
 -- exists for tests; the clear+push fallback covers frontends whose context
 -- does not accept direct input assignment.
+-- The private leading marker keeps a text-only preedit alive in Rime. It is
+-- never decoder input or candidate/preedit output.
+local function buffered_text(context)
+    return context:get_property(state_keys.buffered) or ""
+end
+
+local function live_input(context)
+    local value = context.input or ""
+    if buffered_text(context) ~= "" and value:sub(1, 1) == "~" then return value:sub(2) end
+    return value
+end
+
 local function restore_composition_input(context, value)
+    if buffered_text(context) ~= "" then value = "~" .. value end
+    if context.input == value and buffered_text(context) ~= "" and
+        type(context.refresh_non_confirmed_composition) == "function" then
+        -- Text-only deletion changes the prefix but leaves raw input as "~".
+        -- Rime otherwise reuses that segment's old menu/preedit translation.
+        -- Invalidate the translation without clearing the live composition.
+        if context:refresh_non_confirmed_composition() then return end
+    end
     if type(context.set_input) == "function" then
         context:set_input(value)
         return
@@ -3006,10 +3040,26 @@ end
 -- Rime uses a byte offset in the raw input, not an index in displayed text.
 -- Old frontend/test contexts without caret_pos retain end-append behaviour.
 local function input_caret(context)
-    local length = #(context.input or "")
+    local length = #live_input(context)
     local caret = context.caret_pos
     if type(caret) ~= "number" then return length end
+    if buffered_text(context) ~= "" then caret = caret - 1 end
     return math.max(0, math.min(length, math.floor(caret)))
+end
+
+local function submit_early(env, state, selected, commit)
+    local context = env.engine.context
+    if context:get_option("tiger_sentence_early_commit_to_preedit") or (state.buffered_text or "") ~= "" then
+        state.buffered_text = (state.buffered_text or "") .. commit
+        -- Confirmed text must never be resegmented. Keeping an opaque consumed
+        -- raw boundary also lets Backspace edit inside a multi-character word.
+        state.locks = {{raw=state.committed_raw, text=state.committed_text,
+            boundaries=tostring(#state.committed_raw)..","..tostring(#state.committed_text)..";"}}
+        save_sentence_state(context, state, env)
+    else
+        env.engine:commit_text(commit)
+        learning_submit(env, selected, commit, commit)
+    end
 end
 
 local function invalidate_edit_state(context, state, env, first_changed, full_length)
@@ -3089,11 +3139,11 @@ local function try_empty_code_commit(env, state, full_before, appended_letter)
         save_transient_state(context, state, env)
         return false
     end
-    local full_raw = state.committed_raw .. (context.input or "")
+    local full_raw = state.committed_raw .. live_input(context)
     -- push_input inserts at the caret. Even callers other than processor must
     -- not turn a middle insertion (or a reentrant edit) into an imagined append.
     if full_raw ~= full_before .. appended_letter or
-        input_caret(context) ~= #(context.input or "") then
+        input_caret(context) ~= #live_input(context) then
         state.empty_code_pending = nil
         save_transient_state(context, state, env)
         return false
@@ -3154,8 +3204,7 @@ local function try_empty_code_commit(env, state, full_before, appended_letter)
     state.suspended = false
     state.empty_code_pending = nil
     state.continuation_after_auto_commit = true
-    env.engine:commit_text(commit)
-    learning_submit(env, {text=pending.candidate_text, path={raw_length=pending.base_raw_length}}, commit, commit)
+    submit_early(env, state, {text=pending.candidate_text, path={raw_length=pending.base_raw_length}}, commit)
     if ends_with_digit(commit) then
         env._tiger_sentence_dot_armed = true
     end
@@ -3209,8 +3258,7 @@ local function try_commit_mature_prefix(env, state, evidence_raw)
     state.continuation_after_auto_commit = false
     reset_early_evidence(state)
     save_sentence_state(context, state, env)
-    env.engine:commit_text(commit)
-    learning_submit(env, {text=selected.text, path={raw_length=selected.raw_length}}, commit, commit)
+    submit_early(env, state, {text=selected.text, path={raw_length=selected.raw_length}}, commit)
     if ends_with_digit(commit) then
         env._tiger_sentence_dot_armed = true
     end
@@ -3221,7 +3269,7 @@ end
 local function try_early_commit(env)
     local context = env.engine.context
     local state = sentence_state(context, env)
-    local live_raw = context.input or ""
+    local live_raw = live_input(context)
 
     if input_caret(context) ~= #live_raw or
         not context:get_option("tiger_sentence_early_commit") or state.suspended then
@@ -3356,7 +3404,7 @@ end
 -- shared with the translator; pending confirmations never cross contexts.
 local function learning_selection(env, state)
     local context = env.engine.context
-    local raw = state.committed_raw .. (context.input or "")
+    local raw = state.committed_raw .. live_input(context)
     local composition = context.composition
     local segment = composition and not composition:empty() and composition:back()
     local target = segment and segment.selected_index or 0
@@ -3369,6 +3417,9 @@ local function learning_selection(env, state)
             if visible == target then selected = item end
             visible = visible + 1
         end
+    end
+    if not selected and live_input(context) == "" and state.buffered_text ~= "" then
+        selected = {text=state.committed_text, path={raw_length=#state.committed_raw}}
     end
     return selected, first, raw
 end
@@ -3412,13 +3463,35 @@ local function prepare_learning(env, attach)
     end
     local mode = enabled and ("sentence-v1|rules=" .. (lexicon_state.learning_rules or "") ..
         "|optimal=" .. tostring(lexicon_state.high_freq_limit) .. "|dup=" .. (active_allow_duplicate_single and "1" or "0")) or ""
-    local name = "tiger_sentence_learning_" .. learning.hash(schema and schema.schema_id or "tiger_sentence")
+    local schema_id = schema and schema.schema_id or "tiger_sentence"
+    if env._tiger_learning_schema_id ~= schema_id then
+        env._tiger_learning_schema_id = schema_id
+        env._tiger_learning_name = "tiger_sentence_learning_" .. learning.hash(schema_id)
+    end
+    local name = env._tiger_learning_name
     local live = env._tiger_learning
     if not live or live.mode ~= mode or live.name ~= name then
         if live and live.connection then live.connection:disconnect() end
         if live and live.update_connection then live.update_connection:disconnect() end
-        live = {mode=mode, name=name, pending={}, store=enabled and learning.open(name) or nil}
+        if live and live.option_connection then live.option_connection:disconnect() end
+        if live and live.buffer_commit_connection then live.buffer_commit_connection:disconnect() end
+        live = {mode=mode, name=name, pending={}, hide_owned=live and live.hide_owned,
+            store=enabled and learning.open(name) or nil}
         env._tiger_learning = live
+        if attach and context.commit_notifier then
+            -- Grouped slots run before Rime's ungrouped engine commit slot.
+            -- Keep the menu suffix-only, then assemble ONE complete submission
+            -- just before the host reads it (also covers taps and ASCII exits).
+            live.buffer_commit_connection = context.commit_notifier:connect(function(ctx)
+                local prefix = buffered_text(ctx)
+                if prefix == "" then return end
+                local candidate = ctx:get_selected_candidate()
+                if candidate and candidate.type == "sentence_buffered" then
+                    candidate.text = prefix .. candidate.text
+                    candidate.type = "sentence_buffered_commit"
+                end
+            end, -100)
+        end
         if attach and context.commit_notifier then
             live.connection = context.commit_notifier:connect(function(ctx)
                 if live.mode == "" or not live.store or not live.store.db then return end
@@ -3432,7 +3505,7 @@ local function prepare_learning(env, attach)
                     -- Compare the submitted choice with this menu's first path.
                     learning_stage(env, state, selected, raw, first)
                     learning_submit(env, selected, ctx:get_commit_text(),
-                        selected and selected.text:sub(#state.committed_text + 1) or "")
+                        selected and state.buffered_text .. selected.text:sub(#state.committed_text + 1) or "")
                 end)
             end)
         end
@@ -3440,6 +3513,21 @@ local function prepare_learning(env, attach)
             live.update_connection = context.update_notifier:connect(function(ctx)
                 if not ctx:is_composing() then
                     live.pending, live.baseline, live.submitted_raw = {}, nil, nil
+                    if buffered_text(ctx) ~= "" then reset_sentence_state(ctx, env) end
+                end
+                local hide = buffered_text(ctx) ~= "" and live_input(ctx) == ""
+                if hide or live.hide_owned then
+                    live.hide_owned = hide
+                    if ctx:get_option("_hide_candidate") ~= hide then
+                        ctx:set_option("_hide_candidate", hide)
+                    end
+                end
+            end)
+        end
+        if attach and context.option_update_notifier then
+            live.option_connection = context.option_update_notifier:connect(function(ctx, name)
+                if name == "ascii_mode" and ctx:get_option(name) and buffered_text(ctx) ~= "" then
+                    ctx:confirm_current_selection()
                 end
             end)
         end
@@ -3471,6 +3559,14 @@ local function processor(key_event, env)
     learned.submitted_raw = nil
     local state = sentence_state(context, env)
     local repr = key_event:repr()
+    if state.buffered_text ~= "" and live_input(context) == "" and
+        (repr == "Tab" or repr == "ISO_Left_Tab" or repr == "Shift+Tab" or
+         repr == "Up" or repr == "Down" or repr == "Page_Up" or repr == "Page_Down") then
+        return 1
+    end
+    if state.buffered_text ~= "" and type(context.caret_pos) == "number" and context.caret_pos < 1 then
+        context.caret_pos = 1
+    end
     if not context:is_composing() then learned.pending, learned.baseline = {}, nil end
     -- Mirror InputMethodEngine._dotAfterDigitArmed: the period following a
     -- digit output becomes an ASCII decimal point; any non-modifier key
@@ -3495,7 +3591,7 @@ local function processor(key_event, env)
             return 2
         end
         set_allow_duplicate_single(context)
-        if #(context.input or "") >= max_raw_length then
+        if #live_input(context) >= max_raw_length then
             return 1
         end
         -- Digits are rank suffixes only while composing. Idle digits commit
@@ -3513,7 +3609,7 @@ local function processor(key_event, env)
             return 1
         end
         local is_letter = ch:match("^[a-z]$") ~= nil
-        local live_before = context.input or ""
+        local live_before = live_input(context)
         local caret = input_caret(context)
         local full_before = state.committed_raw .. live_before
         if caret ~= #live_before then
@@ -3562,8 +3658,7 @@ local function processor(key_event, env)
                 state.continuation_after_auto_commit = false
                 save_sentence_state(context, state, env)
                 if commit then
-                    env.engine:commit_text(commit)
-                    learning_submit(env, selected, commit, commit)
+                    submit_early(env, state, selected, commit)
                 end
                 restore_composition_input(context, full_before:sub(#state.committed_raw + 1) .. ch)
                 return 1
@@ -3591,9 +3686,20 @@ local function processor(key_event, env)
         end
         return 2
     end
+    local codepoint = key_event.keycode
+    if state.buffered_text ~= "" and type(codepoint) == "number" and
+        codepoint >= 33 and codepoint <= 126 and
+        string.char(codepoint):match("%p") and
+        not key_event:ctrl() and not key_event:alt() and not key_event:super() then
+        -- Letters and rank selectors were handled above. Flush this complete
+        -- composition BEFORE punctuator creates/closes another Rime segment;
+        -- then let the configured punctuation table handle the original key.
+        context:confirm_current_selection()
+        return 2
+    end
     if repr == "Return" or repr == "KP_Enter" then
         learned.pending, learned.baseline = {}, nil
-        env.engine:commit_text(context.input)
+        env.engine:commit_text(state.buffered_text .. live_input(context))
         context:clear()
         reset_sentence_state(context, env)
         return 1
@@ -3611,8 +3717,36 @@ local function processor(key_event, env)
         state.tab_pending = false
         reset_early_evidence(state)
         state.empty_code_pending = nil
+        if state.buffered_text ~= "" then
+            local raw = live_input(context)
+            local caret = input_caret(context)
+            if repr == "BackSpace" and raw == "" then
+                local letters = utf_chars(state.buffered_text)
+                local removed = table.remove(letters)
+                state.buffered_text = table.concat(letters)
+                state.committed_text = state.committed_text:sub(1, #state.committed_text - #removed)
+                if state.buffered_text == "" then
+                    reset_sentence_state(context, env)
+                else
+                    state.locks = {{raw=state.committed_raw, text=state.committed_text,
+                        boundaries=tostring(#state.committed_raw)..","..tostring(#state.committed_text)..";"}}
+                    save_sentence_state(context, state, env)
+                end
+                reset_decode_cache()
+                restore_composition_input(context, raw)
+                return 1
+            end
+            local first = repr == "BackSpace" and caret - 1 or caret
+            if first < 0 or first >= #raw then return 1 end
+            local remaining = raw:sub(1, first) .. raw:sub(first + 2)
+            invalidate_edit_state(context, state, env,
+                #state.committed_raw + first, #state.committed_raw + #remaining)
+            restore_composition_input(context, remaining)
+            if type(context.caret_pos) == "number" then context.caret_pos = first + 1 end
+            return 1
+        end
         if active_lock(state) then
-            local raw = context.input or ""
+            local raw = live_input(context)
             local caret = input_caret(context)
             local first = repr == "BackSpace" and caret - 1 or caret
             if first < 0 or first >= #raw then
@@ -3647,6 +3781,10 @@ local function processor(key_event, env)
         reset_early_evidence(state)
         state.empty_code_pending = nil
         save_transient_state(context, state, env)
+        if state.buffered_text ~= "" and (repr == "Home" or (repr == "Left" and input_caret(context) == 0)) then
+            context.caret_pos = 1
+            return 1
+        end
         return 2
     end
     if repr == "Tab" or repr == "ISO_Left_Tab" or repr == "Shift+Tab" then
@@ -3695,6 +3833,12 @@ local function translator(input, seg, env)
     prepare_learning(env)
     local committed_text = state.committed_text
     local committed_raw = state.committed_raw
+    local buffered = state.buffered_text
+    if buffered ~= "" then
+        -- Never translate the full context into a later punctuation segment.
+        if seg.start ~= 0 or input:sub(1, 1) ~= "~" then return end
+        input = input:sub(2)
+    end
     local raw = committed_raw .. input
     local results = decode(raw, false, committed_text, active_lock(state))
     local yielded = 0
@@ -3705,16 +3849,32 @@ local function translator(input, seg, env)
             (committed_text == "" or
              item.text:sub(1, #committed_text) == committed_text) then
             local text = committed_text == "" and item.text or item.text:sub(#committed_text + 1)
-            local preedit = committed_raw == "" and item.segmented or
-                trim_segmented_after_raw_prefix(item.segmented, #committed_raw)
-            if text ~= "" then
-                local cand = Candidate("sentence", seg.start, seg._end, text, "")
-                cand.preedit = preedit
+            local preedit = item.segmented
+            if committed_raw ~= "" then
+                -- Same-generation menu refreshes (including text-only
+                -- Backspace) reuse the suffix but prepend the current buffer.
+                if item._display_floor ~= #committed_raw then
+                    item._display_floor = #committed_raw
+                    item._display_suffix = trim_segmented_after_raw_prefix(preedit, #committed_raw)
+                end
+                preedit = item._display_suffix
+            end
+            if text ~= "" or buffered ~= "" then
+                local cand = Candidate(buffered ~= "" and "sentence_buffered" or "sentence",
+                    seg.start, seg._end, text, "")
+                if buffered ~= "" then cand.quality = 1000 end
+                cand.preedit = buffered .. (buffered ~= "" and preedit ~= "" and " " or "") .. preedit
                 yield(cand)
                 yielded = yielded + 1
                 if yielded >= candidate_limit then return end
             end
         end
+    end
+    if yielded == 0 and buffered ~= "" then
+        local cand = Candidate("sentence_buffered", seg.start, seg._end, input, "")
+        cand.quality = 1000
+        cand.preedit = buffered .. (input ~= "" and " " or "") .. input
+        yield(cand)
     end
 end
 
@@ -3810,6 +3970,12 @@ M.performance_status = function()
 end
 M.processor = processor
 M.translator = translator
+M.buffer_filter = function(input, env)
+    local buffered = buffered_text(env.engine.context) ~= ""
+    for candidate in input:iter() do
+        if not buffered or candidate.type == "sentence_buffered" then yield(candidate) end
+    end
+end
 M.learning = learning
 M.set_learning_for_test = function(index, mode)
     learning_index, learning_mode = index, mode or ""
@@ -3821,7 +3987,49 @@ M.processor_component = {
         local live = env._tiger_learning
         if live and live.connection then live.connection:disconnect() end
         if live and live.update_connection then live.update_connection:disconnect() end
+        if live and live.option_connection then live.option_connection:disconnect() end
+        if live and live.buffer_commit_connection then live.buffer_commit_connection:disconnect() end
+        if live and live.hide_owned then env.engine.context:set_option("_hide_candidate", false) end
+        -- A schema change cancels text still owned by this composition.
+        if buffered_text(env.engine.context) ~= "" then
+            env.engine.context:clear()
+            reset_sentence_state(env.engine.context, env)
+        end
         env._tiger_learning = nil
     end
+}
+-- Retain Rime's native modifier timing and bindings. Only while a buffered
+-- composition exists, raw-code/inline-ASCII exits must submit its displayed
+-- candidate instead of the private transport marker. The schema is private;
+-- neither the user's configuration nor ordinary-mode bindings are changed.
+M.ascii_component = {
+    func = function(key, env)
+        local buffered = buffered_text(env.engine.context) ~= ""
+        if not env.native or env.buffered ~= buffered then
+            env.buffered = buffered
+            local schema = env.engine.schema
+            if buffered then
+                local default_schema = Schema(".default")
+                local defaults = default_schema.config
+                local source = schema.config:get_map("ascii_composer/switch_key") and schema.config or defaults
+                local private = Schema("tiger_sentence_ascii")
+                local caps = schema.config:get_bool("ascii_composer/good_old_caps_lock")
+                if caps == nil then caps = defaults:get_bool("ascii_composer/good_old_caps_lock") end
+                private.config:set_bool("ascii_composer/good_old_caps_lock", caps or false)
+                for _, name in ipairs({"Shift_L", "Shift_R", "Control_L", "Control_R",
+                    "Alt_L", "Alt_R", "Super_L", "Super_R", "Caps_Lock", "Eisu_toggle"}) do
+                    local path = "ascii_composer/switch_key/" .. name
+                    local style = source:get_string(path) or "noop"
+                    if style == "commit_code" or style == "inline_ascii" then style = "commit_text" end
+                    private.config:set_string(path, style)
+                end
+                schema = private
+            end
+            env.native_schema = schema
+            env.native = Component.Processor(env.engine, schema, "", "ascii_composer")
+        end
+        return env.native:process_key_event(key)
+    end,
+    fini = function(env) env.native = nil; env.native_schema = nil end
 }
 return M

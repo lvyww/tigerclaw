@@ -469,11 +469,25 @@ release tree. Keep `.bat` files CRLF.
 
 ## Related Ports And Experiments
 
-- `rime/tiger_sentence/`: standalone experimental Rime pack. Regenerate its
-  plain-text data files with `python3 tools/export_tiger_sentence_rime.py`.
+- `rime/tiger_sentence/`: standalone experimental Rime pack.
+  Optional `tiger_sentence_early_commit_to_preedit` (default off) buffers early
+  confirmations in preedit until host submission. Backspace removes live code,
+  then buffered Unicode characters without restoring codes. Deferred learning
+  is cancelled on deletion/cancel; schema changes cancel the buffer. The native
+  ASCII composer wrapper uses `tiger_sentence_ascii.schema.yaml` as a private
+  configuration so raw/inline exits cannot emit the internal marker. Update
+  rime.lua, both Lua modules and both schemas together. Real-host regression:
+  `tools/test_rime_preedit_integration.py` and `tools/rime_preedit_probe.cpp`.
+  Regenerate its plain-text data files with `python3 tools/export_tiger_sentence_rime.py`.
   Keep Lua 5.5 compatibility: never assign to a `for` control variable; use a
   separate local for converted values. Run `tools/run_regressions.py` with
   Lua 5.5, Lua 5.4 and LuaJIT when changing the runtime module.
+  Learning uses immutable per-code aggregate partitions and lazy score epochs;
+  normal confirmation and minute refresh do not replay the whole journal.
+  `learning.build` remains the independent full-replay test oracle. Clock
+  rollback/future timestamps retain a replay fallback. Preserve database hash
+  arithmetic, durable-write-before-publish and the 64-code prefix-search bound.
+  Performance evidence and commands: `tools/RIME_PERFORMANCE.md`.
   The pack includes `symbols.yaml` as its directly-committing punctuation
   default; the schema imports that preset instead of Rime's `default` preset.
   The schema disables built-in `digit_separators` so punctuation after digits
