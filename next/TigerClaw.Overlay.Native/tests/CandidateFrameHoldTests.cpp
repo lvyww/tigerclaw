@@ -86,6 +86,133 @@ struct CandidateFrameHoldProbe {
         pending_probe::Check(!app.transition_.Active() && !app.pendingPlacement_,"Pending suffix retained old animation");
         pending_probe::Check(app.placement_.RecordCount()==records,"Pending suffix consumed placement history");
     }
+    static void BlankResidence() {
+        using namespace pending_probe;
+        State ready;ready.isChinese=true;ready.composition=2;ready.candidateVisible=true;
+        ready.input=u"ab";ready.candidates={u"Alpha",u"Beta"};ready.showCode=true;
+        ready.candidateFrameSession=u"before";ready.residenceDurationMs=1500;
+        auto commit=[&] {
+            State idle=ready;idle.composition=1;idle.candidateVisible=false;
+            idle.input.clear();idle.candidates.clear();idle.candidateFrameSession=u"committed";
+            idle.backgroundUntil=now+ready.residenceDurationMs;return idle;
+        };
+        for(int duration:{0,1,250,3000,60000}) {
+            CandidateFrameHoldProbe p;ready.residenceDurationMs=duration;p.Install(ready);p.Refresh();
+            auto idle=commit();p.Install(idle);p.Refresh();
+            Check(p.Visible()==(duration>0), "Residence duration enable/disable failed");
+            if(duration>0) {
+                now+=duration-1;p.Refresh();Check(p.Visible(), "Custom residence expired early");
+                ++now;p.Refresh();Check(!p.Visible(), "Custom residence exceeded deadline");
+            }
+            ++cases;
+        }
+        ready.residenceDurationMs=1500;
+        for(bool vertical:{false,true}) {
+            CandidateFrameHoldProbe p(vertical);p.Install(ready);p.Refresh();
+            const auto before=p.Rect();const auto frames=published;
+            auto idle=commit();p.Install(idle);p.Refresh();
+            auto rect=p.Rect();
+            Check(p.Visible() && p.app.blankResidence_ && EqualRect(&before,&rect),"Commit changed residence geometry/visibility");
+            Check(published==frames+1 && p.app.display_.text.empty() && !p.app.frameCanBeHeld_,"Residence retained candidate content");
+            const auto blankFrames=published;const auto deadline=p.app.blankDeadline_;
+            p.app.state_.caretX+=80;p.app.state_.caretY+=10;
+            now+=1499;p.Refresh();rect=p.Rect();
+            Check(p.Visible() && EqualRect(&rect,&before) && published==blankFrames && p.app.blankDeadline_==deadline,
+                "Caret update moved/repainted/extended residence");
+            ++now;p.app.Message(p.app.candidate_,WM_TIMER,5,0);
+            Check(!p.Visible() && !p.app.blankResidence_,"Residence did not expire at 1500ms");
+            p.Refresh();Check(!p.Visible(),"Expired hint restarted residence");++cases;
+        }
+        {
+            CandidateFrameHoldProbe p;p.Install(ready);p.Refresh();const auto before=p.Rect();
+            p.Install(commit());p.Refresh();now+=500;
+            auto next=ready;next.candidateFrameSession=u"new-input";next.candidates={u"Next"};
+            next.candidateVisible=false;p.Install(next);p.Refresh();
+            Check(p.Visible() && p.app.blankResidence_,"Fresh-caret wait hid resident frame before continuation");
+            next.candidateVisible=true;
+            p.caret.x+=70;p.Install(next);p.app.state_.animationEnabled=true;p.Refresh();
+            auto rect=p.Rect();
+            Check(p.Visible() && !p.app.blankResidence_ && p.app.transition_.Active() && EqualRect(&before,&rect),
+                "New input did not animate from resident rectangle");
+            p.Tick(250);Check(p.Visible() && p.app.frameCanBeHeld_ && !p.app.display_.text.empty(),"New frame did not finish");
+            now+=2000;p.app.Message(p.app.candidate_,WM_TIMER,5,0);
+            Check(p.Visible(),"Stale residence timer hid new input");++cases;
+        }
+        {
+            CandidateFrameHoldProbe p;p.Install(ready);p.Refresh();p.Install(commit());p.Refresh();
+            auto next=ready;next.candidateFrameSession=u"delayed-input";next.showCode=false;
+            p.Install(next);p.app.state_.candidateDelay=200;p.app.state_.animationEnabled=true;
+            p.Refresh();Check(p.Visible() && p.app.blankResidence_,"Reveal delay hid resident frame");
+            now+=199;p.Refresh();Check(p.Visible() && p.app.blankResidence_,"Reveal delay ended early");
+            ++now;p.Refresh();Check(p.Visible() && !p.app.blankResidence_ && p.app.transition_.Active(),"Delayed reveal failed to animate");
+            p.Tick(250);Check(p.Visible() && !p.app.display_.text.empty(),"Delayed candidate did not publish");++cases;
+        }
+        for(unsigned elapsed:{0u,10u,50u,99u}) {
+            CandidateFrameHoldProbe p;p.Install(ready);p.Refresh();p.Install(commit());p.Refresh();
+            for(unsigned word=0;word<30;++word) {
+                auto next=ready;next.input=u"vujg";next.candidates={u"\u8fd9\u4e2a"};
+                next.candidateFrameSession=FromUtf8("repeated-"+std::to_string(word));
+                p.caret.x+=20;p.Install(next);p.app.state_.animationEnabled=true;p.app.state_.animationDurationMs=100;p.Refresh();
+                Check(p.Visible() && p.app.transition_.Active(),"Repeated input did not start a transition");
+                p.Tick(elapsed);const auto before=p.Rect();
+                auto idle=commit();idle.candidateFrameSession=FromUtf8("commit-"+std::to_string(word));
+                p.Install(idle);p.Refresh();const auto after=p.Rect();
+                Check(p.Visible() && p.app.blankResidence_ && p.app.display_.text.empty() && EqualRect(&before,&after),
+                    "Commit during unfinished transition lost residence");
+                now+=1;
+            }
+            ++cases;
+        }
+        for(bool expire:{false,true}) {
+            CandidateFrameHoldProbe p;p.Install(ready);p.Refresh();p.Install(commit());p.Refresh();
+            auto waiting=ready;waiting.candidateVisible=false;waiting.backgroundUntil=0;
+            waiting.candidateFrameSession=u"waiting-input";p.Install(waiting);p.Refresh();
+            Check(p.Visible() && p.app.blankResidence_,"Wait did not preserve blank frame");
+            if(expire)now+=1500;else p.app.state_.candidateFrameSession=u"different-focus";
+            p.Refresh();Check(!p.Visible(),"Wait bypassed expiry or session invalidation");++cases;
+        }
+        {
+            CandidateFrameHoldProbe p;p.Install(ready);p.Refresh();p.Install(commit());p.Refresh();
+            auto waiting=ready;waiting.candidateVisible=false;waiting.backgroundUntil=0;
+            waiting.candidateFrameSession=u"fast-next";p.Install(waiting);p.Refresh();
+            const auto before=p.Rect();const auto frames=published;
+            now+=20;p.Install(commit());p.Refresh();const auto after=p.Rect();
+            Check(p.Visible() && p.app.blankResidence_ && EqualRect(&before,&after) && frames==published,
+                "Commit during caret wait lost or repainted blank residence");
+            now+=1499;p.Refresh();Check(p.Visible(),"Fresh commit failed to renew residence deadline");
+            ++now;p.Refresh();Check(!p.Visible(),"Renewed residence outlasted 1500ms");++cases;
+        }
+        for(int cancel=0;cancel<8;++cancel) {
+            CandidateFrameHoldProbe p;p.Install(ready);p.Refresh();p.Install(commit());p.Refresh();
+            if(cancel==0)p.app.state_.backgroundUntil=0;
+            if(cancel==1)p.app.state_.candidateFrameSession=u"focus-changed";
+            if(cancel==2)p.app.state_.isChinese=false;
+            if(cancel==3)p.app.state_.isOff=true;
+            if(cancel==4)p.app.state_.hideCandidates=true;
+            if(cancel==5)p.app.frameForeground_=reinterpret_cast<HWND>(-1);
+            if(cancel==6)p.app.state_.caretX=-300000;
+            if(cancel==7)p.app.state_.residenceDurationMs=0;
+            p.Refresh();Check(!p.Visible() && !p.app.blankResidence_,"Cancelled residence stayed visible");++cases;
+        }
+        for(int composition:{2,3,4,5}) {
+            CandidateFrameHoldProbe p;auto state=ready;state.composition=composition;
+            p.Install(state);p.Refresh();auto idle=commit();
+            if(composition==2)idle.backgroundUntil=0; // Escape/Backspace, not a text commit
+            p.Install(idle);p.Refresh();Check(!p.Visible(),"Nonordinary/cancelled input started residence");++cases;
+        }
+        {
+            CandidateFrameHoldProbe p;p.Install(commit());p.Refresh();Check(!p.Visible(),"Commit hint created an unseen window");++cases;
+        }
+        {
+            CandidateFrameHoldProbe p;p.Install(ready);p.Refresh();p.Install(commit());failPresent=1;p.Refresh();
+            Check(!p.Visible(),"Failed blank publication retained old text");++cases;
+        }
+        {
+            CandidateFrameHoldProbe p;p.Install(ready);p.Refresh();p.Install(commit());
+            duringPresent=[&] {p.app.state_.backgroundUntil=0;p.app.state_.candidateFrameSession=u"cancel";p.Refresh();};
+            p.Refresh();Check(!p.Visible() && !p.app.blankResidence_,"Reentrant cancellation resurrected blank frame");++cases;
+        }
+    }
     static void Run(const std::map<std::string,State>& wire) {
         using namespace pending_probe;
         for(bool vertical:{true,false}) {
@@ -266,6 +393,10 @@ int main(int argc,char** argv) {
         withoutHint=argc==3 && std::string(argv[2])=="--without-hint";
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
         Check(SUCCEEDED(CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED)),"COM initialization failed");
+        if(std::string(argv[1])=="--blank-residence") {
+            tiger::overlay::CandidateFrameHoldProbe::BlankResidence();CoUninitialize();
+            std::cout<<"blank residence passed: "<<cases<<" cases, "<<checks<<" checks\n";return 0;
+        }
         std::map<std::string,tiger::overlay::State> wire;
         std::ifstream file(argv[1]);Check(file.good(),"Cannot read Core-generated trace");
         std::string line;

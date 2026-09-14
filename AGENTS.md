@@ -295,7 +295,18 @@ block Core on a paused reader. Contract: `Protocol/ui_state.md`.
   Settings show only the two shortcut rows. Disabled bindings display `清空`;
   the `修改` dialog clears or restores defaults immediately into the unsaved
   settings page. Legacy enable flags remain internal compatibility data.
-- Overlay owns candidate display. It retains an already published nonempty
+- Overlay owns candidate display. Ordinary word commits experimentally leave an empty native candidate frame
+  at its published rectangle when `上屏后候选窗驻留时间(毫秒)` is positive
+  (0..60000, default 0/off). Core publishes `CandidateResidenceDurationMs`
+  and the absolute `CandidateBackgroundUntil` deadline. A new ordinary composition
+  can animate from it; focus/cancel/English/off/hiding/invalid geometry revoke it.
+  Fresh-caret gating and candidate reveal delay in the first resumed ordinary
+  session preserve only the blank frame within the original deadline.
+  A fresh ordinary commit during that wait or an unfinished animation starts
+  another configured-duration residence at the actual displayed rectangle.
+  It never preserves text or extends expiry on caret updates. Real-window probe:
+  `overlay_pending_frame_tests.exe --blank-residence`.
+  It retains an already published nonempty
   candidate/code-only frame while
   sentence decoding is pending in the same `CandidateFrameSession`. This also
   covers another key after a completed empty decode, without a hide/show flash.

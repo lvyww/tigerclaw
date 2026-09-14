@@ -19,6 +19,10 @@ int main()
             animated.animationDurationMs == 200, "default geometry animation duration");
         Check(ParseState(R"({"CandidateAnimationEnabled":false,"CandidateAnimationDurationMs":350})", animated) &&
             !animated.animationEnabled && animated.animationDurationMs == 350, "animation settings parse");
+        Check(ParseState(R"({})", animated) && animated.residenceDurationMs == 0, "old Core defaults residence off");
+        Check(ParseState(R"({"CandidateResidenceDurationMs":3000})", animated) && animated.residenceDurationMs == 3000, "custom residence duration");
+        Check(ParseState(R"({"CandidateResidenceDurationMs":-1})", animated) && animated.residenceDurationMs == 0, "negative residence disabled");
+        Check(ParseState(R"({"CandidateResidenceDurationMs":60001})", animated) && animated.residenceDurationMs == 60000, "residence duration capped");
         FrameRect from{100, 200, 400, 200};
         for (FrameRect target : {FrameRect{200,300,400,200}, FrameRect{100,200,600,300}, FrameRect{100,200,200,100}})
         {

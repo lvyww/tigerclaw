@@ -34,6 +34,11 @@ namespace tiger::overlay
         FrameTransition transition_;
         bool transitionsEnabled_ = true;
         bool frameCanBeHeld_ = false;
+        bool blankResidence_ = false;
+        std::uint64_t blankDeadline_ = 0;
+        std::int64_t blankCommitHint_ = 0;
+        std::optional<Text> residenceInputSession_;
+        HWND frameForeground_ = nullptr;
         Text candidateSession_, frameSession_;
         HMONITOR frameMonitor_ = nullptr;
         RECT frameWork_{};
@@ -93,13 +98,116 @@ namespace tiger::overlay
             MONITORINFO monitor{sizeof(monitor)};
             frameDpi_ = GetMonitorInfoW(frameMonitor_, &monitor) ? candidateDpi_ : 0;
             frameWork_ = monitor.rcWork;
+            frameForeground_ = GetForegroundWindow();
             return true;
         }
         void HideImmediately()
         {
+            blankResidence_ = false; KillTimer(candidate_, 5);
+            residenceInputSession_.reset();
             StopTransition();
             frameCanBeHeld_ = false;
             ShowWindow(candidate_, SW_HIDE);
+        }
+        bool ResidenceEnvironmentValid()
+        {
+            if (!IsWindowVisible(candidate_) || GetForegroundWindow() != frameForeground_ ||
+                !UsableCaret(state_.caretX, state_.caretY)) return false;
+            POINT caret{state_.caretX, state_.caretY};
+            auto monitor = MonitorFromPoint(caret, MONITOR_DEFAULTTONEAREST);
+            MONITORINFO info{sizeof(info)};
+            return monitor == frameMonitor_ && DpiAt(caret) == frameDpi_ &&
+                GetMonitorInfoW(monitor, &info) && EqualRect(&info.rcWork, &frameWork_);
+        }
+        bool RefreshBlankResidence(std::uint64_t revision)
+        {
+            const auto now = GetTickCount64();
+            const bool enabled = state_.residenceDurationMs > 0 && state_.isChinese && !state_.isOff && !state_.hideCandidates;
+            const bool idle = enabled && state_.composition == 1 && !state_.candidateVisible &&
+                state_.input.empty() && state_.candidates.empty();
+            if (blankResidence_)
+            {
+                if (now < blankDeadline_ && enabled && ResidenceEnvironmentValid())
+                {
+                    if (idle && residenceInputSession_ && renderedState_.composition == 2 &&
+                        state_.backgroundUntil > 0 && state_.backgroundUntil != renderedState_.backgroundUntil &&
+                        static_cast<std::uint64_t>(state_.backgroundUntil) > now)
+                    {
+                        // The resumed ordinary input may commit while still
+                        // waiting for its caret/reveal, before publishing text.
+                        // Renew only on a fresh commit, not on an idle update.
+                        blankCommitHint_ = state_.backgroundUntil;
+                        blankDeadline_ = static_cast<std::uint64_t>(state_.backgroundUntil);
+                        candidateSession_ = state_.candidateFrameSession;
+                        residenceInputSession_.reset();
+                        reveal_ = Reveal{};
+                        return true;
+                    }
+                    if (idle && !residenceInputSession_ && state_.backgroundUntil == blankCommitHint_ &&
+                        state_.candidateFrameSession == candidateSession_) return true;
+                    if (state_.composition == 2 && !state_.input.empty() &&
+                        (!residenceInputSession_ || *residenceInputSession_ == state_.candidateFrameSession))
+                    {
+                        residenceInputSession_ = state_.candidateFrameSession;
+                        // Fresh-caret gating publishes composition before it
+                        // permits candidate display. Keep only the blank frame
+                        // during that gap; don't reveal candidates prematurely.
+                        if (!state_.candidateVisible) return true;
+                        // Likewise wait through configured candidate reveal
+                        // delay. Timer 5 advances this without extending expiry.
+                        if (reveal_.Update(state_, now).mode == DisplayMode::Hidden) return true;
+                        // The new composition gets a fresh anchor, but starts
+                        // its geometry transition from the blank visible frame.
+                        blankResidence_ = false; KillTimer(candidate_, 5);
+                        residenceInputSession_.reset();
+                        candidateSession_ = state_.candidateFrameSession;
+                        candidateDrawn_ = false;
+                        return false;
+                    }
+                }
+                HideImmediately();
+                return false;
+            }
+            // Core publishes the configured absolute deadline. Missing duration
+            // means disabled, including when talking to an older Core.
+            if (state_.backgroundUntil <= 0) return false;
+            const auto deadline = state_.backgroundUntil;
+            if (!idle || deadline <= 0 || static_cast<std::uint64_t>(deadline) <= now ||
+                state_.backgroundUntil == renderedState_.backgroundUntil || renderedState_.composition != 2 ||
+                (!frameCanBeHeld_ && !(transition_.Active() && pendingPlacement_)) ||
+                !ResidenceEnvironmentValid()) return false;
+            // A resumed geometry transition may still display the prior blank
+            // frame (or an intermediate candidate frame). Another commit need
+            // not wait for ShowCandidate's final-frame/pending-sentence flag.
+            // Freeze the rectangle actually published, never the target size.
+            RECT rect{};
+            if (!GetWindowRect(candidate_, &rect)) return false;
+            SIZE size{rect.right - rect.left, rect.bottom - rect.top};
+            if (size.cx <= 0 || size.cy <= 0) return false;
+            StopTransition(); KillTimer(candidate_, 1); KillTimer(candidate_, 3);
+            frameCanBeHeld_ = false; candidateDrawn_ = false;
+            Display blank{display_.mode, {}, -1, 0};
+            try
+            {
+                transitionRenderer_.Prepare(renderedState_, blank, candidateDpi_, false, &size);
+                if (revision != visualRevision_) return false;
+                POINT point{rect.left, rect.top};
+                transitionRenderer_.Present(candidate_, &point);
+                if (revision != visualRevision_) return false;
+                display_ = std::move(blank);
+                reveal_ = Reveal{};
+                candidateSession_ = state_.candidateFrameSession;
+                placement_.EndInput();
+                blankCommitHint_ = state_.backgroundUntil;
+                residenceInputSession_.reset();
+                blankDeadline_ = static_cast<std::uint64_t>(deadline);
+                blankResidence_ = true;
+                // Also detect a foreground switch even if Core's notification
+                // is delayed; callbacks never extend the absolute deadline.
+                if (!SetTimer(candidate_, 5, 25, nullptr)) { HideImmediately(); return false; }
+                return true;
+            }
+            catch (...) { HideImmediately(); return false; }
         }
         bool CanHoldCandidateFrame()
         {
@@ -284,9 +392,9 @@ namespace tiger::overlay
         {
             if (!candidate_ || !status_) return;
             const auto revision = ++visualRevision_;
-            ObserveCandidateSession();
             if (inFrame_)
             {
+                ObserveCandidateSession();
                 // A forced refresh can be coalesced safely; never consume a
                 // source snapshot or mutate a renderer recursively.
                 if (!refreshQueued_) refreshQueued_ = PostMessageW(candidate_, RefreshMessage, 0, 0) != FALSE;
@@ -296,6 +404,13 @@ namespace tiger::overlay
                 return;
             }
             FrameGuard guard(inFrame_);
+            if (RefreshBlankResidence(revision))
+            {
+                RefreshStatus(force);
+                if (revision == visualRevision_) renderedState_ = state_;
+                return;
+            }
+            ObserveCandidateSession();
             if (PendingCandidateFrame(state_))
             {
                 HoldCandidateFrame();

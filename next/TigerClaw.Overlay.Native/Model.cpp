@@ -113,6 +113,8 @@ namespace tiger::overlay
             scalar("CandidateAnimationEnabled", next.animationEnabled);
             scalar("CandidateAnimationDurationMs", next.animationDurationMs);
             next.animationDurationMs = std::clamp(next.animationDurationMs, 0, 60000);
+            scalar("CandidateResidenceDurationMs", next.residenceDurationMs);
+            next.residenceDurationMs = std::clamp(next.residenceDurationMs, 0, 60000);
             scalar("SelectedCandidateIndex", next.selected); scalar("FontSize", next.fontSize);
             scalar("SoundSeq", next.soundSequence); scalar("CandidateAnchorRevision", next.anchorRevision);
             scalar("CandidateBackgroundUntil", next.backgroundUntil);

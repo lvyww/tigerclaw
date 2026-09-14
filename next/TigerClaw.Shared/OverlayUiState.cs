@@ -94,6 +94,7 @@ namespace TigerClaw.Shared
         public bool CandidateAnimationEnabled { get; set; } = true;
         [DataMember(Order = 33)]
         public int CandidateAnimationDurationMs { get; set; } = 200;
+        public int CandidateResidenceDurationMs { get; set; } = 0;
 
         // Optional hint; old overlays still see CandidateVisible == false.
         [DataMember(Order = 34)]

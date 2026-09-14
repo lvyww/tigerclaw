@@ -31,6 +31,7 @@ namespace TigerClaw.Dialog
         private const string KeySwitchRecentSchemaEnabled = "Ctrl+m切换最近码表";
         private const string KeyAnimation = "候选窗动效";
         private const string KeyAnimationDuration = "候选窗动效时间(毫秒)";
+        private const string KeyResidenceDuration = "上屏后候选窗驻留时间(毫秒)";
         private const string KeyManualAddWordShortcut = "手动加词快捷键";
         private const string KeySwitchRecentSchemaShortcut = "切换最近码表快捷键";
         private const string DefaultManualAddWordShortcut = "Ctrl+VK_OEM_PLUS";
@@ -335,6 +336,7 @@ namespace TigerClaw.Dialog
             if (!config.ContainsKey(KeyKeySoundVolume)) config[KeyKeySoundVolume] = "30";
             if (!config.ContainsKey(KeyAnimation)) config[KeyAnimation] = Yes;
             if (!config.ContainsKey(KeyAnimationDuration)) config[KeyAnimationDuration] = "200";
+            if (!config.ContainsKey(KeyResidenceDuration)) config[KeyResidenceDuration] = "0";
             foreach (KeyValuePair<string, string> kv in config)
             {
                 if (kv.Key == KeyAnimationDuration || kv.Key == "候选窗出现时间(毫秒)" || kv.Key == "候选窗消失时间(毫秒)" || kv.Key == KeyKeySoundVolume) continue;
@@ -409,7 +411,7 @@ namespace TigerClaw.Dialog
                 Duration = new TextBox { Text = config[KeyAnimationDuration], Style = (Style)FindResource("FieldTextStyle"), MinWidth = 0, Width = 65 }
             };
             var row = new Grid { Tag = controls, MinHeight = 32,
-                ToolTip = "时间单位：毫秒（0～60000）。候选窗移动、扩大和收缩共用此时长，出现和消失立即完成；0 为立即变化。" };
+                ToolTip = "时间单位：毫秒（0～60000）。候选窗移动、扩大和收缩共用此时长，出现立即完成，上屏后的空白驻留由驻留时间单独设置；0 为立即变化。" };
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(210) });
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             row.Children.Add(new TextBlock { Text = "动效", Style = (Style)FindResource("RowTitleStyle"),
@@ -943,12 +945,12 @@ namespace TigerClaw.Dialog
         {
             Dictionary<string, string> current = CollectCurrentValues();
             changedAny = false;
-            foreach (string key in new[] { KeyAnimationDuration })
+            foreach (string key in new[] { KeyAnimationDuration, KeyResidenceDuration })
             {
                 if (current.TryGetValue(key, out string duration) && !string.IsNullOrWhiteSpace(duration) &&
                     (!int.TryParse(duration, out int milliseconds) || milliseconds < 0 || milliseconds > 60000))
                 {
-                    StatusText.Text = "状态：动效时间请输入 0～60000 的整数（毫秒），留空使用默认值。";
+                    StatusText.Text = "状态：" + key + "请输入 0～60000 的整数，留空使用默认值。";
                     return false;
                 }
             }
@@ -1463,7 +1465,9 @@ namespace TigerClaw.Dialog
                 case "隐藏候选":
                     return "隐藏候选窗口，只保留输入中的文字变化。";
                 case "候选窗动效":
-                    return "动效时间控制候选窗移动、扩大和收缩，出现和消失立即完成，单位毫秒。";
+                    return "动效时间控制候选窗移动、扩大和收缩，单位毫秒；上屏后驻留由单独选项控制。";
+                case KeyResidenceDuration:
+                    return "普通字词上屏后，候选窗清空内容并保持位置和大小，续输衔接动效。0 关闭，默认 0；范围 0～60000 毫秒。";
                 case "编码伪装":
                     return "对展示编码做轻度伪装处理。";
                 case "空码自动清屏":
@@ -1563,6 +1567,7 @@ namespace TigerClaw.Dialog
                 case "显示拆分":
                 case "隐藏候选":
                 case "延时显示候选(毫秒)":
+                case KeyResidenceDuration:
                 case "延时展开注释和拆分(毫秒)":
                 case "编码伪装":
                     return SectionCandidate;

@@ -74,6 +74,24 @@ native application with the new snapshot and event.
 
 ## Pending sentence candidate frames
 
+Native Overlay also uses the existing `CandidateBackgroundUntil` timestamp as
+an ordinary-word commit capability. Core publishes commit tick + configured residence duration and
+revokes it on subsequent keys or focus/cancel/config messages. The experimental
+empty-frame residence is controlled by optional `CandidateResidenceDurationMs`
+(0..60000, default 0/off), requires
+a previously visible ordinary composition followed by Chinese idle, and never
+extends the deadline on caret updates. It preserves geometry with no candidate
+content and permits a subsequent ordinary frame to use the existing transition.
+Fresh-caret gating (`CompositionState=2`, nonempty input, `CandidateVisible=false`)
+and candidate reveal delay may intervene before that transition. The existing
+blank frame survives those waits within the original deadline; it does not show
+the pending candidate text. A second input-session change invalidates the wait.
+A new ordinary commit may interrupt the transition or that wait: its fresh
+capability starts another configured-duration residence at the currently published rectangle,
+without requiring a completed animation or a newly drawn candidate frame.
+This is independent of pending sentence retention below; the duration field requires an updated Core. Older Core without that field
+keeps immediate hiding. The setting is `上屏后候选窗驻留时间(毫秒)`.
+
 Optional `CandidateHoldWhilePending` (default false) accompanies
 `CandidateVisible=false` when a Chinese sentence composition has an empty
 projected candidate list and its decoder has not finished. Core captures the

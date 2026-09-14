@@ -22,6 +22,7 @@ namespace tiger::overlay
         int selected = -1;
         bool animationEnabled = true;
         int animationDurationMs = 200;
+        int residenceDurationMs = 0;
         double fontSize = 0;
         std::int64_t soundSequence = 0, anchorRevision = 0;
         std::int64_t backgroundUntil = 0;

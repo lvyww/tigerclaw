@@ -49,8 +49,41 @@ Regression: `tests/test_pending_frame.py` with the real Core-generated trace.
 Candidate animations apply to every input mode and only interpolate geometry
 while the candidate window is already visible. Movement, growth and shrinkage
 share one duration (default 200 ms). Appearing publishes the full candidate
-frame immediately; disappearing cancels any animation and hides immediately.
+frame immediately. Ordinary word commits experimentally leave an empty frame
+for the configured `上屏后候选窗驻留时间(毫秒)` (0..60000, default 0/off);
+other disappearing states hide immediately.
 Interrupted geometry changes continue from the actual displayed rectangle.
+
+The ordinary-word residence reuses Core's existing `CandidateBackgroundUntil`
+commit capability (commit time + configured duration), together with the optional
+`CandidateResidenceDurationMs` field. Missing/zero duration disables residence.
+It requires a previously published ordinary composition (state 2), followed by
+Chinese idle (state 1) with a fresh commit hint. The blank frame keeps the actual
+published rectangle, background and border, with no text or selection. Caret
+updates do not move it or extend its deadline. Another ordinary composition in
+the interval acquires a fresh caret anchor and animates from this visible blank
+rectangle using the existing animation settings.
+New ordinary input may first publish `CandidateVisible=false` while waiting for
+a fresh caret. This gap and the configured candidate reveal delay preserve the
+blank frame, without prematurely displaying the new text or extending the
+original expiry. The first new input session is pinned; another session change
+still invalidates residence.
+An ordinary commit during an unfinished transition freezes its current published
+rectangle and starts a fresh configured-duration blank residence, even before the animation's
+first tick. A resumed ordinary input committing during its caret/reveal wait also
+renews the blank residence; ordinary caret/idle updates cannot renew it.
+Sentence/pinyin/uppercase input,
+cancel, focus/session changes, English/off, explicit hiding and invalid geometry
+do not start or preserve this residence. A 25 ms timer checks expiry/foreground;
+blank publication failure hides immediately rather than retaining old text.
+No placeholder appears without an existing candidate window. Fully transparent
+themes remain transparent; actual movement still requires enabled animation.
+
+Windows regression: `overlay_pending_frame_tests.exe --blank-residence` uses
+test-owned nonactivating windows, the production renderer and a controlled clock.
+It covers default-off, custom 1..60000 ms durations, disabling while resident, 1500 ms expiry, unchanged geometry, resumed transitions, cancellation,
+stale timers, failed presentation and reentry. This does not replace typing
+acceptance in the user's applications.
 
 The Candidate settings category exposes one compact row: animation checkbox and
 duration in milliseconds (`候选窗动效时间(毫秒)`, default 200).

@@ -607,7 +607,10 @@ namespace TigerClaw.Core
             if (wasComposing && result.Handled && !result.IsComposing && result.IsChinese &&
                 wasChinese == result.IsChinese && !string.IsNullOrEmpty(result.TextToOutput) &&
                 !ctrl && !alt && !win && vk != 0x1B && vk != 0x14 && vk != 0x10)
-                Interlocked.Exchange(ref _candidateBackgroundUntil, Environment.TickCount64 + 2000);
+            {
+                int residenceMs = _state.GetCandidateResidenceDurationMs();
+                Interlocked.Exchange(ref _candidateBackgroundUntil, residenceMs > 0 ? Environment.TickCount64 + residenceMs : 0);
+            }
             var learningEvents = _engine.TakeSentenceLearning(result, out var learningStore);
             string learningReceipt = ConvertToInt(msg.GetValue("learning_ack_version"), 0) == 1
                 ? _learningReceipts.Issue(ConvertToString(msg.GetValue("client_session")), learningStore, learningEvents) : null;
@@ -924,6 +927,7 @@ namespace TigerClaw.Core
                         CandidateExpandDelayMs = _state.GetCandidateExpandDelayMs(),
                         CandidateAnimationEnabled = _state.GetCandidateAnimationEnabled(),
                         CandidateAnimationDurationMs = _state.GetCandidateAnimationDurationMs(),
+                        CandidateResidenceDurationMs = _state.GetCandidateResidenceDurationMs(),
                         // Temporary pinyin is a reverse lookup: show its hints immediately.
                         AnnotationExpandDelayMs = engineState.CompositionState == 4
                             ? 0 : _state.GetAnnotationExpandDelayMs(),

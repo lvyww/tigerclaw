@@ -22,6 +22,13 @@ namespace TigerClaw.Core.Tests
         {
             try
             {
+                if (args.Length == 1 && args[0] == "--candidate-settings-tests")
+                {
+                    CandidateAnimationSettings();
+                    KeyResponsesDeclareExpectedKeyUp();
+                    Console.WriteLine("Candidate settings and commit deadline tests passed.");
+                    return 0;
+                }
                 if (args.Length == 1 && args[0] == "--startup-context-tests")
                 {
                     RunStartupContextTests();
@@ -411,6 +418,15 @@ namespace TigerClaw.Core.Tests
             {
                 var state = new CoreRuntimeState(root);
                 state.Initialize();
+                True(state.GetCandidateResidenceDurationMs() == 0, "residence disabled by default");
+                foreach (var sample in new[] { ("1500",1500), ("3000",3000), ("0",0), ("",0), ("invalid",0), ("-1",0), ("60001",60000) })
+                {
+                    state.TrySetConfigValue("上屏后候选窗驻留时间(毫秒)", sample.Item1, out _, out _);
+                    True(state.GetCandidateResidenceDurationMs() == sample.Item2, "residence duration " + sample.Item1);
+                    var reloaded = new CoreRuntimeState(root);
+                    reloaded.Initialize();
+                    True(reloaded.GetCandidateResidenceDurationMs() == sample.Item2, "persisted residence " + sample.Item1);
+                }
                 True(state.GetCandidateAnimationEnabled(), "animation enabled default");
                 True(state.GetCandidateAnimationDurationMs() == 200, "animation duration default");
                 state.TrySetConfigValue("候选窗动效", "否", out _, out _);
@@ -5716,8 +5732,13 @@ namespace TigerClaw.Core.Tests
                     System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
                 handler.Handle("{\"type\":\"key\",\"action\":\"down\",\"vk\":65}");
                 handler.Handle("{\"type\":\"key\",\"action\":\"down\",\"vk\":13}");
+                True((long)holdField.GetValue(handler) == 0, "default commit disables residence");
+                state.TrySetConfigValue("上屏后候选窗驻留时间(毫秒)", "3000", out _, out _);
+                handler.Handle("{\"type\":\"key\",\"action\":\"down\",\"vk\":65}");
+                long beforeCommit = Environment.TickCount64;
+                handler.Handle("{\"type\":\"key\",\"action\":\"down\",\"vk\":13}");
                 long deadline = (long)holdField.GetValue(handler);
-                True(deadline > 0 && deadline <= Environment.TickCount64 + 2000, "ordinary commit sets bounded background deadline");
+                True(deadline >= beforeCommit + 3000 && deadline <= Environment.TickCount64 + 3000, "ordinary commit sets bounded background deadline");
                 handler.Handle("{\"type\":\"key\",\"action\":\"up\",\"vk\":13}");
                 True(deadline == (long)holdField.GetValue(handler), "keyup does not extend background deadline");
                 handler.Handle("{\"type\":\"composition_canceled\"}");
