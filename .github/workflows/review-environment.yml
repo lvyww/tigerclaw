@@ -1,0 +1,37 @@
+name: One-shot sentence review environment
+on:
+  push:
+    branches: [codex/stage-tigerclaw-review-20260915]
+permissions:
+  contents: read
+jobs:
+  environment:
+    if: github.repository == 'lvyww/tigerclaw'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
+        with:
+          dotnet-version: '10.0.100'
+      - name: Archive exact source baseline and isolated SDK for offline verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p review-environment
+          dotnet --info | tee review-environment/dotnet-info.txt
+          git archive 1bf8028bb2c2f7590031f9d2c65bb0ec910e9200 AGENTS.md next/TigerClaw.Core next/TigerClaw.Core.Tests next/TigerClaw.Shared next/TigerClaw.Sentence.Native tests .github | gzip > review-environment/baseline.tar.gz
+          sdkroot="$(dirname "$(readlink -f "$(command -v dotnet)")")"
+          tar -C "$sdkroot" -czf review-environment/dotnet-sdk.tar.gz dotnet host/fxr/10.0.0 shared/Microsoft.NETCore.App/10.0.0 sdk/10.0.100 packs/Microsoft.NETCore.App.Ref/10.0.0 packs/Microsoft.NETCore.App.Host.linux-x64/10.0.0 LICENSE.txt ThirdPartyNotices.txt
+          sha256sum review-environment/*.tar.gz > review-environment/SHA256SUMS
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: sentence-review-environment
+          path: review-environment/*
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
