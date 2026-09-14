@@ -3552,6 +3552,7 @@ local function processor(key_event, env)
     if key_event:release() then
         return 2
     end
+    if env._tiger_options then env._tiger_options.sync() end
     ensure_lexicon(env)
     local context = env.engine.context
     set_allow_duplicate_single(context)
@@ -3982,8 +3983,10 @@ M.set_learning_for_test = function(index, mode)
     reset_decode_cache()
 end
 M.processor_component = {
+    init = function(env) M.options.init(env) end,
     func = processor,
     fini = function(env)
+        M.options.fini(env)
         local live = env._tiger_learning
         if live and live.connection then live.connection:disconnect() end
         if live and live.update_connection then live.update_connection:disconnect() end
@@ -3998,6 +4001,86 @@ M.processor_component = {
         env._tiger_learning = nil
     end
 }
+-- These are user preferences, not per-application composition state. Keep a
+-- separate small Rime Config so API/mobile toggles persist too (switcher's
+-- save_options only saves switcher commands). Never rewrite user.yaml or the
+-- user's default.custom.yaml. Disk I/O occurs on load/toggle, never each key.
+M.options = {}
+do
+    local defaults = {
+        tiger_sentence_early_commit = true,
+        tiger_sentence_allow_duplicate_single = true,
+        tiger_sentence_early_commit_to_preedit = false
+    }
+    local stores = {}
+    local function open_store()
+        if type(Config) ~= "function" or not rime_api or
+            type(rime_api.get_user_data_dir) ~= "function" then return nil end
+        local directory = rime_api.get_user_data_dir()
+        if not directory or directory == "" then return nil end
+        local path = directory .. "/tiger_sentence.options.yaml"
+        if stores[path] then return stores[path] end
+        local config = Config()
+        if file_exists(path) then config:load_from_file(path) end
+        local legacy = Config()
+        if file_exists(directory .. "/user.yaml") then legacy:load_from_file(directory .. "/user.yaml") end
+        local store = {config=config, path=path, values={}, revision=0}
+        for name in pairs(defaults) do
+            local value = config:get_bool("options/" .. name)
+            if value == nil then value = legacy:get_bool("var/option/" .. name) end
+            store.values[name] = value
+        end
+        stores[path] = store
+        return store
+    end
+    function M.options.sync(env)
+        local live = env._tiger_options
+        if not live or live.syncing or live.revision == live.store.revision then return end
+        live.syncing = true
+        local context = env.engine.context
+        for name, fallback in pairs(live.defaults) do
+            local value = live.store.values[name]
+            if value == nil then value = fallback end
+            if context:get_option(name) ~= value then context:set_option(name, value) end
+        end
+        live.revision = live.store.revision
+        live.syncing = false
+    end
+    function M.options.init(env)
+        local ok, store = pcall(open_store)
+        if not ok or not store then return end
+        local context = env.engine.context
+        local live = {store=store, defaults={}, revision=-1}
+        live.sync = function() M.options.sync(env) end
+        env._tiger_options = live
+        for name, fallback in pairs(defaults) do
+            local value = env.engine.schema.config:get_bool("tiger_sentence/option_defaults/" .. name)
+            if value == nil then value = fallback end
+            live.defaults[name] = value
+        end
+        M.options.sync(env)
+        live.connection = context.option_update_notifier:connect(function(ctx, name)
+            if live.syncing or defaults[name] == nil then return end
+            local value = ctx:get_option(name)
+            if store.values[name] == value then return end
+            store.values[name] = value
+            store.revision = store.revision + 1
+            -- Leave this session's revision stale: other options may have
+            -- changed in another application since this one was last used.
+            local saved, accepted = pcall(function()
+                for option, choice in pairs(store.values) do store.config:set_bool("options/" .. option, choice) end
+                return store.config:save_to_file(store.path)
+            end)
+            set_property_if_changed(ctx, "tiger_sentence_options_error",
+                saved and accepted and "" or "Unable to save tiger_sentence.options.yaml")
+        end)
+    end
+    function M.options.fini(env)
+        local live = env._tiger_options
+        if live and live.connection then live.connection:disconnect() end
+        env._tiger_options = nil
+    end
+end
 -- Retain Rime's native modifier timing and bindings. Only while a buffered
 -- composition exists, raw-code/inline-ASCII exits must submit its displayed
 -- candidate instead of the private transport marker. The schema is private;

@@ -478,6 +478,11 @@ release tree. Keep `.bat` files CRLF.
   configuration so raw/inline exits cannot emit the internal marker. Update
   rime.lua, both Lua modules and both schemas together. Real-host regression:
   `tools/test_rime_preedit_integration.py` and `tools/rime_preedit_probe.cpp`.
+  The three sentence switches have no `reset`: user choices persist in
+  `tiger_sentence.options.yaml`, with first-use `tiger_sentence/option_defaults`.
+  New sessions restore preferences; existing sessions synchronize before input.
+  Config I/O occurs only on initialization/toggles. Keep this user-owned file
+  across upgrades; do not distribute it. Tests: `tools/test_rime_options_integration.py`.
   Regenerate its plain-text data files with `python3 tools/export_tiger_sentence_rime.py`.
   Keep Lua 5.5 compatibility: never assign to a `for` control variable; use a
   separate local for converted values. Run `tools/run_regressions.py` with

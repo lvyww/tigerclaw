@@ -47,6 +47,21 @@ schema 默认值一致（不一致直接报错），白名单可用 `--full-code
 
 ## 提前上屏至编码（默认关闭）
 
+“提前上屏”“单字重码组句”“提前上屏至编码”三个整句开关会记住最后一次选择，
+跨应用的新会话、应用重启和 Rime 重启后恢复；已打开的其他会话在下一次输入前同步。
+偏好保存在用户目录的 `tiger_sentence.options.yaml`，更新方案时保留此文件。
+它不包含输入内容，也不与学习数据库混用。旧 `user.yaml` 中已有的这三个保存值
+可作为首次迁移来源；方案不改写 `user.yaml` 或 `default.custom.yaml`。
+
+默认仍为提前上屏开、单字重码组句开、提前上屏至编码关。首次使用的默认值放在
+`tiger_sentence/option_defaults/` 下，已有保存值优先。不要再给这三个 switch 加
+`reset`，否则会话初始化会覆盖选择。升级须同时更新 Lua 和主 schema；仅改 Lua
+不能消除旧 schema 的强制重置。完全退出 Rime 后移走偏好文件可清除本方案保存值
+（若旧 `user.yaml` 仍有这三个值，会再次迁移）。
+
+真实多会话、进程重启和默认值/旧设置迁移回归：
+`tools/test_rime_options_integration.py`，探针为 `tools/rime_options_probe.cpp`。
+
 方案选项 `tiger_sentence_early_commit_to_preedit` 的开启名称为“提前上屏至编码”。
 它与“提前上屏开”配合使用：概率提前确认、空码自动确认和 Tab 后续字母确认的
 文字暂存在预编辑区，例如“我们 ja”，最终空格或点选才一次性提交到应用。

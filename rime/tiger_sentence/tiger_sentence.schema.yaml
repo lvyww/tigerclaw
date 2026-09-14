@@ -23,13 +23,10 @@ switches:
   - name: full_shape
     states: [ 半角, 全角 ]
   - name: tiger_sentence_early_commit
-    reset: 1
     states: [ 提前上屏关, 提前上屏开 ]
   - name: tiger_sentence_allow_duplicate_single
-    reset: 1
     states: [ 单字重码组句关, 单字重码组句开 ]
   - name: tiger_sentence_early_commit_to_preedit
-    reset: 0
     states: [ 提前上屏至应用, 提前上屏至编码 ]
 engine:
   processors:
@@ -62,6 +59,11 @@ menu:
   page_size: 5
 
 tiger_sentence:
+  # First-use defaults only. Explicit choices persist across input sessions.
+  option_defaults:
+    tiger_sentence_early_commit: true
+    tiger_sentence_allow_duplicate_single: true
+    tiger_sentence_early_commit_to_preedit: false
   # Learn submitted candidate corrections (direct taps and Tab selections).
   tab_learning: true
   # 提前上屏与空码自动上屏共用的最短保留编码数；0 表示不额外限制。
