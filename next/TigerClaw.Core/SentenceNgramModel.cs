@@ -7,7 +7,7 @@ using System.Text;
 
 namespace TigerClaw.Core
 {
-    internal sealed class SentenceNgramModel : ISentenceLanguageModel, IDisposable
+    internal sealed partial class SentenceNgramModel : ISentenceBoundaryLanguageModel, IDisposable
     {
         private const string Magic = "TCSKNM01";
         private const int Version = 1;
@@ -32,10 +32,6 @@ namespace TigerClaw.Core
         private readonly long _trigramContextOffset;
         private readonly long _trigramContextCount;
         private readonly float _unknownProbability;
-        private readonly FixedSizeCache<double> _logProbabilityCache =
-            new FixedSizeCache<double>(LogProbabilityCacheSize);
-        private readonly FixedSizeCache<bool> _observedBigramCache =
-            new FixedSizeCache<bool>(ObservedBigramCacheSize);
         private bool _disposed;
 
         private SentenceNgramModel(MemoryMappedFile mapping, long length)
@@ -176,22 +172,11 @@ namespace TigerClaw.Core
             return LogProbability(previous2, previous1, target, includeUnigram: true);
         }
 
-        public double LogProbability(string previous2, string previous1, string target, bool includeUnigram)
+        private double ComputeLogProbability(string previous2, string previous1, string target, bool includeUnigram)
         {
-            ThrowIfDisposed();
             int first = ResolveScalar(previous2);
             int second = ResolveScalar(previous1);
             int third = ResolveScalar(target);
-            ulong cacheKey = PackTriple(first, second, third);
-            if (!includeUnigram)
-            {
-                cacheKey |= NoUnigramCacheKeyFlag;
-            }
-            if (_logProbabilityCache.TryGetValue(cacheKey, out double cached))
-            {
-                return cached;
-            }
-
             double unigram = includeUnigram
                 ? LookupInt32(
                     _unigramOffset,
@@ -224,36 +209,7 @@ namespace TigerClaw.Core
                 1.0f);
             trigram += trigramLambda * bigram;
             double result = Math.Log(Math.Max(trigram, 1e-300));
-            _logProbabilityCache.Set(cacheKey, result);
             return result;
-        }
-
-        public bool HasObservedBigram(string previous, string target)
-        {
-            ThrowIfDisposed();
-            int left = ResolveScalar(previous);
-            int right = ResolveScalar(target);
-            ulong cacheKey = PackPair(left, right);
-            if (_observedBigramCache.TryGetValue(cacheKey, out bool cached))
-            {
-                return cached;
-            }
-
-            bool result = ContainsUInt64(_bigramOffset, _bigramCount, cacheKey);
-            _observedBigramCache.Set(cacheKey, result);
-            return result;
-        }
-
-        public void Dispose()
-        {
-            if (_disposed)
-            {
-                return;
-            }
-
-            _disposed = true;
-            _view.Dispose();
-            _mapping.Dispose();
         }
 
         private static int ResolveScalar(string token)
@@ -472,9 +428,8 @@ namespace TigerClaw.Core
 
             internal void Set(ulong key, T value)
             {
-                // SentenceInputDecoder serializes worker and synchronous access
-                // with its decode lock. Keeping entries inline therefore avoids
-                // a heap object on every cache miss without adding cache locks.
+                // The owning query session serializes access. A different
+                // decoder owns a different cache, while mapped data is shared.
                 _entries[GetIndex(key)] = new Entry
                 {
                     Key = key,

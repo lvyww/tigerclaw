@@ -91,13 +91,27 @@ namespace
             }
         }
 
-        std::vector<double> Score(const std::vector<std::string>& candidates)
+        std::vector<double> Score(const std::vector<std::string>& candidates, tcs_abort_callback abort, void* abortContext)
         {
             if (candidates.empty() || candidates.size() > MaximumCandidates)
             {
                 throw std::runtime_error("candidate count must be between 1 and 5");
             }
 
+            _abort = abort;
+            _abortContext = abortContext;
+            llama_set_abort_callback(_context.get(), abort, abortContext);
+            struct ResetAbort
+            {
+                Scorer& owner;
+                ~ResetAbort()
+                {
+                    llama_set_abort_callback(owner._context.get(), nullptr, nullptr);
+                    owner._abort = nullptr;
+                    owner._abortContext = nullptr;
+                }
+            } resetAbort{*this};
+            CheckCanceled();
             const llama_token bos = llama_vocab_bos(_vocabulary);
             const llama_token eos = llama_vocab_eos(_vocabulary);
             if (bos == LLAMA_TOKEN_NULL || eos == LLAMA_TOKEN_NULL)
@@ -109,6 +123,7 @@ namespace
             sequences.reserve(candidates.size());
             for (const std::string& candidate : candidates)
             {
+                CheckCanceled();
                 if (candidate.empty())
                 {
                     throw std::runtime_error("candidate text must not be empty");
@@ -162,6 +177,7 @@ namespace
                     }
                 }
 
+                CheckCanceled();
                 llama_memory_clear(llama_get_memory(_context.get()), true);
                 const int32_t decodeResult = llama_decode(_context.get(), batch);
                 if (decodeResult != 0)
@@ -331,6 +347,7 @@ namespace
                 {
                     while (true)
                     {
+                        if (IsCanceled()) return;
                         const std::size_t targetIndex = nextTarget.fetch_add(1);
                         if (targetIndex >= targets.size())
                         {
@@ -348,6 +365,7 @@ namespace
                 worker.join();
             }
 
+            CheckCanceled();
             std::vector<double> scores(sequences.size(), 0.0);
             for (std::size_t targetIndex = 0; targetIndex < targets.size(); ++targetIndex)
             {
@@ -356,6 +374,13 @@ namespace
             return scores;
         }
 
+        bool IsCanceled() const { return _abort != nullptr && _abort(_abortContext); }
+        void CheckCanceled() const
+        {
+            if (IsCanceled()) throw std::runtime_error("sentence request canceled");
+        }
+        tcs_abort_callback _abort = nullptr;
+        void* _abortContext = nullptr;
         ModelPointer _model;
         const llama_vocab* _vocabulary;
         int32_t _vocabularySize;
@@ -417,11 +442,11 @@ int TCS_CALL tcs_create_from_file(
     });
 }
 
-int TCS_CALL tcs_score(
+int TCS_CALL tcs_score_cancellable(
     void* scorer,
     const char* const* candidatesUtf8,
     int32_t candidateCount,
-    double* scores)
+    double* scores, tcs_abort_callback abort, void* abortContext)
 {
     return Guard([&]()
     {
@@ -443,9 +468,15 @@ int TCS_CALL tcs_score(
             }
             candidates.emplace_back(candidatesUtf8[index]);
         }
-        const std::vector<double> result = static_cast<Scorer*>(scorer)->Score(candidates);
+        const std::vector<double> result = static_cast<Scorer*>(scorer)->Score(candidates, abort, abortContext);
         std::copy(result.begin(), result.end(), scores);
     });
+}
+
+int TCS_CALL tcs_score(void* scorer, const char* const* candidatesUtf8,
+    int32_t candidateCount, double* scores)
+{
+    return tcs_score_cancellable(scorer, candidatesUtf8, candidateCount, scores, nullptr, nullptr);
 }
 
 void TCS_CALL tcs_destroy(void* scorer)

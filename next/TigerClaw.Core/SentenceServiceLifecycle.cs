@@ -21,6 +21,8 @@ namespace TigerClaw.Core
         private long _epoch;
         private SentenceRerankRequest _pending;
         private CancellationTokenSource _activeCancellation;
+        private bool _activeScoring;
+        private long _requestRevision;
 
         internal SentenceServiceLifecycle(Action<CancellationToken> load, Action release,
             Func<SentenceRerankRequest, CancellationToken, double[]> score,
@@ -54,8 +56,24 @@ namespace TigerClaw.Core
             lock (_lock)
             {
                 if (_stopping || !_enabled) return;
-                _pending = request;
+                _pending = new SentenceRerankRequest
+                {
+                    Generation = request.Generation, RawCode = request.RawCode,
+                    Candidates = request.Candidates == null ? null : (string[])request.Candidates.Clone()
+                };
+                _requestRevision++;
+                if (_activeScoring) _activeCancellation?.Cancel();
                 Monitor.PulseAll(_lock);
+            }
+        }
+
+        internal void CancelPending()
+        {
+            lock (_lock)
+            {
+                _pending = null;
+                _requestRevision++;
+                if (_activeScoring) _activeCancellation?.Cancel();
             }
         }
 
@@ -80,7 +98,7 @@ namespace TigerClaw.Core
             while (true)
             {
                 bool release, load;
-                long epoch;
+                long epoch, requestRevision;
                 SentenceRerankRequest request;
                 CancellationToken token;
                 lock (_lock)
@@ -91,6 +109,7 @@ namespace TigerClaw.Core
                     release = _releasePending;
                     load = !release && _loadPending;
                     epoch = _epoch;
+                    requestRevision = _requestRevision;
                     request = !release && !load ? _pending : null;
                     if (release) _releasePending = false;
                     else
@@ -100,6 +119,7 @@ namespace TigerClaw.Core
                         else _pending = null;
                         _activeCancellation = new CancellationTokenSource();
                     }
+                    _activeScoring = request != null;
                     token = _activeCancellation?.Token ?? CancellationToken.None;
                 }
                 try
@@ -114,7 +134,7 @@ namespace TigerClaw.Core
                     {
                         double[] scores = _score(request, token);
                         bool accept;
-                        lock (_lock) accept = !_stopping && _enabled && epoch == _epoch && !token.IsCancellationRequested;
+                        lock (_lock) accept = !_stopping && _enabled && epoch == _epoch && requestRevision == _requestRevision && !token.IsCancellationRequested;
                         // Never call Engine while holding our lock (Engine also calls Request).
                         if (accept && scores != null) _completed?.Invoke(request.Generation, request.RawCode, scores);
                     }
@@ -135,6 +155,7 @@ namespace TigerClaw.Core
                     {
                         _activeCancellation?.Dispose();
                         _activeCancellation = null;
+                        _activeScoring = false;
                     }
                 }
             }
