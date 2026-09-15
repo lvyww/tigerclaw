@@ -20,6 +20,17 @@ namespace TigerClaw.Core
             CancelSentenceWork();
             var previous = _sentenceInputDecoder;
             _sentenceInputDecoder = replacement;
+            // Raw text and candidate count can be identical across resource
+            // replacement. Retire the generation as well as the decoder so a
+            // late Qwen response cannot rerank the replacement's candidates.
+            if (!ReferenceEquals(previous, replacement) &&
+                _compositionState == CompositionState.CnSentence && _sentenceRawBuffer.Length > 0)
+            {
+                _sentenceGeneration++;
+            }
+            _sentenceNeuralAcceptedRaw = _sentenceNeuralTopText = string.Empty;
+            ResetSentenceAutoCommitEvidence();
+            ResetSentenceEmptyCodePending();
             _sentenceAppliedGeneration = -1;
             _sentenceResultLexiconVersion = -1;
             if (!_sentenceDecoderExternallyProvided) previous?.Dispose();

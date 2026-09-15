@@ -382,9 +382,11 @@ namespace TigerClaw.Core
             {
                 SentenceCandidate[] candidates = _sentenceDecodeResult.Candidates ?? Array.Empty<SentenceCandidate>();
                 int rerankCount = Math.Min(5, candidates.Length);
-                if (!_state.IsSentenceInputActive() || !_state.GetSentenceNeuralRerankEnabled() ||
+                if (_engineDisposed || !_state.IsSentenceInputActive() || !_state.GetSentenceNeuralRerankEnabled() ||
                     _compositionState != CompositionState.CnSentence ||
-                    generation != _sentenceGeneration ||
+                    generation != _sentenceGeneration || generation != _sentenceAppliedGeneration ||
+                    _sentenceResultLexiconVersion != _state.LexiconVersion ||
+                    !string.Equals(rawCode, _sentenceDecodeResult.RawCode, StringComparison.Ordinal) ||
                     generation == _sentenceManualSelectionGeneration ||
                     !string.Equals(rawCode, _sentenceRawBuffer.ToString(), StringComparison.Ordinal) ||
                     scores == null || scores.Length != rerankCount)

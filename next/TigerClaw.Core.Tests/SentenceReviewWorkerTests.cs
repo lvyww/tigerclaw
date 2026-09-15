@@ -49,7 +49,15 @@ namespace TigerClaw.Core.Tests
                 Review(completed.Wait(5000), "replacement/latest generation publishes without another key");
                 string expected = replace ? "丙" : "甲国";
                 Review(engine.GetUiSnapshot(20).Candidates[0] == expected, "only latest decoder result published (replace=" + replace + ")");
-                if (replace) Review(!engine.ApplySentenceNeuralScores(oldGeneration, "aa", new[] { 999.0, -999.0 }), "old Qwen response rejected after decoder replacement");
+                if (replace)
+                {
+                    long currentGeneration = engine.GetDifferentialSnapshot(20).SentenceGeneration;
+                    Review(currentGeneration > oldGeneration, "decoder replacement advances same-raw generation");
+                    Review(!engine.ApplySentenceNeuralScores(oldGeneration, "aa", new[] { 999.0, -999.0 }),
+                        "old Qwen response rejected after decoder replacement");
+                    Review(engine.ApplySentenceNeuralScores(currentGeneration, "aa", new[] { 0.0, 0.0 }),
+                        "replacement generation still accepts its own Qwen response");
+                }
                 Press(engine, 27);
                 Review(original.RetainedStatePositions == 0, "old worker state released after composition");
             }
