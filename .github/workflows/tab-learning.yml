@@ -19,6 +19,8 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
           persist-credentials: false
+          fetch-depth: 0
+          submodules: recursive
       - name: Test learning record maintenance
         shell: pwsh
         run: |
@@ -28,6 +30,24 @@ jobs:
         shell: pwsh
         run: |
           dotnet run --project next/TigerClaw.Core.Tests -c Release -p:PublishAot=false
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Reject broken sentence-cache and confidence variants
+        shell: pwsh
+        run: |
+          python tools/test_sentence_review_faults.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Compare independent pre-review and current assemblies
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $baseline = Join-Path $env:RUNNER_TEMP 'sentence-pre-review'
+          $archive = Join-Path $env:RUNNER_TEMP 'sentence-pre-review.zip'
+          git archive --format=zip "--output=$archive" 1bf8028bb2c2f7590031f9d2c65bb0ec910e9200
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Expand-Archive -LiteralPath $archive -DestinationPath $baseline
+          dotnet build "$baseline/next/TigerClaw.Core/TigerClaw.Core.csproj" -c Release -p:PublishAot=false
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          dotnet run --no-build --project next/TigerClaw.Core.Tests -c Release -p:PublishAot=false -- --sentence-review-compare "$baseline/next/_run/Release/net10.0-windows/TigerClaw.Core.dll"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Compile Native AOT Core
         shell: pwsh

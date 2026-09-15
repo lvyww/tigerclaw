@@ -11,7 +11,7 @@ namespace TigerClaw.Core
 {
     // ASCII journal with UTF-16 hex fields and CRC32, compatible with Tigirl V1.
     // Product basenames differ deliberately: no implicit cross-product writes.
-    internal sealed class SentenceLearningStore
+    internal sealed partial class SentenceLearningStore
     {
         internal const int MaximumBytes = 16 * 1024 * 1024, MaximumEvents = 10000;
         private readonly object _gate = new();
@@ -42,7 +42,12 @@ namespace TigerClaw.Core
                 return true;
             }
         }
-        internal bool ConfirmAsync(SentenceLearningEvent[] events) => events.Length == 0 || Queue(() => Confirm(events));
+        internal bool ConfirmAsync(SentenceLearningEvent[] events)
+        {
+            if (events.Length == 0) return true;
+            var copy = events.Select(e => e.Copy()).ToArray();
+            return Queue(() => Confirm(copy));
+        }
         internal void RefreshAsync()
         {
             lock (_gate)
@@ -98,10 +103,16 @@ namespace TigerClaw.Core
         {
             internal List<SentenceLearningEvent> Events = new();
             internal HashSet<string> Seen = new(StringComparer.Ordinal);
+            internal HashSet<string> Removed = new(StringComparer.Ordinal);
+            internal SentenceLearningEvent[] Visible;
+            internal SentenceLearningEvent[] VisibleEvents => Visible ??=
+                Events.Where(e => !Removed.Contains(e.Id)).TakeLast(MaximumEvents).ToArray();
         }
-        private static Journal Parse(string data)
+        private static Journal Parse(string data, Journal journal = null)
         {
-            var journal = new Journal(); var removed = new HashSet<string>(StringComparer.Ordinal);
+            journal ??= new Journal();
+            var removed = journal.Removed;
+            journal.Visible = null;
             int start = 0;
             for (;;)
             {
@@ -123,22 +134,22 @@ namespace TigerClaw.Core
                 else if (f[1] == "U" && f.Length == 5 && f[4].Length <= 128) { journal.Seen.Add(f[2]); removed.Add(f[4]); }
                 else if (f[1] == "C" && f.Length == 4) { journal.Seen.Add(f[2]); journal.Events.Clear(); removed.Clear(); }
             }
-            journal.Events.RemoveAll(e => removed.Contains(e.Id));
-            if (journal.Events.Count > MaximumEvents) journal.Events.RemoveRange(0, journal.Events.Count - MaximumEvents);
             return journal;
         }
-        private void Publish(List<SentenceLearningEvent> events)
+        private void Publish(IReadOnlyList<SentenceLearningEvent> events)
         {
-            Volatile.Write(ref _snapshot, SentenceLearningSnapshot.Build(events));
+            Volatile.Write(ref _snapshot, _accumulator.Update(events, DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+            _lastRead = DateTime.UtcNow;
             var info = new FileInfo(_path); _size = info.Exists ? info.Length : 0; _stamp = info.Exists ? info.LastWriteTimeUtc : default;
         }
-        internal void Refresh()
+        private void RefreshCore()
         {
-            if (!File.Exists(_path)) { Publish(new()); return; }
+            if (!File.Exists(_path)) { Publish(Array.Empty<SentenceLearningEvent>()); return; }
             var info = new FileInfo(_path);
             // Refresh decay even when the file is unchanged (one-minute bound).
-            if (info.Length == _size && info.LastWriteTimeUtc == _stamp && DateTime.UtcNow - _lastRead < TimeSpan.FromMinutes(1)) return;
-            using var guard = Acquire(); Publish(Parse(ReadBytes()).Events); _lastRead = DateTime.UtcNow;
+            DateTime now = DateTime.UtcNow;
+            if (info.Length == _size && info.LastWriteTimeUtc == _stamp && now >= _lastRead && now - _lastRead < TimeSpan.FromMinutes(1)) return;
+            using var guard = Acquire(); Publish(ReadJournal(ReadBytes()).VisibleEvents); _lastRead = DateTime.UtcNow;
         }
         private DateTime _lastRead;
         private void Append(string data, string addition)
@@ -154,29 +165,34 @@ namespace TigerClaw.Core
             {
                 byte[] bytes = Encoding.ASCII.GetBytes(addition); stream.Write(bytes); stream.Flush(true);
             }
-            Publish(Parse(data + addition).Events);
+            var journal = ReadJournal(data);
+            _parsedData = null; _parsedJournal = null; // No half-updated cache survives failure.
+            Parse(addition, journal);
+            _parsedCharacters += addition.Length;
+            RememberJournal(data, addition, journal);
+            Publish(journal.VisibleEvents);
         }
-        internal void Confirm(IEnumerable<SentenceLearningEvent> events)
+        private void ConfirmCore(IEnumerable<SentenceLearningEvent> events)
         {
-            using var guard = Acquire(); string data = ReadBytes(); var journal = Parse(data); var addition = new StringBuilder();
+            using var guard = Acquire(); string data = ReadBytes(); var journal = ReadJournal(data); var accepted = new HashSet<string>(StringComparer.Ordinal); var addition = new StringBuilder();
             foreach (var e in events)
             {
-                if (e.Id.Length == 0 || e.Id.Length > 128 || e.Id.IndexOfAny(new[] { '\t', '\r', '\n' }) >= 0 || journal.Seen.Contains(e.Id) ||
+                if (e.Id.Length == 0 || e.Id.Length > 128 || e.Id.IndexOfAny(new[] { '\t', '\r', '\n' }) >= 0 || journal.Seen.Contains(e.Id) || accepted.Contains(e.Id) ||
                     e.Time < 0 || e.Mode.Length == 0 || e.Mode.Length > 512 || e.Code.Length == 0 || e.Code.Length > 128 || !SentenceLearning.StaticText(e.Text) ||
                     (e.Context.Length > 0 && SentenceLearning.Characters(e.Context) == 0) || SentenceLearning.Characters(e.Context) > 2) continue;
-                journal.Seen.Add(e.Id);
+                accepted.Add(e.Id);
                 addition.Append(Seal("TCL1\tE\t" + e.Id + "\t" + e.Time.ToString(CultureInfo.InvariantCulture) + "\t" + Hex(e.Mode) + "\t" + Hex(e.Code) + "\t" + Hex(e.Text) + "\t" + Hex(e.Context)));
             }
-            if (addition.Length == 0) Publish(journal.Events); else Append(data, addition.ToString());
+            if (addition.Length == 0) Publish(journal.VisibleEvents); else Append(data, addition.ToString());
         }
-        internal SentenceLearningEvent[] Entries() { if (!File.Exists(_path)) return Array.Empty<SentenceLearningEvent>(); using var guard = Acquire(); return Parse(ReadBytes()).Events.ToArray(); }
-        internal bool UndoLast()
+        private SentenceLearningEvent[] EntriesCore() { if (!File.Exists(_path)) return Array.Empty<SentenceLearningEvent>(); using var guard = Acquire(); return ReadJournal(ReadBytes()).VisibleEvents.Select(e => e.Copy()).ToArray(); }
+        private bool UndoLastCore()
         {
             if (!File.Exists(_path)) return false;
-            using var guard = Acquire(); string data = ReadBytes(); var entries = Parse(data).Events; if (entries.Count == 0) return false;
+            using var guard = Acquire(); string data = ReadBytes(); var entries = ReadJournal(data).VisibleEvents; if (entries.Length == 0) return false;
             Append(data, Seal("TCL1\tU\t" + Guid.NewGuid().ToString("N") + "\t" + DateTimeOffset.UtcNow.ToUnixTimeSeconds() + "\t" + entries[^1].Id)); return true;
         }
-        internal void Clear()
+        private void ClearCore()
         {
             using var guard = Acquire(); string data = ReadBytes();
             Append(data, Seal("TCL1\tC\t" + Guid.NewGuid().ToString("N") + "\t" + DateTimeOffset.UtcNow.ToUnixTimeSeconds()));

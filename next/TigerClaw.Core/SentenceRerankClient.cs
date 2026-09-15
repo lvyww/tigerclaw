@@ -25,16 +25,23 @@ namespace TigerClaw.Core
         void Request(SentenceRerankRequest request);
     }
 
-    internal sealed partial class SentenceRerankClient : ISentenceRerankService
+    internal interface ICancelableSentenceRerankService : ISentenceRerankService
+    {
+        void CancelPending();
+    }
+
+    internal sealed partial class SentenceRerankClient : ICancelableSentenceRerankService
     {
         private readonly CoreRuntimeState _state;
         private readonly ProcessLauncher _launcher;
         private readonly SentenceServiceLifecycle _lifecycle;
         private long _seq;
+        private readonly string _pipeShortName;
 
         public SentenceRerankClient(CoreRuntimeState state, ProcessLauncher launcher,
-            Action<long, string, double[]> resultCallback)
+            Action<long, string, double[]> resultCallback, string pipeShortName = null)
         {
+            _pipeShortName = pipeShortName ?? RuntimeConstants.SentencePipeShortName;
             _state = state ?? throw new ArgumentNullException(nameof(state));
             _launcher = launcher ?? throw new ArgumentNullException(nameof(launcher));
             _lifecycle = new SentenceServiceLifecycle(Preload, Release, Score, resultCallback);
@@ -56,6 +63,8 @@ namespace TigerClaw.Core
             _lifecycle.Request(request);
         }
 
+        public void CancelPending() => _lifecycle.CancelPending();
+
         public void Dispose()
         {
             _lifecycle.Dispose();
@@ -67,7 +76,7 @@ namespace TigerClaw.Core
             string modelPath = ResolveModelPath();
             if (!File.Exists(modelPath)) return false;
             string arguments = "--parent-pid " + Environment.ProcessId.ToString(CultureInfo.InvariantCulture) +
-                " --pipe " + QuoteArgument(RuntimeConstants.SentencePipeShortName) +
+                " --pipe " + QuoteArgument(_pipeShortName) +
                 " --model " + QuoteArgument(modelPath);
             return _launcher.TryLaunchSentence(arguments);
         }
@@ -116,7 +125,7 @@ namespace TigerClaw.Core
         {
             using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
             deadline.CancelAfter(timeoutMs);
-            using var pipe = new NamedPipeClientStream(".", RuntimeConstants.SentencePipeShortName,
+            using var pipe = new NamedPipeClientStream(".", _pipeShortName,
                 PipeDirection.InOut, PipeOptions.Asynchronous);
             await pipe.ConnectAsync(deadline.Token).ConfigureAwait(false);
             // Preserve the existing scoring response budget after connection.

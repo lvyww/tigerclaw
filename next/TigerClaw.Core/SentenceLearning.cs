@@ -10,6 +10,7 @@ namespace TigerClaw.Core
         public long Time = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         public string Mode = "", Code = "", Text = "", Context = "";
         public int RawStart, RawEnd, TextStart, TextEnd;
+        internal SentenceLearningEvent Copy() => (SentenceLearningEvent)MemberwiseClone();
     }
 
     internal static class SentenceLearning
@@ -38,15 +39,18 @@ namespace TigerClaw.Core
             return count;
         }
 
-        internal static string Context(string prefix)
+        internal static string Context(string prefix) => Context(prefix, prefix.Length);
+
+        internal static string Context(string prefix, int end)
         {
-            int start = prefix.Length;
+            if ((uint)end > (uint)prefix.Length) throw new ArgumentOutOfRangeException(nameof(end));
+            int start = end;
             for (int i = 0; i < 2 && start > 0; i++)
             {
                 start--;
                 if (char.IsLowSurrogate(prefix[start]) && start > 0) start--;
             }
-            return prefix.Substring(start);
+            return prefix.Substring(start, end - start);
         }
 
         internal static bool StaticText(string text)
@@ -90,7 +94,7 @@ namespace TigerClaw.Core
                     result.Add(new SentenceLearningEvent
                     {
                         Mode = mode, Code = raw.Substring(previous, end - previous).ToLowerInvariant(), Text = chosen,
-                        Context = Context(selected.Text.Substring(0, first)),
+                        Context = Context(selected.Text, first),
                         RawStart = previous, RawEnd = end, TextStart = first, TextEnd = last
                     });
                 }
@@ -102,7 +106,7 @@ namespace TigerClaw.Core
 
     // Immutable query snapshot. Replay/aggregation happens once on the store
     // worker; candidate generation never scans events or context histories.
-    internal sealed class SentenceLearningSnapshot
+    internal sealed partial class SentenceLearningSnapshot
     {
         internal static readonly SentenceLearningSnapshot Empty = new();
 

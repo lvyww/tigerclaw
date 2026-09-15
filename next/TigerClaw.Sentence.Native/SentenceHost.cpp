@@ -1,4 +1,5 @@
 #include "SentenceQwenNative.h"
+#include "SentencePipeIo.h"
 
 #include <Windows.h>
 #include <shellapi.h>
@@ -174,7 +175,7 @@ namespace
             tcs_destroy(_handle);
         }
 
-        std::vector<double> Score(const std::vector<std::string>& candidates) const
+        std::vector<double> Score(const std::vector<std::string>& candidates, HANDLE pipe) const
         {
             std::vector<const char*> pointers;
             pointers.reserve(candidates.size());
@@ -183,11 +184,11 @@ namespace
                 pointers.push_back(candidate.c_str());
             }
             std::vector<double> scores(candidates.size());
-            Check(tcs_score(
+            Check(tcs_score_cancellable(
                 _handle,
                 pointers.data(),
                 static_cast<std::int32_t>(pointers.size()),
-                scores.data()));
+                scores.data(), tigerclaw::sentence::Disconnected, pipe));
             return scores;
         }
 
@@ -248,7 +249,7 @@ namespace
         };
     }
 
-    Json HandleRequest(const Json& request, const Scorer& scorer, bool& stopping)
+    Json HandleRequest(HANDLE pipe, const Json& request, const Scorer& scorer, bool& stopping)
     {
         if (!request.is_object())
         {
@@ -305,7 +306,7 @@ namespace
         response["raw_code"] = rawCode;
         response["success"] = true;
         response["provider"] = ProviderName;
-        response["scores"] = scorer.Score(candidates);
+        response["scores"] = scorer.Score(candidates, pipe);
         return response;
     }
 
@@ -317,7 +318,7 @@ namespace
             DWORD written = 0;
             const DWORD remaining = static_cast<DWORD>(
                 std::min<std::size_t>(value.size() - offset, MAXDWORD));
-            if (!WriteFile(pipe, value.data() + offset, remaining, &written, nullptr) || written == 0)
+            if (!tigerclaw::sentence::Write(pipe, value.data() + offset, remaining, written) || written == 0)
             {
                 return false;
             }
@@ -331,7 +332,7 @@ namespace
         Json response;
         try
         {
-            response = HandleRequest(Json::parse(line), scorer, stopping);
+            response = HandleRequest(pipe, Json::parse(line), scorer, stopping);
         }
         catch (const std::exception& error)
         {
@@ -349,7 +350,7 @@ namespace
         while (!stopping)
         {
             DWORD read = 0;
-            if (!ReadFile(pipe, buffer, sizeof(buffer), &read, nullptr) || read == 0)
+            if (!tigerclaw::sentence::Read(pipe, buffer, sizeof(buffer), read) || read == 0)
             {
                 return;
             }
@@ -402,7 +403,7 @@ namespace
         {
             UniqueHandle pipe(CreateNamedPipeW(
                 pipePath.c_str(),
-                PIPE_ACCESS_DUPLEX,
+                PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
                 PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
                 1,
                 4096,
@@ -414,8 +415,7 @@ namespace
                 throw std::runtime_error("cannot create sentence named pipe");
             }
 
-            const BOOL connected = ConnectNamedPipe(pipe.get(), nullptr);
-            if (!connected && GetLastError() != ERROR_PIPE_CONNECTED)
+            if (!tigerclaw::sentence::Connect(pipe.get()))
             {
                 continue;
             }

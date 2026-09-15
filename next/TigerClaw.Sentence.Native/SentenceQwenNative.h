@@ -27,6 +27,12 @@ TCS_API int TCS_CALL tcs_score(
     int32_t candidateCount,
     double* scores);
 
+// Callback must be thread-safe and must not throw.
+using tcs_abort_callback = bool (TCS_CALL *)(void*);
+TCS_API int TCS_CALL tcs_score_cancellable(
+    void* scorer, const char* const* candidatesUtf8, int32_t candidateCount,
+    double* scores, tcs_abort_callback abort, void* abortContext);
+
 TCS_API void TCS_CALL tcs_destroy(void* scorer);
 
 TCS_API const char* TCS_CALL tcs_last_error();

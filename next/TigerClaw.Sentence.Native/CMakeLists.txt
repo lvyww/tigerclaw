@@ -39,3 +39,16 @@ endif()
 
 set_target_properties(TigerClaw.Sentence.Host PROPERTIES
     OUTPUT_NAME "TigerClaw.Sentence")
+
+# Explicitly requested diagnostic target; never packaged or run by normal builds.
+add_executable(TigerClaw.Sentence.CancelProbe EXCLUDE_FROM_ALL
+    tests/CancelProbe.cpp SentenceQwenNative.cpp SentenceQwenNative.h)
+target_compile_features(TigerClaw.Sentence.CancelProbe PRIVATE cxx_std_17)
+target_compile_definitions(TigerClaw.Sentence.CancelProbe PRIVATE TIGERCLAW_SENTENCE_NATIVE_STATIC)
+target_include_directories(TigerClaw.Sentence.CancelProbe PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/llama.cpp/include")
+target_link_libraries(TigerClaw.Sentence.CancelProbe PRIVATE llama)
+if(MSVC)
+    target_compile_options(TigerClaw.Sentence.CancelProbe PRIVATE /utf-8 /EHsc)
+endif()
