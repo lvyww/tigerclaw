@@ -244,7 +244,8 @@ namespace TigerClaw.Core
             var seed = new BeamState
             {
                 Text = prefix.Text, Previous2 = Bos, Previous1 = Bos, MaxLexiconRank = 1,
-                Boundary = CopyUnlearnedBoundary(prefix.Boundary)
+                Boundary = CopyUnlearnedBoundary(prefix.Boundary),
+                CodeScore = prefix.Boundary?.CodeScore ?? 0.0
             };
             var elements = StringInfo.GetTextElementEnumerator(prefix.Text);
             while (elements.MoveNext())

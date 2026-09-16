@@ -64,6 +64,11 @@ namespace TigerClaw.Core
         private const int VK_Z = 0x5A;
         private const double SentenceEmittedCharacterReward = 2.0;
         private const double SentenceWholeInputSingleCharacterReward = 5.0;
+        private const double SentenceCanonicalCodeReward = 2.0;
+        private const double SentenceCanonicalIsolationFactor = 0.0;
+        private const int SentenceCanonicalIsolationMinimumCodeLength = 4;
+        private const double SentenceLexicalPriorWeight = 0.1;
+        private const int SentenceLexicalPriorCandidateLimit = 5;
         private const double SentenceNeuralWeight = 0.84;
         private const double SentenceShortNeuralWeight = 0.30;
         private const int SentenceShortNeuralMaximumLength = 2;
@@ -328,7 +333,13 @@ namespace TigerClaw.Core
                     emittedCharacterReward: SentenceEmittedCharacterReward,
                     wholeInputSingleCharacterReward: SentenceWholeInputSingleCharacterReward,
                     supplementMatcher: supplementMatcher,
-                    allowDuplicateSingleCharacters: allowDuplicateSingleCharacters));
+                    allowDuplicateSingleCharacters: allowDuplicateSingleCharacters,
+                    canonicalCodeReward: SentenceCanonicalCodeReward,
+                    canonicalIsolationFactor: SentenceCanonicalIsolationFactor,
+                    canonicalIsolationMinCodeLength: SentenceCanonicalIsolationMinimumCodeLength,
+                    lexicalPrior: SentenceLexicalPrior.LoadEmbedded(),
+                    lexicalPriorWeight: SentenceLexicalPriorWeight,
+                    lexicalCandidateLimit: SentenceLexicalPriorCandidateLimit));
                 ConfigureSentenceLearning();
                 _sentenceDecodedLexiconVersion = _state.LexiconVersion;
                 _sentenceDecodedOptimalCodeLimit = optimalCodeLimit;
@@ -2603,10 +2614,22 @@ namespace TigerClaw.Core
                 return null;
             }
 
+            SentenceCandidate[] visibleCandidates = _sentenceDecodeResult.Candidates ??
+                Array.Empty<SentenceCandidate>();
+            // Confidence deliberately excludes final-stage ranking priors. It
+            // may therefore support a different path from the one currently
+            // shown first. Confidence can authorize a commit only when that
+            // commit remains a prefix of the displayed top candidate. Keep a
+            // null sentinel for merged incomplete-tail generations, which
+            // intentionally have evidence but no display candidate.
+            string visibleTop = visibleCandidates.Length > 0
+                ? visibleCandidates[0]?.Text ?? string.Empty
+                : null;
+
             if (_sentenceAutoCommitLastSeenRaw.Length > 0 &&
                 string.Equals(_sentenceAutoCommitLastSeenRaw, evidenceRaw, StringComparison.Ordinal))
             {
-                return TryCommitMatureSentencePrefix(evidenceRaw, currentGeneration);
+                return TryCommitMatureSentencePrefix(evidenceRaw, currentGeneration, visibleTop);
             }
 
             bool extendsPreviousGeneration = _sentenceAutoCommitLastSeenRaw.Length == 0 ||
@@ -2620,17 +2643,6 @@ namespace TigerClaw.Core
 
             SentencePrefixEvidence[] prefixes = earlyCommitEvidence.Prefixes ??
                 Array.Empty<SentencePrefixEvidence>();
-            string acceptedTop = null;
-            if (string.Equals(_sentenceNeuralAcceptedRaw, evidenceRaw, StringComparison.Ordinal))
-            {
-                acceptedTop = _sentenceNeuralTopText ?? string.Empty;
-            }
-            SentenceCandidate[] visibleCandidates = _sentenceDecodeResult.Candidates ??
-                Array.Empty<SentenceCandidate>();
-            if (visibleCandidates.Length > 0 && visibleCandidates[0].SupplementScore > 0.0)
-            {
-                acceptedTop = visibleCandidates[0].Text ?? string.Empty;
-            }
 
             var lookup = new SentenceEvidenceLookup(prefixes, visibleCandidates);
             var qualifying = new Dictionary<string, SentencePrefixEvidence>(StringComparer.Ordinal);
@@ -2648,8 +2660,8 @@ namespace TigerClaw.Core
                     prefix.RawLength <= _sentenceCommittedRawLength ||
                     prefix.Text.Length <= _sentenceCommittedText.Length ||
                     !prefix.Text.StartsWith(_sentenceCommittedText, StringComparison.Ordinal) ||
-                    (acceptedTop != null &&
-                     !acceptedTop.StartsWith(prefix.Text, StringComparison.Ordinal)))
+                    (visibleTop != null &&
+                     !visibleTop.StartsWith(prefix.Text, StringComparison.Ordinal)))
                 {
                     continue;
                 }
@@ -2671,7 +2683,7 @@ namespace TigerClaw.Core
             {
                 _sentenceAutoCommitTrackers = RetainSentenceAutoCommitTrackersWithoutCounting(
                     prefixes, lookup);
-                return TryCommitMatureSentencePrefix(evidenceRaw, currentGeneration);
+                return TryCommitMatureSentencePrefix(evidenceRaw, currentGeneration, visibleTop);
             }
 
             var nextTrackers = new Dictionary<string, SentenceAutoCommitTracker>(
@@ -2701,7 +2713,7 @@ namespace TigerClaw.Core
                 nextTrackers[item.Key] = tracker;
             }
             _sentenceAutoCommitTrackers = nextTrackers;
-            return TryCommitMatureSentencePrefix(evidenceRaw, currentGeneration);
+            return TryCommitMatureSentencePrefix(evidenceRaw, currentGeneration, visibleTop);
         }
 
         private Dictionary<string, SentenceAutoCommitTracker> RetainSentenceAutoCommitTrackersWithoutCounting(
@@ -2813,7 +2825,10 @@ namespace TigerClaw.Core
                  right.StartsWith(left, StringComparison.Ordinal));
         }
 
-        private string TryCommitMatureSentencePrefix(string evidenceRaw, bool currentGeneration)
+        private string TryCommitMatureSentencePrefix(
+            string evidenceRaw,
+            bool currentGeneration,
+            string visibleTop)
         {
             SentenceAutoCommitTracker selected = _sentenceAutoCommitTrackers.Values
                 .Where(tracker =>
@@ -2824,7 +2839,9 @@ namespace TigerClaw.Core
                     evidenceRaw.Length - tracker.RawLength >=
                         GetSentenceAutoCommitRetainRawLength() &&
                     tracker.Text.Length > _sentenceCommittedText.Length &&
-                    tracker.Text.StartsWith(_sentenceCommittedText, StringComparison.Ordinal))
+                    tracker.Text.StartsWith(_sentenceCommittedText, StringComparison.Ordinal) &&
+                    (visibleTop == null ||
+                     visibleTop.StartsWith(tracker.Text, StringComparison.Ordinal)))
                 .OrderByDescending(tracker =>
                     new StringInfo(tracker.Text).LengthInTextElements)
                 .ThenByDescending(tracker => tracker.LastShare)
@@ -4673,6 +4690,9 @@ namespace TigerClaw.Core
                         FinalScore = candidate.FinalScore,
                         ConfidenceScore = candidate.ConfidenceScore,
                         SupplementScore = candidate.SupplementScore,
+                        LearningScore = candidate.LearningScore,
+                        CodeScore = candidate.CodeScore,
+                        LexicalScore = candidate.LexicalScore,
                         Boundary = candidate.Boundary,
                         MaxLexiconRank = candidate.MaxLexiconRank
                     })

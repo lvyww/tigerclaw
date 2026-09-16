@@ -158,6 +158,12 @@ block Core on a paused reader. Contract: `Protocol/ui_state.md`.
   when the unsplit input is that character's shortest available code (source
   order breaks equal-length ties), regardless of its rank under that code. The
   reward does not enter confidence mass or apply to an explicitly selected rank.
+- Compact final ranking adds `2.0 × code length` for primary-code single-character
+  edges, removes isolation penalties only for primary/explicit single-character
+  edges of at least four codes, and gives the original Top-5 a bounded 50k-word
+  Bloom-filter vote. None of these enter Beam or confidence mass; without an
+  n-gram model they are disabled. Qwen consumes the resulting base Top-5 and
+  keeps its existing fusion formula. See `docs/COMPACT_RANKING_PRIORS.md`.
 - Qwen3 0.6B Q8 reranks exactly the first five n-gram candidates. If the
   pre-Qwen base winner has 2..6 text elements, score each candidate by
   `(1-alpha)*BaseScore + alpha*QwenScore`: its own length 2 uses alpha=0.15,

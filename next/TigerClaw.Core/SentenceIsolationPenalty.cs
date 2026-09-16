@@ -64,6 +64,72 @@ namespace TigerClaw.Core
             return penalty;
         }
 
+        public double Apply(
+            string text,
+            SentencePathBoundary boundary,
+            ISentenceLanguageModel model,
+            double protectedFactor,
+            int protectedMinimumCodeLength)
+        {
+            if (!Enabled || model == null || string.IsNullOrEmpty(text) || boundary == null)
+            {
+                return 0.0;
+            }
+
+            var boundaries = new List<SentencePathBoundary>();
+            for (SentencePathBoundary current = boundary; current != null; current = current.Previous)
+            {
+                boundaries.Add(current);
+            }
+            boundaries.Reverse();
+
+            double penalty = 0.0;
+            double previousWeight = 0.0;
+            string previousCharacter = null;
+            int textStart = 0;
+            foreach (SentencePathBoundary current in boundaries)
+            {
+                int textEnd = Math.Min(text.Length, Math.Max(textStart, current.TextLength));
+                string edge = text.Substring(textStart, textEnd - textStart);
+                double factor = current.ProtectsRareCharacter &&
+                    current.CodeLength >= protectedMinimumCodeLength
+                    ? Math.Clamp(protectedFactor, 0.0, 1.0)
+                    : 1.0;
+                foreach (string character in SplitCharacters(edge))
+                {
+                    int rank = SentenceCharacterRanks.GetRank(character);
+                    double currentWeight = rank > RankThreshold ? Weight(rank) * factor : 0.0;
+                    bool linked = previousCharacter != null &&
+                        (previousWeight > 0.0 || currentWeight > 0.0) &&
+                        model.HasObservedBigram(previousCharacter, character);
+                    if (previousWeight > 0.0 && linked) penalty -= previousWeight;
+                    previousWeight = currentWeight > 0.0 && !linked ? currentWeight : 0.0;
+                    if (previousWeight > 0.0) penalty += previousWeight;
+                    previousCharacter = character;
+                }
+                textStart = textEnd;
+            }
+
+            // Defensive fallback for a legacy or externally-created boundary
+            // chain which ends before the candidate text.
+            if (textStart < text.Length)
+            {
+                foreach (string character in SplitCharacters(text.Substring(textStart)))
+                {
+                    int rank = SentenceCharacterRanks.GetRank(character);
+                    double currentWeight = rank > RankThreshold ? Weight(rank) : 0.0;
+                    bool linked = previousCharacter != null &&
+                        (previousWeight > 0.0 || currentWeight > 0.0) &&
+                        model.HasObservedBigram(previousCharacter, character);
+                    if (previousWeight > 0.0 && linked) penalty -= previousWeight;
+                    previousWeight = currentWeight > 0.0 && !linked ? currentWeight : 0.0;
+                    if (previousWeight > 0.0) penalty += previousWeight;
+                    previousCharacter = character;
+                }
+            }
+            return penalty;
+        }
+
         public double Weight(int rank)
         {
             if (!UseLogRank)
