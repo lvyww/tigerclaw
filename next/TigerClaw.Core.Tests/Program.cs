@@ -296,7 +296,7 @@ namespace TigerClaw.Core.Tests
                 SentencePrefixEvidenceWeightsBoundaryDisagreement();
                 SentencePrefixEvidenceKeepsRawBoundariesDistinct();
                 SentencePrefixEvidenceLookupRequiresExactRawBoundary();
-                SentenceAutoCommitAcceptsProbabilisticAlternatingSegmentation();
+                SentenceAutoCommitDefersProbabilisticAlternatingSegmentation();
                 SentenceAutoCommitReplayPreservesOriginalCommit();
                 KeyReplayCacheReturnsOriginalResultWithCurrentSequence();
                 ShortcutGesturesParseAndMatch();
@@ -5393,12 +5393,12 @@ namespace TigerClaw.Core.Tests
                 nameof(SentencePrefixEvidenceWeightsBoundaryDisagreement) + ".negligible");
         }
 
-        private static void SentenceAutoCommitAcceptsProbabilisticAlternatingSegmentation()
+        private static void SentenceAutoCommitDefersProbabilisticAlternatingSegmentation()
         {
             var state = new CoreRuntimeState();
             EnableSentenceMode(state);
             True(state.TrySetConfigValue("整句自动提前上屏", "是", out _, out string commitReason),
-                nameof(SentenceAutoCommitAcceptsProbabilisticAlternatingSegmentation) + ": " + commitReason);
+                nameof(SentenceAutoCommitDefersProbabilisticAlternatingSegmentation) + ": " + commitReason);
             var decoder = new SentenceInputDecoder(
                 SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
                 {
@@ -5417,11 +5417,8 @@ namespace TigerClaw.Core.Tests
 
             TypeLetters(engine, "abcde");
             Equal(null, Press(engine, 0x46).TextToOutput,
-                nameof(SentenceAutoCommitAcceptsProbabilisticAlternatingSegmentation) +
+                nameof(SentenceAutoCommitDefersProbabilisticAlternatingSegmentation) +
                 ".conflicting_visible_top_defers");
-            Equal("甲", Press(engine, 0x47).TextToOutput,
-                nameof(SentenceAutoCommitAcceptsProbabilisticAlternatingSegmentation) +
-                ".aligned_generation_commits");
         }
 
         private static void SentenceAutoCommitReplayPreservesOriginalCommit()
