@@ -222,6 +222,7 @@ namespace TigerClaw.Core.Tests
                 SentenceDecoderAppliesCharacterRewardInsideBeam();
                 SentenceDecoderRewardsOptimalWholeInputSingleCharacter();
                 SentenceDecoderAppliesCompactRankingPriorsOnlyAtFinalRank();
+                SentenceAutoCommitMatchesFinalRankingTop();
                 SentenceSupplementParsesPerSchemaFile();
                 SentenceSupplementMatchesOverlapsAndRepeatedSingleCharacters();
                 SentenceSupplementRewardsInsideBeamWithoutChangingConfidence();
@@ -4350,6 +4351,70 @@ namespace TigerClaw.Core.Tests
                 nameof(SentenceDecoderAppliesCompactRankingPriorsOnlyAtFinalRank) + ".locked_prefix_code_score");
         }
 
+        private static SentenceInputDecoder CreateRankingConflictSentenceDecoder()
+        {
+            return new SentenceInputDecoder(
+                SentenceLexiconIndex.Build(
+                    new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        ["xy"] = new List<string> { "甲" },
+                        ["ab"] = new List<string> { "甲" },
+                        ["uv"] = new List<string> { "乙" },
+                        ["cd"] = new List<string> { "乙" },
+                        ["abcd"] = new List<string> { "鼎" },
+                        ["ef"] = new List<string> { "丁", "丙" },
+                        ["efg"] = new List<string> { "丁", "丙" },
+                        ["efgh"] = new List<string> { "丁", "丙" }
+                    }),
+                new RankingConflictSentenceLanguageModel(),
+                beamWidth: 100,
+                rankPenalty: 0.0,
+                isolationPenalty: SentenceIsolationPenalty.None,
+                allowDuplicateSingleCharacters: true,
+                canonicalCodeReward: 2.0);
+        }
+
+        private static void SentenceAutoCommitMatchesFinalRankingTop()
+        {
+            using (var decoder = CreateRankingConflictSentenceDecoder())
+            {
+                foreach (string raw in new[] { "abcdef", "abcdefg", "abcdefgh" })
+                {
+                    SentenceDecodeResult decoded = decoder.DecodeFull(
+                        raw, 20, includeEarlyCommitEvidence: true);
+                    Equal("鼎丁", decoded.Candidates[0].Text,
+                        nameof(SentenceAutoCommitMatchesFinalRankingTop) + ".top." + raw);
+                    SentencePrefixEvidence supported = decoded.EarlyCommitEvidence.Prefixes.Single(
+                        prefix => prefix.Text == "甲乙" && prefix.RawLength == 4);
+                    True(supported.Share >= 0.995 && supported.Share < 0.99999,
+                        nameof(SentenceAutoCommitMatchesFinalRankingTop) + ".confidence." + raw);
+                }
+            }
+
+            var state = new CoreRuntimeState();
+            EnableSentenceMode(state);
+            True(state.TrySetConfigValue("整句自动提前上屏", "否", out _, out _),
+                nameof(SentenceAutoCommitMatchesFinalRankingTop) + ".disable_setup");
+            using var engine = new InputMethodEngine(state, CreateRankingConflictSentenceDecoder());
+            engine.SentenceEmptyCodeAutoCommitOverride = false;
+            TypeLetters(engine, "abcde");
+            True(state.TrySetConfigValue("整句自动提前上屏", "是", out _, out _),
+                nameof(SentenceAutoCommitMatchesFinalRankingTop) + ".enable");
+
+            foreach ((int Key, string Raw) generation in new[]
+            {
+                (0x46, "abcdef"),
+                (0x47, "abcdefg"),
+                (0x48, "abcdefgh")
+            })
+            {
+                Equal(null, Press(engine, generation.Key).TextToOutput,
+                    nameof(SentenceAutoCommitMatchesFinalRankingTop) + ".no_commit." + generation.Raw);
+                Equal("鼎丁", engine.GetUiSnapshot(5).Candidates[0],
+                    nameof(SentenceAutoCommitMatchesFinalRankingTop) + ".display." + generation.Raw);
+            }
+        }
+
         private static void SentenceSupplementParsesPerSchemaFile()
         {
             string directory = Path.Combine(
@@ -6412,6 +6477,16 @@ namespace TigerClaw.Core.Tests
         private sealed class FlatSentenceLanguageModel : ISentenceLanguageModel
         {
             public double LogProbability(string previous2, string previous1, string target) => 0.0;
+
+            public bool HasObservedBigram(string previous, string target) => false;
+        }
+
+        private sealed class RankingConflictSentenceLanguageModel : ISentenceLanguageModel
+        {
+            public double LogProbability(string previous2, string previous1, string target)
+            {
+                return string.Equals(target, "鼎", StringComparison.Ordinal) ? -7.0 : 0.0;
+            }
 
             public bool HasObservedBigram(string previous, string target) => false;
         }
