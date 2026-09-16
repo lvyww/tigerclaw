@@ -5416,9 +5416,12 @@ namespace TigerClaw.Core.Tests
             engine.SentenceEmptyCodeAutoCommitOverride = false;
 
             TypeLetters(engine, "abcde");
-            Equal("甲", Press(engine, 0x46).TextToOutput,
+            Equal(null, Press(engine, 0x46).TextToOutput,
                 nameof(SentenceAutoCommitAcceptsProbabilisticAlternatingSegmentation) +
-                ".probabilistic_commit");
+                ".conflicting_visible_top_defers");
+            Equal("甲", Press(engine, 0x47).TextToOutput,
+                nameof(SentenceAutoCommitAcceptsProbabilisticAlternatingSegmentation) +
+                ".aligned_generation_commits");
         }
 
         private static void SentenceAutoCommitReplayPreservesOriginalCommit()
