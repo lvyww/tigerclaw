@@ -221,6 +221,7 @@ namespace TigerClaw.Core.Tests
                 SentenceDecoderLetsSegmentedSingleDuplicatesCompeteWhenEnabled();
                 SentenceDecoderAppliesCharacterRewardInsideBeam();
                 SentenceDecoderRewardsOptimalWholeInputSingleCharacter();
+                SentenceDecoderAppliesCompactRankingPriorsOnlyAtFinalRank();
                 SentenceSupplementParsesPerSchemaFile();
                 SentenceSupplementMatchesOverlapsAndRepeatedSingleCharacters();
                 SentenceSupplementRewardsInsideBeamWithoutChangingConfidence();
@@ -3193,6 +3194,15 @@ namespace TigerClaw.Core.Tests
                     leftCandidates[index].SupplementScore == rightCandidates[index].SupplementScore,
                     name + ".supplement_score." + index);
                 True(
+                    leftCandidates[index].LearningScore == rightCandidates[index].LearningScore,
+                    name + ".learning_score." + index);
+                True(
+                    leftCandidates[index].CodeScore == rightCandidates[index].CodeScore,
+                    name + ".code_score." + index);
+                True(
+                    leftCandidates[index].LexicalScore == rightCandidates[index].LexicalScore,
+                    name + ".lexical_score." + index);
+                True(
                     leftCandidates[index].MaxLexiconRank == rightCandidates[index].MaxLexiconRank,
                     name + ".max_rank." + index);
             }
@@ -4214,6 +4224,130 @@ namespace TigerClaw.Core.Tests
                 rewarded.Decode("abcdef"),
                 rewarded.DecodeFull("abcdef"),
                 nameof(SentenceDecoderRewardsOptimalWholeInputSingleCharacter) + ".incremental_append");
+        }
+
+        private static void SentenceDecoderAppliesCompactRankingPriorsOnlyAtFinalRank()
+        {
+            var model = new FlatSentenceLanguageModel();
+            SentenceLexiconIndex codeLexicon = SentenceLexiconIndex.Build(
+                new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["xy"] = new List<string> { "甲" },
+                    ["ab"] = new List<string> { "甲" },
+                    ["cd"] = new List<string> { "乙" },
+                    ["abcd"] = new List<string> { "鼎" }
+                });
+            var baseline = new SentenceInputDecoder(
+                codeLexicon, model, beamWidth: 100,
+                isolationPenalty: SentenceIsolationPenalty.None,
+                allowDuplicateSingleCharacters: true);
+            var shaped = new SentenceInputDecoder(
+                codeLexicon, model, beamWidth: 100,
+                isolationPenalty: SentenceIsolationPenalty.None,
+                allowDuplicateSingleCharacters: true,
+                canonicalCodeReward: 2.0);
+            SentenceDecodeResult plain = baseline.DecodeFull("abcd");
+            SentenceDecodeResult ranked = shaped.DecodeFull("abcd");
+            Equal("甲乙", plain.Candidates[0].Text,
+                nameof(SentenceDecoderAppliesCompactRankingPriorsOnlyAtFinalRank) + ".code_baseline");
+            Equal("鼎", ranked.Candidates[0].Text,
+                nameof(SentenceDecoderAppliesCompactRankingPriorsOnlyAtFinalRank) + ".code_ranked");
+            True(plain.ExpandedStates == ranked.ExpandedStates &&
+                 plain.Candidates.Select(value => value.Text).OrderBy(value => value).SequenceEqual(
+                     ranked.Candidates.Select(value => value.Text).OrderBy(value => value)),
+                nameof(SentenceDecoderAppliesCompactRankingPriorsOnlyAtFinalRank) + ".beam_unchanged");
+            foreach (SentenceCandidate candidate in plain.Candidates)
+            {
+                SentenceCandidate changed = ranked.Candidates.Single(value => value.Text == candidate.Text);
+                True(Math.Abs(candidate.ConfidenceScore - changed.ConfidenceScore) < 1e-9,
+                    nameof(SentenceDecoderAppliesCompactRankingPriorsOnlyAtFinalRank) + ".code_confidence");
+            }
+
+            SentenceLexiconIndex rareFourLexicon = SentenceLexiconIndex.Build(
+                new Dictionary<string, List<string>> { ["abcd"] = new List<string> { "揸" } });
+            var rareBaseline = new SentenceInputDecoder(rareFourLexicon, model);
+            var rareProtected = new SentenceInputDecoder(
+                rareFourLexicon, model,
+                canonicalIsolationFactor: 0.0,
+                canonicalIsolationMinCodeLength: 4);
+            SentenceCandidate rarePlain = rareBaseline.DecodeFull("abcd").Candidates[0];
+            SentenceCandidate rareRanked = rareProtected.DecodeFull("abcd").Candidates[0];
+            True(Math.Abs((rareRanked.FinalScore - rarePlain.FinalScore) - 2.0) < 1e-9 &&
+                 Math.Abs(rareRanked.ConfidenceScore - rarePlain.ConfidenceScore) < 1e-9,
+                nameof(SentenceDecoderAppliesCompactRankingPriorsOnlyAtFinalRank) + ".four_code_rare_protection");
+
+            SentenceLexiconIndex rareThreeLexicon = SentenceLexiconIndex.Build(
+                new Dictionary<string, List<string>> { ["abc"] = new List<string> { "揸" } });
+            var rareThreeBaseline = new SentenceInputDecoder(rareThreeLexicon, model);
+            var rareThreeProtected = new SentenceInputDecoder(
+                rareThreeLexicon, model,
+                canonicalIsolationFactor: 0.0,
+                canonicalIsolationMinCodeLength: 4);
+            True(Math.Abs(rareThreeBaseline.DecodeFull("abc").Candidates[0].FinalScore -
+                          rareThreeProtected.DecodeFull("abc").Candidates[0].FinalScore) < 1e-9,
+                nameof(SentenceDecoderAppliesCompactRankingPriorsOnlyAtFinalRank) + ".three_code_not_protected");
+
+            SentenceLexicalPrior lexical = SentenceLexicalPrior.LoadEmbedded();
+            True(lexical.ByteCount == 150032 && lexical.EntryCount == 50000 &&
+                 lexical.Contains("中国") && !lexical.Contains("一乙"),
+                nameof(SentenceDecoderAppliesCompactRankingPriorsOnlyAtFinalRank) + ".lexical_model");
+            SentenceLexiconIndex lexicalLexicon = SentenceLexiconIndex.Build(
+                new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["ab"] = new List<string> { "一" },
+                    ["cd"] = new List<string> { "乙" },
+                    ["abcd"] = new List<string> { "中国" }
+                });
+            var lexicalBaseline = new SentenceInputDecoder(
+                lexicalLexicon, model, isolationPenalty: SentenceIsolationPenalty.None,
+                allowDuplicateSingleCharacters: true);
+            var lexicalRanked = new SentenceInputDecoder(
+                lexicalLexicon, model, isolationPenalty: SentenceIsolationPenalty.None,
+                allowDuplicateSingleCharacters: true,
+                lexicalPrior: lexical, lexicalPriorWeight: 0.1);
+            SentenceDecodeResult lexicalPlain = lexicalBaseline.DecodeFull("abcd");
+            SentenceDecodeResult lexicalResult = lexicalRanked.DecodeFull("abcd");
+            Equal("一乙", lexicalPlain.Candidates[0].Text,
+                nameof(SentenceDecoderAppliesCompactRankingPriorsOnlyAtFinalRank) + ".lexical_baseline");
+            Equal("中国", lexicalResult.Candidates[0].Text,
+                nameof(SentenceDecoderAppliesCompactRankingPriorsOnlyAtFinalRank) + ".lexical_ranked");
+            foreach (SentenceCandidate candidate in lexicalPlain.Candidates)
+            {
+                SentenceCandidate changed = lexicalResult.Candidates.Single(value => value.Text == candidate.Text);
+                True(Math.Abs(candidate.ConfidenceScore - changed.ConfidenceScore) < 1e-9,
+                    nameof(SentenceDecoderAppliesCompactRankingPriorsOnlyAtFinalRank) + ".lexical_confidence");
+            }
+
+            var neutral = new SentenceInputDecoder(
+                codeLexicon, NeutralSentenceLanguageModel.Instance,
+                isolationPenalty: SentenceIsolationPenalty.None,
+                allowDuplicateSingleCharacters: true,
+                canonicalCodeReward: 2.0,
+                lexicalPrior: lexical,
+                lexicalPriorWeight: 0.1);
+            Equal("甲乙", neutral.DecodeFull("abcd").Candidates[0].Text,
+                nameof(SentenceDecoderAppliesCompactRankingPriorsOnlyAtFinalRank) + ".no_model_disabled");
+
+            SentenceDecodeResult lockedSource = shaped.DecodeFull("abcd");
+            SentenceCandidate lockedCandidate = lockedSource.Candidates.Single(value => value.Text == "鼎");
+            var lockedLexicon = SentenceLexiconIndex.Build(
+                new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["xy"] = new List<string> { "甲" },
+                    ["ab"] = new List<string> { "甲" },
+                    ["cd"] = new List<string> { "乙" },
+                    ["abcd"] = new List<string> { "鼎" },
+                    ["ef"] = new List<string> { "丁" }
+                });
+            var lockedDecoder = new SentenceInputDecoder(
+                lockedLexicon, model, isolationPenalty: SentenceIsolationPenalty.None,
+                allowDuplicateSingleCharacters: true,
+                canonicalCodeReward: 2.0);
+            var lockedPrefix = new SentenceLockedPrefix("abcd", "鼎", lockedCandidate.Boundary);
+            SentenceCandidate lockedResult = lockedDecoder.Decode(
+                "abcdef", lockedPrefix: lockedPrefix).Candidates.Single(value => value.Text == "鼎丁");
+            True(Math.Abs(lockedResult.CodeScore - 12.0) < 1e-9,
+                nameof(SentenceDecoderAppliesCompactRankingPriorsOnlyAtFinalRank) + ".locked_prefix_code_score");
         }
 
         private static void SentenceSupplementParsesPerSchemaFile()
@@ -6273,6 +6407,13 @@ namespace TigerClaw.Core.Tests
             {
                 return false;
             }
+        }
+
+        private sealed class FlatSentenceLanguageModel : ISentenceLanguageModel
+        {
+            public double LogProbability(string previous2, string previous1, string target) => 0.0;
+
+            public bool HasObservedBigram(string previous, string target) => false;
         }
 
         private sealed class PrefersAfternoonOverCaveSentenceLanguageModel : ISentenceLanguageModel

@@ -40,6 +40,7 @@ namespace TigerClaw.Core
         public double LogRank { get; set; }
         public string[] TextElements { get; set; }
         public bool IsOptimalSingleCharacterCode { get; set; }
+        public bool IsPrimarySingleCharacterCode { get; set; }
     }
 
     internal sealed class SentenceLexiconIndex
@@ -166,9 +167,10 @@ namespace TigerClaw.Core
                         !IsSingleTextElement(text) ||
                         !IsCommonSingleCharacter(text, common) ||
                         IsWhitelistedFullCodeCharacter(text, whitelist);
-                    if (allowNonPrimary ||
-                        (primaryBaseCodeByCharacter.TryGetValue(text, out string primaryCode) &&
-                         string.Equals(primaryCode, pair.Key, StringComparison.OrdinalIgnoreCase)))
+                    bool isPrimarySingleCharacterCode =
+                        primaryBaseCodeByCharacter.TryGetValue(text, out string primaryCode) &&
+                        string.Equals(primaryCode, pair.Key, StringComparison.OrdinalIgnoreCase);
+                    if (allowNonPrimary || isPrimarySingleCharacterCode)
                     {
                         allowed.Add(new SentenceLexiconCandidate
                         {
@@ -178,7 +180,8 @@ namespace TigerClaw.Core
                             TextElements = SplitTextElements(text),
                             IsOptimalSingleCharacterCode =
                                 optimalInputCodeByCharacter.TryGetValue(text, out string optimalCode) &&
-                                string.Equals(optimalCode, pair.Key, StringComparison.OrdinalIgnoreCase)
+                                string.Equals(optimalCode, pair.Key, StringComparison.OrdinalIgnoreCase),
+                            IsPrimarySingleCharacterCode = isPrimarySingleCharacterCode
                         });
                     }
                 }
@@ -291,6 +294,8 @@ namespace TigerClaw.Core
         public double ConfidenceScore { get; set; }
         public double SupplementScore { get; set; }
         public double LearningScore { get; set; }
+        public double CodeScore { get; set; }
+        public double LexicalScore { get; set; }
         public int MaxLexiconRank { get; set; }
         public SentencePathBoundary Boundary { get; set; }
 
@@ -339,6 +344,9 @@ namespace TigerClaw.Core
         public int TextLength { get; init; }
         public int RawLength { get; init; }
         public double LearningScore { get; init; }
+        public double CodeScore { get; init; }
+        public bool ProtectsRareCharacter { get; init; }
+        public int CodeLength { get; init; }
     }
 
     internal sealed class SentenceDecodeResult
@@ -485,6 +493,12 @@ namespace TigerClaw.Core
         private readonly bool _scoreSentenceBoundaries;
         private readonly double _emittedCharacterReward;
         private readonly double _wholeInputSingleCharacterReward;
+        private readonly double _canonicalCodeReward;
+        private readonly double _canonicalIsolationFactor;
+        private readonly int _canonicalIsolationMinCodeLength;
+        private readonly SentenceLexicalPrior _lexicalPrior;
+        private readonly double _lexicalPriorWeight;
+        private readonly int _lexicalCandidateLimit;
         private readonly SentenceSupplementMatcher _supplementMatcher;
         private readonly bool _hasSupplements;
         private readonly bool _allowDuplicateSingleCharacters;
@@ -519,6 +533,7 @@ namespace TigerClaw.Core
             public double SupplementScore;
             public double LearningScore;
             public double LearningPotential;
+            public double CodeScore;
             public int MaxLexiconRank;
             public SentencePathBoundary Boundary;
         }
@@ -668,7 +683,13 @@ namespace TigerClaw.Core
             double emittedCharacterReward = 0.0,
             double wholeInputSingleCharacterReward = 0.0,
             SentenceSupplementMatcher supplementMatcher = null,
-            bool allowDuplicateSingleCharacters = false)
+            bool allowDuplicateSingleCharacters = false,
+            double canonicalCodeReward = 0.0,
+            double canonicalIsolationFactor = 1.0,
+            int canonicalIsolationMinCodeLength = 4,
+            SentenceLexicalPrior lexicalPrior = null,
+            double lexicalPriorWeight = 0.0,
+            int lexicalCandidateLimit = 5)
         {
             _lexicon = lexicon ?? throw new ArgumentNullException(nameof(lexicon));
             _modelSession = (languageModel as SentenceNgramModel)?.CreateQuerySession();
@@ -687,6 +708,16 @@ namespace TigerClaw.Core
             _scoreSentenceBoundaries = scoreSentenceBoundaries;
             _emittedCharacterReward = Math.Max(0.0, emittedCharacterReward);
             _wholeInputSingleCharacterReward = Math.Max(0.0, wholeInputSingleCharacterReward);
+            bool rankingPriorsEnabled = languageModel != null &&
+                languageModel is not NeutralSentenceLanguageModel;
+            _canonicalCodeReward = rankingPriorsEnabled ? Math.Max(0.0, canonicalCodeReward) : 0.0;
+            _canonicalIsolationFactor = rankingPriorsEnabled
+                ? Math.Clamp(canonicalIsolationFactor, 0.0, 1.0)
+                : 1.0;
+            _canonicalIsolationMinCodeLength = Math.Max(2, canonicalIsolationMinCodeLength);
+            _lexicalPrior = rankingPriorsEnabled ? lexicalPrior : null;
+            _lexicalPriorWeight = rankingPriorsEnabled ? Math.Max(0.0, lexicalPriorWeight) : 0.0;
+            _lexicalCandidateLimit = Math.Max(1, lexicalCandidateLimit);
             _supplementMatcher = supplementMatcher ?? SentenceSupplementMatcher.Empty;
             _hasSupplements = !_supplementMatcher.IsEmpty;
             int maxCodeLength = 1;
@@ -900,7 +931,15 @@ namespace TigerClaw.Core
             for (var b = boundary; b != null; b = b.Previous) chain.Add(b);
             SentencePathBoundary result = null;
             for (int i = chain.Count - 1; i >= 0; i--)
-                result = new SentencePathBoundary { Previous = result, RawLength = chain[i].RawLength, TextLength = chain[i].TextLength };
+                result = new SentencePathBoundary
+                {
+                    Previous = result,
+                    RawLength = chain[i].RawLength,
+                    TextLength = chain[i].TextLength,
+                    CodeScore = chain[i].CodeScore,
+                    ProtectsRareCharacter = chain[i].ProtectsRareCharacter,
+                    CodeLength = chain[i].CodeLength
+                };
             return result;
         }
 
@@ -1058,6 +1097,15 @@ namespace TigerClaw.Core
                                 score += wholeInputSingleCharacterRewardAdded;
                             }
 
+                            double codeScoreAdded = 0.0;
+                            if (_canonicalCodeReward > 0.0 &&
+                                selectedRank == 0 &&
+                                candidate.IsPrimarySingleCharacterCode &&
+                                candidate.TextElements.Length == 1)
+                            {
+                                codeScoreAdded = _canonicalCodeReward * codeLength;
+                            }
+
                             string nextText = item.Text + candidate.Text;
                             double learning = LearningReward(raw, nextText, consumedEnd, item, out double learningPotential);
                             double learningAdded = learning - item.LearningScore;
@@ -1075,13 +1123,20 @@ namespace TigerClaw.Core
                                 SupplementScore = item.SupplementScore + supplementAdded,
                                 LearningScore = learning,
                                 LearningPotential = learningPotential,
+                                CodeScore = item.CodeScore + codeScoreAdded,
                                 MaxLexiconRank = Math.Max(item.MaxLexiconRank, candidate.Rank),
                                 Boundary = new SentencePathBoundary
                                 {
                                     Previous = item.Boundary,
                                     TextLength = item.Text.Length + candidate.Text.Length,
                                     RawLength = consumedEnd,
-                                    LearningScore = learning
+                                    LearningScore = learning,
+                                    CodeScore = item.CodeScore + codeScoreAdded,
+                                    ProtectsRareCharacter =
+                                        _canonicalIsolationFactor < 1.0 &&
+                                        candidate.TextElements.Length == 1 &&
+                                        (candidate.IsPrimarySingleCharacterCode || selectedRank > 0),
+                                    CodeLength = codeLength
                                 }
                             });
                             expandedStates++;
@@ -1157,6 +1212,24 @@ namespace TigerClaw.Core
                 candidate.SegmentedCode ??= BuildSegmentedCode(normalized, candidate.Boundary);
             }
             visible = visible.Select(candidate => candidate.Copy()).ToArray();
+            if (visible.Length > 1 && _lexicalPrior != null && !_lexicalPrior.IsEmpty &&
+                _lexicalPriorWeight > 0.0)
+            {
+                var lookupCache = new Dictionary<string, bool>(StringComparer.Ordinal);
+                int lexicalLimit = Math.Min(visible.Length, _lexicalCandidateLimit);
+                for (int index = 0; index < lexicalLimit; index++)
+                {
+                    double lexicalScore = _lexicalPrior.Score(visible[index].Text, lookupCache) *
+                        _lexicalPriorWeight;
+                    visible[index].LexicalScore = lexicalScore;
+                    visible[index].BaseScore += lexicalScore;
+                    visible[index].FinalScore += lexicalScore;
+                }
+                Comparison<SentenceCandidate> comparison = PreferScoreOverLexiconRank(result)
+                    ? SentenceCandidate.CompareByScoreThenLexiconRank
+                    : SentenceCandidate.CompareByLexiconRankThenScore;
+                Array.Sort(visible, Comparer<SentenceCandidate>.Create(comparison));
+            }
 
             SentenceEarlyCommitEvidence earlyCommitEvidence = new SentenceEarlyCommitEvidence
             {
@@ -1190,8 +1263,9 @@ namespace TigerClaw.Core
 
         private SentenceCandidate EvaluateState(BeamState item)
         {
-            double endingAdjustment = TransitionScore(item.Previous2, item.Previous1, Eos) -
-                ApplyIsolationPenalty(item.Text);
+            double eosScore = TransitionScore(item.Previous2, item.Previous1, Eos);
+            double endingAdjustment = eosScore - ApplyPathIsolationPenalty(item) + item.CodeScore;
+            double confidenceEndingAdjustment = eosScore - ApplyIsolationPenalty(item.Text);
             double score = item.Score + endingAdjustment;
             return new SentenceCandidate
             {
@@ -1199,11 +1273,26 @@ namespace TigerClaw.Core
                 BaseScore = score - item.LearningScore,
                 LearningScore = item.LearningScore,
                 FinalScore = score,
-                ConfidenceScore = item.LogMass + endingAdjustment,
+                ConfidenceScore = item.LogMass + confidenceEndingAdjustment,
                 SupplementScore = item.SupplementScore,
+                CodeScore = item.CodeScore,
                 Boundary = item.Boundary,
                 MaxLexiconRank = Math.Max(1, item.MaxLexiconRank)
             };
+        }
+
+        private double ApplyPathIsolationPenalty(BeamState item)
+        {
+            if (_canonicalIsolationFactor >= 1.0 || item?.Boundary == null)
+            {
+                return ApplyIsolationPenalty(item?.Text);
+            }
+            return _isolationPenalty.Apply(
+                item.Text,
+                item.Boundary,
+                _languageModel,
+                _canonicalIsolationFactor,
+                _canonicalIsolationMinCodeLength);
         }
 
         private double ApplyIsolationPenalty(string text)

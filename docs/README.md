@@ -21,6 +21,7 @@
 | `FCITX5_ANDROID_BASELINE.md` | Android 移植冻结的仓库/模型身份 |
 | `sentence_golden_v1.md` | 跨实现 sentence JSONL 黄金格式 |
 | `COMPACT_LEXICON.md` | C# 主码表/拼音反查紧凑二进制布局、生命周期与内存基准 |
+| `COMPACT_RANKING_PRIORS.md` | 整句主码、四码生僻字保护与紧凑 Top-5 词先验 |
 | `SENTENCE_EARLY_COMMIT_EVAL.md` | 整句提前上屏准确度与积极性端到端评测 |
 | `../tools/README_sentence_neural.md` | n-gram 训练和离线模型实验 |
 

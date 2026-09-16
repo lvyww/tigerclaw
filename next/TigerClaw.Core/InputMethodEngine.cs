@@ -64,6 +64,11 @@ namespace TigerClaw.Core
         private const int VK_Z = 0x5A;
         private const double SentenceEmittedCharacterReward = 2.0;
         private const double SentenceWholeInputSingleCharacterReward = 5.0;
+        private const double SentenceCanonicalCodeReward = 2.0;
+        private const double SentenceCanonicalIsolationFactor = 0.0;
+        private const int SentenceCanonicalIsolationMinimumCodeLength = 4;
+        private const double SentenceLexicalPriorWeight = 0.1;
+        private const int SentenceLexicalPriorCandidateLimit = 5;
         private const double SentenceNeuralWeight = 0.84;
         private const double SentenceShortNeuralWeight = 0.30;
         private const int SentenceShortNeuralMaximumLength = 2;
@@ -328,7 +333,13 @@ namespace TigerClaw.Core
                     emittedCharacterReward: SentenceEmittedCharacterReward,
                     wholeInputSingleCharacterReward: SentenceWholeInputSingleCharacterReward,
                     supplementMatcher: supplementMatcher,
-                    allowDuplicateSingleCharacters: allowDuplicateSingleCharacters));
+                    allowDuplicateSingleCharacters: allowDuplicateSingleCharacters,
+                    canonicalCodeReward: SentenceCanonicalCodeReward,
+                    canonicalIsolationFactor: SentenceCanonicalIsolationFactor,
+                    canonicalIsolationMinCodeLength: SentenceCanonicalIsolationMinimumCodeLength,
+                    lexicalPrior: SentenceLexicalPrior.LoadEmbedded(),
+                    lexicalPriorWeight: SentenceLexicalPriorWeight,
+                    lexicalCandidateLimit: SentenceLexicalPriorCandidateLimit));
                 ConfigureSentenceLearning();
                 _sentenceDecodedLexiconVersion = _state.LexiconVersion;
                 _sentenceDecodedOptimalCodeLimit = optimalCodeLimit;
@@ -4673,6 +4684,9 @@ namespace TigerClaw.Core
                         FinalScore = candidate.FinalScore,
                         ConfidenceScore = candidate.ConfidenceScore,
                         SupplementScore = candidate.SupplementScore,
+                        LearningScore = candidate.LearningScore,
+                        CodeScore = candidate.CodeScore,
+                        LexicalScore = candidate.LexicalScore,
                         Boundary = candidate.Boundary,
                         MaxLexiconRank = candidate.MaxLexiconRank
                     })
