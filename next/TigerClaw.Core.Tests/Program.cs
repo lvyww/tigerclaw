@@ -128,7 +128,8 @@ namespace TigerClaw.Core.Tests
                         args[1], args[2], args[3],
                         args.Length > 4 ? args[4] : null,
                         args.Length > 5 ? ParseInt(args[5], 0) : 0,
-                        args.Length > 6 ? args[6] : null);
+                        args.Length > 6 ? args[6] : null,
+                        args.Length > 7 ? ParseInt(args[7], 2000) : 2000);
                 }
                 if (args.Length >= 4 && string.Equals(args[0], "--sentence-eval", StringComparison.OrdinalIgnoreCase))
                 {
@@ -942,8 +943,10 @@ namespace TigerClaw.Core.Tests
             string lexiconPath,
             string outputPath,
             int caseLimit,
-            string selectedMode)
+            string selectedMode,
+            int beamWidth)
         {
+            beamWidth = Math.Max(1, beamWidth);
             List<EvalCaseDto> cases = LoadEvalCases(casesPath);
             AppendEarlyCommitRegressionCases(cases);
             if (caseLimit > 0 && cases.Count > caseLimit)
@@ -961,6 +964,7 @@ namespace TigerClaw.Core.Tests
                     var decoder = new SentenceInputDecoder(
                         index,
                         model,
+                        beamWidth: beamWidth,
                         emittedCharacterReward: 2.0);
                     SentenceCandidate top = decoder.DecodeFull(item.Code, 20)
                         .Candidates.FirstOrDefault();
@@ -981,7 +985,8 @@ namespace TigerClaw.Core.Tests
                         cases, index, model, baselineCorrect,
                         mode: "current",
                         rows: rows,
-                        summaries: summaries);
+                        summaries: summaries,
+                        beamWidth: beamWidth);
                 }
                 if (ShouldRunSentenceEarlyCommitPolicyMode(selectedMode, "weak-evidence-2"))
                 {
@@ -991,7 +996,8 @@ namespace TigerClaw.Core.Tests
                         rows: rows,
                         summaries: summaries,
                         configureEngine: engine =>
-                            engine.SentenceEarlyCommitRequiredEvidenceCount = 2);
+                            engine.SentenceEarlyCommitRequiredEvidenceCount = 2,
+                        beamWidth: beamWidth);
                 }
                 if (ShouldRunSentenceEarlyCommitPolicyMode(selectedMode, "retain-raw-0"))
                 {
@@ -1001,7 +1007,8 @@ namespace TigerClaw.Core.Tests
                         rows: rows,
                         summaries: summaries,
                         configureEngine: engine =>
-                            engine.SentenceEarlyCommitMinimumRetainedRawLength = 0);
+                            engine.SentenceEarlyCommitMinimumRetainedRawLength = 0,
+                        beamWidth: beamWidth);
                 }
                 if (ShouldRunSentenceEarlyCommitPolicyMode(selectedMode, "count-merged-tail"))
                 {
@@ -1011,7 +1018,8 @@ namespace TigerClaw.Core.Tests
                         rows: rows,
                         summaries: summaries,
                         configureEngine: engine =>
-                            engine.SentenceEarlyCommitCountMergedTailEvidence = true);
+                            engine.SentenceEarlyCommitCountMergedTailEvidence = true,
+                        beamWidth: beamWidth);
                 }
                 if (ShouldRunSentenceEarlyCommitPolicyMode(selectedMode, "count-merged-tail-weak2"))
                 {
@@ -1024,7 +1032,8 @@ namespace TigerClaw.Core.Tests
                         {
                             engine.SentenceEarlyCommitRequiredEvidenceCount = 2;
                             engine.SentenceEarlyCommitCountMergedTailEvidence = true;
-                        });
+                        },
+                        beamWidth: beamWidth);
                 }
                 if (ShouldRunSentenceEarlyCommitPolicyMode(selectedMode, "count-merged-tail-retain0"))
                 {
@@ -1037,7 +1046,8 @@ namespace TigerClaw.Core.Tests
                         {
                             engine.SentenceEarlyCommitMinimumRetainedRawLength = 0;
                             engine.SentenceEarlyCommitCountMergedTailEvidence = true;
-                        });
+                        },
+                        beamWidth: beamWidth);
                 }
                 if (ShouldRunSentenceEarlyCommitPolicyMode(selectedMode, "armed-strong1"))
                 {
@@ -1047,7 +1057,8 @@ namespace TigerClaw.Core.Tests
                         rows: rows,
                         summaries: summaries,
                         configureEngine: engine =>
-                            engine.SentenceEarlyCommitArmedStrongSingleEvidence = true);
+                            engine.SentenceEarlyCommitArmedStrongSingleEvidence = true,
+                        beamWidth: beamWidth);
                 }
                 if (ShouldRunSentenceEarlyCommitPolicyMode(selectedMode, "truncated-strong"))
                 {
@@ -1057,7 +1068,8 @@ namespace TigerClaw.Core.Tests
                         rows: rows,
                         summaries: summaries,
                         configureEngine: engine =>
-                            engine.SentenceEarlyCommitAllowTruncatedStrongEvidence = true);
+                            engine.SentenceEarlyCommitAllowTruncatedStrongEvidence = true,
+                        beamWidth: beamWidth);
                 }
                 if (ShouldRunSentenceEarlyCommitPolicyMode(selectedMode, "combined-relaxed"))
                 {
@@ -1071,7 +1083,8 @@ namespace TigerClaw.Core.Tests
                             engine.SentenceEarlyCommitRequiredEvidenceCount = 2;
                             engine.SentenceEarlyCommitMinimumRetainedRawLength = 0;
                             engine.SentenceEarlyCommitCountMergedTailEvidence = true;
-                        });
+                        },
+                        beamWidth: beamWidth);
                 }
 
                 if (!string.IsNullOrEmpty(outputPath))
@@ -1108,7 +1121,8 @@ namespace TigerClaw.Core.Tests
             string mode,
             List<string> rows,
             List<string> summaries,
-            Action<InputMethodEngine> configureEngine = null)
+            Action<InputMethodEngine> configureEngine = null,
+            int beamWidth = 2000)
         {
             var tally = new SentenceEarlyCommitEvalTally();
             var bucketTallies = new Dictionary<string, SentenceEarlyCommitEvalTally>(
@@ -1141,6 +1155,7 @@ namespace TigerClaw.Core.Tests
                     var decoder = new SentenceInputDecoder(
                         index,
                         model,
+                        beamWidth: Math.Max(1, beamWidth),
                         emittedCharacterReward: 2.0);
                     var engine = new InputMethodEngine(
                         state,
