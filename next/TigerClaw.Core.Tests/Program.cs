@@ -291,6 +291,8 @@ namespace TigerClaw.Core.Tests
                 SentenceAutoCommitDroppedTailContradictsShorterCompetitor();
                 SentenceAutoCommitStopsBeforeExtendableSegment();
                 SentenceAutoCommitUsesTwoStrongGenerationCommonPrefix();
+                SentenceAutoCommitArmedStrongCanCommitAfterOneCurrentGeneration();
+                SentenceTruncatedEvidenceCanBePreservedForPolicyEval();
                 SentenceAutoCommitKeepsThreeGenerationWindowForWeakEvidence();
                 SentenceAutoCommitTracksPrefixesIndependently();
                 SentencePrefixEvidenceWeightsBoundaryDisagreement();
@@ -1037,6 +1039,26 @@ namespace TigerClaw.Core.Tests
                             engine.SentenceEarlyCommitCountMergedTailEvidence = true;
                         });
                 }
+                if (ShouldRunSentenceEarlyCommitPolicyMode(selectedMode, "armed-strong1"))
+                {
+                    EvaluateSentenceEarlyCommitMode(
+                        cases, index, model, baselineCorrect,
+                        mode: "armed-strong1",
+                        rows: rows,
+                        summaries: summaries,
+                        configureEngine: engine =>
+                            engine.SentenceEarlyCommitArmedStrongSingleEvidence = true);
+                }
+                if (ShouldRunSentenceEarlyCommitPolicyMode(selectedMode, "truncated-strong"))
+                {
+                    EvaluateSentenceEarlyCommitMode(
+                        cases, index, model, baselineCorrect,
+                        mode: "truncated-strong",
+                        rows: rows,
+                        summaries: summaries,
+                        configureEngine: engine =>
+                            engine.SentenceEarlyCommitAllowTruncatedStrongEvidence = true);
+                }
                 if (ShouldRunSentenceEarlyCommitPolicyMode(selectedMode, "combined-relaxed"))
                 {
                     EvaluateSentenceEarlyCommitMode(
@@ -1302,6 +1324,9 @@ namespace TigerClaw.Core.Tests
             AddEvalCaseIfMissing(cases, "新人上午来面试", "iejryfenahbmsp");
             AddEvalCaseIfMissing(cases, "左手匕首", "nuusvbbhoi");
             AddEvalCaseIfMissing(cases, "有一些人在这里看东西", "nvfisvmjrngvduqryxvx");
+            // hufu-ime-rust found an incomplete-tail confidence hijack on this
+            // sequence. TigerClaw's visible-top prefix gate should keep it safe.
+            AddEvalCaseIfMissing(cases, "斜劈", "jxjcdnp");
         }
 
         private sealed class SentenceEarlyCommitCaseResult
@@ -5240,6 +5265,83 @@ namespace TigerClaw.Core.Tests
             EngineUiSnapshot snapshot = engine.GetUiSnapshot(5);
             True(snapshot.Candidates.Length > 0 && snapshot.Candidates[0] == "丁",
                 nameof(SentenceAutoCommitUsesTwoStrongGenerationCommonPrefix) + ".unstable_suffix_retained");
+        }
+
+        private static void SentenceAutoCommitArmedStrongCanCommitAfterOneCurrentGeneration()
+        {
+            Dictionary<string, List<string>> lexicon = new Dictionary<string, List<string>>
+            {
+                ["ab"] = new List<string> { "甲" },
+                ["cd"] = new List<string> { "乙" },
+                ["ef"] = new List<string> { "丙" },
+                ["gh"] = new List<string> { "丁" },
+                ["ij"] = new List<string> { "戊" },
+                ["kl"] = new List<string> { "己" }
+            };
+
+            var controlState = new CoreRuntimeState();
+            EnableSentenceEarlyCommit(controlState);
+            var control = new InputMethodEngine(controlState, CreateSentenceDecoder(lexicon));
+            control.SentenceEmptyCodeAutoCommitOverride = false;
+            control.SentenceEarlyCommitRequiredEvidenceCount = 99;
+            control.SentenceEarlyCommitRequiredStrongCount = 99;
+            TypeLetters(control, "abcdefghij");
+            Equal(null, Press(control, 0x4B).TextToOutput,
+                nameof(SentenceAutoCommitArmedStrongCanCommitAfterOneCurrentGeneration) +
+                ".control_stays_buffered");
+
+            var armedState = new CoreRuntimeState();
+            EnableSentenceEarlyCommit(armedState);
+            var armed = new InputMethodEngine(armedState, CreateSentenceDecoder(lexicon));
+            armed.SentenceEmptyCodeAutoCommitOverride = false;
+            armed.SentenceEarlyCommitRequiredEvidenceCount = 99;
+            armed.SentenceEarlyCommitRequiredStrongCount = 99;
+            armed.SentenceEarlyCommitArmedStrongSingleEvidence = true;
+            armed.SentenceEarlyCommitArmedRawThreshold = 10;
+            TypeLetters(armed, "abcdefghij");
+            Equal("甲乙丙丁", Press(armed, 0x4B).TextToOutput,
+                nameof(SentenceAutoCommitArmedStrongCanCommitAfterOneCurrentGeneration) +
+                ".armed_commits_safe_prefix");
+        }
+
+        private static void SentenceTruncatedEvidenceCanBePreservedForPolicyEval()
+        {
+            var lexicon = SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
+            {
+                ["ab"] = new List<string> { "甲", "乙", "丙" },
+                ["cd"] = new List<string> { "丁" },
+                ["ef"] = new List<string> { "戊" }
+            });
+
+            var strict = new SentenceInputDecoder(
+                lexicon,
+                NeutralSentenceLanguageModel.Instance,
+                beamWidth: 1);
+            SentenceDecodeResult strictResult = strict.DecodeFull(
+                "abcdef", 20, includeEarlyCommitEvidence: true);
+            True(strictResult.EarlyCommitEvidence.ConfidenceTruncated,
+                nameof(SentenceTruncatedEvidenceCanBePreservedForPolicyEval) +
+                ".strict_marks_truncated");
+            True(strictResult.EarlyCommitEvidence.Prefixes.Length == 0,
+                nameof(SentenceTruncatedEvidenceCanBePreservedForPolicyEval) +
+                ".strict_drops_evidence");
+
+            var experimental = new SentenceInputDecoder(
+                lexicon,
+                NeutralSentenceLanguageModel.Instance,
+                beamWidth: 1)
+            {
+                PreserveTruncatedEarlyCommitEvidence = true
+            };
+            SentenceDecodeResult experimentalResult = experimental.DecodeFull(
+                "abcdef", 20, includeEarlyCommitEvidence: true);
+            True(experimentalResult.EarlyCommitEvidence.ConfidenceTruncated,
+                nameof(SentenceTruncatedEvidenceCanBePreservedForPolicyEval) +
+                ".experimental_still_marks_truncated");
+            True(experimentalResult.EarlyCommitEvidence.Prefixes.Any(prefix =>
+                    prefix.BoundaryClosed && prefix.Share >= 0.99999),
+                nameof(SentenceTruncatedEvidenceCanBePreservedForPolicyEval) +
+                ".experimental_keeps_strong_closed_prefix");
         }
 
         private static void SentenceAutoCommitKeepsThreeGenerationWindowForWeakEvidence()

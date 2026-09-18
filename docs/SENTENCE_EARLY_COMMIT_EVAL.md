@@ -114,3 +114,22 @@ next\_run\Tests\Release\net10.0-windows\TigerClaw.Core.Tests.exe ^
 根据该复验，Windows Core 采用“合并尾码代计数”，但保留三代普通证据和至少
 三个未上屏 raw 编码。该策略是概率决策：允许极少数后续编码导致切分翻转的
 理论风险，以换取更高的提前上屏覆盖率。
+
+### hufu-ime-rust 启发的实验策略（2026-09-18）
+
+默认产品策略不变。新增两个仅供 `--sentence-early-commit-policy-eval` 使用的模式：
+
+- `armed-strong1`：当前未提交 raw 超过 10 键后，本句进入 armed 状态；仅当
+  当前代证据达到既有强置信线 `0.99999` 时允许单代成熟。显示首选前缀一致、
+  closed boundary、至少保留 3 个 raw、距上次提交至少新增 3 键等现有安全门全部保留。
+- `truncated-strong`：beam 截断时保留幸存路径的诊断证据，但
+  `ConfidenceTruncated` 仍保持 true；只允许当前代、强置信
+  `>=0.99999` 的 closed-boundary evidence 进入现有证据 tracker，仍需默认两代
+  strong 证据成熟。该模式用于量化“长句截断即停摆”是否值得放宽，不改变发布行为。
+
+另加入 `jxjcdnp → 斜劈` 回归样本。hufu 曾在此遇到 incomplete-tail 假高置信
+抢跑；TigerClaw 仍要求准备提交的 prefix 必须是当前显示首选的前缀，用于验证现有
+visible-top 门能持续阻止这类劫持。
+
+单模式运行示例：在命令末尾分别传
+`armed-strong1` 或 `truncated-strong`。
