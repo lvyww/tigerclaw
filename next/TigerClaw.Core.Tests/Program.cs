@@ -5306,11 +5306,11 @@ namespace TigerClaw.Core.Tests
 
         private static void SentenceTruncatedEvidenceCanBePreservedForPolicyEval()
         {
+            // Put competing paths directly in the completed bucket so beam=1
+            // deterministically marks the final confidence pool as truncated.
             var lexicon = SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
             {
-                ["ab"] = new List<string> { "甲", "乙", "丙" },
-                ["cd"] = new List<string> { "丁" },
-                ["ef"] = new List<string> { "戊" }
+                ["abcdef"] = new List<string> { "甲", "乙", "丙" }
             });
 
             var strict = new SentenceInputDecoder(
