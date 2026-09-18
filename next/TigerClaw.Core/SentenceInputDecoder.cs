@@ -510,6 +510,9 @@ namespace TigerClaw.Core
         private int _cachedLimit;
         private bool _cachedIncludesEarlyCommitEvidence;
         private string _cachedRequiredTextPrefix = string.Empty;
+        // The engine enables this for the production strong-truncated policy.
+        // Standalone decoders keep the conservative default unless a caller opts in.
+        internal bool PreserveTruncatedEarlyCommitEvidence { get; set; }
         private readonly Dictionary<string, double> _isolationPenaltyCache;
         private readonly string[] _isolationPenaltyCacheKeys;
         private int _isolationPenaltyCacheNext;
@@ -1237,7 +1240,8 @@ namespace TigerClaw.Core
                 ConfidenceTruncated = confidenceTruncated || _learningAffected,
                 RawLengths = new Dictionary<string, int>(StringComparer.Ordinal)
             };
-            if (includeEarlyCommitEvidence && !_learningAffected && !confidenceTruncated)
+            if (includeEarlyCommitEvidence && !_learningAffected &&
+                (!confidenceTruncated || PreserveTruncatedEarlyCommitEvidence))
             {
                 // Display truncation must not inflate confidence. All retained
                 // complete paths compete, plus applicable unfinished-tail paths.
@@ -1405,7 +1409,10 @@ namespace TigerClaw.Core
                 requiredTextPrefix,
                 out mergedIncompleteTail,
                 ref confidenceTruncated);
-            SentencePrefixEvidence[] prefixes = confidenceTruncated ? Array.Empty<SentencePrefixEvidence>() : BuildPrefixEvidence(pool);
+            SentencePrefixEvidence[] prefixes =
+                confidenceTruncated && !PreserveTruncatedEarlyCommitEvidence
+                    ? Array.Empty<SentencePrefixEvidence>()
+                    : BuildPrefixEvidence(pool);
             SentencePrefixEvidence longest = prefixes
                 .Where(prefix =>
                     prefix.BoundaryClosed && prefix.Share >= EarlyCommitMinimumShare)
@@ -1472,7 +1479,8 @@ namespace TigerClaw.Core
                     continue;
                 }
 
-                if (confidenceTruncated || partialTruncated)
+                if ((confidenceTruncated || partialTruncated) &&
+                    !PreserveTruncatedEarlyCommitEvidence)
                 {
                     if (partial.Any(item => HasRequiredPrefix(item.Text, requiredTextPrefix)))
                     {
