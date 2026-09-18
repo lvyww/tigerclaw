@@ -72,8 +72,9 @@ namespace TigerClaw.Core
         private const double SentenceNeuralWeight = 0.84;
         private const double SentenceShortNeuralWeight = 0.30;
         private const int SentenceShortNeuralMaximumLength = 2;
-        private const double SentenceEarlyCommitMinimumShare = 0.995;
-        private const double SentenceEarlyCommitStrongShare = 0.99999;
+        private const double SentenceEarlyCommitMinimumShare = 0.99;
+        private const double SentenceEarlyCommitStrongShare = 0.999;
+        private const double SentenceEmptyCodeStrongShare = 0.99999;
         private const int SentenceEarlyCommitRetainedRawLength = 3;
         private const int SentenceEarlyCommitMaximumNeutralGap = 3;
 
