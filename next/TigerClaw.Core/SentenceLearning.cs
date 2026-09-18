@@ -102,6 +102,84 @@ namespace TigerClaw.Core
             }
             return result;
         }
+
+        internal static SentenceLearningEvent[] Reinforce(
+            string raw,
+            SentenceCandidate selected,
+            int floor,
+            string mode,
+            SentenceLearningSnapshot snapshot)
+        {
+            if (string.IsNullOrEmpty(raw) || selected == null || string.IsNullOrEmpty(selected.Text) ||
+                string.IsNullOrEmpty(mode) || snapshot == null || snapshot.IsEmpty)
+            {
+                return Array.Empty<SentenceLearningEvent>();
+            }
+            SortedDictionary<int, int> boundaries = Boundaries(selected, raw.Length);
+            if (boundaries == null)
+            {
+                return Array.Empty<SentenceLearningEvent>();
+            }
+            KeyValuePair<int, int>[] points = boundaries.ToArray();
+            var result = new List<SentenceLearningEvent>();
+            for (int endIndex = 1; endIndex < points.Length; endIndex++)
+            {
+                int rawEnd = points[endIndex].Key;
+                int textEnd = points[endIndex].Value;
+                if (rawEnd <= floor)
+                {
+                    continue;
+                }
+                double bestScore = 0.0;
+                int bestRawStart = -1, bestTextStart = -1;
+                string bestText = null, bestContext = null;
+                for (int startIndex = endIndex - 1; startIndex >= 0; startIndex--)
+                {
+                    int rawStart = points[startIndex].Key;
+                    int textStart = points[startIndex].Value;
+                    if (rawStart < floor)
+                    {
+                        continue;
+                    }
+                    string fragment = selected.Text.Substring(textStart, textEnd - textStart);
+                    if (Characters(fragment) > 16)
+                    {
+                        break;
+                    }
+                    string code = raw.Substring(rawStart, rawEnd - rawStart).ToLowerInvariant();
+                    string context = Context(selected.Text, textStart);
+                    double score = snapshot.Score(mode, code, fragment, context);
+                    if (score > bestScore + 1e-12)
+                    {
+                        bestScore = score;
+                        bestRawStart = rawStart;
+                        bestTextStart = textStart;
+                        bestText = fragment;
+                        bestContext = context;
+                    }
+                }
+                // Once a preference is already near full maturity, avoid
+                // appending another journal row on every normal top1 commit.
+                // Natural decay can later bring it below this threshold, at
+                // which point a fresh stable use reinforces it again.
+                if (bestScore <= 0.0 || bestScore >= 9.0 || bestRawStart < 0)
+                {
+                    continue;
+                }
+                result.Add(new SentenceLearningEvent
+                {
+                    Mode = mode,
+                    Code = raw.Substring(bestRawStart, rawEnd - bestRawStart).ToLowerInvariant(),
+                    Text = bestText,
+                    Context = bestContext,
+                    RawStart = bestRawStart,
+                    RawEnd = rawEnd,
+                    TextStart = bestTextStart,
+                    TextEnd = textEnd
+                });
+            }
+            return result.ToArray();
+        }
     }
 
     // Immutable query snapshot. Replay/aggregation happens once on the store

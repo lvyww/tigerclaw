@@ -68,6 +68,30 @@ namespace TigerClaw.Core
             _pendingLearning.RemoveAll(e => e.RawEnd <= rawEnd);
             if (_readyLearning.Count > 0) _learningOutput = output;
         }
+
+        private void ReinforceSentenceLearning(SentenceCandidate candidate, string output)
+        {
+            // A correction captured during this same commit is already one
+            // learning observation. Do not double-count it as a stable repeat.
+            if (_readyLearning.Count > 0 || candidate == null || _learningStore == null ||
+                string.IsNullOrEmpty(_learningMode) || !_state.GetSentenceLearningEnabled())
+            {
+                return;
+            }
+            SentenceLearningEvent[] reinforcement = SentenceLearning.Reinforce(
+                _sentenceRawBuffer.ToString(),
+                candidate,
+                0,
+                _learningMode,
+                _learningStore.Snapshot);
+            if (reinforcement.Length == 0)
+            {
+                return;
+            }
+            _readyLearning.AddRange(reinforcement);
+            _learningOutput = output;
+        }
+
         internal SentenceLearningEvent[] TakeSentenceLearning(KeyEngineResult result, out SentenceLearningStore store)
         {
             lock (_lock)

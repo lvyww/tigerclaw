@@ -59,6 +59,19 @@ namespace TigerClaw.Core.Tests
             var compete = SentenceLearningSnapshot.Build(new[] { e, b, change }, e.Time);
             LearningCheck(compete.Score(e.Mode, e.Code, change.Text, e.Context) > compete.Score(e.Mode, e.Code, e.Text, e.Context), "new correction wins old habit");
             LearningCheck(SentenceLearningSnapshot.Build(Enumerable.Repeat(e, 100), e.Time).Score(e.Mode, e.Code, e.Text, e.Context) <= 10, "bounded score");
+            LearningCheck(SentenceInputDecoder.LearningEarlyCommitMaturity(6) == 0 &&
+                Math.Abs(SentenceInputDecoder.LearningEarlyCommitMaturity(8) - 0.5) < 1e-12 &&
+                SentenceInputDecoder.LearningEarlyCommitMaturity(10) == 1,
+                "early-commit maturity grows 0 -> 0.5 -> 1");
+            LearningCheck(SentenceInputDecoder.LearningEarlyCommitContribution(6) == 0 &&
+                Math.Abs(SentenceInputDecoder.LearningEarlyCommitContribution(8) - 0.30) < 1e-12 &&
+                Math.Abs(SentenceInputDecoder.LearningEarlyCommitContribution(10) - 0.75) < 1e-12,
+                "learning confidence contribution follows maturity multiplier");
+            SentenceCandidate learnedCandidate = Candidate("设置" + e.Text, (2, 2), (6, 4));
+            SentenceLearningEvent[] reinforcement = SentenceLearning.Reinforce("xx" + e.Code, learnedCandidate, 0, e.Mode, s);
+            LearningCheck(reinforcement.Length == 1 && reinforcement[0].Code == e.Code &&
+                reinforcement[0].Text == e.Text && reinforcement[0].Context == e.Context,
+                "stable learned top1 can be reinforced in the same context");
             foreach (var name in new[] { ".tigerclaw-learning-v1.log", ".TIGIRL-LEARNING-v1.log.bak.txt", ".tigerclaw-learning-v1.log.tmp.dict.yaml", ".tigirl-learning-v1.log.lock" })
                 LearningCheck(SentenceLearning.IsReservedFile(name), "reserved filename " + name);
             LearningCheck(!SentenceLearning.IsReservedFile("正常码表.txt"), "normal table allowed");
@@ -134,8 +147,30 @@ namespace TigerClaw.Core.Tests
             var e = LearningEvent("aabb", "乙中");decoder.SetLearning(SentenceLearningSnapshot.Build(new[] { e }), e.Mode);
             var learned = decoder.Decode("aabb", 20, true);
             LearningCheck(learned.Candidates[0].Text == "乙中", "learned multi-edge path survives beam one");
-            LearningCheck(learned.LearningAffected && learned.EarlyCommitEvidence.Prefixes.Length == 0, "learning not early-commit confidence");
+            LearningCheck(learned.LearningAffected, "learning affected flag retained for diagnostics/empty-code safety");
             LearningCheck(Math.Abs(learned.Candidates[0].FinalScore - learned.Candidates[0].BaseScore - 6) < 1e-5, "one reward only");
+
+            var confidenceDecoder = new SentenceInputDecoder(
+                lexicon, NeutralSentenceLanguageModel.Instance, beamWidth: 100,
+                isolationPenalty: SentenceIsolationPenalty.None, allowDuplicateSingleCharacters: true);
+            SentenceDecodeResult confidencePlain = confidenceDecoder.Decode("aabb", 20, true);
+            SentenceCandidate plainTarget = confidencePlain.Candidates.Single(c => c.Text == "乙中");
+            confidenceDecoder.SetLearning(SentenceLearningSnapshot.Build(new[] { e }, e.Time), e.Mode);
+            SentenceDecodeResult firstLearning = confidenceDecoder.Decode("aabb", 20, true);
+            SentenceCandidate firstTarget = firstLearning.Candidates.Single(c => c.Text == "乙中");
+            LearningCheck(firstLearning.LearningAffected && firstLearning.EarlyCommitEvidence.Prefixes.Length > 0,
+                "learning no longer disables early-commit evidence");
+            LearningCheck(Math.Abs(firstTarget.EarlyCommitConfidenceScore - plainTarget.EarlyCommitConfidenceScore) < 1e-12,
+                "first correction has zero early-commit confidence contribution");
+            var e2 = LearningEvent(e.Code, e.Text, e.Context); e2.Time = e.Time;
+            confidenceDecoder.SetLearning(SentenceLearningSnapshot.Build(new[] { e, e2 }, e.Time), e.Mode);
+            SentenceCandidate secondTarget = confidenceDecoder.Decode("aabb", 20, true).Candidates.Single(c => c.Text == "乙中");
+            var e3 = LearningEvent(e.Code, e.Text, e.Context); e3.Time = e.Time;
+            confidenceDecoder.SetLearning(SentenceLearningSnapshot.Build(new[] { e, e2, e3 }, e.Time), e.Mode);
+            SentenceCandidate matureTarget = confidenceDecoder.Decode("aabb", 20, true).Candidates.Single(c => c.Text == "乙中");
+            LearningCheck(secondTarget.EarlyCommitConfidenceScore > firstTarget.EarlyCommitConfidenceScore &&
+                matureTarget.EarlyCommitConfidenceScore > secondTarget.EarlyCommitConfidenceScore,
+                "stable learning progressively increases early-commit confidence");
             LearningCheck(decoder.Decode("aabbcc").Candidates[0].Text == "乙中国", "local preference with suffix");
             LearningCheck(decoder.Decode("aa2bb").Candidates[0].Text == "乙中", "explicit selectors retain meaning");
             var illegal = LearningEvent("aabb", "重庆中");decoder.SetLearning(SentenceLearningSnapshot.Build(new[] { illegal }), illegal.Mode);
@@ -161,7 +196,23 @@ namespace TigerClaw.Core.Tests
             LearningCheck(store.Path == Path.Combine(scheme, ".tigerclaw-learning-v1.log") && !File.Exists(store.Path), "scheme source folder, not cache, no pre-ack write");
             store.ConfirmAsync(events);store.FlushAsync().GetAwaiter().GetResult();
             TypeLetters(engine, "aa");LearningCheck(engine.GetUiSnapshot(5).Candidates[0] == "乙", "confirmed preference used by next composition");
-            output = Press(engine, 32);LearningCheck(engine.TakeSentenceLearning(output, out _).Length == 0 && store.Entries().Length == 1, "automatic use no self reinforcement");
+            output = Press(engine, 32);events = engine.TakeSentenceLearning(output, out _);
+            LearningCheck(events.Length == 1 && store.Entries().Length == 1,
+                "explicit stable top1 stages one reinforcement without writing before ack");
+            store.ConfirmAsync(events);store.FlushAsync().GetAwaiter().GetResult();
+            LearningCheck(store.Entries().Length == 2 &&
+                Math.Abs(store.Snapshot.Score(events[0].Mode, events[0].Code, events[0].Text, events[0].Context) - 8) < 1e-9,
+                "second stable observation reaches half maturity");
+            TypeLetters(engine, "aa");output = Press(engine, 32);events = engine.TakeSentenceLearning(output, out _);
+            LearningCheck(events.Length == 1, "mature top1 stages another explicit reinforcement");
+            store.ConfirmAsync(events);store.FlushAsync().GetAwaiter().GetResult();
+            double matureScore = store.Snapshot.Score(events[0].Mode, events[0].Code, events[0].Text, events[0].Context);
+            LearningCheck(store.Entries().Length == 3 && matureScore > 9.99 &&
+                SentenceInputDecoder.LearningEarlyCommitMaturity(matureScore) > 0.99,
+                "third stable observation reaches effectively full maturity");
+            TypeLetters(engine, "aa");output = Press(engine, 32);
+            LearningCheck(engine.TakeSentenceLearning(output, out _).Length == 0,
+                "fully mature top1 does not append redundant reinforcement");
             TypeLetters(engine, "aa");Press(engine, 9);output = Press(engine, 27);LearningCheck(engine.TakeSentenceLearning(output, out _).Length == 0, "Escape discards browsing");
             state.TrySetConfigValue("整句Tab自学习", "否", out _, out _);TypeLetters(engine, "aa");LearningCheck(engine.GetUiSnapshot(5).Candidates[0] == "甲", "disabled engine order restored");Press(engine, 27);
             state.TrySetConfigValue("整句Tab自学习", "是", out _, out _);

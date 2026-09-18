@@ -227,3 +227,57 @@ beam=1 才首次出现 0.11% baseline-correct unsafe，与上一发布策略的�
 在 3004 条平衡集上造成 134 条 baseline-correct 错误（约 4.46% 全样本），
 因此只采纳两个概率阈值，不采纳 armed 单代确认和 retain0。
 
+
+### 个性化语料参与提前上屏（2026-09-18）
+
+此前补充语料只影响 Beam 排序而不直接进入 early-commit confidence；自学习只要
+命中就令 `LearningAffected=true` 并整代禁用提前上屏。本轮改为双置信度：
+
+- `BaseShare`：仅基础语言模型/原 confidence mass，用于 strong、truncated-strong
+  与 boundary-closed 安全判定；
+- `Share`：在基础 confidence 上加入受限个性化贡献，用于普通三代 evidence 成熟。
+
+因此用户数据可以让普通证据更快达到 `0.99`，但不能单独制造 `strong=0.999`，
+也不能单独把一个未闭合的 raw boundary 变成可提交边界。
+
+#### 自定义/补充语料
+
+补充语料继续用原 reward 参与 Beam 排序，同时额外给 early-commit confidence 一个
+有上限的小贡献：
+
+```
+supplement_early_bonus = min(0.75, supplement_score * 0.05)
+```
+
+这个 bonus 只进入个性化 `Share`；`BaseShare` 和 empty-code confidence 不变。
+多个个性化来源叠加后的总 early-commit bonus 还统一限制在 `0.80`。
+
+#### 自学习成熟度
+
+沿用已有学习分数（第一次/第二次/第三次同一稳定偏好约为 6/8/10），定义：
+
+```
+maturity = clamp((learning_score - 6) / 4, 0, 1)
+learning_early_bonus = min(0.75, learning_score * maturity * 0.075)
+```
+
+含义：
+
+- 第一次 Tab 改选：`maturity=0`，只改变候选排序，不贡献 early confidence；
+- 后续用户明确接受已经成为首选的同一学习结果：逐步强化到约 0.5、1.0；
+- 学习时间衰减会让成熟度自然下降；
+- 已接近完全成熟（学习分数 >=9）时不再每次写日志，等自然衰减后才允许再次强化；
+- 概率提前上屏本身不产生强化事件，避免自学习形成自动正反馈闭环。
+
+学习影响且 confidence pool 已发生 beam truncation 时仍禁止提前上屏，因为学习奖励
+可能改变 beam 幸存路径，使截断后的纯模型 `BaseShare` 产生条件性假高置信。
+
+#### 验证
+
+- Full Core：全部通过；学习测试 25,710 checks；
+- sentence review：809,258 checks / 5,084 snapshots；
+- 个性化 fixture 验证补充语料和成熟学习可以把普通 `Share` 推过阈值，但
+  `BaseShare` 保持不变，即使个性化 `Share >= 0.999` 也不会形成 strong；
+- 生产模型 10,001 条、无个性化命中的默认路径与当前 main 完全一致：
+  early-case 90.70%、平均留码 5.322、P90=8、提前覆盖 72.68%、
+  baseline-correct unsafe=0。

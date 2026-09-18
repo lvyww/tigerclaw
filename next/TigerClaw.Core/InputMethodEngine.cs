@@ -2440,7 +2440,7 @@ namespace TigerClaw.Core
                     return commit;
                 }
             }
-            if (_sentenceDecodeResult.LearningAffected || (!_state.GetSentenceAutoCommitEnabled() && !IsSentenceEmptyCodeAutoCommitActive()))
+            if (!_state.GetSentenceAutoCommitEnabled() && !IsSentenceEmptyCodeAutoCommitActive())
             {
                 // Keep disabled-mode edits off both automatic-commit paths. Reset once when
                 // necessary so a live setting change cannot leave evidence for a later re-enable.
@@ -2584,7 +2584,7 @@ namespace TigerClaw.Core
 
         private string TryAutoCommitSentencePrefix()
         {
-            if (_sentenceDecodeResult.LearningAffected || !_state.GetSentenceAutoCommitEnabled() || _sentenceAutoCommitSuspended)
+            if (!_state.GetSentenceAutoCommitEnabled() || _sentenceAutoCommitSuspended)
             {
                 ResetSentenceAutoCommitEvidence();
                 return null;
@@ -2614,6 +2614,15 @@ namespace TigerClaw.Core
             SentenceEarlyCommitEvidence earlyCommitEvidence =
                 _sentenceDecodeResult.EarlyCommitEvidence ?? SentenceEarlyCommitEvidence.Empty;
             bool truncatedEvidence = earlyCommitEvidence.ConfidenceTruncated;
+            // Learning may change which paths survive the beam. When the pool is
+            // already truncated, a model-only BaseShare can therefore look
+            // artificially strong even though the learned path affected survival.
+            // Keep gradual learning participation to complete confidence pools.
+            if (truncatedEvidence && _sentenceDecodeResult.LearningAffected)
+            {
+                ResetSentenceAutoCommitEvidence();
+                return null;
+            }
             if (truncatedEvidence &&
                 (!SentenceEarlyCommitAllowTruncatedStrongEvidence || !currentGeneration))
             {
@@ -2664,7 +2673,7 @@ namespace TigerClaw.Core
                 if (prefix == null || string.IsNullOrEmpty(prefix.Text) ||
                     !prefix.BoundaryClosed ||
                     prefix.Share < SentenceEarlyCommitMinimumShare ||
-                    (truncatedEvidence && prefix.Share < SentenceEarlyCommitStrongShare) ||
+                    (truncatedEvidence && GetSentencePrefixBaseShare(prefix) < SentenceEarlyCommitStrongShare) ||
                     prefix.RawLength <= _sentenceCommittedRawLength ||
                     prefix.Text.Length <= _sentenceCommittedText.Length ||
                     !prefix.Text.StartsWith(_sentenceCommittedText, StringComparison.Ordinal) ||
@@ -2711,7 +2720,7 @@ namespace TigerClaw.Core
                 tracker.EvidenceCount = Math.Min(
                     Math.Max(1, SentenceEarlyCommitRequiredEvidenceCount),
                     tracker.EvidenceCount + 1);
-                tracker.ConsecutiveStrongCount = prefix.Share >= SentenceEarlyCommitStrongShare
+                tracker.ConsecutiveStrongCount = GetSentencePrefixBaseShare(prefix) >= SentenceEarlyCommitStrongShare
                     ? Math.Min(
                         Math.Max(1, SentenceEarlyCommitRequiredStrongCount),
                         tracker.ConsecutiveStrongCount + 1)
@@ -2901,6 +2910,9 @@ namespace TigerClaw.Core
                 ? Math.Max(SentenceEarlyCommitMinimumRetainedRawLength, configured)
                 : SentenceEarlyCommitMinimumRetainedRawLength;
         }
+
+        private static double GetSentencePrefixBaseShare(SentencePrefixEvidence prefix) =>
+            prefix == null || double.IsNaN(prefix.BaseShare) ? prefix?.Share ?? 0.0 : prefix.BaseShare;
 
         private static string BuildSentencePrefixTrackerKey(string text, int rawLength)
         {
@@ -3095,6 +3107,10 @@ namespace TigerClaw.Core
                 output = output.Substring(_sentenceCommittedText.Length);
             }
             ReleaseSentenceLearning(candidates[index].Text, _sentenceRawBuffer.Length, output);
+            if (index == 0)
+            {
+                ReinforceSentenceLearning(candidates[index], output);
+            }
             ClearCompositionInput();
             _compositionState = CompositionState.CnIdle;
             ResetCandidatePageTracker();
@@ -3120,7 +3136,13 @@ namespace TigerClaw.Core
             CaptureSentenceLearning(_sentenceSelectedIndex);
             output += suffix ?? string.Empty;
             if (candidates.Length > 0 && _sentenceSelectedIndex < candidates.Length)
+            {
                 ReleaseSentenceLearning(candidates[_sentenceSelectedIndex].Text, _sentenceRawBuffer.Length, output);
+                if (_sentenceSelectedIndex == 0)
+                {
+                    ReinforceSentenceLearning(candidates[_sentenceSelectedIndex], output);
+                }
+            }
             ClearCompositionInput();
             _compositionState = CompositionState.CnIdle;
             ResetCandidatePageTracker();
@@ -4708,6 +4730,7 @@ namespace TigerClaw.Core
                         BaseScore = candidate.BaseScore,
                         FinalScore = candidate.FinalScore,
                         ConfidenceScore = candidate.ConfidenceScore,
+                        EarlyCommitConfidenceScore = candidate.EarlyCommitConfidenceScore,
                         SupplementScore = candidate.SupplementScore,
                         LearningScore = candidate.LearningScore,
                         CodeScore = candidate.CodeScore,
