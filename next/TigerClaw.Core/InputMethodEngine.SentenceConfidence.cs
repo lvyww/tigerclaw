@@ -53,7 +53,7 @@ namespace TigerClaw.Core
                 if (item.Text == candidate.Text && item.Boundary?.RawLength == candidate.Boundary?.RawLength)
                     candidateMass += mass;
             }
-            return total > 0.0 && candidateMass / total >= SentenceEarlyCommitStrongShare;
+            return total > 0.0 && candidateMass / total >= SentenceEmptyCodeStrongShare;
         }
     }
 }
