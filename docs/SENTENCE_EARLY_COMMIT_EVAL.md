@@ -196,3 +196,34 @@ incomplete-tail 劫持案例。
 在策略评测中，`current` 现在专门复现变更前的 strict truncation veto，
 `truncated-strong` 对应新的发布默认行为；普通 `--sentence-early-commit-eval`
 直接走发布默认策略。
+
+### 虎符证据阈值等参数复验（2026-09-18）
+
+虎符当前提前上屏的两个概率数值为：proposal confidence `0.99`、strong share
+`0.999`。TigerClaw 原发布值分别为 `0.995`、`0.99999`。使用同一生产
+n-gram、码表与 10001 条数据做拆分 A/B：
+
+| 策略 | 提前触发 | 平均留码 | P90 | 提前覆盖 | baseline-correct unsafe |
+|---|---:|---:|---:|---:|---:|
+| TigerClaw 发布基线 0.995 / 0.99999 | 90.34% | 5.525 | 9 | 71.21% | 0 |
+| 仅 proposal 0.99 | 90.48% | 5.447 | 9 | 71.67% | 0 |
+| 仅 strong 0.999 | 90.62% | 5.399 | 8 | 72.20% | 0 |
+| proposal 0.99 + strong 0.999 | **90.70%** | **5.322** | **8** | **72.68%** | **0** |
+
+组合阈值在 31+ 长句上：平均留码 `6.464 → 6.124`，P90 `10 → 9`，
+提前覆盖 `79.66% → 81.74%`，baseline-correct unsafe 仍为 0。
+
+注意：TigerClaw 的空码顶屏也曾复用 early-commit strong 常量。直接全局把
+`0.99999` 改成 `0.999` 会放宽空码顶屏的隐藏候选池安全门，并触发既有
+sentence-review 回归。因此两者现已解耦：概率提前上屏 strong 使用 `0.999`，
+空码顶屏继续保持 `0.99999`。
+
+解耦后的最终候选在 Full Core 中通过 809258 checks / 5084 snapshots；10001 条
+默认产品路径 baseline-correct unsafe=0。beam 压力在 100、10、2 均保持 0，
+beam=1 才首次出现 0.11% baseline-correct unsafe，与上一发布策略的失效边界一致。
+
+完整照搬虎符的数值/节奏并不适合 TigerClaw：`0.99 / 0.999` +
+`early_need=3` + `resid>10 armed strong_need=1` + `min_retained_raw=0`
+在 3004 条平衡集上造成 134 条 baseline-correct 错误（约 4.46% 全样本），
+因此只采纳两个概率阈值，不采纳 armed 单代确认和 retain0。
+
