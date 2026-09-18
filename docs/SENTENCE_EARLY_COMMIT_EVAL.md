@@ -115,21 +115,84 @@ next\_run\Tests\Release\net10.0-windows\TigerClaw.Core.Tests.exe ^
 三个未上屏 raw 编码。该策略是概率决策：允许极少数后续编码导致切分翻转的
 理论风险，以换取更高的提前上屏覆盖率。
 
-### hufu-ime-rust 启发的实验策略（2026-09-18）
+### hufu-ime-rust 启发的截断证据策略（2026-09-18）
 
-默认产品策略不变。新增两个仅供 `--sentence-early-commit-policy-eval` 使用的模式：
+本轮首先对两个方向做端到端 A/B：
 
-- `armed-strong1`：当前未提交 raw 超过 10 键后，本句进入 armed 状态；仅当
-  当前代证据达到既有强置信线 `0.99999` 时允许单代成熟。显示首选前缀一致、
-  closed boundary、至少保留 3 个 raw、距上次提交至少新增 3 键等现有安全门全部保留。
-- `truncated-strong`：beam 截断时保留幸存路径的诊断证据，但
-  `ConfidenceTruncated` 仍保持 true；只允许当前代、强置信
-  `>=0.99999` 的 closed-boundary evidence 进入现有证据 tracker，仍需默认两代
-  strong 证据成熟。该模式用于量化“长句截断即停摆”是否值得放宽，不改变发布行为。
+- `armed-strong1`：长残码进入 armed 后，强置信证据允许单代成熟；
+- `truncated-strong`：beam 截断时仍保留幸存路径证据，但 `ConfidenceTruncated`
+  继续为 true，只允许当前代、`share >= 0.99999`、closed-boundary 的证据进入
+  现有 tracker，仍需默认两代 strong 证据成熟。
 
-另加入 `jxjcdnp → 斜劈` 回归样本。hufu 曾在此遇到 incomplete-tail 假高置信
-抢跑；TigerClaw 仍要求准备提交的 prefix 必须是当前显示首选的前缀，用于验证现有
-visible-top 门能持续阻止这类劫持。
+生产模型、当前码表、10001 条大集（原 10000 条 + `jxjcdnp → 斜劈` 回归）结果：
 
-单模式运行示例：在命令末尾分别传
-`armed-strong1` 或 `truncated-strong`。
+| 策略 | 触发率 | 平均留码 | P90 留码 | 提前覆盖 | 基线正确回归 |
+|---|---:|---:|---:|---:|---:|
+| 旧 strict truncation veto | 90.34% | 5.891 | 10 | 67.39% | 0 |
+| armed-strong1 | 90.50% | 5.735 | 9 | 68.59% | **2** |
+| truncated-strong | 90.34% | **5.525** | **9** | **71.21%** | **0** |
+
+`armed-strong1` 因两条 baseline 正确真实回归被否决并从代码移除。两条回归分别为
+“有茶有书适合惬意地呆坐半天”被提前锁成“……惬意地吃……”以及
+“由威廉二世陪同李鸿章走上阅兵台……”被提前锁成“……李鸿章走上来……”。
+
+`truncated-strong` 的收益只发生在 31+ 编码长句：10001 条中有 763 条行为变化，
+全部属于 31+ 档；其中 760 条 baseline 正确，760 条均保持 safe 且 final-exact。
+31+ 平均留码 `7.178 → 6.464`，P90 `14 → 10`，提前覆盖
+`72.20% → 79.66%`。首次提前提交位置和总体触发率基本不变，说明收益来自长句
+后半程不再因为 beam truncation 一票否决而停止继续消费安全前缀。
+
+#### Beam 压力测试
+
+`--sentence-early-commit-policy-eval` 最后可再传一个 beam width，用于在同一 beam
+下重新计算 baseline 后做压力比较，例如：
+
+```batch
+next\_run\Tests\Release\net10.0-windows\TigerClaw.Core.Tests.exe ^
+  --sentence-early-commit-policy-eval ^
+  C:\Archive\tigerclaw_sentence_ml\baseline\tiger-sentence-early-commit-eval-10000-v1.json ^
+  release_arm64\Models\sentence-ngram-v2.bin ^
+  release_arm64\码表\虎整句\虎整句.txt ^
+  C:\Archive\tigerclaw_sentence_ml\baseline\truncated-stress.csv ^
+  0 truncated-strong 100
+```
+
+10001 条大集从产品 beam=2000 一路压低的结果：
+
+| Beam | baseline top1 | 平均留码 | 提前覆盖 | baseline-correct unsafe |
+|---:|---:|---:|---:|---:|
+| 2000 | 98.56% | 5.525 | 71.21% | 0 |
+| 1000 | 98.56% | 5.571 | 70.79% | 0 |
+| 500 | 98.56% | 5.638 | 70.29% | 0 |
+| 250 | 98.56% | 5.713 | 69.81% | 0 |
+| 100 | 98.56% | 5.834 | 68.96% | 0 |
+| 50 | 98.56% | 5.961 | 68.11% | 0 |
+| 25 | 98.56% | 6.147 | 66.99% | 0 |
+| 10 | 98.56% | 6.406 | 65.44% | 0 |
+| 5 | 98.56% | 6.542 | 64.67% | 0 |
+| 3 | 98.53% | 6.410 | 65.60% | 0 |
+| 2 | 98.50% | 5.941 | 68.85% | 0 |
+| 1 | 96.61% | 4.347 | 78.59% | **0.11%** |
+
+因此该策略不是理论上无条件安全：当 beam 极端收缩到 1、置信度退化为“唯一幸存
+路径即 100%”时会出现真实回归；但在 10001 条上从产品 2000 一直压到 2 都保持
+baseline 正确样本零回归。3004 条平衡集得到相同边界：beam=2 仍为 0，beam=1
+首次出现 `璎珞 (noonsgw) → 朝` 的错误提前提交。
+
+基于该结果，Windows Core 的发布默认策略改为接受强截断证据，不再对
+`ConfidenceTruncated` 一票否决。安全门保持为：
+
+- 仅消费当前 generation 的截断证据，不接受上一代异步结果；
+- prefix `share >= 0.99999` 且 boundary closed；
+- prefix 必须仍是当前显示首选的前缀；
+- 仍需默认两代连续 strong 证据成熟；
+- 仍至少保留 3 个 raw，并保持距上次概率提交至少新增 3 个 raw；
+- 学习影响、手动导航等原有暂停条件不变。
+
+`jxjcdnp → 斜劈` 在 strict、truncated 及压力测试中都保持 baseline 正确、无错误
+提前提交且 final-exact，现有 visible-top prefix gate 足以覆盖 hufu 报告的该类
+incomplete-tail 劫持案例。
+
+在策略评测中，`current` 现在专门复现变更前的 strict truncation veto，
+`truncated-strong` 对应新的发布默认行为；普通 `--sentence-early-commit-eval`
+直接走发布默认策略。

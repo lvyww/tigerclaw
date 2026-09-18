@@ -84,11 +84,10 @@ namespace TigerClaw.Core
         internal int SentenceEarlyCommitMinimumRetainedRawLength { get; set; } =
             SentenceEarlyCommitRetainedRawLength;
         internal bool SentenceEarlyCommitCountMergedTailEvidence { get; set; } = true;
-        // Evaluator-only policies inspired by hufu-ime-rust. Both default off.
-        // Product behavior is unchanged unless a test/evaluator explicitly enables them.
-        internal bool SentenceEarlyCommitArmedStrongSingleEvidence { get; set; }
-        internal int SentenceEarlyCommitArmedRawThreshold { get; set; } = 10;
-        internal bool SentenceEarlyCommitAllowTruncatedStrongEvidence { get; set; }
+        // Beam truncation no longer vetoes early commit outright. Product policy
+        // accepts only current-generation, very-strong truncated evidence; the
+        // evaluator can set this false to reproduce the previous strict veto.
+        internal bool SentenceEarlyCommitAllowTruncatedStrongEvidence { get; set; } = true;
         internal bool? SentenceEmptyCodeAutoCommitOverride { get; set; }
 
         private sealed class SentenceAutoCommitTracker
@@ -139,7 +138,6 @@ namespace TigerClaw.Core
         private int _sentenceLastAutoCommitRawLength;
         private bool _sentenceAutoCommitSuspended;
         private bool _sentenceContinuationAfterAutoCommit;
-        private bool _sentenceEarlyCommitResidArmed;
         private SentenceEmptyCodePending _sentenceEmptyCodePending;
         private string _sentenceNeuralAcceptedRaw = string.Empty;
         private string _sentenceNeuralTopText = string.Empty;
@@ -2634,14 +2632,6 @@ namespace TigerClaw.Core
                 ? visibleCandidates[0]?.Text ?? string.Empty
                 : null;
 
-            if (SentenceEarlyCommitArmedStrongSingleEvidence &&
-                currentGeneration &&
-                evidenceRaw.Length - _sentenceCommittedRawLength >
-                    Math.Max(0, SentenceEarlyCommitArmedRawThreshold))
-            {
-                _sentenceEarlyCommitResidArmed = true;
-            }
-
             if (_sentenceAutoCommitLastSeenRaw.Length > 0 &&
                 string.Equals(_sentenceAutoCommitLastSeenRaw, evidenceRaw, StringComparison.Ordinal))
             {
@@ -2842,26 +2832,11 @@ namespace TigerClaw.Core
                  right.StartsWith(left, StringComparison.Ordinal));
         }
 
-        private bool IsSentenceAutoCommitTrackerMature(
-            SentenceAutoCommitTracker tracker,
-            bool currentGeneration)
+        private bool IsSentenceAutoCommitTrackerMature(SentenceAutoCommitTracker tracker)
         {
-            if (tracker == null)
-            {
-                return false;
-            }
-
-            if (tracker.EvidenceCount >= SentenceEarlyCommitRequiredEvidenceCount ||
-                tracker.ConsecutiveStrongCount >= SentenceEarlyCommitRequiredStrongCount)
-            {
-                return true;
-            }
-
-            return SentenceEarlyCommitArmedStrongSingleEvidence &&
-                _sentenceEarlyCommitResidArmed &&
-                currentGeneration &&
-                tracker.ConsecutiveStrongCount >= 1 &&
-                tracker.LastShare >= SentenceEarlyCommitStrongShare;
+            return tracker != null &&
+                (tracker.EvidenceCount >= SentenceEarlyCommitRequiredEvidenceCount ||
+                 tracker.ConsecutiveStrongCount >= SentenceEarlyCommitRequiredStrongCount);
         }
 
         private string TryCommitMatureSentencePrefix(
@@ -2871,7 +2846,7 @@ namespace TigerClaw.Core
         {
             SentenceAutoCommitTracker selected = _sentenceAutoCommitTrackers.Values
                 .Where(tracker =>
-                    IsSentenceAutoCommitTrackerMature(tracker, currentGeneration) &&
+                    IsSentenceAutoCommitTrackerMature(tracker) &&
                     tracker.RawLength > _sentenceCommittedRawLength &&
                     tracker.RawLength <= evidenceRaw.Length &&
                     evidenceRaw.Length - tracker.RawLength >=
@@ -3264,7 +3239,6 @@ namespace TigerClaw.Core
             _sentenceCommittedRawLength = 0;
             ResetSentenceAutoCommitEvidence();
             _sentenceLastAutoCommitRawLength = 0;
-            _sentenceEarlyCommitResidArmed = false;
             _sentenceAutoCommitSuspended = false;
             _sentenceContinuationAfterAutoCommit = false;
             ResetSentenceEmptyCodePending();

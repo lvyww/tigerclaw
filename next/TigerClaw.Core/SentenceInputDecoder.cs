@@ -510,8 +510,8 @@ namespace TigerClaw.Core
         private int _cachedLimit;
         private bool _cachedIncludesEarlyCommitEvidence;
         private string _cachedRequiredTextPrefix = string.Empty;
-        // Evaluator-only: retain evidence from the surviving beam while keeping
-        // ConfidenceTruncated=true. Default false preserves production safety.
+        // The engine enables this for the production strong-truncated policy.
+        // Standalone decoders keep the conservative default unless a caller opts in.
         internal bool PreserveTruncatedEarlyCommitEvidence { get; set; }
         private readonly Dictionary<string, double> _isolationPenaltyCache;
         private readonly string[] _isolationPenaltyCacheKeys;
