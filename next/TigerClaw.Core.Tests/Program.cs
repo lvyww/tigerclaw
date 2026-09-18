@@ -227,6 +227,8 @@ namespace TigerClaw.Core.Tests
                 SentenceSupplementParsesPerSchemaFile();
                 SentenceSupplementMatchesOverlapsAndRepeatedSingleCharacters();
                 SentenceSupplementRewardsInsideBeamWithoutChangingConfidence();
+                SentencePersonalizationPromotesOnlyMatureOrdinaryEvidence();
+                SentencePersonalizationCannotCreateStrongEvidence();
                 SentenceSupplementIncrementalMatchesFullRebuild();
                 SentenceSupplementSurvivesNeuralRerank();
                 SentenceDecoderUsesOnlyTheOptimalCharacterCode();
@@ -3194,6 +3196,7 @@ namespace TigerClaw.Core.Tests
                         item.Text == prefix.Text &&
                         item.RawLength == prefix.RawLength &&
                         item.Share == prefix.Share &&
+                        item.BaseShare == prefix.BaseShare &&
                         item.BoundaryShare == prefix.BoundaryShare &&
                         item.BoundaryClosed == prefix.BoundaryClosed),
                     name + ".early.prefix." + prefix.Text + "@" + prefix.RawLength);
@@ -3222,6 +3225,9 @@ namespace TigerClaw.Core.Tests
                 True(
                     leftCandidates[index].ConfidenceScore == rightCandidates[index].ConfidenceScore,
                     name + ".confidence_score." + index);
+                True(
+                    leftCandidates[index].EarlyCommitConfidenceScore == rightCandidates[index].EarlyCommitConfidenceScore,
+                    name + ".early_commit_confidence_score." + index);
                 True(
                     leftCandidates[index].SupplementScore == rightCandidates[index].SupplementScore,
                     name + ".supplement_score." + index);
@@ -4530,9 +4536,117 @@ namespace TigerClaw.Core.Tests
             True(Math.Abs(afterTarget.SupplementScore - 9.0) < 1e-9,
                 nameof(SentenceSupplementRewardsInsideBeamWithoutChangingConfidence) + ".reward");
             True(Math.Abs(afterTarget.ConfidenceScore - beforeTarget.ConfidenceScore) < 1e-12,
-                nameof(SentenceSupplementRewardsInsideBeamWithoutChangingConfidence) + ".confidence");
+                nameof(SentenceSupplementRewardsInsideBeamWithoutChangingConfidence) + ".base_confidence");
+            True(Math.Abs((afterTarget.EarlyCommitConfidenceScore - beforeTarget.EarlyCommitConfidenceScore) - 0.45) < 1e-9,
+                nameof(SentenceSupplementRewardsInsideBeamWithoutChangingConfidence) + ".bounded_early_confidence");
             True(Math.Abs((afterTarget.BaseScore - beforeTarget.BaseScore) - 9.0) < 1e-9,
                 nameof(SentenceSupplementRewardsInsideBeamWithoutChangingConfidence) + ".base_score");
+        }
+
+        private static void SentencePersonalizationPromotesOnlyMatureOrdinaryEvidence()
+        {
+            var lexicon = SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
+            {
+                ["ab"] = new List<string> { "甲" },
+                ["cd"] = new List<string> { "乙" },
+                ["abcd"] = new List<string> { "丁" }
+            });
+            SentenceInputDecoder Create(SentenceSupplementMatcher supplements = null) =>
+                new SentenceInputDecoder(
+                    lexicon,
+                    new BoundaryAlternativeSentenceLanguageModel(-4.2),
+                    beamWidth: 100,
+                    isolationPenalty: SentenceIsolationPenalty.None,
+                    supplementMatcher: supplements ?? SentenceSupplementMatcher.Empty);
+            SentencePrefixEvidence Prefix(SentenceDecodeResult result) => result.EarlyCommitEvidence.Prefixes
+                .Single(prefix => prefix.Text == "甲" && prefix.RawLength == 2);
+
+            using SentenceInputDecoder baseline = Create();
+            SentencePrefixEvidence plain = Prefix(baseline.Decode("abcd", 20, true));
+            True(plain.BaseShare < 0.99 && plain.Share < 0.99,
+                nameof(SentencePersonalizationPromotesOnlyMatureOrdinaryEvidence) + ".fixture_below_minimum");
+
+            using SentenceInputDecoder supplement = Create(SentenceSupplementMatcher.Build(new[]
+            {
+                SentenceSupplementEntry.Create("甲乙", 1000)
+            }));
+            SentencePrefixEvidence supplemented = Prefix(supplement.Decode("abcd", 20, true));
+            True(supplemented.BaseShare < 0.99 && supplemented.Share >= 0.99 && supplemented.Share < 0.999,
+                nameof(SentencePersonalizationPromotesOnlyMatureOrdinaryEvidence) + ".supplement_promotes_ordinary_only");
+
+            using SentenceInputDecoder learning = Create();
+            SentenceLearningEvent Event() => new SentenceLearningEvent
+            {
+                Mode = "test-v1",
+                Code = "ab",
+                Text = "甲",
+                Context = string.Empty,
+                Time = 1_700_000_000
+            };
+            SentenceLearningEvent e1 = Event(), e2 = Event(), e3 = Event();
+            learning.SetLearning(SentenceLearningSnapshot.Build(new[] { e1 }, e1.Time), e1.Mode);
+            SentencePrefixEvidence first = Prefix(learning.Decode("abcd", 20, true));
+            learning.SetLearning(SentenceLearningSnapshot.Build(new[] { e1, e2 }, e1.Time), e1.Mode);
+            SentencePrefixEvidence second = Prefix(learning.Decode("abcd", 20, true));
+            learning.SetLearning(SentenceLearningSnapshot.Build(new[] { e1, e2, e3 }, e1.Time), e1.Mode);
+            SentencePrefixEvidence mature = Prefix(learning.Decode("abcd", 20, true));
+            True(Math.Abs(first.Share - first.BaseShare) < 1e-12,
+                nameof(SentencePersonalizationPromotesOnlyMatureOrdinaryEvidence) + ".first_learning_zero_contribution");
+            True(second.Share > first.Share && second.Share < 0.99,
+                nameof(SentencePersonalizationPromotesOnlyMatureOrdinaryEvidence) + ".second_learning_partial_contribution");
+            True(mature.Share > second.Share && mature.Share >= 0.99 && mature.Share < 0.999,
+                nameof(SentencePersonalizationPromotesOnlyMatureOrdinaryEvidence) + ".mature_learning_promotes_ordinary_only");
+        }
+
+        private static void SentencePersonalizationCannotCreateStrongEvidence()
+        {
+            var lexicon = SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
+            {
+                ["ab"] = new List<string> { "甲" },
+                ["cd"] = new List<string> { "乙" },
+                ["abcd"] = new List<string> { "丁" }
+            });
+            SentenceInputDecoder Create(SentenceSupplementMatcher supplements = null) =>
+                new SentenceInputDecoder(
+                    lexicon,
+                    new BoundaryAlternativeSentenceLanguageModel(-6.5),
+                    beamWidth: 100,
+                    isolationPenalty: SentenceIsolationPenalty.None,
+                    supplementMatcher: supplements ?? SentenceSupplementMatcher.Empty);
+
+            using SentenceInputDecoder baseline = Create();
+            SentenceDecodeResult baselineResult = baseline.Decode("abcd", 20, true);
+            SentencePrefixEvidence baselinePrefix = baselineResult.EarlyCommitEvidence.Prefixes
+                .Single(prefix => prefix.Text == "甲" && prefix.RawLength == 2);
+
+            using SentenceInputDecoder supplement = Create(SentenceSupplementMatcher.Build(new[]
+            {
+                SentenceSupplementEntry.Create("甲乙", 1000)
+            }));
+            SentencePrefixEvidence supplementPrefix = supplement.Decode("abcd", 20, true)
+                .EarlyCommitEvidence.Prefixes.Single(prefix => prefix.Text == "甲" && prefix.RawLength == 2);
+            True(supplementPrefix.Share > baselinePrefix.Share &&
+                 supplementPrefix.Share >= 0.999 && supplementPrefix.BaseShare < 0.999,
+                nameof(SentencePersonalizationCannotCreateStrongEvidence) + ".supplement_crosses_only_personalized_share");
+
+            using SentenceInputDecoder learning = Create();
+            var events = Enumerable.Range(0, 3).Select(_ => new SentenceLearningEvent
+            {
+                Mode = "test-v1",
+                Code = "ab",
+                Text = "甲",
+                Context = string.Empty,
+                Time = 1_700_000_000
+            }).ToArray();
+            learning.SetLearning(SentenceLearningSnapshot.Build(events, 1_700_000_000), "test-v1");
+            SentencePrefixEvidence learningPrefix = learning.Decode("abcd", 20, true)
+                .EarlyCommitEvidence.Prefixes.Single(prefix => prefix.Text == "甲" && prefix.RawLength == 2);
+            True(learningPrefix.Share > baselinePrefix.Share &&
+                 learningPrefix.Share >= 0.999 && learningPrefix.BaseShare < 0.999,
+                nameof(SentencePersonalizationCannotCreateStrongEvidence) + ".learning_crosses_only_personalized_share");
+            True(Math.Abs(supplementPrefix.BaseShare - baselinePrefix.BaseShare) < 1e-12 &&
+                 Math.Abs(learningPrefix.BaseShare - baselinePrefix.BaseShare) < 1e-12,
+                nameof(SentencePersonalizationCannotCreateStrongEvidence) + ".base_share_unchanged");
         }
 
         private static void SentenceSupplementIncrementalMatchesFullRebuild()

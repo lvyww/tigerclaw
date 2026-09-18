@@ -292,6 +292,9 @@ namespace TigerClaw.Core
         public double BaseScore { get; set; }
         public double FinalScore { get; set; }
         public double ConfidenceScore { get; set; }
+        // Early-commit confidence may include bounded personalization while
+        // ConfidenceScore stays model-only for empty-code and diagnostics.
+        public double EarlyCommitConfidenceScore { get; set; } = double.NaN;
         public double SupplementScore { get; set; }
         public double LearningScore { get; set; }
         public double CodeScore { get; set; }
@@ -418,7 +421,10 @@ namespace TigerClaw.Core
         internal SentencePrefixEvidence Copy() => (SentencePrefixEvidence)MemberwiseClone();
         public string Text { get; set; }
         public int RawLength { get; set; }
+        // Share includes bounded mature personalization. BaseShare is pure
+        // model confidence and remains authoritative for strong evidence.
         public double Share { get; set; }
+        public double BaseShare { get; set; } = double.NaN;
         public double BoundaryShare { get; set; }
         public bool BoundaryClosed { get; set; }
     }
@@ -460,9 +466,17 @@ namespace TigerClaw.Core
             if (!ReferenceEquals(_learning, query.Snapshot) || _learningMode != query.Mode) ClearCache();
             _learning = query.Snapshot; _learningMode = query.Mode;
         }
-        private double LearningReward(string raw, string text, int end, BeamState previous, out double potential)
+        private double LearningReward(
+            string raw,
+            string text,
+            int end,
+            BeamState previous,
+            out double potential,
+            out double earlyCommitBonus)
         {
-            double best = previous.LearningScore; potential = 0;
+            double best = previous.LearningScore;
+            earlyCommitBonus = previous.LearningEarlyCommitBonus;
+            potential = 0;
             if (_learning.IsEmpty) return best;
             var start = previous.Boundary;
             for (;;)
@@ -475,14 +489,52 @@ namespace TigerClaw.Core
                 double reward = _learning.Score(_learningMode, code, fragment, context);
                 double hint = _learning.PrefixScore(_learningMode, code, fragment, context);
                 if (hint > 0) { potential = Math.Max(potential, hint); _learningAffected = true; }
-                if (reward > 0) { _learningAffected = true; best = Math.Max(best, (start?.LearningScore ?? 0) + reward); }
+                if (reward > 0)
+                {
+                    _learningAffected = true;
+                    double candidate = (start?.LearningScore ?? 0) + reward;
+                    double candidateEarlyCommitBonus = Math.Max(
+                        previous.LearningEarlyCommitBonus,
+                        LearningEarlyCommitContribution(reward));
+                    if (candidate > best ||
+                        (Math.Abs(candidate - best) <= 1e-12 && candidateEarlyCommitBonus > earlyCommitBonus))
+                    {
+                        best = candidate;
+                    }
+                    earlyCommitBonus = Math.Max(earlyCommitBonus, candidateEarlyCommitBonus);
+                }
                 if (start == null) break; start = start.Previous;
             }
             return best;
         }
+
+        internal static double LearningEarlyCommitMaturity(double learningScore)
+        {
+            // Existing exact learning scores are 6 / 8 / 10 for the first,
+            // second and third stable confirmations. The first correction only
+            // ranks the candidate; it deliberately contributes zero confidence.
+            return Math.Max(0.0, Math.Min(1.0, (learningScore - 6.0) / 4.0));
+        }
+
+        internal static double LearningEarlyCommitContribution(double learningScore) =>
+            Math.Min(
+                LearningEarlyCommitConfidenceCap,
+                Math.Max(0.0, learningScore) * LearningEarlyCommitMaturity(learningScore) *
+                    LearningEarlyCommitConfidenceScale);
+
+        internal static double SupplementEarlyCommitContribution(double supplementScore) =>
+            Math.Min(
+                SupplementEarlyCommitConfidenceCap,
+                Math.Max(0.0, supplementScore) * SupplementEarlyCommitConfidenceScale);
+
         private const string Bos = "\x02";
         private const string Eos = "\x03";
-        private const double EarlyCommitMinimumShare = 0.995;
+        private const double EarlyCommitMinimumShare = 0.99;
+        private const double SupplementEarlyCommitConfidenceScale = 0.05;
+        private const double SupplementEarlyCommitConfidenceCap = 0.75;
+        private const double LearningEarlyCommitConfidenceScale = 0.075;
+        private const double LearningEarlyCommitConfidenceCap = 0.75;
+        private const double PersonalizedEarlyCommitConfidenceCap = 0.80;
         private const double EarlyCommitClosedBoundaryShare = 0.99999;
         private const int IsolationPenaltyCacheCapacity = 8192;
         private readonly SentenceLexiconIndex _lexicon;
@@ -536,6 +588,7 @@ namespace TigerClaw.Core
             public double SupplementScore;
             public double LearningScore;
             public double LearningPotential;
+            public double LearningEarlyCommitBonus;
             public double CodeScore;
             public int MaxLexiconRank;
             public SentencePathBoundary Boundary;
@@ -1110,7 +1163,13 @@ namespace TigerClaw.Core
                             }
 
                             string nextText = item.Text + candidate.Text;
-                            double learning = LearningReward(raw, nextText, consumedEnd, item, out double learningPotential);
+                            double learning = LearningReward(
+                                raw,
+                                nextText,
+                                consumedEnd,
+                                item,
+                                out double learningPotential,
+                                out double learningEarlyCommitBonus);
                             double learningAdded = learning - item.LearningScore;
                             score += learningAdded;
                             states[consumedEnd].InheritTruncation(ancestorTruncated);
@@ -1126,6 +1185,7 @@ namespace TigerClaw.Core
                                 SupplementScore = item.SupplementScore + supplementAdded,
                                 LearningScore = learning,
                                 LearningPotential = learningPotential,
+                                LearningEarlyCommitBonus = learningEarlyCommitBonus,
                                 CodeScore = item.CodeScore + codeScoreAdded,
                                 MaxLexiconRank = Math.Max(item.MaxLexiconRank, candidate.Rank),
                                 Boundary = new SentencePathBoundary
@@ -1237,10 +1297,10 @@ namespace TigerClaw.Core
             SentenceEarlyCommitEvidence earlyCommitEvidence = new SentenceEarlyCommitEvidence
             {
                 Prefixes = Array.Empty<SentencePrefixEvidence>(),
-                ConfidenceTruncated = confidenceTruncated || _learningAffected,
+                ConfidenceTruncated = confidenceTruncated,
                 RawLengths = new Dictionary<string, int>(StringComparer.Ordinal)
             };
-            if (includeEarlyCommitEvidence && !_learningAffected &&
+            if (includeEarlyCommitEvidence &&
                 (!confidenceTruncated || PreserveTruncatedEarlyCommitEvidence))
             {
                 // Display truncation must not inflate confidence. All retained
@@ -1271,13 +1331,18 @@ namespace TigerClaw.Core
             double endingAdjustment = eosScore - ApplyPathIsolationPenalty(item) + item.CodeScore;
             double confidenceEndingAdjustment = eosScore - ApplyIsolationPenalty(item.Text);
             double score = item.Score + endingAdjustment;
+            double confidenceScore = item.LogMass + confidenceEndingAdjustment;
+            double personalizationBonus = Math.Min(
+                PersonalizedEarlyCommitConfidenceCap,
+                SupplementEarlyCommitContribution(item.SupplementScore) + item.LearningEarlyCommitBonus);
             return new SentenceCandidate
             {
                 Text = item.Text,
                 BaseScore = score - item.LearningScore,
                 LearningScore = item.LearningScore,
                 FinalScore = score,
-                ConfidenceScore = item.LogMass + confidenceEndingAdjustment,
+                ConfidenceScore = confidenceScore,
+                EarlyCommitConfidenceScore = confidenceScore + personalizationBonus,
                 SupplementScore = item.SupplementScore,
                 CodeScore = item.CodeScore,
                 Boundary = item.Boundary,
@@ -1534,14 +1599,18 @@ namespace TigerClaw.Core
                 return;
             }
 
-            double combinedMass = LogSumExp(previous.ConfidenceScore, candidate.ConfidenceScore);
-            if (candidate.ConfidenceScore > previous.ConfidenceScore)
+            double combinedBaseMass = LogSumExp(previous.ConfidenceScore, candidate.ConfidenceScore);
+            double combinedEarlyCommitMass = LogSumExp(
+                GetEarlyCommitConfidenceScore(previous),
+                GetEarlyCommitConfidenceScore(candidate));
+            if (GetEarlyCommitConfidenceScore(candidate) > GetEarlyCommitConfidenceScore(previous))
             {
                 previous = CopyEarlyCommitPoolCandidate(candidate);
                 pool[key] = previous;
             }
 
-            previous.ConfidenceScore = combinedMass;
+            previous.ConfidenceScore = combinedBaseMass;
+            previous.EarlyCommitConfidenceScore = combinedEarlyCommitMass;
         }
 
         private static SentenceCandidate CopyEarlyCommitPoolCandidate(SentenceCandidate candidate)
@@ -1550,9 +1619,15 @@ namespace TigerClaw.Core
             {
                 Text = candidate.Text,
                 ConfidenceScore = candidate.ConfidenceScore,
+                EarlyCommitConfidenceScore = GetEarlyCommitConfidenceScore(candidate),
                 Boundary = candidate.Boundary
             };
         }
+
+        private static double GetEarlyCommitConfidenceScore(SentenceCandidate candidate) =>
+            candidate == null || double.IsNaN(candidate.EarlyCommitConfidenceScore)
+                ? candidate?.ConfidenceScore ?? double.NegativeInfinity
+                : candidate.EarlyCommitConfidenceScore;
 
         private static bool HasLowConfidenceCompletedGeneration(
             SentenceCandidate[] candidates)
@@ -1579,6 +1654,71 @@ namespace TigerClaw.Core
                 return Array.Empty<SentencePrefixEvidence>();
             }
 
+            bool personalized = candidates.Any(candidate =>
+                Math.Abs(GetEarlyCommitConfidenceScore(candidate) - candidate.ConfidenceScore) > 1e-12);
+            if (!personalized)
+            {
+                return BuildBasePrefixEvidence(candidates);
+            }
+
+            double baseMaximum = candidates.Max(candidate => candidate.ConfidenceScore);
+            double earlyMaximum = candidates.Max(GetEarlyCommitConfidenceScore);
+            double baseTotal = 0.0, earlyTotal = 0.0;
+            var mass = new Dictionary<SentencePrefixKey, (double Base, double Early)>();
+            var baseBoundaryMass = new Dictionary<int, double>();
+            foreach (SentenceCandidate candidate in candidates)
+            {
+                CheckCancellation();
+                double baseWeight = Math.Exp(candidate.ConfidenceScore - baseMaximum);
+                double earlyWeight = Math.Exp(GetEarlyCommitConfidenceScore(candidate) - earlyMaximum);
+                baseTotal += baseWeight;
+                earlyTotal += earlyWeight;
+                SentencePathBoundary boundary = candidate.Boundary;
+                var candidateRawBoundaries = new HashSet<int>();
+                while (boundary != null)
+                {
+                    if (boundary.TextLength > 0 && boundary.TextLength <= candidate.Text.Length)
+                    {
+                        var key = new SentencePrefixKey(candidate.Text, boundary.TextLength, boundary.RawLength);
+                        mass.TryGetValue(key, out var previous);
+                        mass[key] = (previous.Base + baseWeight, previous.Early + earlyWeight);
+                        candidateRawBoundaries.Add(boundary.RawLength);
+                    }
+                    boundary = boundary.Previous;
+                }
+                foreach (int rawBoundary in candidateRawBoundaries)
+                {
+                    baseBoundaryMass.TryGetValue(rawBoundary, out double previous);
+                    baseBoundaryMass[rawBoundary] = previous + baseWeight;
+                }
+            }
+
+            if (baseTotal <= 0.0 || earlyTotal <= 0.0)
+            {
+                return Array.Empty<SentencePrefixEvidence>();
+            }
+
+            return mass.Select(item =>
+                {
+                    double boundaryShare = baseBoundaryMass.TryGetValue(
+                        item.Key.RawLength, out double value)
+                        ? value / baseTotal
+                        : 0.0;
+                    return new SentencePrefixEvidence
+                    {
+                        Text = item.Key.MaterializeText(),
+                        RawLength = item.Key.RawLength,
+                        Share = item.Value.Early / earlyTotal,
+                        BaseShare = item.Value.Base / baseTotal,
+                        BoundaryShare = boundaryShare,
+                        BoundaryClosed = boundaryShare >= EarlyCommitClosedBoundaryShare
+                    };
+                })
+                .ToArray();
+        }
+
+        private SentencePrefixEvidence[] BuildBasePrefixEvidence(SentenceCandidate[] candidates)
+        {
             double maximum = candidates.Max(candidate => candidate.ConfidenceScore);
             double total = 0.0;
             var mass = new Dictionary<SentencePrefixKey, double>();
@@ -1615,6 +1755,7 @@ namespace TigerClaw.Core
 
             return mass.Select(item =>
                 {
+                    double share = item.Value / total;
                     double boundaryShare = boundaryMass.TryGetValue(
                         item.Key.RawLength, out double value)
                         ? value / total
@@ -1623,7 +1764,8 @@ namespace TigerClaw.Core
                     {
                         Text = item.Key.MaterializeText(),
                         RawLength = item.Key.RawLength,
-                        Share = item.Value / total,
+                        Share = share,
+                        BaseShare = share,
                         BoundaryShare = boundaryShare,
                         BoundaryClosed = boundaryShare >= EarlyCommitClosedBoundaryShare
                     };
