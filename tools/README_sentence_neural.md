@@ -3,7 +3,7 @@
 本目录包含整句语料处理、n-gram 训练、模型转换和离线评测工具。当前 Windows
 运行时只使用：
 
-- `sentence-ngram-v2.bin`：完整语料裁剪后的 Modified Kneser-Ney V2；
+- `sentence-ngram-v2.bin`：20% 原发布模型与 80% mohu 214 MiB 模型的融合裁剪版（2026-09-19）；
 - `sentence-qwen-q8.gguf`：Qwen3 0.6B Base Q8，重排前五个 n-gram 候选。
 
 两者均为仓库外原始文件，发布后只读映射，不加密。旧 compact n-gram、字符
@@ -13,6 +13,7 @@ Transformer 和 ONNX 流程只保留作历史实验，不进入当前运行时�
 
 - `SentenceNgramTrainer/`：Windows .NET 10 外部计数与 V2 模型构建。
 - `convert_sentence_ngram_mobile.py`：把 V2 无损重排成移动端 TCSKNM02。
+- `convert_sentence_ngram_windows.py`：把 TCSKNM02 无损重排回 Windows TCSKNM01；保留零值观察记录和空回退上下文。
 - `export_tiger_sentence_rime.py`：导出 Rime 虎整句码表和排名数据。
 - `benchmark_sentence_gram.py`：离线比较 n-gram/搭配实验。
 - `SentenceLengthEval/`：原虎整句按 2～6 字分档、真实 ARM64 Q8 scorer 的配对准确率评测；口径与运行方式见其 README。
@@ -34,6 +35,21 @@ C:\Archive\tigerclaw_sentence_ml\qwen3-0.6b-gguf\downloaded\Qwen3-0.6B-Base-Q8_0
 
 `next/build_next.bat`、`publish.bat` 和 `publish_arm64.bat` 从这些仓库外位置复制
 运行模型。不要把模型复制回源码目录长期保存。
+
+2026-09-19 按用户选择，将上述两个 n-gram 源更新为单文件融合 214 MiB 版。
+移动格式为 224,475,584 字节（214.08 MiB），SHA256
+`23216acd8319885aa2431ffbf2231dab4677c5d4abb55a08a404450a15b865ca`；
+Windows 格式为 272,600,424 字节（259.97 MiB），SHA256
+`de4e925d01cdadf2a7e0a6b7dfff4e9b953cd220c2398eb1b81ab6e5714537db`。
+两者包含相同 float32 参数；Windows 转回移动格式逐字节一致。
+原模型保存在仓库外 `backups/pre-fused214-20260919/`。
+
+融合先物化 `0.2*log(P_原发布)+0.8*log(P_mohu)`，保留二元观察并集，
+再按三元直接贡献裁剪并补给回退。它不是重新训练的原始计数 KN 模型，
+也不强制将评分归一化。旧集与 fresh 集共两万条首选正确 19,852（99.260%），
+原发布版为 19,800；该评测使用 Rime `201eb79`、compact、无 Qwen/学习/提前上屏。
+语料已参与权重选择，不是独立确认，也不代表 Windows/Qwen 或提前上屏的实机准确率。
+实验完整结果在 `next/_run/ngram-214-materialize-20260919/`。
 
 ## 训练 KN V2
 

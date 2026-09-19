@@ -1,5 +1,7 @@
 # 虎整句（Rime 独立实验版）
 
+方案默认采用 `compact` 内存档，包含暂存后长句尾部回删缓存复用及纯暂存文字回删优化。可在 `tiger_sentence.custom.yaml` 的 `patch` 中设置 `"tiger_sentence/memory_profile": balanced` 切换为较大缓存档。
+
 本方案使用纯 Lua 码表格图和本地 n-gram，不依赖 Windows Core，也不是 Windows
 TSF 发布包的一部分。它仍处于实验阶段，尤其是自动提前上屏在不同 Rime 前端上的
 闪烁、提交顺序和长时间稳定性需要分别验收。
@@ -298,8 +300,14 @@ Lua 按一次 composition 在内存中汇总解码次数、模型缺页、读取
 ## 模型
 
 移动端优先使用仓库外的 `sentence-ngram-mobile.bin`（TCSKNM02）。它是 V2 模型的
-无损分页重排，常驻稀疏索引约 2.1 MiB，上下文页 LRU 上限 8 MiB，不会一次读入
+无损分页重排，上下文页 LRU 上限 8 MiB，不会一次读入
 完整模型。
+
+2026-09-19 本地发布模型源切换为 20% 原发布版 + 80% mohu 的单文件融合裁剪版，
+224,475,584 字节（214.08 MiB），SHA256 为
+`23216acd8319885aa2431ffbf2231dab4677c5d4abb55a08a404450a15b865ca`。
+读取格式不变，仍默认 compact。两万条离线首选准确率 99.260%，原发布版为
+99.000%；样本已参与模型选择，不代表独立测试或实机验收。公开 Release 附件需另行发布。
 
 ```bash
 python3 tools/convert_sentence_ngram_mobile.py \

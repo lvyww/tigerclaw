@@ -1,6 +1,8 @@
 -- Tab correction learning. Rime owns the LevelDb lock and durable records;
 -- decoding uses only immutable in-memory indexes. No Windows receipt is implied.
 local M = {}
+local memo = require("tiger_sentence_cache")
+local MATERIALIZED_CODE_LIMIT = 256
 local function chars(text)
     local result = {}
     for c in text:gmatch("[%z\1-\127\194-\244][\128-\191]*") do
@@ -184,7 +186,14 @@ local function materialize(index, code)
             for ctx, value in pairs(s.exact) do p.exact[ctx] = math.max(p.exact[ctx] or 0, value) end
         end
     end
-    index.cache[code] = result
+    -- Only derived scores are evicted; events and immutable aggregates remain.
+    -- Otherwise querying many distinct 16-character corrections materializes
+    -- every prefix table for the entire journal until the next score epoch.
+    if not index._materialized then
+        index._materialized = memo.new(MATERIALIZED_CODE_LIMIT)
+        index._materialized.values = index.cache
+    end
+    memo.put(index._materialized, code, result)
     return result
 end
 local function update_index(index, accepted, events, now)
@@ -224,39 +233,197 @@ function M.score(index, mode, code, text, ctx)
     local values = materialize(index, code)
     return values and score(values.exact[key(code, mode, text)], ctx) or 0
 end
-function M.prefix_score(index, mode, code, text, ctx)
-    if code == "" or text == "" then return 0 end
-    local codes, lo, hi = index.codes, 1, #index.codes + 1
+-- Code vectors and scoring snapshots are immutable after publication. Weak
+-- owners release unused epochs, while each surviving owner's caches are bounded.
+local code_windows = setmetatable({}, {__mode="k"})
+local prefix_queries = setmetatable({}, {__mode="k"})
+function M.trim_caches(index)
+    if not index then return end
+    if index.partitions then index.cache, index._materialized = {}, nil end
+    prefix_queries[index], code_windows[index.codes] = nil, nil
+end
+local function code_window(codes, code)
+    local cache = code_windows[codes]
+    if not cache then cache = memo.new(2048); code_windows[codes] = cache end
+    local window = cache.values[code]
+    if window then return window[1], window[2] end
+    local lo, hi = 1, #codes + 1
     while lo < hi do
         local mid = math.floor((lo + hi) / 2)
         if codes[mid] < code then lo = mid + 1 else hi = mid end
     end
-    local best = 0
+    local last = lo - 1
+    -- Preserve the old 64-slot window exactly: an equal code consumes a slot
+    -- even though it is not itself a longer-code prefix match.
     for i = lo, math.min(#codes, lo + 63) do
+        if codes[i]:sub(1, #code) ~= code then break end
+        last = i
+    end
+    memo.put(cache, code, {lo, last})
+    return lo, last
+end
+function M.prefix_score(index, mode, code, text, ctx)
+    if code == "" or text == "" then return 0 end
+    local codes = index.codes
+    local first, last = code_window(codes, code)
+    if first > last then return 0 end
+    local cache = prefix_queries[index]
+    if not cache then cache = memo.new(4096); prefix_queries[index] = cache end
+    local query = key(mode, code, text, ctx)
+    local cached = cache.values[query]
+    if cached ~= nil then return cached end
+    local best = 0
+    for i = first, last do
         local value = codes[i]
-        if value:sub(1, #code) ~= code then break end
         if #value > #code then
             local values = materialize(index, value)
             best = math.max(best, score(values.prefixes[key(value, mode, text)], ctx))
         end
     end
-    return best
+    return memo.put(cache, query, best)
 end
+
+-- Same UTF-8 acceptance as chars(), including a zero result for malformed input,
+-- but count without allocating an array or concatenating all characters again.
+local function character_count(text)
+    local count, position = 0, 1
+    while position <= #text do
+        local a, b, c, d = text:byte(position, position + 3)
+        local length
+        if a < 128 then length = 1
+        elseif a >= 194 and a <= 223 and b and b >= 128 and b <= 191 then length = 2
+        elseif a >= 224 and a <= 239 and b and b >= 128 and b <= 191 and
+            c and c >= 128 and c <= 191 and (a ~= 224 or b >= 160) and
+            (a ~= 237 or b < 160) then length = 3
+        elseif a >= 240 and a <= 244 and b and b >= 128 and b <= 191 and
+            c and c >= 128 and c <= 191 and d and d >= 128 and d <= 191 and
+            (a ~= 240 or b >= 144) and (a ~= 244 or b < 144) then length = 4
+        else return 0 end
+        position, count = position + length, count + 1
+    end
+    return count
+end
+local function path_context(start, text, length)
+    local prefix = text:sub(1, length)
+    if not start or start.text ~= prefix or start.text_length ~= length then
+        return context(prefix) -- compatibility calls without full path metadata
+    end
+    if start._learning_context_source ~= prefix then
+        -- Use the original validator, not BOS sentinels or unchecked prev1/prev2.
+        -- This preserves malformed UTF-8 and actual control-character behavior.
+        start._learning_context = context(prefix)
+        start._learning_context_source = prefix
+    end
+    return start._learning_context
+end
+function M.early_commit_maturity(score)
+    if not score or score <= 9 then return 0 end
+    local weight = math.exp((score - 9) / 2)
+    return math.max(0, math.min(1, (weight - 1) / 2))
+end
+
+function M.early_commit_contribution(score)
+    return math.min(0.75, math.max(0, score or 0) * M.early_commit_maturity(score) * 0.075)
+end
+
+function M.fusion_mode(mode)
+    return mode == "" and "" or ("fusion-v1|" .. mode)
+end
+
+function M.fusion_pair_code(raw, direct, composed)
+    return "~f" .. M.hash((raw or "") .. "\0D\0" .. (direct or "") .. "\0C\0" .. (composed or ""))
+end
+
+function M.fusion_score(index, mode, raw, direct, composed)
+    if not index or mode == "" then return 0 end
+    local fusion = M.fusion_mode(mode)
+    local code = M.fusion_pair_code(raw, direct, composed)
+    return M.score(index, fusion, code, "D", "") - M.score(index, fusion, code, "C", "")
+end
+
+function M.fusion_event(mode, raw, direct, composed, direct_wins, raw_end)
+    if mode == "" then return nil end
+    return {
+        time=os.time(), mode=M.fusion_mode(mode),
+        code=M.fusion_pair_code(raw, direct, composed),
+        text=direct_wins and "D" or "C", context="",
+        raw_start=0, raw_end=math.max(0, raw_end or #raw),
+        text_start=0, text_end=1
+    }
+end
+
 function M.reward(index, mode, raw, text, finish, previous)
     local best, potential, start = previous.learning_score or 0, 0, previous
-    if not index or #index.codes == 0 or mode == "" then return best, potential end
+    local early_bonus = previous.learning_early_commit_bonus or 0
+    if not index or #index.codes == 0 or mode == "" then return best, potential, early_bonus end
     while true do
         local t, r = start and start.text_length or 0, start and start.raw_length or 0
         local fragment = text:sub(t + 1)
-        if #chars(fragment) > 16 then break end
-        local code, ctx = raw:sub(r + 1, finish), context(text:sub(1, t))
-        best = math.max(best, (start and start.learning_score or 0) + M.score(index, mode, code, fragment, ctx))
+        if character_count(fragment) > 16 then break end
+        local code, ctx = raw:sub(r + 1, finish), path_context(start, text, t)
+        local reward = M.score(index, mode, code, fragment, ctx)
+        local candidate = (start and start.learning_score or 0) + reward
+        local candidate_bonus = math.max(previous.learning_early_commit_bonus or 0,
+            M.early_commit_contribution(reward))
+        if candidate > best or (candidate == best and candidate_bonus > early_bonus) then
+            best = candidate
+        end
+        early_bonus = math.max(early_bonus, candidate_bonus)
         potential = math.max(potential, M.prefix_score(index, mode, code, fragment, ctx))
         if not start or r == 0 then break end
         start = start.previous
     end
-    return best, potential
+    return best, potential, early_bonus
 end
+
+function M.reinforce(index, mode, raw, selected, floor)
+    if not index or not selected or not selected.path or mode == "" then return {} end
+    local map, ends, node = {[0]=0}, {}, selected.path
+    while node and (node.raw_length or 0) > 0 do
+        map[node.raw_length] = node.text_length
+        ends[#ends + 1] = node.raw_length
+        node = node.previous
+    end
+    table.sort(ends)
+    local r, t = 0, 0
+    for _, last in ipairs(ends) do
+        if last <= r or (map[last] or 0) <= t or map[last] > #selected.text then return {} end
+        r, t = last, map[last]
+    end
+    if r ~= #raw or t ~= #selected.text then return {} end
+    local points = {{raw=0, text=0}}
+    for _, last in ipairs(ends) do points[#points + 1] = {raw=last, text=map[last]} end
+    local result = {}
+    for ei = 2, #points do
+        local finish = points[ei]
+        if finish.raw > floor then
+            local best_score, best = 0, nil
+            for si = ei - 1, 1, -1 do
+                local start = points[si]
+                if start.raw >= floor then
+                    local fragment = selected.text:sub(start.text + 1, finish.text)
+                    if character_count(fragment) > 16 then break end
+                    local code = raw:sub(start.raw + 1, finish.raw):lower()
+                    local ctx = context(selected.text:sub(1, start.text))
+                    local score_value = M.score(index, mode, code, fragment, ctx)
+                    if score_value > best_score then
+                        best_score = score_value
+                        best = {code=code,text=fragment,context=ctx,raw_start=start.raw,raw_end=finish.raw,
+                            text_start=start.text,text_end=finish.text}
+                    end
+                end
+            end
+            -- 9 / 10.39 / 11.20 are approximately the first/second/third
+            -- stable observations. Stop journaling once effectively mature.
+            if best and best_score > 0 and best_score < 11 then
+                best.time = os.time(); best.mode = mode
+                result[#result + 1] = best
+            end
+        end
+    end
+    return result
+end
+
 function M.diff(raw, before, selected, floor, mode)
     local function boundaries(item)
         local map, ends, node = {[0]=0}, {}, item.path

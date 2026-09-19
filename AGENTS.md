@@ -487,6 +487,10 @@ release tree. Keep `.bat` files CRLF.
 ## Related Ports And Experiments
 
 - `rime/tiger_sentence/`: standalone experimental Rime pack.
+  Synced public runtime through PR #18, `bd83900`, on 2026-09-19.
+  The distributed schema defaults to `tiger_sentence/memory_profile: compact`;
+  `balanced` remains an explicit custom-patch alternative. Safe locked tail
+  Backspace reuses the active lattice; text-only buffered deletion skips scoring.
   Optional `tiger_sentence_early_commit_to_preedit` (default off) buffers early
   confirmations in preedit until host submission. Backspace removes live code,
   then buffered Unicode characters without restoring codes. Deferred learning
@@ -552,7 +556,11 @@ release tree. Keep `.bat` files CRLF.
   - The n-gram model never enters git (224 MB, above the 100 MB limit); it
     ships only as a Release attachment. Canonical local copy:
     `C:\Archive\tigerclaw_sentence_ml\runtime\sentence-ngram-mobile.bin`
-    (md5 77b1d38760fd5efcbdbedf9289c4d6d1).
+    (2026-09-19 fused/pruned 214.08 MiB; SHA256
+    `23216acd8319885aa2431ffbf2231dab4677c5d4abb55a08a404450a15b865ca`).
+    Windows holds the same parameters in TCSKNM01 (259.97 MiB); conversion,
+    identities and evaluation limits are in `tools/README_sentence_neural.md`.
+    Local replacement does not upload or replace public Release attachments.
   - Release procedure per version: sync files into the mirror layout ->
     run the full test suite from the mirror layout (Lua 5.4 with model and
     luajit no-model) -> tag `vX.Y.Z` and push (SSH works) -> build the
