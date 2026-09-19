@@ -348,8 +348,10 @@ first path, do not reinforce first-choice taps, and consume each submission once
 Rime and Fcitx5 correction weights now align with supplemental corpus weights:
 each confirmation adds 1000, using `clamp(9 + 2 * ln(weight / 1000), 0, 16)`.
 The 30-day half-life applies to weight. Existing journals are replayed under
-this rule. This port-specific change replaces the old 6/8/10 reward; Windows
-retains its existing policy. Real-model `zhhbi` needs two corrections to promote
+this rule. Windows now uses the same 9/10.39/11.20 confirmation rewards and
+16-point cap (2026-09-19), including replay of existing journals; confidence
+maturity inverts this curve, and stable top1 reinforcement stops at 11 points.
+Real-model `zhhbi` needs two corrections to promote
 `虎娘` over `其父`; real librime tests cover taps, Tab/space and engine restart.
 Rime's shared manual-confirm notification also covers keyboard selection. See each
 port README for persistence and acceptance limits. See `TAB_LEARNING.md` and

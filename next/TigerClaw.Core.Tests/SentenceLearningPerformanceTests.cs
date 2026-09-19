@@ -80,7 +80,7 @@ namespace TigerClaw.Core.Tests
                 "64 rows count skipped modes, not only matching modes");
             events[63].Mode = "test-v1";
             snapshot = SentenceLearningSnapshot.Build(events, LearningBenchmarkTime);
-            LearningCheck(snapshot.PrefixScore("test-v1", "aa", "甲", "前甲") == 6, "64th row included");
+            LearningCheck(snapshot.PrefixScore("test-v1", "aa", "甲", "前甲") == 9, "64th row included");
             events.Add(IndexEvent("other-v1", "aa", "乙丙", "前甲", LearningBenchmarkTime));
             snapshot = SentenceLearningSnapshot.Build(events, LearningBenchmarkTime);
             LearningCheck(snapshot.PrefixScore("test-v1", "aa", "甲", "前甲") == 0, "equal-code row still consumes limit");
@@ -120,7 +120,7 @@ namespace TigerClaw.Core.Tests
             string context = events[0].Context, text = events[0].Text;
             Func<double> indexed = () => snapshot.PrefixScore("test-v1", "aa", "甲", context);
             Func<double> reference = () => before.PrefixScore("test-v1", "aa", "甲", context);
-            LearningCheck(indexed() == 6 && indexed() == reference(), "stress prefix result equals oracle");
+            LearningCheck(indexed() == 9 && indexed() == reference(), "stress prefix result equals oracle");
 
             // Deterministic complexity guard, not a wall-clock CI threshold:
             // the old nested Score path allocates HashSets, the indexed path
@@ -148,7 +148,7 @@ namespace TigerClaw.Core.Tests
             // Snapshot readers are concurrent; there is no mutable query cache.
             var parallel = new double[64];
             Parallel.For(0, parallel.Length, i => parallel[i] = indexed());
-            LearningCheck(parallel.All(value => value == 6), "concurrent immutable query results");
+            LearningCheck(parallel.All(value => value == 9), "concurrent immutable query results");
 
             var lexicon = SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
             {
@@ -167,7 +167,7 @@ namespace TigerClaw.Core.Tests
             double decodeUs = LearningMedianUs(fullDecode, 100);
             double prefixUs = LearningMedianUs(indexed, 2000);
             double oldPrefixUs = LearningMedianUs(reference, 1, 3);
-            LearningCheck(snapshot.Score("test-v1", "aabb", text, context) == 6, "build preserves exact score under pressure");
+            LearningCheck(snapshot.Score("test-v1", "aabb", text, context) == 9, "build preserves exact score under pressure");
             Console.WriteLine(JsonSerializer.Serialize(new
             {
                 test = "learning_index_stress", records = count, distinctTexts, build_ms = buildMs,

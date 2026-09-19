@@ -98,7 +98,7 @@ namespace TigerClaw.Core
                     if (entry.Key != e.Text) c.Weight *= 0.25;
                 }
                 if (!choices.TryGetValue(e.Text, out var target)) choices[e.Text] = target = new Choice { Time = time };
-                target.Weight = Math.Min(3, target.Weight + 1);
+                target.Weight = Math.Min(Math.Exp(3.5), target.Weight + 1);
                 target.Count = Math.Min(3, target.Count + 1);
             }
 
@@ -113,7 +113,7 @@ namespace TigerClaw.Core
                         double weight = c.Weight * Math.Pow(2, -Math.Max(0, now - c.Time) / (30.0 * 86400));
                         var key = (group.Key.Mode, entry.Key);
                         if (!summaries.TryGetValue(key, out var summary)) summaries[key] = summary = new();
-                        summary.Scores.Exact[group.Key.Context] = Math.Min(10, 6 * Math.Min(1, weight) + 2 * Math.Max(0, weight - 1));
+                        summary.Scores.Exact[group.Key.Context] = Math.Clamp(9 + 2 * Math.Log(Math.Max(0.001, weight)), 0, 16);
                         summary.Weight += weight;
                         summary.Count = Math.Min(3, summary.Count + c.Count);
                         if (group.Key.Context.Length > 0 && weight >= 0.1) summary.KnownContexts++;

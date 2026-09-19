@@ -54,10 +54,10 @@ namespace TigerClaw.Core.Tests
             LearningCheck(!SentenceLearning.StaticText("\ud800") && !SentenceLearning.StaticText("{日期}") && !SentenceLearning.StaticText("显示\x1e输出"), "dynamic/invalid text rejected");
             LearningCheck(SentenceLearning.StaticText(new string('中', 16)) && !SentenceLearning.StaticText(new string('中', 17)), "16 scalar limit");
             var e = LearningEvent("aabb", "虎娘", "设置"); var s = SentenceLearningSnapshot.Build(new[] { e }, e.Time);
-            LearningCheck(s.Score(e.Mode, e.Code, e.Text, e.Context) == 6, "first correction effective");
+            LearningCheck(s.Score(e.Mode, e.Code, e.Text, e.Context) == 9, "first correction effective");
             LearningCheck(s.Score(e.Mode, e.Code, e.Text, "其他") == 0 && s.Score("other", e.Code, e.Text, e.Context) == 0, "mode/context scope");
-            LearningCheck(s.PrefixScore(e.Mode, "aa", "虎", e.Context) == 6 && s.PrefixScore(e.Mode, "aa", "狼", e.Context) == 0, "prefix retention hint");
-            LearningCheck(SentenceLearningSnapshot.Build(new[] { e }, e.Time + 30 * 86400).Score(e.Mode, e.Code, e.Text, e.Context) == 3, "30 day half life");
+            LearningCheck(s.PrefixScore(e.Mode, "aa", "虎", e.Context) == 9 && s.PrefixScore(e.Mode, "aa", "狼", e.Context) == 0, "prefix retention hint");
+            LearningCheck(Math.Abs(SentenceLearningSnapshot.Build(new[] { e }, e.Time + 30 * 86400).Score(e.Mode, e.Code, e.Text, e.Context) - 7.613705638880109) < 1e-12, "30 day half life applies to weight, not score");
             var b = LearningEvent(e.Code, e.Text, e.Context); b.Time = e.Time;
             var c = LearningEvent(e.Code, e.Text, "测试"); c.Time = e.Time;
             LearningCheck(SentenceLearningSnapshot.Build(new[] { e, b, c }, e.Time).Score(e.Mode, e.Code, e.Text, "其他") == 2, "weak cross-context generalization");
@@ -66,14 +66,34 @@ namespace TigerClaw.Core.Tests
             var change = LearningEvent(e.Code, "虎爪", e.Context); change.Time = e.Time;
             var compete = SentenceLearningSnapshot.Build(new[] { e, b, change }, e.Time);
             LearningCheck(compete.Score(e.Mode, e.Code, change.Text, e.Context) > compete.Score(e.Mode, e.Code, e.Text, e.Context), "new correction wins old habit");
-            LearningCheck(SentenceLearningSnapshot.Build(Enumerable.Repeat(e, 100), e.Time).Score(e.Mode, e.Code, e.Text, e.Context) <= 10, "bounded score");
-            LearningCheck(SentenceInputDecoder.LearningEarlyCommitMaturity(6) == 0 &&
-                Math.Abs(SentenceInputDecoder.LearningEarlyCommitMaturity(8) - 0.5) < 1e-12 &&
-                SentenceInputDecoder.LearningEarlyCommitMaturity(10) == 1,
+            LearningCheck(SentenceLearningSnapshot.Build(Enumerable.Repeat(e, 100), e.Time).Score(e.Mode, e.Code, e.Text, e.Context) == 16, "bounded score");
+            var accumulated = new List<SentenceLearningEvent>();
+            var accumulator = new SentenceLearningSnapshot.Accumulator();
+            foreach (var point in new[] { (1, 9.0), (2, 10.38629436111989),
+                (3, 11.19722457733622), (10, 13.605170185988092), (34, 16.0) })
+            {
+                while (accumulated.Count < point.Item1)
+                {
+                    var next = LearningEvent(e.Code, e.Text, e.Context); next.Time = e.Time;
+                    accumulated.Add(next);
+                }
+                double replay = SentenceLearningSnapshot.Build(accumulated, e.Time).Score(e.Mode, e.Code, e.Text, e.Context);
+                double incremental = accumulator.Update(accumulated, e.Time).Score(e.Mode, e.Code, e.Text, e.Context);
+                LearningCheck(Math.Abs(replay - point.Item2) < 1e-12 && Math.Abs(incremental - point.Item2) < 1e-12,
+                    "Rime/Tigirl weight parity for replay and incremental confirmations " + point.Item1);
+            }
+            double decayedCap = accumulator.Update(accumulated, e.Time + 30 * 86400).Score(e.Mode, e.Code, e.Text, e.Context);
+            LearningCheck(Math.Abs(decayedCap - 14.61370563888011) < 1e-12,
+                "capped weight still decays with a 30 day half life");
+            LearningCheck(Math.Abs(compete.Score(e.Mode, e.Code, e.Text, e.Context) - 7.613705638880109) < 1e-12,
+                "competitor weight is quartered before converting to score");
+            LearningCheck(SentenceInputDecoder.LearningEarlyCommitMaturity(9) == 0 &&
+                Math.Abs(SentenceInputDecoder.LearningEarlyCommitMaturity(9 + 2 * Math.Log(2)) - 0.5) < 1e-12 &&
+                Math.Abs(SentenceInputDecoder.LearningEarlyCommitMaturity(9 + 2 * Math.Log(3)) - 1) < 1e-12,
                 "early-commit maturity grows 0 -> 0.5 -> 1");
-            LearningCheck(SentenceInputDecoder.LearningEarlyCommitContribution(6) == 0 &&
-                Math.Abs(SentenceInputDecoder.LearningEarlyCommitContribution(8) - 0.30) < 1e-12 &&
-                Math.Abs(SentenceInputDecoder.LearningEarlyCommitContribution(10) - 0.75) < 1e-12,
+            LearningCheck(SentenceInputDecoder.LearningEarlyCommitContribution(9) == 0 &&
+                Math.Abs(SentenceInputDecoder.LearningEarlyCommitContribution(9 + 2 * Math.Log(2)) - 0.3894860385419959) < 1e-12 &&
+                Math.Abs(SentenceInputDecoder.LearningEarlyCommitContribution(9 + 2 * Math.Log(3)) - 0.75) < 1e-12,
                 "learning confidence contribution follows maturity multiplier");
             string fusionMode = "sentence-v2|test";
             SentenceLearningEvent fusionEvent = SentenceFusionPreference.CreateEvent(
@@ -164,7 +184,7 @@ namespace TigerClaw.Core.Tests
             var learned = decoder.Decode("aabb", 20, true);
             LearningCheck(learned.Candidates[0].Text == "乙中", "learned multi-edge path survives beam one");
             LearningCheck(learned.LearningAffected, "learning affected flag retained for diagnostics/empty-code safety");
-            LearningCheck(Math.Abs(learned.Candidates[0].FinalScore - learned.Candidates[0].BaseScore - 6) < 1e-5, "one reward only");
+            LearningCheck(Math.Abs(learned.Candidates[0].FinalScore - learned.Candidates[0].BaseScore - 9) < 1e-5, "one reward only");
 
             var confidenceDecoder = new SentenceInputDecoder(
                 lexicon, NeutralSentenceLanguageModel.Instance, beamWidth: 100,
@@ -259,14 +279,14 @@ namespace TigerClaw.Core.Tests
                 "explicit stable Composed top1 stages one reinforcement without writing before ack");
             store.ConfirmAsync(events);store.FlushAsync().GetAwaiter().GetResult();
             double halfMatureScore = store.Snapshot.Score(events[0].Mode, events[0].Code, events[0].Text, events[0].Context);
-            LearningCheck(store.Entries().Length == 2 && halfMatureScore > 7.99 && halfMatureScore <= 8.0 &&
+            LearningCheck(store.Entries().Length == 2 && halfMatureScore > 10.38 && halfMatureScore <= 9 + 2 * Math.Log(2) &&
                 SentenceInputDecoder.LearningEarlyCommitMaturity(halfMatureScore) > 0.49,
                 "second stable Composed observation reaches approximately half maturity");
             TypeLetters(engine, "aabb");output = Press(engine, 32);events = engine.TakeSentenceLearning(output, out _);
             LearningCheck(events.Length == 1, "mature Composed top1 stages another explicit reinforcement");
             store.ConfirmAsync(events);store.FlushAsync().GetAwaiter().GetResult();
             double matureScore = store.Snapshot.Score(events[0].Mode, events[0].Code, events[0].Text, events[0].Context);
-            LearningCheck(store.Entries().Length == 3 && matureScore > 9.99 &&
+            LearningCheck(store.Entries().Length == 3 && matureScore > 11.19 &&
                 SentenceInputDecoder.LearningEarlyCommitMaturity(matureScore) > 0.99,
                 "third stable Composed observation reaches effectively full maturity");
             TypeLetters(engine, "aabb");output = Press(engine, 32);

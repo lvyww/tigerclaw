@@ -162,7 +162,7 @@ namespace TigerClaw.Core
                 // appending another journal row on every normal top1 commit.
                 // Natural decay can later bring it below this threshold, at
                 // which point a fresh stable use reinforces it again.
-                if (bestScore <= 0.0 || bestScore >= 9.0 || bestRawStart < 0)
+                if (bestScore <= 0.0 || bestScore >= 11.0 || bestRawStart < 0)
                 {
                     continue;
                 }
@@ -256,7 +256,9 @@ namespace TigerClaw.Core
                 }
                 if (!choices.TryGetValue(e.Text, out var target))
                     choices[e.Text] = target = new Choice { Time = time };
-                target.Weight = Math.Min(3, target.Weight + 1);
+                // One confirmation equals supplemental corpus weight 1000.
+                // exp(3.5) is the weight where 9 + 2*ln(weight) reaches 16.
+                target.Weight = Math.Min(Math.Exp(3.5), target.Weight + 1);
                 target.Count = Math.Min(3, target.Count + 1);
             }
             if (groups.Count == 0) return Empty;
@@ -270,7 +272,7 @@ namespace TigerClaw.Core
                     double weight = c.Weight * Math.Pow(2, -Math.Max(0, now - c.Time) / (30.0 * 86400));
                     var key = (group.Key.Code, group.Key.Mode, entry.Key);
                     if (!summaries.TryGetValue(key, out var summary)) summaries[key] = summary = new();
-                    summary.Scores.Exact[group.Key.Context] = Math.Min(10, 6 * Math.Min(1, weight) + 2 * Math.Max(0, weight - 1));
+                    summary.Scores.Exact[group.Key.Context] = Math.Clamp(9 + 2 * Math.Log(Math.Max(0.001, weight)), 0, 16);
                     summary.Weight += weight;
                     summary.Count = Math.Min(3, summary.Count + c.Count);
                     // A context occurs once per summary. Empty is unknown, not

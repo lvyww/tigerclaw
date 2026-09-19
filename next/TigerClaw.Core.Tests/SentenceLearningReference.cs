@@ -1,4 +1,5 @@
-// Frozen PR #4 / 2321bd0 implementation. Test oracle only; never used by Core.
+// PR #4 / 2321bd0 flat-scan oracle, with the shared 2026-09-19 reward curve.
+// Its independent storage/query algorithm is retained; never used by Core.
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -38,7 +39,7 @@ namespace TigerClaw.Core.Tests
                     if (c.Text == e.Text) target = c; else c.Weight *= 0.25;
                 }
                 if (target == null) { target = new Choice { Mode = e.Mode, Text = e.Text, Context = e.Context, Time = time }; choices.Add(target); }
-                target.Weight = Math.Min(3, target.Weight + 1); target.Count = Math.Min(3, target.Count + 1);
+                target.Weight = Math.Min(Math.Exp(3.5), target.Weight + 1); target.Count = Math.Min(3, target.Count + 1);
             }
             foreach (var choices in snapshot._byCode.Values) foreach (var c in choices)
                 c.Weight *= Math.Pow(2, -Math.Max(0, now - c.Time) / (30.0 * 86400));
@@ -68,7 +69,7 @@ namespace TigerClaw.Core.Tests
             foreach (var c in choices)
             {
                 if (c.Mode != mode || c.Text != text) continue;
-                if (c.Context == context) exact = Math.Min(10, 6 * Math.Min(1, c.Weight) + 2 * Math.Max(0, c.Weight - 1));
+                if (c.Context == context) exact = Math.Clamp(9 + 2 * Math.Log(Math.Max(0.001, c.Weight)), 0, 16);
                 aggregate += c.Weight; count += c.Count;
                 if (c.Context.Length > 0 && c.Weight >= 0.1) contexts.Add(c.Context);
             }
