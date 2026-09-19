@@ -432,6 +432,7 @@ namespace TigerClaw.Core
                         preferScoreOverLexiconRank
                             ? SentenceCandidate.CompareByScoreThenLexiconRank
                             : SentenceCandidate.CompareByLexiconRankThenScore));
+                _sentenceInputDecoder?.ApplyFusionOrdering(rawCode, candidates);
                 _sentenceNeuralAcceptedRaw = rawCode;
                 _sentenceNeuralTopText = candidates.Length > 0 ? candidates[0].Text ?? string.Empty : string.Empty;
                 _sentenceSelectedIndex = 0;
@@ -2403,7 +2404,11 @@ namespace TigerClaw.Core
             // Rank selectors still edit the current segment; only a new code
             // letter confirms the Tab-highlighted candidate as a fixed prefix.
             bool confirmTabSelection = _sentenceTabSelectionPending && isLetter;
-            if (confirmTabSelection) CaptureSentenceLearning(_sentenceSelectedIndex);
+            if (confirmTabSelection)
+            {
+                CaptureSentenceFusionLearning(_sentenceSelectedIndex);
+                CaptureSentenceLearning(_sentenceSelectedIndex);
+            }
             _sentenceTabSelectionPending = false;
             if (confirmTabSelection)
             {
@@ -3095,6 +3100,7 @@ namespace TigerClaw.Core
                 return KeyEngineResult.CreateHandled(true, null, GetSentenceDisplayCode(), true);
             }
 
+            CaptureSentenceFusionLearning(index);
             CaptureSentenceLearning(index);
             string output = candidates[index].Text;
             if (_sentenceCommittedText.Length > 0 &&
@@ -3133,6 +3139,7 @@ namespace TigerClaw.Core
             {
                 output = output.Substring(_sentenceCommittedText.Length);
             }
+            CaptureSentenceFusionLearning(_sentenceSelectedIndex);
             CaptureSentenceLearning(_sentenceSelectedIndex);
             output += suffix ?? string.Empty;
             if (candidates.Length > 0 && _sentenceSelectedIndex < candidates.Length)
@@ -4736,7 +4743,9 @@ namespace TigerClaw.Core
                         CodeScore = candidate.CodeScore,
                         LexicalScore = candidate.LexicalScore,
                         Boundary = candidate.Boundary,
-                        MaxLexiconRank = candidate.MaxLexiconRank
+                        MaxLexiconRank = candidate.MaxLexiconRank,
+                        Source = candidate.Source,
+                        DirectRank = candidate.DirectRank
                     })
                     .Where(candidate => candidate.Text.Length > 0)
                     .ToArray();
