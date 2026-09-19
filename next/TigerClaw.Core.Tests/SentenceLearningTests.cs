@@ -307,7 +307,7 @@ namespace TigerClaw.Core.Tests
             Key('A');Key('A');Key('B');Key('B');Key(9);response = Key(32);using var json = JsonDocument.Parse(response);
             LearningCheck(json.RootElement.GetProperty("commit_text").GetString() == "乙中", "protocol actual Composed corrected commit");
             string receipt = json.RootElement.GetProperty("learning_receipt").GetString();
-            var actualStore = (SentenceLearningStore)typeof(InputMethodEngine).GetField("_learningStore", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(handler);
+            var actualStore = (SentenceLearningStore)typeof(InputMethodEngine).GetField("_learningStore", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(actual);
             LearningCheck(!File.Exists(actualStore.Path), "Core response alone cannot learn");
             using var replay = JsonDocument.Parse(handler.Handle(last));LearningCheck(replay.RootElement.GetProperty("learning_receipt").GetString() == receipt, "same key retry replays receipt");
             string ack = JsonSerializer.Serialize(new { type = "learning_commit", client_session = "test-client", learning_receipt = receipt, applied = true });
