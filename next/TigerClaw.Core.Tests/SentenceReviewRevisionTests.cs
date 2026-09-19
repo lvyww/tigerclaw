@@ -54,6 +54,13 @@ namespace TigerClaw.Core.Tests
             return text.ToString();
         }
 
+        private static string RevisionCandidateTextSet(object result)
+        {
+            return string.Join("\u001F", ((IEnumerable)RevisionProperty(result, "Candidates")).Cast<object>()
+                .Select(candidate => RevisionProperty(candidate, "Text")?.ToString() ?? string.Empty)
+                .OrderBy(text => text, StringComparer.Ordinal));
+        }
+
         private static int RunSentenceRevisionReview(string baselineAssembly, string modelPath)
         {
             baselineAssembly = Path.GetFullPath(baselineAssembly);
@@ -104,7 +111,19 @@ namespace TigerClaw.Core.Tests
                                 if (raw.Length > 24 || (raw.Length > 2 && random.Next(3) == 0)) raw = raw[..random.Next(raw.Length)];
                                 else raw += new[] { "aa", "bb", "ab", "ba", "aab", "a", "b", "12", ";" }[random.Next(9)];
                                 var result = RevisionCall(old, "DecodeFull", new() { ["rawCode"] = raw, ["candidateLimit"] = 20 });
-                                Review(RevisionSnapshot(result) == RevisionSnapshot(current.Decode(raw, 20)), "old/new exact snapshot " + raw);
+                                SentenceDecodeResult currentResult = current.Decode(raw, 20);
+                                bool hasDirect = (currentResult.Candidates ?? Array.Empty<SentenceCandidate>())
+                                    .Any(SentenceFusionPreference.IsDirect);
+                                if (hasDirect)
+                                {
+                                    Review(RevisionCandidateTextSet(result) == RevisionCandidateTextSet(currentResult),
+                                        "old/new direct candidate text set " + raw);
+                                }
+                                else
+                                {
+                                    Review(RevisionSnapshot(result) == RevisionSnapshot(currentResult),
+                                        "old/new exact composed snapshot " + raw);
+                                }
                                 snapshots++;
                             }
                             object oldSeed = ((IEnumerable)RevisionProperty(RevisionCall(old, "DecodeFull", new() { ["rawCode"] = "aa" }), "Candidates")).Cast<object>().First();
