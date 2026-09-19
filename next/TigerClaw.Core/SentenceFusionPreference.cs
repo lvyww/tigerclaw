@@ -25,7 +25,7 @@ namespace TigerClaw.Core
             candidate != null && candidate.Source == SentenceCandidateSource.Composed;
 
         internal static string PairCode(string raw, string directText, string composedText) =>
-            SentenceLearning.ConfigurationHash(
+            "~f" + SentenceLearning.ConfigurationHash(
                 (raw ?? string.Empty) + "\0D\0" + (directText ?? string.Empty) +
                 "\0C\0" + (composedText ?? string.Empty));
 
