@@ -546,7 +546,7 @@ namespace tiger::overlay
                 if (themes) DestroyMenu(themes);
                 return;
             }
-            AppendMenuW(menu, MF_STRING, 1, L"Github\u9875\u9762");
+            AppendMenuW(menu, MF_STRING, 1, L"\u864e\u722a GitHub \u9875\u9762");
             AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
             AppendMenuW(menu, MF_STRING, 2, L"\u65b9\u6848\u6587\u4ef6\u5939");
             AppendMenuW(menu, MF_STRING, 3, L"\u5bfc\u51fa\u7801\u8868");

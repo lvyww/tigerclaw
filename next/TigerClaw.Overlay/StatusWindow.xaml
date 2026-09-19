@@ -16,7 +16,7 @@
         Loaded="Window_Loaded">
     <Window.ContextMenu>
         <ContextMenu Opened="ContextMenu_Opened" Closed="ContextMenu_Closed">
-            <MenuItem Header="Github&#x9875;&#x9762;" Click="MenuOfficial_Click" />
+            <MenuItem Header="&#x864E;&#x722A; GitHub &#x9875;&#x9762;" Click="MenuOfficial_Click" />
             <Separator />
             <MenuItem Header="&#x65B9;&#x6848;&#x6587;&#x4EF6;&#x5939;" Click="MenuFolder_Click" />
             <MenuItem Header="&#x5BFC;&#x51FA;&#x7801;&#x8868;" Click="MenuExport_Click" />
