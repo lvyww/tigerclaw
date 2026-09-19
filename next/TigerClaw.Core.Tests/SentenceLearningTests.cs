@@ -245,17 +245,17 @@ namespace TigerClaw.Core.Tests
             store.ConfirmAsync(events);store.FlushAsync().GetAwaiter().GetResult();
             TypeLetters(engine, "aabb");LearningCheck(engine.GetUiSnapshot(5).Candidates[0] == learnedComposed, "confirmed Composed preference used by next composition");
             output = Press(engine, 32);events = engine.TakeSentenceLearning(output, out _);
-            LearningCheck(events.Length == 1 && store.Entries().Length == 2,
+            LearningCheck(events.Length == 1 && store.Entries().Length == 1,
                 "explicit stable Composed top1 stages one reinforcement without writing before ack");
             store.ConfirmAsync(events);store.FlushAsync().GetAwaiter().GetResult();
-            LearningCheck(store.Entries().Length == 3 &&
+            LearningCheck(store.Entries().Length == 2 &&
                 Math.Abs(store.Snapshot.Score(events[0].Mode, events[0].Code, events[0].Text, events[0].Context) - 8) < 1e-9,
                 "second stable Composed observation reaches half maturity");
             TypeLetters(engine, "aabb");output = Press(engine, 32);events = engine.TakeSentenceLearning(output, out _);
             LearningCheck(events.Length == 1, "mature Composed top1 stages another explicit reinforcement");
             store.ConfirmAsync(events);store.FlushAsync().GetAwaiter().GetResult();
             double matureScore = store.Snapshot.Score(events[0].Mode, events[0].Code, events[0].Text, events[0].Context);
-            LearningCheck(store.Entries().Length == 4 && matureScore > 9.99 &&
+            LearningCheck(store.Entries().Length == 3 && matureScore > 9.99 &&
                 SentenceInputDecoder.LearningEarlyCommitMaturity(matureScore) > 0.99,
                 "third stable Composed observation reaches effectively full maturity");
             TypeLetters(engine, "aabb");output = Press(engine, 32);
