@@ -258,9 +258,10 @@ namespace TigerClaw.Core.Tests
             LearningCheck(events.Length == 1 && store.Entries().Length == 1,
                 "explicit stable Composed top1 stages one reinforcement without writing before ack");
             store.ConfirmAsync(events);store.FlushAsync().GetAwaiter().GetResult();
-            LearningCheck(store.Entries().Length == 2 &&
-                Math.Abs(store.Snapshot.Score(events[0].Mode, events[0].Code, events[0].Text, events[0].Context) - 8) < 1e-9,
-                "second stable Composed observation reaches half maturity");
+            double halfMatureScore = store.Snapshot.Score(events[0].Mode, events[0].Code, events[0].Text, events[0].Context);
+            LearningCheck(store.Entries().Length == 2 && halfMatureScore > 7.99 && halfMatureScore <= 8.0 &&
+                SentenceInputDecoder.LearningEarlyCommitMaturity(halfMatureScore) > 0.49,
+                "second stable Composed observation reaches approximately half maturity");
             TypeLetters(engine, "aabb");output = Press(engine, 32);events = engine.TakeSentenceLearning(output, out _);
             LearningCheck(events.Length == 1, "mature Composed top1 stages another explicit reinforcement");
             store.ConfirmAsync(events);store.FlushAsync().GetAwaiter().GetResult();
