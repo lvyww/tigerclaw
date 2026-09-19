@@ -233,6 +233,7 @@ namespace TigerClaw.Core.Tests
             state.TrySetConfigValue("允许单字重码组句", "是", out _, out _);state.TrySetConfigValue("整句神经重排", "否", out _, out _);
             var decoder = CreateSentenceDecoder(new Dictionary<string, List<string>> { ["aa"] = new() { "甲", "乙" }, ["bb"] = new() { "中", "国" }, ["cc"] = new() { "人" } }, true);
             using var engine = new InputMethodEngine(state, decoder);
+            Console.WriteLine("learning-engine phase: direct-order");
             TypeLetters(engine, "aa");
             string[] directBefore = engine.GetUiSnapshot(5).Candidates;
             Press(engine, 9);var output = Press(engine, 32);var events = engine.TakeSentenceLearning(output, out var store);
@@ -244,6 +245,7 @@ namespace TigerClaw.Core.Tests
                 "Direct table order survives ordinary manual selection");
             Press(engine, 27);
 
+            Console.WriteLine("learning-engine phase: composed-learning");
             TypeLetters(engine, "aabb");
             string[] composedBefore = engine.GetUiSnapshot(5).Candidates;
             string baseComposedTop = composedBefore[0], learnedComposed = composedBefore[1];
@@ -270,8 +272,10 @@ namespace TigerClaw.Core.Tests
             LearningCheck(engine.TakeSentenceLearning(output, out _).Length == 0,
                 "fully mature Composed top1 does not append redundant reinforcement");
             TypeLetters(engine, "aabb");Press(engine, 9);output = Press(engine, 27);LearningCheck(engine.TakeSentenceLearning(output, out _).Length == 0, "Escape discards browsing");
+            Console.WriteLine("learning-engine phase: disable-restore");
             state.TrySetConfigValue("整句Tab自学习", "否", out _, out _);TypeLetters(engine, "aabb");LearningCheck(engine.GetUiSnapshot(5).Candidates[0] == baseComposedTop, "disabled engine order restored");Press(engine, 27);
             state.TrySetConfigValue("整句Tab自学习", "是", out _, out _);
+            Console.WriteLine("learning-engine phase: protocol");
             // Protocol test uses a fresh scheme and simulated TSF success/failure
             // acknowledgements; it is not a live document editing test.
             string separate = Path.Combine(root, "protocol");Directory.CreateDirectory(Path.Combine(separate, "码表", "虎整句"));
