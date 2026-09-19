@@ -32,12 +32,20 @@ namespace TigerClaw.Core.Tests
             Directory.CreateDirectory(root);
             try
             {
-                LearningRules(); LearningStorage(root); LearningDecoder(); LearningEngineAndProtocol(root);
-                LearningPerformance();
+                RunLearningStage("rules", LearningRules);
+                RunLearningStage("storage", () => LearningStorage(root));
+                RunLearningStage("decoder", LearningDecoder);
+                RunLearningStage("engine-protocol", () => LearningEngineAndProtocol(root));
+                RunLearningStage("performance", LearningPerformance);
                 Console.WriteLine(JsonSerializer.Serialize(new { test = "tab_learning", status = "passed", checks = learningChecks, physicalTsfTested = false }));
                 return 0;
             }
             finally { try { Directory.Delete(root, true); } catch (IOException) { } }
+        }
+        private static void RunLearningStage(string name, Action action)
+        {
+            try { action(); }
+            catch (Exception ex) { throw new Exception("Learning stage " + name + ": " + ex.Message, ex); }
         }
         private static void LearningRules()
         {
