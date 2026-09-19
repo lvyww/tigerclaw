@@ -726,7 +726,10 @@ namespace TigerClaw.Core
                 double combinedMass = LogSumExp(previous.LogMass, item.LogMass);
                 SentenceCandidateSource combinedSource = previous.Source | item.Source;
                 int combinedDirectRank = Math.Min(previous.DirectRank, item.DirectRank);
-                if (IsBetterDuplicate(item, previous))
+                bool itemDirect = (item.Source & SentenceCandidateSource.Direct) != 0;
+                bool previousDirect = (previous.Source & SentenceCandidateSource.Direct) != 0;
+                bool replace = itemDirect != previousDirect ? itemDirect : IsBetterDuplicate(item, previous);
+                if (replace)
                 {
                     item.LogMass = combinedMass;
                     item.Source = combinedSource;
