@@ -67,6 +67,14 @@ namespace TigerClaw.Core.Tests
                 Math.Abs(SentenceInputDecoder.LearningEarlyCommitContribution(8) - 0.30) < 1e-12 &&
                 Math.Abs(SentenceInputDecoder.LearningEarlyCommitContribution(10) - 0.75) < 1e-12,
                 "learning confidence contribution follows maturity multiplier");
+            string fusionMode = "sentence-v2|test";
+            SentenceLearningEvent fusionEvent = SentenceFusionPreference.CreateEvent(
+                fusionMode, "ii", "C", "A", true, 2);
+            SentenceLearningSnapshot fusionSnapshot = SentenceLearningSnapshot.Build(
+                new[] { fusionEvent }, fusionEvent.Time);
+            LearningCheck(
+                SentenceFusionPreference.SignedScore(fusionSnapshot, fusionMode, "ii", "C", "A") > 0,
+                "fusion preference records Direct over Composed without changing table rank");
             SentenceCandidate learnedCandidate = Candidate("设置" + e.Text, (2, 2), (6, 4));
             SentenceLearningEvent[] reinforcement = SentenceLearning.Reinforce("xx" + e.Code, learnedCandidate, 0, e.Mode, s);
             LearningCheck(reinforcement.Length == 1 && reinforcement[0].Code == e.Code &&
@@ -178,9 +186,35 @@ namespace TigerClaw.Core.Tests
             decoder.SetLearning(null, "");var restored = decoder.Decode("aabb");
             LearningCheck(restored.Candidates[0].Text == plain.Candidates[0].Text && !restored.LearningAffected, "disable restores baseline");
             var single = LearningEvent();decoder.SetLearning(SentenceLearningSnapshot.Build(new[] { single }), single.Mode);var first = decoder.Decode("aa");
-            LearningCheck(first.Candidates[0].Text == "乙", "single correction changes sentence ranking");
+            LearningCheck(first.Candidates[0].Text == "甲" &&
+                SentenceFusionPreference.IsDirect(first.Candidates[0]) &&
+                first.Candidates.All(candidate => candidate.LearningScore == 0),
+                "Direct-to-Direct history never changes exact table order");
             var prefix = new SentenceLockedPrefix("aa", first.Candidates[0].Text, first.Candidates[0].Boundary);decoder.SetLearning(null, "");
-            var locked = decoder.Decode("aabb", lockedPrefix: prefix);LearningCheck(locked.Candidates[0].LearningScore == 0 && locked.Candidates[0].Text == "乙中", "lock no stale scores");
+            var locked = decoder.Decode("aabb", lockedPrefix: prefix);LearningCheck(locked.Candidates[0].LearningScore == 0 && locked.Candidates[0].Text == "甲中", "lock no stale scores");
+
+            var fusionDecoder = new SentenceInputDecoder(
+                lexicon, NeutralSentenceLanguageModel.Instance, beamWidth: 100,
+                isolationPenalty: SentenceIsolationPenalty.None, allowDuplicateSingleCharacters: true);
+            var directB = new SentenceCandidate { Text = "B", Source = SentenceCandidateSource.Direct, DirectRank = 1 };
+            var directC = new SentenceCandidate { Text = "C", Source = SentenceCandidateSource.Direct, DirectRank = 2 };
+            var composedA = new SentenceCandidate { Text = "A", Source = SentenceCandidateSource.Composed };
+            var merge = new[] { composedA, directB, directC };
+            fusionDecoder.ApplyFusionOrdering("ii", merge);
+            LearningCheck(string.Concat(merge.Select(c => c.Text)) == "ABC", "baseline cross-source order preserved");
+            string fusionMode = "sentence-v2|test";
+            var fusionEvent = SentenceFusionPreference.CreateEvent(fusionMode, "ii", "C", "A", true, 2);
+            fusionDecoder.SetLearning(SentenceLearningSnapshot.Build(new[] { fusionEvent }, fusionEvent.Time), fusionMode);
+            fusionDecoder.Decode("aa");
+            merge = new[]
+            {
+                new SentenceCandidate { Text = "A", Source = SentenceCandidateSource.Composed },
+                new SentenceCandidate { Text = "B", Source = SentenceCandidateSource.Direct, DirectRank = 1 },
+                new SentenceCandidate { Text = "C", Source = SentenceCandidateSource.Direct, DirectRank = 2 }
+            };
+            fusionDecoder.ApplyFusionOrdering("ii", merge);
+            LearningCheck(string.Concat(merge.Select(c => c.Text)) == "BCA",
+                "selecting Direct C promotes only the Direct prefix B,C across Composed A");
         }
         private static void LearningEngineAndProtocol(string root)
         {
@@ -191,30 +225,44 @@ namespace TigerClaw.Core.Tests
             state.TrySetConfigValue("允许单字重码组句", "是", out _, out _);state.TrySetConfigValue("整句神经重排", "否", out _, out _);
             var decoder = CreateSentenceDecoder(new Dictionary<string, List<string>> { ["aa"] = new() { "甲", "乙" }, ["bb"] = new() { "中", "国" }, ["cc"] = new() { "人" } }, true);
             using var engine = new InputMethodEngine(state, decoder);
-            TypeLetters(engine, "aa");Press(engine, 9);var output = Press(engine, 32);var events = engine.TakeSentenceLearning(output, out var store);
-            LearningCheck(output.TextToOutput == "乙" && events.Length == 1 && store != null, "actual engine produces staged correction");
+            TypeLetters(engine, "aa");
+            string[] directBefore = engine.GetUiSnapshot(5).Candidates;
+            Press(engine, 9);var output = Press(engine, 32);var events = engine.TakeSentenceLearning(output, out var store);
+            LearningCheck(output.TextToOutput == directBefore[1] && events.Length == 0 && store != null,
+                "ordinary selection between Direct candidates never creates learning");
             LearningCheck(store.Path == Path.Combine(scheme, ".tigerclaw-learning-v1.log") && !File.Exists(store.Path), "scheme source folder, not cache, no pre-ack write");
+            TypeLetters(engine, "aa");
+            LearningCheck(engine.GetUiSnapshot(5).Candidates.Take(2).SequenceEqual(directBefore.Take(2)),
+                "Direct table order survives ordinary manual selection");
+            Press(engine, 27);
+
+            TypeLetters(engine, "aabb");
+            string[] composedBefore = engine.GetUiSnapshot(5).Candidates;
+            string baseComposedTop = composedBefore[0], learnedComposed = composedBefore[1];
+            Press(engine, 9);output = Press(engine, 32);events = engine.TakeSentenceLearning(output, out store);
+            LearningCheck(output.TextToOutput == learnedComposed && events.Length == 1,
+                "Composed-to-Composed manual selection still stages sentence learning");
             store.ConfirmAsync(events);store.FlushAsync().GetAwaiter().GetResult();
-            TypeLetters(engine, "aa");LearningCheck(engine.GetUiSnapshot(5).Candidates[0] == "乙", "confirmed preference used by next composition");
+            TypeLetters(engine, "aabb");LearningCheck(engine.GetUiSnapshot(5).Candidates[0] == learnedComposed, "confirmed Composed preference used by next composition");
             output = Press(engine, 32);events = engine.TakeSentenceLearning(output, out _);
-            LearningCheck(events.Length == 1 && store.Entries().Length == 1,
-                "explicit stable top1 stages one reinforcement without writing before ack");
+            LearningCheck(events.Length == 1 && store.Entries().Length == 2,
+                "explicit stable Composed top1 stages one reinforcement without writing before ack");
             store.ConfirmAsync(events);store.FlushAsync().GetAwaiter().GetResult();
-            LearningCheck(store.Entries().Length == 2 &&
+            LearningCheck(store.Entries().Length == 3 &&
                 Math.Abs(store.Snapshot.Score(events[0].Mode, events[0].Code, events[0].Text, events[0].Context) - 8) < 1e-9,
-                "second stable observation reaches half maturity");
-            TypeLetters(engine, "aa");output = Press(engine, 32);events = engine.TakeSentenceLearning(output, out _);
-            LearningCheck(events.Length == 1, "mature top1 stages another explicit reinforcement");
+                "second stable Composed observation reaches half maturity");
+            TypeLetters(engine, "aabb");output = Press(engine, 32);events = engine.TakeSentenceLearning(output, out _);
+            LearningCheck(events.Length == 1, "mature Composed top1 stages another explicit reinforcement");
             store.ConfirmAsync(events);store.FlushAsync().GetAwaiter().GetResult();
             double matureScore = store.Snapshot.Score(events[0].Mode, events[0].Code, events[0].Text, events[0].Context);
-            LearningCheck(store.Entries().Length == 3 && matureScore > 9.99 &&
+            LearningCheck(store.Entries().Length == 4 && matureScore > 9.99 &&
                 SentenceInputDecoder.LearningEarlyCommitMaturity(matureScore) > 0.99,
-                "third stable observation reaches effectively full maturity");
-            TypeLetters(engine, "aa");output = Press(engine, 32);
+                "third stable Composed observation reaches effectively full maturity");
+            TypeLetters(engine, "aabb");output = Press(engine, 32);
             LearningCheck(engine.TakeSentenceLearning(output, out _).Length == 0,
-                "fully mature top1 does not append redundant reinforcement");
-            TypeLetters(engine, "aa");Press(engine, 9);output = Press(engine, 27);LearningCheck(engine.TakeSentenceLearning(output, out _).Length == 0, "Escape discards browsing");
-            state.TrySetConfigValue("整句Tab自学习", "否", out _, out _);TypeLetters(engine, "aa");LearningCheck(engine.GetUiSnapshot(5).Candidates[0] == "甲", "disabled engine order restored");Press(engine, 27);
+                "fully mature Composed top1 does not append redundant reinforcement");
+            TypeLetters(engine, "aabb");Press(engine, 9);output = Press(engine, 27);LearningCheck(engine.TakeSentenceLearning(output, out _).Length == 0, "Escape discards browsing");
+            state.TrySetConfigValue("整句Tab自学习", "否", out _, out _);TypeLetters(engine, "aabb");LearningCheck(engine.GetUiSnapshot(5).Candidates[0] == baseComposedTop, "disabled engine order restored");Press(engine, 27);
             state.TrySetConfigValue("整句Tab自学习", "是", out _, out _);
             // Protocol test uses a fresh scheme and simulated TSF success/failure
             // acknowledgements; it is not a live document editing test.
