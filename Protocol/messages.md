@@ -44,7 +44,7 @@ Native Overlay 尝试取得前台，但菜单显示不以授权成功为前提�
 | `add_ci` / `construct_ci` / `get_last_ci` | Dialog | 是 | 加词、构词、历史文本 |
 | `get_send_history_count` | Dialog | 是 | 已发送文本元素计数 |
 | `open_mb_folder` / `export_mb` | Dialog/Overlay | 是 | 打开或导出码表 |
-| `open_official` | Dialog/Overlay | 是 | 打开项目主页 |
+| `open_official` | Dialog/Overlay | 是 | 打开虎爪 GitHub 开源仓库 |
 | `exit_core` | Overlay | 是 | 回复后退出 Core |
 | `focus` / `caret` / `ime_active` | TSF | 否 | 窗口、光标和激活状态 |
 | `composition_canceled` | TSF/Hook | 否 | 前端已取消 composition |

@@ -272,7 +272,7 @@ namespace TigerClaw.Core
 
                 case "open_official":
                     {
-                        bool ok = TryOpenTarget("https://github.com/lvyww/bime");
+                        bool ok = TryOpenTarget("https://github.com/lvyww/tigerclaw");
                         return BuildResponseWithUiState(seq, ok, ok, keyboardOpen: _engine.IsChinese);
                     }
 

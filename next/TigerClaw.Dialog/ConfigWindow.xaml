@@ -559,7 +559,7 @@
                                         Style="{StaticResource ActionButtonStyle}"
                                         Click="OnAboutCopyClick" />
                                 <Button x:Name="AboutOfficialButton"
-                                        Content="打开 Github"
+                                        Content="打开虎爪 GitHub"
                                         Width="112"
                                         Style="{StaticResource ActionButtonStyle}"
                                         Click="OnAboutOfficialClick" />
