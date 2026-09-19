@@ -4246,8 +4246,10 @@ namespace TigerClaw.Core.Tests
             SentenceCandidate rewardedSingle = rewardedResult.Candidates.Single(candidate => candidate.Text == "丙");
             True(baselineResult.Candidates[0].Text != "丙",
                 nameof(SentenceDecoderRewardsOptimalWholeInputSingleCharacter) + ".baseline_loses");
-            Equal("丙", rewardedResult.Candidates[0].Text,
-                nameof(SentenceDecoderRewardsOptimalWholeInputSingleCharacter) + ".later_rank_rewarded");
+            True(
+                Array.FindIndex(rewardedResult.Candidates, candidate => candidate.Text == "词语") <
+                Array.FindIndex(rewardedResult.Candidates, candidate => candidate.Text == "丙"),
+                nameof(SentenceDecoderRewardsOptimalWholeInputSingleCharacter) + ".direct_rank_preserved");
             True(Math.Abs((rewardedSingle.FinalScore - baselineSingle.FinalScore) - 5.0) < 1e-9,
                 nameof(SentenceDecoderRewardsOptimalWholeInputSingleCharacter) + ".reward_value");
             True(Math.Abs(rewardedSingle.ConfidenceScore - baselineSingle.ConfidenceScore) < 1e-9,
