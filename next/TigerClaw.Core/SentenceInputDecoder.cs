@@ -1871,10 +1871,16 @@ namespace TigerClaw.Core
                 if (!baseOrder.ContainsKey(text)) baseOrder[text] = index;
             }
 
+            int BaseIndex(SentenceCandidate candidate) =>
+                candidate != null &&
+                baseOrder.TryGetValue(candidate.Text ?? string.Empty, out int index)
+                    ? index
+                    : int.MaxValue;
+
             List<SentenceCandidate> direct = candidates
                 .Where(SentenceFusionPreference.IsDirect)
                 .OrderBy(candidate => candidate.DirectRank)
-                .ThenBy(candidate => baseOrder.TryGetValue(candidate.Text ?? string.Empty, out int index) ? index : int.MaxValue)
+                .ThenBy(BaseIndex)
                 .ToList();
             List<SentenceCandidate> composed = candidates
                 .Where(candidate => !SentenceFusionPreference.IsDirect(candidate))
@@ -1917,11 +1923,11 @@ namespace TigerClaw.Core
                     if (Math.Abs(directPrefix - composedPrefix) > 1e-12)
                         takeDirect = directPrefix > composedPrefix;
                     else
-                        takeDirect = baseOrder[d.Text] < baseOrder[c.Text];
+                        takeDirect = BaseIndex(d) < BaseIndex(c);
                 }
                 else
                 {
-                    takeDirect = baseOrder[d.Text] < baseOrder[c.Text];
+                    takeDirect = BaseIndex(d) < BaseIndex(c);
                 }
 
                 merged.Add(takeDirect ? direct[di++] : composed[ci++]);
