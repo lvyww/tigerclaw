@@ -95,6 +95,7 @@ namespace TigerClaw.Core.Tests
                 ReviewLearningAccumulator();
                 ReviewJournal(folder);
                 ReviewMappedModel(folder, modelPath);
+                ReviewMobileModels(folder);
                 ReviewRerankCancellation(folder);
                 Console.WriteLine(JsonSerializer.Serialize(new { test = "sentence_review", status = "passed",
                     checks = _reviewChecks, snapshots = _reviewSnapshots, production_model = modelPath != null,

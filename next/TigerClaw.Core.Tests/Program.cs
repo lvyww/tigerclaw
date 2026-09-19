@@ -60,6 +60,7 @@ namespace TigerClaw.Core.Tests
                 if (args.Length >= 2 && args[0] == "--sentence-review-benchmark") return RunSentenceReviewBenchmark(args[1], args.Length > 2 && args[2] != "-" ? args[2] : null, args.Length > 3 ? int.Parse(args[3]) : 0);
                 if (args.Length >= 2 && args[0] == "--sentence-review-compare") return RunSentenceRevisionReview(args[1], args.Length > 2 ? args[2] : null);
                 if (args.Length == 3 && args[0] == "--sentence-native-review") return RunNativeSentenceReview(args[1], args[2]);
+                if (args.Length == 7 && args[0] == "--ngram-format-compare") return RunMobileComparison(args[1], args[2], args[3], args[4], args[5], args[6]);
                 if (args.Length >= 1 && args[0] == "--sentence-review-tests") return RunSentenceReviewTests(args.Length > 1 ? args[1] : null);
                 if (args.Length == 1 && args[0] == "--learning-tests") return RunLearningTests();
                 if (args.Length == 4 && args[0] == "--learning-worker") return RunLearningWorker(args[1], args[2], int.Parse(args[3]));

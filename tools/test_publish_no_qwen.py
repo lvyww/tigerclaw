@@ -33,7 +33,7 @@ def main():
                  'TigerClaw.Dialog.exe', 'TigerClaw.Dialog.exe.config', 'TigerClaw.exe',
                  'TigerClaw.Shared.dll', 'bime.ico', '更新日志.txt', '安装.bat', '卸载.bat',
                  '自定义选重键.txt', 'x64/TigerClaw.dll', 'Win32/TigerClaw.dll',
-                 'Models/sentence-ngram-v2.bin', 'Models/sentence-qwen-q8.gguf',
+                 'Models/sentence-ngram-mobile.bin', 'Models/sentence-qwen-q8.gguf',
                  'sentence/TigerClaw.Sentence.exe', 'sentence/Models/sentence-qwen-q8.gguf',
                  'sentence/Models/old/QWEN.GGUF', 'sentence/licenses/llama.cpp-LICENSE.txt',
                  'sounds/KeyNormal.wav', '字体/font.txt', '拼音反查码表/table.txt', '码表/test.txt']
@@ -55,7 +55,7 @@ def main():
             archive = release / ('虎爪输入法-1.2.3' + ('-no-qwen' if no_qwen else '') + '.7z')
             listing = subprocess.check_output([str(release / '7z.exe'), 'l', '-slt', win(archive)]).decode(errors='replace')
             assert ('.gguf' in listing.lower()) == (not no_qwen)
-            for name in ('sentence-ngram-v2.bin', 'TigerClaw.Sentence.exe', 'llama.cpp-LICENSE.txt'):
+            for name in ('sentence-ngram-mobile.bin', 'TigerClaw.Sentence.exe', 'llama.cpp-LICENSE.txt'):
                 assert name in listing, name
             assert (release / 'TigerClaw' / 'config.txt').read_text() == 'distribution config'
             subprocess.run([str(release / '7z.exe'), 't', win(archive)], check=True, capture_output=True)

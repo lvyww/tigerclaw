@@ -32,6 +32,7 @@ namespace TigerClaw.Core
         private readonly long _trigramContextOffset;
         private readonly long _trigramContextCount;
         private readonly float _unknownProbability;
+        private readonly MobileLayout _mobile;
         private bool _disposed;
 
         private SentenceNgramModel(MemoryMappedFile mapping, long length)
@@ -48,37 +49,47 @@ namespace TigerClaw.Core
             {
                 long position = 0;
                 string magic = ReadAscii(ref position, Magic.Length);
-                if (!string.Equals(magic, Magic, StringComparison.Ordinal))
+                if (string.Equals(magic, "TCSKNM02", StringComparison.Ordinal))
                 {
-                    throw new InvalidDataException("Invalid sentence n-gram V2 model magic.");
+                    _mobile = new MobileLayout(_view, _length);
+                    _unigramCount = _mobile.UnigramCount;
+                    _unigramOffset = _mobile.UnigramOffset;
+                    position = _length;
                 }
-                if (ReadInt32(ref position) != Version)
+                else
                 {
-                    throw new InvalidDataException("Unsupported sentence n-gram V2 model version.");
+                    if (!string.Equals(magic, Magic, StringComparison.Ordinal))
+                    {
+                        throw new InvalidDataException("Invalid sentence n-gram V2 model magic.");
+                    }
+                    if (ReadInt32(ref position) != Version)
+                    {
+                        throw new InvalidDataException("Unsupported sentence n-gram V2 model version.");
+                    }
+
+                    _unigramCount = ReadNonNegativeInt32(ref position, "unigram");
+                    _unigramOffset = ReserveSection(ref position, _unigramCount, 8, "unigram");
+
+                    _bigramCount = ReadNonNegativeInt64(ref position, "bigram");
+                    _bigramOffset = ReserveSection(ref position, _bigramCount, 12, "bigram");
+
+                    _bigramContextCount = ReadNonNegativeInt32(ref position, "bigram context");
+                    _bigramContextOffset = ReserveSection(
+                        ref position,
+                        _bigramContextCount,
+                        8,
+                        "bigram context");
+
+                    _trigramCount = ReadNonNegativeInt64(ref position, "trigram");
+                    _trigramOffset = ReserveSection(ref position, _trigramCount, 12, "trigram");
+
+                    _trigramContextCount = ReadNonNegativeInt64(ref position, "trigram context");
+                    _trigramContextOffset = ReserveSection(
+                        ref position,
+                        _trigramContextCount,
+                        12,
+                        "trigram context");
                 }
-
-                _unigramCount = ReadNonNegativeInt32(ref position, "unigram");
-                _unigramOffset = ReserveSection(ref position, _unigramCount, 8, "unigram");
-
-                _bigramCount = ReadNonNegativeInt64(ref position, "bigram");
-                _bigramOffset = ReserveSection(ref position, _bigramCount, 12, "bigram");
-
-                _bigramContextCount = ReadNonNegativeInt32(ref position, "bigram context");
-                _bigramContextOffset = ReserveSection(
-                    ref position,
-                    _bigramContextCount,
-                    8,
-                    "bigram context");
-
-                _trigramCount = ReadNonNegativeInt64(ref position, "trigram");
-                _trigramOffset = ReserveSection(ref position, _trigramCount, 12, "trigram");
-
-                _trigramContextCount = ReadNonNegativeInt64(ref position, "trigram context");
-                _trigramContextOffset = ReserveSection(
-                    ref position,
-                    _trigramContextCount,
-                    12,
-                    "trigram context");
 
                 if (position != _length || _unigramCount == 0)
                 {
@@ -172,7 +183,7 @@ namespace TigerClaw.Core
             return LogProbability(previous2, previous1, target, includeUnigram: true);
         }
 
-        private double ComputeLogProbability(string previous2, string previous1, string target, bool includeUnigram)
+        private double ComputeLogProbability(string previous2, string previous1, string target, bool includeUnigram, QueryCache cache)
         {
             int first = ResolveScalar(previous2);
             int second = ResolveScalar(previous1);
@@ -184,6 +195,16 @@ namespace TigerClaw.Core
                     third,
                     _unknownProbability)
                 : 0.0;
+            if (_mobile != null)
+            {
+                var bi = _mobile.Lookup(false, (ulong)second, third, cache.MobileContexts(false));
+                double bigramScore = bi.Probability;
+                bigramScore += (double)bi.Lambda * unigram;
+                var tri = _mobile.Lookup(true, PackPair(first, second), third, cache.MobileContexts(true));
+                double trigramScore = tri.Probability;
+                trigramScore += (double)tri.Lambda * bigramScore;
+                return Math.Log(Math.Max(trigramScore, 1e-300));
+            }
             double bigram = LookupUInt64(
                 _bigramOffset,
                 _bigramCount,
@@ -232,6 +253,8 @@ namespace TigerClaw.Core
         private static IEnumerable<string> CandidatePaths(string baseDirectory)
         {
             string root = string.IsNullOrEmpty(baseDirectory) ? AppContext.BaseDirectory : baseDirectory;
+            yield return Path.Combine(root, "Models", "sentence-ngram-mobile.bin");
+            yield return Path.Combine(root, "sentence-ngram-mobile.bin");
             yield return Path.Combine(root, "Models", "sentence-ngram-v2.bin");
             yield return Path.Combine(root, "sentence-ngram-v2.bin");
         }

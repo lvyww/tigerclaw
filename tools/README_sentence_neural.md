@@ -3,7 +3,7 @@
 本目录包含整句语料处理、n-gram 训练、模型转换和离线评测工具。当前 Windows
 运行时只使用：
 
-- `sentence-ngram-v2.bin`：20% 原发布模型与 80% mohu 214 MiB 模型的融合裁剪版（2026-09-19）；
+- `sentence-ngram-mobile.bin`：20% 原发布模型与 80% mohu 214 MiB 模型的融合裁剪版（2026-09-19）；旧 `sentence-ngram-v2.bin` 仍可读取；
 - `sentence-qwen-q8.gguf`：Qwen3 0.6B Base Q8，重排前五个 n-gram 候选。
 
 两者均为仓库外原始文件，发布后只读映射，不加密。旧 compact n-gram、字符
@@ -33,8 +33,50 @@ C:\Archive\tigerclaw_sentence_ml\runtime\sentence-ngram-mobile.bin
 C:\Archive\tigerclaw_sentence_ml\qwen3-0.6b-gguf\downloaded\Qwen3-0.6B-Base-Q8_0.gguf
 ```
 
-`next/build_next.bat`、`publish.bat` 和 `publish_arm64.bat` 从这些仓库外位置复制
-运行模型。不要把模型复制回源码目录长期保存。
+`next/build_next.bat`、`publish.bat` 和 `publish_arm64.bat` 默认从上述仓库外位置复制
+mobile n-gram 和 Qwen 模型，成功复制 mobile 后的输出不再保留旧 v2 n-gram。
+Core-only 发布不改模型，可继续读取已有 v2 文件。不要把模型复制回源码目录长期保存。
+
+### Windows 双格式读取
+
+Core 根据文件头识别 TCSKNM01 / TCSKNM02。自动加载按 `Models/` 下 mobile、
+运行目录下 mobile、`Models/` 下 v2、运行目录下 v2 的顺序查找。
+某个文件加载失败会继续尝试下一个；若两个格式都有效，mobile 优先。
+读取器不改变 Beam、学习、Qwen 或提前上屏算法。
+
+两种格式都使用只读内存映射，映射页由操作系统管理。Mobile 不复制整个模型或
+Lua 式数据页缓存；每个查询会话分别缓存最多 16384 个二元、16384 个三元上下文
+的位置、后继数和回退系数，复用原有固定大小评分缓存。上下文查询先查稀疏索引，
+然后跳过后继数据，一次扫描并缓存该索引块的上下文位置，最后二分查找后继。
+空上下文仍保留回退系数；零概率后继仍算已观察记录。
+格式边界和稀疏索引在加载时校验，访问上下文时继续校验页边界和记录长度。
+旧模型释放仍等待所有查询会话结束，不跨解码器共享可变缓存。
+
+验证入口：Core `--sentence-review-tests` 含双格式合成模型测试；
+`--ngram-format-compare <v2> <mobile> <codes.txt> <scalar-queries.tsv> <cases.tsv> <output-prefix>`
+核对真实模型、逐键候选及提前上屏证据，并记录输入/回删耗时。
+查询 TSV 为三个 Unicode 码点整数；句子 TSV 为 `id/dataset/code/text` 四列。
+基准输出包含逐键 TSV 与 p50/p95/max JSON，模型读取不等于实机 UI 响应时间。
+
+2026-09-20 验证：完整 Core 回归通过（整句 938714 项检查、7388 个快照），
+ARM64/x64 Native AOT 构建通过，普通/no-qwen 包含 mobile 模型的隔离打包测试通过。
+融合模型 40004 组查询含/不含 unigram 分数逐位相等，二元观察结果相等；
+48 条句子（13–77 编码）两轮输入/回删共 10052 对解码结果，候选、评分和提前
+上屏证据一致。基准为 ARM64 Windows 上的 Release 托管测试程序，保留 OS 文件
+缓存，无 Qwen/学习/补充语料，采用生产 Beam 与排序参数；不是前端实机验收。
+
+| 长句编码位置 >24，单位 ms | v2 p95 | mobile p95 | v2 最慢 | mobile 最慢 |
+|---|---:|---:|---:|---:|
+| 第一轮输入（1440 对） | 17.33 | 18.33 | 35.69 | 47.34 |
+| 第一轮回删（1400 对） | 9.71 | 9.94 | 30.05 | 32.28 |
+| 第二轮输入（1440 对） | 16.93 | 16.81 | 42.53 | 47.75 |
+| 第二轮回删（1400 对） | 10.06 | 9.65 | 32.17 | 27.26 |
+
+第二轮复用解码器和查询缓存，第一轮仅查询会话新建，不是冷磁盘启动。
+第一轮首键 48 对的 p95 为 1.37/1.62 ms，最慢 2.02/12.79 ms；模型加载单次
+为 1.20/4.56 ms。暂不能宣称 mobile 更快或尾延迟全面改善；确定收益是当前模型
+文件减少 45.90 MiB（17.65%），并与 Rime 共用文件。结果及逐键明细保存在
+`next/_run/mobile-ngram-20260919/comparison-prefetch.{json,tsv}`。
 
 2026-09-19 按用户选择，将上述两个 n-gram 源更新为单文件融合 214 MiB 版。
 移动格式为 224,475,584 字节（214.08 MiB），SHA256

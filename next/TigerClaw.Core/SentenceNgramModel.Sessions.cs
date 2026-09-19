@@ -13,13 +13,18 @@ namespace TigerClaw.Core
         {
             private readonly FixedSizeCache<double> _scores = new(LogProbabilityCacheSize);
             private readonly FixedSizeCache<bool> _observed = new(ObservedBigramCacheSize);
+            private FixedSizeCache<MobileContext> _mobileBigrams, _mobileTrigrams;
+
+            internal FixedSizeCache<MobileContext> MobileContexts(bool trigram) => trigram
+                ? (_mobileTrigrams ??= new(1 << 14))
+                : (_mobileBigrams ??= new(1 << 14));
 
             internal double Score(SentenceNgramModel model, string a, string b, string c, bool unigram)
             {
                 ulong key = PackTriple(ResolveScalar(a), ResolveScalar(b), ResolveScalar(c));
                 if (!unigram) key |= NoUnigramCacheKeyFlag;
                 if (_scores.TryGetValue(key, out double score)) return score;
-                score = model.ComputeLogProbability(a, b, c, unigram);
+                score = model.ComputeLogProbability(a, b, c, unigram, this);
                 _scores.Set(key, score);
                 return score;
             }
@@ -28,7 +33,9 @@ namespace TigerClaw.Core
             {
                 ulong key = PackPair(ResolveScalar(a), ResolveScalar(b));
                 if (_observed.TryGetValue(key, out bool value)) return value;
-                value = model.ContainsUInt64(model._bigramOffset, model._bigramCount, key);
+                value = model._mobile == null
+                    ? model.ContainsUInt64(model._bigramOffset, model._bigramCount, key)
+                    : model._mobile.Lookup(false, (ulong)ResolveScalar(a), ResolveScalar(b), MobileContexts(false)).Observed;
                 _observed.Set(key, value);
                 return value;
             }

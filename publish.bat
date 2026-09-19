@@ -92,7 +92,7 @@ set "OVERLAY_OUT=%ROOT%\next\_run\Release\net48"
 set "DIALOG_OUT=%ROOT%\next\_run\Release\net48"
 set "SENTENCE_OUT=%ROOT%\next\_run\Release\sentence"
 set "SENTENCE_MODEL_ROOT=C:\Archive\tigerclaw_sentence_ml\runtime"
-set "SENTENCE_NGRAM_MODEL=%SENTENCE_MODEL_ROOT%\sentence-ngram-v2.bin"
+set "SENTENCE_NGRAM_MODEL=%SENTENCE_MODEL_ROOT%\sentence-ngram-mobile.bin"
 set "SENTENCE_QWEN_MODEL=C:\Archive\tigerclaw_sentence_ml\qwen3-0.6b-gguf\downloaded\Qwen3-0.6B-Base-Q8_0.gguf"
 set "SENTENCE_QWEN_LICENSE=C:\Archive\tigerclaw_sentence_ml\qwen3-0.6b-base\LICENSE"
 set "HOOK_NATIVE_OUT=%ROOT%\next\_run\Release\native"
@@ -304,7 +304,7 @@ if exist "%RELEASE_SENTENCE%\Models\sentence-transformer.tcmodel" del /q "%RELEA
 if exist "%RELEASE_SENTENCE%\Models\sentence-vocabulary.tcmodel" del /q "%RELEASE_SENTENCE%\Models\sentence-vocabulary.tcmodel"
 if exist "%RELEASE_SENTENCE%\Models\sentence-transformer.json" del /q "%RELEASE_SENTENCE%\Models\sentence-transformer.json"
 if "%PUBLISH_NO_QWEN%"=="0" call :CopyFileStrict "%SENTENCE_QWEN_MODEL%" "%RELEASE_SENTENCE%\Models\sentence-qwen-q8.gguf" || exit /b 1
-call :CopyFileStrict "%SENTENCE_NGRAM_MODEL%" "%RELEASE_MODELS%\sentence-ngram-v2.bin" || exit /b 1
+call :CopyFileStrict "%SENTENCE_NGRAM_MODEL%" "%RELEASE_MODELS%\sentence-ngram-mobile.bin" || exit /b 1
 call :CopyFileStrict "%ROOT%\third_party\llama.cpp\LICENSE" "%RELEASE_SENTENCE%\licenses\llama.cpp-LICENSE.txt" || exit /b 1
 if "%PUBLISH_NO_QWEN%"=="0" call :CopyFileStrict "%SENTENCE_QWEN_LICENSE%" "%RELEASE_SENTENCE%\licenses\Qwen3-LICENSE.txt" || exit /b 1
 
