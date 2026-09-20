@@ -55,22 +55,27 @@ namespace TigerClaw.Core.Tests
             LearningCheck(SentenceLearning.StaticText(new string('中', 16)) && !SentenceLearning.StaticText(new string('中', 17)), "16 scalar limit");
             var e = LearningEvent("aabb", "虎娘", "设置"); var s = SentenceLearningSnapshot.Build(new[] { e }, e.Time);
             LearningCheck(s.Score(e.Mode, e.Code, e.Text, e.Context) == 9, "first correction effective");
-            LearningCheck(s.Score(e.Mode, e.Code, e.Text, "其他") == 0 && s.Score("other", e.Code, e.Text, e.Context) == 0, "mode/context scope");
-            LearningCheck(s.PrefixScore(e.Mode, "aa", "虎", e.Context) == 9 && s.PrefixScore(e.Mode, "aa", "狼", e.Context) == 0, "prefix retention hint");
-            LearningCheck(Math.Abs(SentenceLearningSnapshot.Build(new[] { e }, e.Time + 30 * 86400).Score(e.Mode, e.Code, e.Text, e.Context) - 7.613705638880109) < 1e-12, "30 day half life applies to weight, not score");
+            LearningCheck(s.Score(e.Mode, e.Code, e.Text, "其他") == 6 && s.Score("other", e.Code, e.Text, e.Context) == 0, "first correction generalizes across context but not mode");
+            LearningCheck(s.PrefixScore(e.Mode, "aa", "虎", e.Context) == 9 && s.PrefixScore(e.Mode, "aa", "虎", "其他") == 6 &&
+                s.PrefixScore(e.Mode, "aa", "狼", e.Context) == 0, "prefix retention hint carries exact/general levels");
+            LearningCheck(SentenceLearningSnapshot.Build(new[] { e }, e.Time + 3650L * 86400).Score(e.Mode, e.Code, e.Text, e.Context) == 9,
+                "learning never decays with wall-clock time");
             var b = LearningEvent(e.Code, e.Text, e.Context); b.Time = e.Time;
             var c = LearningEvent(e.Code, e.Text, "测试"); c.Time = e.Time;
-            LearningCheck(SentenceLearningSnapshot.Build(new[] { e, b, c }, e.Time).Score(e.Mode, e.Code, e.Text, "其他") == 2, "weak cross-context generalization");
+            LearningCheck(SentenceLearningSnapshot.Build(new[] { e, b, c }, e.Time).Score(e.Mode, e.Code, e.Text, "其他") == 10,
+                "three explicit corrections reach cross-context level three");
             var single1 = LearningEvent("aa", "乙", "前甲"); var single2 = LearningEvent("aa", "乙", "前甲"); var single3 = LearningEvent("aa", "乙", "后甲");
-            LearningCheck(SentenceLearningSnapshot.Build(new[] { single1, single2, single3 }).Score(e.Mode, "aa", "乙", "其他") == 0, "single character not generalized");
+            LearningCheck(SentenceLearningSnapshot.Build(new[] { single1, single2, single3 }).Score(e.Mode, "aa", "乙", "其他") == 10,
+                "single-character fragments use the same explicit correction levels");
             var change = LearningEvent(e.Code, "虎爪", e.Context); change.Time = e.Time;
             var compete = SentenceLearningSnapshot.Build(new[] { e, b, change }, e.Time);
             LearningCheck(compete.Score(e.Mode, e.Code, change.Text, e.Context) > compete.Score(e.Mode, e.Code, e.Text, e.Context), "new correction wins old habit");
-            LearningCheck(SentenceLearningSnapshot.Build(Enumerable.Repeat(e, 100), e.Time).Score(e.Mode, e.Code, e.Text, e.Context) == 16, "bounded score");
+            var capped = SentenceLearningSnapshot.Build(Enumerable.Repeat(e, 100), e.Time);
+            LearningCheck(capped.Score(e.Mode, e.Code, e.Text, e.Context) == 27 &&
+                capped.Score(e.Mode, e.Code, e.Text, "其他") == 24, "ten-level exact/general score caps");
             var accumulated = new List<SentenceLearningEvent>();
             var accumulator = new SentenceLearningSnapshot.Accumulator();
-            foreach (var point in new[] { (1, 9.0), (2, 10.38629436111989),
-                (3, 11.19722457733622), (10, 13.605170185988092), (34, 16.0) })
+            foreach (var point in new[] { (1, 9.0), (2, 11.0), (3, 13.0), (10, 27.0), (34, 27.0) })
             {
                 while (accumulated.Count < point.Item1)
                 {
@@ -82,20 +87,19 @@ namespace TigerClaw.Core.Tests
                 LearningCheck(Math.Abs(replay - point.Item2) < 1e-12 && Math.Abs(incremental - point.Item2) < 1e-12,
                     "Rime/Tigirl weight parity for replay and incremental confirmations " + point.Item1);
             }
-            double decayedCap = accumulator.Update(accumulated, e.Time + 30 * 86400).Score(e.Mode, e.Code, e.Text, e.Context);
-            LearningCheck(Math.Abs(decayedCap - 14.61370563888011) < 1e-12,
-                "capped weight still decays with a 30 day half life");
-            LearningCheck(Math.Abs(compete.Score(e.Mode, e.Code, e.Text, e.Context) - 7.613705638880109) < 1e-12,
-                "competitor weight is quartered before converting to score");
+            double persistentCap = accumulator.Update(accumulated, e.Time + 3650L * 86400).Score(e.Mode, e.Code, e.Text, e.Context);
+            LearningCheck(persistentCap == 27, "capped learning is time invariant");
+            LearningCheck(compete.Score(e.Mode, e.Code, e.Text, e.Context) == 0,
+                "manual competing correction demotes the old local preference without time decay");
             LearningCheck(SentenceInputDecoder.LearningEarlyCommitMaturity(9) == 0 &&
-                Math.Abs(SentenceInputDecoder.LearningEarlyCommitMaturity(9 + 2 * Math.Log(2)) - 0.5) < 1e-12 &&
-                Math.Abs(SentenceInputDecoder.LearningEarlyCommitMaturity(9 + 2 * Math.Log(3)) - 1) < 1e-12,
-                "early-commit maturity grows 0 -> 0.5 -> 1");
+                SentenceInputDecoder.LearningEarlyCommitMaturity(11) == 0.5 &&
+                SentenceInputDecoder.LearningEarlyCommitMaturity(13) == 1,
+                "early-commit maturity follows first/second/third manual-correction levels");
             LearningCheck(SentenceInputDecoder.LearningEarlyCommitContribution(9) == 0 &&
-                Math.Abs(SentenceInputDecoder.LearningEarlyCommitContribution(9 + 2 * Math.Log(2)) - 0.3894860385419959) < 1e-12 &&
-                Math.Abs(SentenceInputDecoder.LearningEarlyCommitContribution(9 + 2 * Math.Log(3)) - 0.75) < 1e-12,
-                "learning confidence contribution follows maturity multiplier");
-            string fusionMode = "sentence-v2|test";
+                Math.Abs(SentenceInputDecoder.LearningEarlyCommitContribution(11) - 0.4125) < 1e-12 &&
+                SentenceInputDecoder.LearningEarlyCommitContribution(13) == 0.75,
+                "learning confidence contribution follows level maturity");
+            string fusionMode = "sentence-v3|test";
             SentenceLearningEvent fusionEvent = SentenceFusionPreference.CreateEvent(
                 fusionMode, "ii", "C", "A", true, 2);
             SentenceLearningSnapshot fusionSnapshot = SentenceLearningSnapshot.Build(
@@ -103,11 +107,6 @@ namespace TigerClaw.Core.Tests
             LearningCheck(
                 SentenceFusionPreference.SignedScore(fusionSnapshot, fusionMode, "ii", "C", "A") > 0,
                 "fusion preference records Direct over Composed without changing table rank");
-            SentenceCandidate learnedCandidate = Candidate("设置" + e.Text, (2, 2), (6, 4));
-            SentenceLearningEvent[] reinforcement = SentenceLearning.Reinforce("xx" + e.Code, learnedCandidate, 0, e.Mode, s);
-            LearningCheck(reinforcement.Length == 1 && reinforcement[0].Code == e.Code &&
-                reinforcement[0].Text == e.Text && reinforcement[0].Context == e.Context,
-                "stable learned top1 can be reinforced in the same context");
             foreach (var name in new[] { ".tigerclaw-learning-v1.log", ".TIGIRL-LEARNING-v1.log.bak.txt", ".tigerclaw-learning-v1.log.tmp.dict.yaml", ".tigirl-learning-v1.log.lock" })
                 LearningCheck(SentenceLearning.IsReservedFile(name), "reserved filename " + name);
             LearningCheck(!SentenceLearning.IsReservedFile("正常码表.txt"), "normal table allowed");
@@ -230,7 +229,7 @@ namespace TigerClaw.Core.Tests
             var merge = new[] { composedA, directB, directC };
             fusionDecoder.ApplyFusionOrdering("ii", merge);
             LearningCheck(string.Concat(merge.Select(c => c.Text)) == "ABC", "baseline cross-source order preserved");
-            string fusionMode = "sentence-v2|test";
+            string fusionMode = "sentence-v3|test";
             var fusionEvent = SentenceFusionPreference.CreateEvent(fusionMode, "ii", "C", "A", true, 2);
             fusionDecoder.SetLearning(SentenceLearningSnapshot.Build(new[] { fusionEvent }, fusionEvent.Time), fusionMode);
             fusionDecoder.Decode("aa");
@@ -275,23 +274,11 @@ namespace TigerClaw.Core.Tests
             store.ConfirmAsync(events);store.FlushAsync().GetAwaiter().GetResult();
             TypeLetters(engine, "aabb");LearningCheck(engine.GetUiSnapshot(5).Candidates[0] == learnedComposed, "confirmed Composed preference used by next composition");
             output = Press(engine, 32);events = engine.TakeSentenceLearning(output, out _);
-            LearningCheck(events.Length == 1 && store.Entries().Length == 1,
-                "explicit stable Composed top1 stages one reinforcement without writing before ack");
-            store.ConfirmAsync(events);store.FlushAsync().GetAwaiter().GetResult();
-            double halfMatureScore = store.Snapshot.Score(events[0].Mode, events[0].Code, events[0].Text, events[0].Context);
-            LearningCheck(store.Entries().Length == 2 && halfMatureScore > 10.38 && halfMatureScore <= 9 + 2 * Math.Log(2) &&
-                SentenceInputDecoder.LearningEarlyCommitMaturity(halfMatureScore) > 0.49,
-                "second stable Composed observation reaches approximately half maturity");
+            LearningCheck(events.Length == 0 && store.Entries().Length == 1,
+                "learned Composed top1 normal commit never strengthens learning");
             TypeLetters(engine, "aabb");output = Press(engine, 32);events = engine.TakeSentenceLearning(output, out _);
-            LearningCheck(events.Length == 1, "mature Composed top1 stages another explicit reinforcement");
-            store.ConfirmAsync(events);store.FlushAsync().GetAwaiter().GetResult();
-            double matureScore = store.Snapshot.Score(events[0].Mode, events[0].Code, events[0].Text, events[0].Context);
-            LearningCheck(store.Entries().Length == 3 && matureScore > 11.19 &&
-                SentenceInputDecoder.LearningEarlyCommitMaturity(matureScore) > 0.99,
-                "third stable Composed observation reaches effectively full maturity");
-            TypeLetters(engine, "aabb");output = Press(engine, 32);
-            LearningCheck(engine.TakeSentenceLearning(output, out _).Length == 0,
-                "fully mature Composed top1 does not append redundant reinforcement");
+            LearningCheck(events.Length == 0 && store.Entries().Length == 1,
+                "repeated top1 use remains at the original manual-correction level");
             TypeLetters(engine, "aabb");Press(engine, 9);output = Press(engine, 27);LearningCheck(engine.TakeSentenceLearning(output, out _).Length == 0, "Escape discards browsing");
             Console.WriteLine("learning-engine phase: disable-restore");
             state.TrySetConfigValue("整句Tab自学习", "否", out _, out _);TypeLetters(engine, "aabb");LearningCheck(engine.GetUiSnapshot(5).Candidates[0] == baseComposedTop, "disabled engine order restored");Press(engine, 27);

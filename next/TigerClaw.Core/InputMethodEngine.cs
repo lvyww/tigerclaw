@@ -3115,7 +3115,6 @@ namespace TigerClaw.Core
             ReleaseSentenceLearning(candidates[index].Text, _sentenceRawBuffer.Length, output);
             if (index == 0)
             {
-                ReinforceSentenceLearning(candidates[index], output);
             }
             ClearCompositionInput();
             _compositionState = CompositionState.CnIdle;
@@ -3147,7 +3146,6 @@ namespace TigerClaw.Core
                 ReleaseSentenceLearning(candidates[_sentenceSelectedIndex].Text, _sentenceRawBuffer.Length, output);
                 if (_sentenceSelectedIndex == 0)
                 {
-                    ReinforceSentenceLearning(candidates[_sentenceSelectedIndex], output);
                 }
             }
             ClearCompositionInput();

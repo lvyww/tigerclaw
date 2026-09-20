@@ -1,4 +1,4 @@
-// PR #4 / 2321bd0 flat-scan oracle, with the shared 2026-09-19 reward curve.
+// Flat-scan oracle for the persistent manual-correction level policy.
 // Its independent storage/query algorithm is retained; never used by Core.
 using System;
 using System.Collections.Generic;
@@ -7,8 +7,6 @@ using TigerClaw.Core;
 
 namespace TigerClaw.Core.Tests
 {
-    // Immutable query snapshot. Automatic use never calls Build with a new
-    // event; only explicit Tab corrections acknowledged by TSF produce events.
     internal sealed class SentenceLearningReference
     {
         internal static readonly SentenceLearningReference Empty = Build(Array.Empty<SentenceLearningEvent>());
@@ -16,36 +14,37 @@ namespace TigerClaw.Core.Tests
         {
             public string Mode, Text, Context;
             public double Weight;
-            public int Count;
-            public long Time;
         }
         private readonly Dictionary<string, List<Choice>> _byCode = new(StringComparer.Ordinal);
         private string[] _codes = Array.Empty<string>();
         internal bool IsEmpty => _byCode.Count == 0;
+
+        private static int Level(double weight) => Math.Clamp((int)Math.Floor(weight + 1e-12), 0, 10);
+        private static double General(double weight) { int n = Level(weight); return n == 0 ? 0 : 4 + 2 * n; }
+        private static double Exact(double weight) { int n = Level(weight); return n == 0 ? 0 : 7 + 2 * n; }
+
         internal static SentenceLearningReference Build(IEnumerable<SentenceLearningEvent> events, long? at = null)
         {
-            long now = at ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            _ = at;
             var snapshot = new SentenceLearningReference();
             foreach (var e in events)
             {
                 if (e.Mode.Length == 0 || e.Mode.Length > 512 || e.Code.Length == 0 || e.Code.Length > 128 || !SentenceLearning.StaticText(e.Text) ||
                     (e.Context.Length > 0 && SentenceLearning.Characters(e.Context) == 0) || SentenceLearning.Characters(e.Context) > 2) continue;
                 if (!snapshot._byCode.TryGetValue(e.Code, out var choices)) snapshot._byCode[e.Code] = choices = new();
-                Choice target = null; long time = Math.Min(now, e.Time);
+                Choice target = null;
                 foreach (var c in choices)
                 {
                     if (c.Mode != e.Mode || c.Context != e.Context) continue;
-                    c.Weight *= Math.Pow(2, -Math.Max(0, time - c.Time) / (30.0 * 86400)); c.Time = Math.Max(c.Time, time);
                     if (c.Text == e.Text) target = c; else c.Weight *= 0.25;
                 }
-                if (target == null) { target = new Choice { Mode = e.Mode, Text = e.Text, Context = e.Context, Time = time }; choices.Add(target); }
-                target.Weight = Math.Min(Math.Exp(3.5), target.Weight + 1); target.Count = Math.Min(3, target.Count + 1);
+                if (target == null) { target = new Choice { Mode = e.Mode, Text = e.Text, Context = e.Context }; choices.Add(target); }
+                target.Weight = Math.Min(10, target.Weight + 1);
             }
-            foreach (var choices in snapshot._byCode.Values) foreach (var c in choices)
-                c.Weight *= Math.Pow(2, -Math.Max(0, now - c.Time) / (30.0 * 86400));
             snapshot._codes = snapshot._byCode.Keys.OrderBy(s => s, StringComparer.Ordinal).ToArray();
             return snapshot;
         }
+
         internal double PrefixScore(string mode, string code, string text, string context)
         {
             if (code.Length == 0 || text.Length == 0) return 0;
@@ -61,20 +60,18 @@ namespace TigerClaw.Core.Tests
             }
             return score;
         }
+
         internal double Score(string mode, string code, string text, string context)
         {
             if (!_byCode.TryGetValue(code, out var choices)) return 0;
-            double exact = 0, aggregate = 0; int count = 0;
-            var contexts = new HashSet<string>(StringComparer.Ordinal);
+            double exact = 0, aggregate = 0;
             foreach (var c in choices)
             {
                 if (c.Mode != mode || c.Text != text) continue;
-                if (c.Context == context) exact = Math.Clamp(9 + 2 * Math.Log(Math.Max(0.001, c.Weight)), 0, 16);
-                aggregate += c.Weight; count += c.Count;
-                if (c.Context.Length > 0 && c.Weight >= 0.1) contexts.Add(c.Context);
+                if (c.Context == context) exact = Exact(c.Weight);
+                aggregate += c.Weight;
             }
-            double general = SentenceLearning.Characters(text) > 1 && count >= 3 && contexts.Count >= 2 ? 2 * Math.Min(1, aggregate / 3) : 0;
-            return Math.Max(exact, general);
+            return Math.Max(exact, General(aggregate));
         }
     }
 }

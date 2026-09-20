@@ -515,12 +515,9 @@ namespace TigerClaw.Core
 
         internal static double LearningEarlyCommitMaturity(double learningScore)
         {
-            // Invert the shared supplement-weight reward: the first, second,
-            // third confirmations have maturity 0, 0.5, 1 respectively.
-            // A first correction only ranks the candidate, adding no confidence.
-            if (learningScore <= 9.0) return 0.0;
-            double weight = Math.Exp((learningScore - 9.0) / 2.0);
-            return Math.Clamp((weight - 1.0) / 2.0, 0.0, 1.0);
+            // Exact-context manual-correction levels are 9, 11, 13... .
+            // Keep the first correction ranking-only, then mature 0 -> .5 -> 1.
+            return Math.Clamp((learningScore - 9.0) / 4.0, 0.0, 1.0);
         }
 
         internal static double LearningEarlyCommitContribution(double learningScore) =>

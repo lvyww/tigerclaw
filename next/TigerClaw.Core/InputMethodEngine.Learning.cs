@@ -28,7 +28,7 @@ namespace TigerClaw.Core
                 _learningConfigVersion = _state.ConfigVersion; _learningSchema = schema;
                 string mode = "";
                 if (_state.GetSentenceLearningEnabled() && _state.IsSentenceInputActive())
-                    mode = "sentence-v2|dup=" + (_state.GetSentenceAllowDuplicateSingleCharacters() ? "1" : "0") +
+                    mode = "sentence-v3|dup=" + (_state.GetSentenceAllowDuplicateSingleCharacters() ? "1" : "0") +
                           "|optimal=" + _state.GetSentenceOptimalCodeHighFreqLimit().ToString(CultureInfo.InvariantCulture) + "|whitelist=" + SentenceLearning.ConfigurationHash(_state.GetSentenceFullCodeWhitelistText());
                 if (mode != _learningMode || changedScheme) { _pendingLearning.Clear(); _learningBaseline = null; }
                 _learningMode = mode;
@@ -117,30 +117,6 @@ namespace TigerClaw.Core
             }
             _pendingLearning.RemoveAll(e => e.RawEnd <= rawEnd);
             if (_readyLearning.Count > 0) _learningOutput = output;
-        }
-
-        private void ReinforceSentenceLearning(SentenceCandidate candidate, string output)
-        {
-            // A correction captured during this same commit is already one
-            // learning observation. Do not double-count it as a stable repeat.
-            if (_readyLearning.Count > 0 || candidate == null || _learningStore == null ||
-                string.IsNullOrEmpty(_learningMode) || !_state.GetSentenceLearningEnabled() ||
-                !SentenceFusionPreference.IsComposedOnly(candidate))
-            {
-                return;
-            }
-            SentenceLearningEvent[] reinforcement = SentenceLearning.Reinforce(
-                _sentenceRawBuffer.ToString(),
-                candidate,
-                0,
-                _learningMode,
-                _learningStore.Snapshot);
-            if (reinforcement.Length == 0)
-            {
-                return;
-            }
-            _readyLearning.AddRange(reinforcement);
-            _learningOutput = output;
         }
 
         internal SentenceLearningEvent[] TakeSentenceLearning(KeyEngineResult result, out SentenceLearningStore store)

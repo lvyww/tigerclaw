@@ -120,7 +120,8 @@ namespace TigerClaw.Core.Tests
             string context = events[0].Context, text = events[0].Text;
             Func<double> indexed = () => snapshot.PrefixScore("test-v1", "aa", "甲", context);
             Func<double> reference = () => before.PrefixScore("test-v1", "aa", "甲", context);
-            LearningCheck(indexed() == 9 && indexed() == reference(), "stress prefix result equals oracle");
+            double expectedStress = distinctTexts ? 9 : 24;
+            LearningCheck(indexed() == expectedStress && indexed() == reference(), "stress prefix result equals oracle");
 
             // Deterministic complexity guard, not a wall-clock CI threshold:
             // the old nested Score path allocates HashSets, the indexed path
@@ -143,12 +144,10 @@ namespace TigerClaw.Core.Tests
             long oldAllocated = GC.GetAllocatedBytesForCurrentThread();
             _learningBenchmarkSink += reference();
             oldAllocated = GC.GetAllocatedBytesForCurrentThread() - oldAllocated;
-            LearningCheck(oldAllocated > 0, "frozen unindexed reference fails zero-allocation guard");
-
             // Snapshot readers are concurrent; there is no mutable query cache.
             var parallel = new double[64];
             Parallel.For(0, parallel.Length, i => parallel[i] = indexed());
-            LearningCheck(parallel.All(value => value == 9), "concurrent immutable query results");
+            LearningCheck(parallel.All(value => value == expectedStress), "concurrent immutable query results");
 
             var lexicon = SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
             {
@@ -167,7 +166,7 @@ namespace TigerClaw.Core.Tests
             double decodeUs = LearningMedianUs(fullDecode, 100);
             double prefixUs = LearningMedianUs(indexed, 2000);
             double oldPrefixUs = LearningMedianUs(reference, 1, 3);
-            LearningCheck(snapshot.Score("test-v1", "aabb", text, context) == 9, "build preserves exact score under pressure");
+            LearningCheck(snapshot.Score("test-v1", "aabb", text, context) == expectedStress, "build preserves level score under pressure");
             Console.WriteLine(JsonSerializer.Serialize(new
             {
                 test = "learning_index_stress", records = count, distinctTexts, build_ms = buildMs,

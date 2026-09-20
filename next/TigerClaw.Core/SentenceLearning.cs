@@ -103,83 +103,6 @@ namespace TigerClaw.Core
             return result;
         }
 
-        internal static SentenceLearningEvent[] Reinforce(
-            string raw,
-            SentenceCandidate selected,
-            int floor,
-            string mode,
-            SentenceLearningSnapshot snapshot)
-        {
-            if (string.IsNullOrEmpty(raw) || selected == null || string.IsNullOrEmpty(selected.Text) ||
-                string.IsNullOrEmpty(mode) || snapshot == null || snapshot.IsEmpty)
-            {
-                return Array.Empty<SentenceLearningEvent>();
-            }
-            SortedDictionary<int, int> boundaries = Boundaries(selected, raw.Length);
-            if (boundaries == null)
-            {
-                return Array.Empty<SentenceLearningEvent>();
-            }
-            KeyValuePair<int, int>[] points = boundaries.ToArray();
-            var result = new List<SentenceLearningEvent>();
-            for (int endIndex = 1; endIndex < points.Length; endIndex++)
-            {
-                int rawEnd = points[endIndex].Key;
-                int textEnd = points[endIndex].Value;
-                if (rawEnd <= floor)
-                {
-                    continue;
-                }
-                double bestScore = 0.0;
-                int bestRawStart = -1, bestTextStart = -1;
-                string bestText = null, bestContext = null;
-                for (int startIndex = endIndex - 1; startIndex >= 0; startIndex--)
-                {
-                    int rawStart = points[startIndex].Key;
-                    int textStart = points[startIndex].Value;
-                    if (rawStart < floor)
-                    {
-                        continue;
-                    }
-                    string fragment = selected.Text.Substring(textStart, textEnd - textStart);
-                    if (Characters(fragment) > 16)
-                    {
-                        break;
-                    }
-                    string code = raw.Substring(rawStart, rawEnd - rawStart).ToLowerInvariant();
-                    string context = Context(selected.Text, textStart);
-                    double score = snapshot.Score(mode, code, fragment, context);
-                    if (score > bestScore + 1e-12)
-                    {
-                        bestScore = score;
-                        bestRawStart = rawStart;
-                        bestTextStart = textStart;
-                        bestText = fragment;
-                        bestContext = context;
-                    }
-                }
-                // Once a preference is already near full maturity, avoid
-                // appending another journal row on every normal top1 commit.
-                // Natural decay can later bring it below this threshold, at
-                // which point a fresh stable use reinforces it again.
-                if (bestScore <= 0.0 || bestScore >= 11.0 || bestRawStart < 0)
-                {
-                    continue;
-                }
-                result.Add(new SentenceLearningEvent
-                {
-                    Mode = mode,
-                    Code = raw.Substring(bestRawStart, rawEnd - bestRawStart).ToLowerInvariant(),
-                    Text = bestText,
-                    Context = bestContext,
-                    RawStart = bestRawStart,
-                    RawEnd = rawEnd,
-                    TextStart = bestTextStart,
-                    TextEnd = textEnd
-                });
-            }
-            return result.ToArray();
-        }
     }
 
     // Immutable query snapshot. Replay/aggregation happens once on the store
@@ -191,8 +114,6 @@ namespace TigerClaw.Core
         private sealed class Choice
         {
             internal double Weight;
-            internal int Count;
-            internal long Time;
         }
 
         private sealed class Scores
@@ -220,7 +141,6 @@ namespace TigerClaw.Core
         {
             internal readonly Scores Scores = new();
             internal double Weight;
-            internal int Count, KnownContexts;
         }
 
         private sealed class ModeIndex
@@ -233,11 +153,26 @@ namespace TigerClaw.Core
         private string[] _codes = Array.Empty<string>();
         internal bool IsEmpty => _byCode.Count == 0;
 
+        private const int MaximumCorrectionLevel = 10;
+
+        private static int CorrectionLevel(double weight) =>
+            Math.Clamp((int)Math.Floor(weight + 1e-12), 0, MaximumCorrectionLevel);
+
+        private static double GeneralScore(double weight)
+        {
+            int level = CorrectionLevel(weight);
+            return level == 0 ? 0 : 4 + 2 * level; // L1=6 ... L10=24.
+        }
+
+        private static double ExactScore(double weight)
+        {
+            int level = CorrectionLevel(weight);
+            return level == 0 ? 0 : 7 + 2 * level; // Same-context protection: L1=9 ... L10=27.
+        }
+
         internal static SentenceLearningSnapshot Build(IEnumerable<SentenceLearningEvent> events, long? at = null)
         {
-            long now = at ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            // Competitors share code, mode AND context. Unrelated contexts no
-            // longer make journal replay quadratic for the same code/text.
+            _ = at; // Learning is persistent; timestamps are journal metadata only.
             var groups = new Dictionary<(string Code, string Mode, string Context), Dictionary<string, Choice>>();
             foreach (var e in events)
             {
@@ -246,20 +181,16 @@ namespace TigerClaw.Core
                 var key = (e.Code, e.Mode, e.Context);
                 if (!groups.TryGetValue(key, out var choices))
                     groups[key] = choices = new(StringComparer.Ordinal);
-                long time = Math.Min(now, e.Time);
+
+                // Only explicit manual corrections reach this journal. A competing
+                // manual correction weakens the old choice in the same context;
+                // elapsed wall-clock time never changes learning.
                 foreach (var entry in choices)
-                {
-                    var c = entry.Value;
-                    c.Weight *= Math.Pow(2, -Math.Max(0, time - c.Time) / (30.0 * 86400));
-                    c.Time = Math.Max(c.Time, time);
-                    if (entry.Key != e.Text) c.Weight *= 0.25;
-                }
+                    if (entry.Key != e.Text) entry.Value.Weight *= 0.25;
+
                 if (!choices.TryGetValue(e.Text, out var target))
-                    choices[e.Text] = target = new Choice { Time = time };
-                // One confirmation equals supplemental corpus weight 1000.
-                // exp(3.5) is the weight where 9 + 2*ln(weight) reaches 16.
-                target.Weight = Math.Min(Math.Exp(3.5), target.Weight + 1);
-                target.Count = Math.Min(3, target.Count + 1);
+                    choices[e.Text] = target = new Choice();
+                target.Weight = Math.Min(MaximumCorrectionLevel, target.Weight + 1);
             }
             if (groups.Count == 0) return Empty;
 
@@ -268,16 +199,10 @@ namespace TigerClaw.Core
             {
                 foreach (var entry in group.Value)
                 {
-                    var c = entry.Value;
-                    double weight = c.Weight * Math.Pow(2, -Math.Max(0, now - c.Time) / (30.0 * 86400));
                     var key = (group.Key.Code, group.Key.Mode, entry.Key);
                     if (!summaries.TryGetValue(key, out var summary)) summaries[key] = summary = new();
-                    summary.Scores.Exact[group.Key.Context] = Math.Clamp(9 + 2 * Math.Log(Math.Max(0.001, weight)), 0, 16);
-                    summary.Weight += weight;
-                    summary.Count = Math.Min(3, summary.Count + c.Count);
-                    // A context occurs once per summary. Empty is unknown, not
-                    // sentence-start evidence; expired weak contexts do not count.
-                    if (group.Key.Context.Length > 0 && weight >= 0.1) summary.KnownContexts++;
+                    summary.Scores.Exact[group.Key.Context] = ExactScore(entry.Value.Weight);
+                    summary.Weight += entry.Value.Weight;
                 }
             }
 
@@ -285,8 +210,10 @@ namespace TigerClaw.Core
             foreach (var entry in summaries)
             {
                 var summary = entry.Value;
-                summary.Scores.General = SentenceLearning.Characters(entry.Key.Text) > 1 && summary.Count >= 3 && summary.KnownContexts >= 2
-                    ? 2 * Math.Min(1, summary.Weight / 3) : 0;
+                // One explicit correction immediately creates a cross-context
+                // fragment preference. Further levels require further explicit
+                // corrections; ordinary/automatic top1 commits never add events.
+                summary.Scores.General = GeneralScore(summary.Weight);
                 if (!snapshot._byCode.TryGetValue(entry.Key.Code, out var modes))
                     snapshot._byCode[entry.Key.Code] = modes = new(StringComparer.Ordinal);
                 if (!modes.TryGetValue(entry.Key.Mode, out var index)) modes[entry.Key.Mode] = index = new();
@@ -298,9 +225,6 @@ namespace TigerClaw.Core
                 {
                     foreach (var entry in index.Texts)
                     {
-                        // Only proper text prefixes: exact text is NOT a hint.
-                        // UTF-16 prefixes preserve the previous ordinal contract.
-                        // StaticText bounds this to at most 31 prefixes per text.
                         for (int length = 1; length < entry.Key.Length; length++)
                         {
                             string prefix = entry.Key.Substring(0, length);
