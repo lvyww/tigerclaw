@@ -56,8 +56,21 @@ function M.hash(text)
     end
     return string.format("%08x%08x", a, b)
 end
+local MAX_LEVEL = 10
+local function correction_level(weight)
+    return math.max(0, math.min(MAX_LEVEL, math.floor((weight or 0) + 1e-12)))
+end
+local function general_score(weight)
+    local level = correction_level(weight)
+    return level > 0 and (4 + 2 * level) or 0 -- L1=6 ... L10=24.
+end
+local function exact_score(weight)
+    local level = correction_level(weight)
+    return level > 0 and (7 + 2 * level) or 0 -- Same-context L1=9 ... L10=27.
+end
+
 function M.build(events, now)
-    now = now or os.time()
+    -- Timestamps remain persisted metadata only. Learning never decays by time.
     local groups = {}
     for _, e in ipairs(events) do
         if e.mode and #e.mode > 0 and #e.mode <= 512 and e.code and #e.code > 0 and #e.code <= 128 and
@@ -66,16 +79,11 @@ function M.build(events, now)
             local k = key(e.code, e.mode, e.context)
             local group = groups[k] or {code=e.code, mode=e.mode, context=e.context, choices={}}
             groups[k] = group
-            local time = math.min(now, e.time)
             for text, c in pairs(group.choices) do
-                c.weight = c.weight * 2 ^ (-math.max(0, time - c.time) / (30 * 86400))
-                c.time = math.max(time, c.time)
                 if text ~= e.text then c.weight = c.weight * 0.25 end
             end
-            local c = group.choices[e.text] or {weight=0, count=0, time=time}
-            -- One confirmation equals supplement weight 1000. Cap accumulated
-            -- weight where 9 + 2*ln(weight/1000) reaches the shared score cap.
-            c.weight, c.count = math.min(math.exp(3.5), c.weight + 1), math.min(3, c.count + 1)
+            local c = group.choices[e.text] or {weight=0}
+            c.weight = math.min(MAX_LEVEL, c.weight + 1)
             group.choices[e.text] = c
         end
     end
@@ -83,28 +91,26 @@ function M.build(events, now)
     for _, g in pairs(groups) do
         for text, c in pairs(g.choices) do
             local k = key(g.code, g.mode, text)
-            local s = summaries[k] or {code=g.code, mode=g.mode, text=text, exact={}, weight=0, count=0, contexts=0}
-            summaries[k] = s
-            local weight = c.weight * 2 ^ (-math.max(0, now - c.time) / (30 * 86400))
-            s.exact[g.context] = math.max(0, math.min(16, 9 + 2 * math.log(math.max(0.001, weight))))
-            s.weight, s.count = s.weight + weight, math.min(3, s.count + c.count)
-            if g.context ~= "" and weight >= 0.1 then s.contexts = s.contexts + 1 end
+            local x = summaries[k] or {code=g.code, mode=g.mode, text=text, exact={}, weight=0}
+            summaries[k] = x
+            x.exact[g.context] = exact_score(c.weight)
+            x.weight = x.weight + c.weight
         end
     end
     local index = {codes={}, exact={}, prefixes={}}
     local seen = {}
-    for k, s in pairs(summaries) do
-        s.general = #chars(s.text) > 1 and s.count >= 3 and s.contexts >= 2 and 2 * math.min(1, s.weight / 3) or 0
-        index.exact[k] = s
-        if not seen[s.code] then seen[s.code] = true; index.codes[#index.codes + 1] = s.code end
-        local prefix, letters = "", chars(s.text)
+    for k, x in pairs(summaries) do
+        x.general = general_score(x.weight)
+        index.exact[k] = x
+        if not seen[x.code] then seen[x.code] = true; index.codes[#index.codes + 1] = x.code end
+        local prefix, letters = "", chars(x.text)
         for i = 1, #letters - 1 do
             prefix = prefix .. letters[i]
-            local pk = key(s.code, s.mode, prefix)
-            local p = index.prefixes[pk] or {general=0, exact={}}
-            index.prefixes[pk] = p
-            p.general = math.max(p.general, s.general)
-            for ctx, score in pairs(s.exact) do p.exact[ctx] = math.max(p.exact[ctx] or 0, score) end
+            local pk = key(x.code, x.mode, prefix)
+            local q = index.prefixes[pk] or {general=0, exact={}}
+            index.prefixes[pk] = q
+            q.general = math.max(q.general, x.general)
+            for ctx, value in pairs(x.exact) do q.exact[ctx] = math.max(q.exact[ctx] or 0, value) end
         end
     end
     table.sort(index.codes)
@@ -133,13 +139,11 @@ local function append_group(partition, e, now)
     local old = partition[k]
     local g = {mode=e.mode, context=e.context, choices={}}
     partition[k] = g
-    local time = math.min(now, e.time)
     for text, c in pairs(old and old.choices or {}) do
-        g.choices[text] = {weight=c.weight * 2 ^ (-math.max(0, time - c.time) / (30 * 86400)) *
-            (text ~= e.text and 0.25 or 1), count=c.count, time=math.max(time, c.time)}
+        g.choices[text] = {weight=c.weight * (text ~= e.text and 0.25 or 1)}
     end
-    local c = g.choices[e.text] or {weight=0, count=0, time=time}
-    c.weight, c.count = math.min(math.exp(3.5), c.weight + 1), math.min(3, c.count + 1)
+    local c = g.choices[e.text] or {weight=0}
+    c.weight = math.min(MAX_LEVEL, c.weight + 1)
     g.choices[e.text] = c
 end
 function M.runtime_index(events, now)
@@ -165,17 +169,15 @@ local function materialize(index, code)
     for _, g in pairs(partition) do
         for text, c in pairs(g.choices) do
             local k = key(code, g.mode, text)
-            local s = result.exact[k] or {mode=g.mode, text=text, exact={}, weight=0, count=0, contexts=0}
+            local s = result.exact[k] or {mode=g.mode, text=text, exact={}, weight=0}
             result.exact[k] = s
-            local weight = c.weight * 2 ^ (-math.max(0, index.now - c.time) / (30 * 86400))
-            s.exact[g.context] = math.max(0, math.min(16, 9 + 2 * math.log(math.max(0.001, weight))))
-            s.weight, s.count = s.weight + weight, math.min(3, s.count + c.count)
-            if g.context ~= "" and weight >= 0.1 then s.contexts = s.contexts + 1 end
+            s.exact[g.context] = exact_score(c.weight)
+            s.weight = s.weight + c.weight
         end
     end
     for _, s in pairs(result.exact) do
         local letters = chars(s.text)
-        s.general = #letters > 1 and s.count >= 3 and s.contexts >= 2 and 2 * math.min(1, s.weight / 3) or 0
+        s.general = general_score(s.weight)
         local prefix = ""
         for i = 1, #letters - 1 do
             prefix = prefix .. letters[i]
@@ -197,11 +199,7 @@ local function materialize(index, code)
     return result
 end
 local function update_index(index, accepted, events, now)
-    -- Future timestamps were clamped during replay. Clock rollback/forward
-    -- across those timestamps needs a fresh replay to preserve old semantics.
-    if not index.partitions or now < index.now or index.future > index.now then
-        return M.runtime_index(events, now)
-    end
+    if not index.partitions then return M.runtime_index(events, now) end
     local next_index = {codes=index.codes, partitions=copy(index.partitions), cache={}, now=now, future=index.future}
     local changed, new_codes = {}, {}
     for _, e in ipairs(accepted) do
@@ -213,7 +211,6 @@ local function update_index(index, accepted, events, now)
                 if not old then new_codes[#new_codes + 1] = e.code end
             end
             append_group(next_index.partitions[e.code], e, now)
-            next_index.future = math.max(next_index.future, e.time)
         end
     end
     if #new_codes > 0 then
@@ -317,9 +314,8 @@ local function path_context(start, text, length)
     return start._learning_context
 end
 function M.early_commit_maturity(score)
-    if not score or score <= 9 then return 0 end
-    local weight = math.exp((score - 9) / 2)
-    return math.max(0, math.min(1, (weight - 1) / 2))
+    if not score then return 0 end
+    return math.max(0, math.min(1, (score - 9) / 4))
 end
 
 function M.early_commit_contribution(score)
@@ -374,54 +370,6 @@ function M.reward(index, mode, raw, text, finish, previous)
         start = start.previous
     end
     return best, potential, early_bonus
-end
-
-function M.reinforce(index, mode, raw, selected, floor)
-    if not index or not selected or not selected.path or mode == "" then return {} end
-    local map, ends, node = {[0]=0}, {}, selected.path
-    while node and (node.raw_length or 0) > 0 do
-        map[node.raw_length] = node.text_length
-        ends[#ends + 1] = node.raw_length
-        node = node.previous
-    end
-    table.sort(ends)
-    local r, t = 0, 0
-    for _, last in ipairs(ends) do
-        if last <= r or (map[last] or 0) <= t or map[last] > #selected.text then return {} end
-        r, t = last, map[last]
-    end
-    if r ~= #raw or t ~= #selected.text then return {} end
-    local points = {{raw=0, text=0}}
-    for _, last in ipairs(ends) do points[#points + 1] = {raw=last, text=map[last]} end
-    local result = {}
-    for ei = 2, #points do
-        local finish = points[ei]
-        if finish.raw > floor then
-            local best_score, best = 0, nil
-            for si = ei - 1, 1, -1 do
-                local start = points[si]
-                if start.raw >= floor then
-                    local fragment = selected.text:sub(start.text + 1, finish.text)
-                    if character_count(fragment) > 16 then break end
-                    local code = raw:sub(start.raw + 1, finish.raw):lower()
-                    local ctx = context(selected.text:sub(1, start.text))
-                    local score_value = M.score(index, mode, code, fragment, ctx)
-                    if score_value > best_score then
-                        best_score = score_value
-                        best = {code=code,text=fragment,context=ctx,raw_start=start.raw,raw_end=finish.raw,
-                            text_start=start.text,text_end=finish.text}
-                    end
-                end
-            end
-            -- 9 / 10.39 / 11.20 are approximately the first/second/third
-            -- stable observations. Stop journaling once effectively mature.
-            if best and best_score > 0 and best_score < 11 then
-                best.time = os.time(); best.mode = mode
-                result[#result + 1] = best
-            end
-        end
-    end
-    return result
 end
 
 function M.diff(raw, before, selected, floor, mode)
@@ -512,16 +460,8 @@ function M.confirm(store, events)
     return changed
 end
 function M.refresh_scores(store)
-    local now = os.time()
-    if store and store.db and (now - store.scored_at >= 60 or now < store.scored_at) then
-        local index = store.index
-        if not index.partitions or now < index.now or index.future > index.now then
-            store.index = M.runtime_index(store.events, now)
-        else
-            store.index = {codes=index.codes, partitions=index.partitions, cache={}, now=now, future=index.future}
-        end
-        store.scored_at = now
-    end
+    -- No time decay: a quiet clock can never alter published learning scores.
+    return store and store.index or nil
 end
 M.context = context
 return M

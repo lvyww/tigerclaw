@@ -30,19 +30,22 @@ local function event(code, text, ctx, mode)
 end
 local index = learning.build({event("ab", "疒")}, now)
 check(learning.score(index,"test","ab","疒","")==9, "first correction equals supplement weight 1000")
-check(learning.score(index,"test","ab","疒","甲")==0, "single character context isolation")
+check(learning.score(index,"test","ab","疒","甲")==6, "first correction creates cross-context preference")
 check(learning.score(index,"other","ab","疒","")==0, "mode isolation")
-check(math.abs(learning.score(learning.build({event("ab","疒")},now+30*86400),"test","ab","疒","")-(9+2*math.log(0.5)))<1e-9,"weight half life")
+check(learning.score(learning.build({event("ab","疒")},now+3650*86400),"test","ab","疒","")==9,"learning has no time decay")
 local repeated={}
 for i=1,40 do
     repeated[#repeated+1]=event("ab","疒")
-    check(math.abs(learning.score(learning.build(repeated,now),"test","ab","疒","")-math.min(16,9+2*math.log(i)))<1e-9,
-        "repeated corrections equal supplement weights, bounded at sixteen")
+    local level=math.min(10,i)
+    check(learning.score(learning.build(repeated,now),"test","ab","疒","")==7+2*level,
+        "explicit corrections advance two points per level and cap at ten")
 end
+check(learning.score(learning.build(repeated,now),"test","ab","疒","其他")==24,
+    "cross-context score caps at twenty-four")
 local events={event("ab","甲乙","前"),event("ab","甲乙","后"),event("ab","甲乙","后")}
-check(learning.score(learning.build(events,now),"test","ab","甲乙","新")==2,"weak multi-character generalization")
+check(learning.score(learning.build(events,now),"test","ab","甲乙","新")==10,"three explicit corrections reach cross-context level three")
 events[#events+1]=event("ab","甲丙","后")
-check(math.abs(learning.score(learning.build(events,now),"test","ab","甲乙","后")-(9+2*math.log(0.5)))<1e-9,"competitor weight decay")
+check(learning.score(learning.build(events,now),"test","ab","甲乙","后")==6,"manual competitor correction demotes old local choice without time decay")
 local before={text="甲乙",path={raw_length=4,text_length=6,previous={raw_length=2,text_length=3}}}
 local selected={text="甲丙",path=before.path}
 local diff=learning.diff("ABcd",before,selected,0,"test")
@@ -74,17 +77,16 @@ local twice=learning.build({event("abcd","疒否"),event("abcd","疒否")},now)
 sentence.set_learning_for_test(twice,"test")
 local second=sentence.decode("abcd",true)
 check((second[1].early_commit_confidence_score or second[1].confidence_score)>second[1].confidence_score,
-    "second stable Composed observation adds partial early confidence")
+    "second explicit Composed correction adds partial early confidence")
 local thrice=learning.build({event("abcd","疒否"),event("abcd","疒否"),event("abcd","疒否")},now)
 sentence.set_learning_for_test(thrice,"test")
 local mature=sentence.decode("abcd",true)
 check((mature[1].early_commit_confidence_score or mature[1].confidence_score)>
     (second[1].early_commit_confidence_score or second[1].confidence_score),
-    "third stable Composed observation adds more early confidence")
+    "third explicit Composed correction adds more early confidence")
 check(learning.early_commit_maturity(9)==0 and
-    math.abs(learning.early_commit_maturity(9+2*math.log(2))-0.5)<1e-9 and
-    learning.early_commit_maturity(9+2*math.log(3))>0.999999,
-    "learning maturity maps first/second/third observations to 0/0.5/1")
+    learning.early_commit_maturity(11)==0.5 and learning.early_commit_maturity(13)==1,
+    "learning maturity maps first/second/third manual-correction levels to 0/0.5/1")
 
 local fusion_mode="sentence-v2|test"
 sentence.set_learning_for_test(nil,fusion_mode)
@@ -153,9 +155,9 @@ check(writes==0,"transformed commit does not learn")
 type_ot();press("Tab");press("space")
 check(writes==1 and commits[#commits]=="疒否","host Composed submission learns once")
 type_ot();check(sentence.decode("abcd")[1].text=="疒否","next composition uses Composed learning")
-press("space");check(writes==2,"ordinary learned first choice reinforces the first stable repeat")
-type_ot();press("space");check(writes==3,"second stable repeat advances learning to full maturity")
-type_ot();press("space");check(writes==3,"fully mature top1 stops redundant reinforcement writes")
+press("space");check(writes==1,"ordinary learned first choice never reinforces")
+type_ot();press("space");check(writes==1,"repeated learned top1 use keeps the same level")
+type_ot();press("space");check(writes==1,"normal top1 use remains write-free")
 config.enabled=false;type_ot()
 check(sentence.decode("abcd")[1].text=="交否","schema setting disables scoring")
 press("Escape");config.enabled=true;type_ot()
@@ -174,9 +176,10 @@ check(lock_ctx.input=="a","Tab learning keeps live raw suffix")
 sentence.processor_component.fini(lock_env)
 local reopened = dofile(repo.."/lua/tiger_sentence_learning.lua")
 local persisted = reopened.open("tiger_sentence_learning_"..learning.hash("learning-test"))
-check(persisted.count==3 and #persisted.events==3,"database restart loads correction plus mature reinforcements")
+check(persisted.count==1 and #persisted.events==1,"database restart loads only the explicit correction")
 local saved=persisted.events[1]
-check(reopened.score(persisted.index,saved.mode,saved.code,saved.text,saved.context)>11,"length-framed persistence preserves mature score")
+check(reopened.score(persisted.index,saved.mode,saved.code,saved.text,saved.context)==9,
+    "length-framed persistence preserves level-one exact score")
 check(not learning.confirm({db={update=function()error("must not write")end},count=10000}, {event("ab","乙")}),"bounded event history")
 local tap_env,tap_ctx,tap_press,tap_type,_,tap_config=host("tap-schema",false)
 local before_taps=writes
@@ -188,11 +191,11 @@ tap_type();tap_ctx:highlight(1);tap_ctx.repeat_notification=true;tap_ctx:confirm
 check(writes==before_taps+1,"non-first tap learns exactly once without Tab or space")
 tap_type();check(sentence.decode("abcd")[1].text=="疒否","tap changes next Composed ranking")
 tap_ctx:highlight(0);tap_ctx:confirm_current_selection()
-check(writes==before_taps+2,"tapping learned first candidate reinforces a stable preference")
+check(writes==before_taps+1,"tapping learned first candidate does not reinforce")
 tap_config.enabled=false;tap_type();tap_ctx:highlight(1);tap_ctx:confirm_current_selection()
-check(writes==before_taps+2,"disabled learning ignores taps")
+check(writes==before_taps+1,"disabled learning ignores taps")
 tap_config.enabled=true;tap_type();tap_press("Tab");tap_ctx:confirm_current_selection()
-check(writes==before_taps+3,"Tab followed by tap records one correction")
+check(writes==before_taps+2,"Tab followed by tap records one correction")
 sentence.processor_component.fini(tap_env)
 for _, punctuation in ipairs({"comma", "period"}) do
     local p_env,p_ctx,p_press,p_type=host("punct-"..punctuation,false)
@@ -210,7 +213,7 @@ for _, punctuation in ipairs({"comma", "period"}) do
     sentence.processor_component.fini(p_env)
 end
 -- Runtime partitions must match an independent full journal replay, including
--- competing choices, generalization, cap/decay, old snapshots and clock jumps.
+-- competing choices, generalization, caps, old snapshots and clock jumps.
 local real_time, clock = os.time, now
 os.time = function() return clock end
 local optimized = learning.open("incremental-index-equivalence")
@@ -269,7 +272,7 @@ local runtime_index=learning.runtime_index
 learning.runtime_index=function() error("hot path replayed the journal") end
 check(learning.confirm(large,{{time=clock,mode="test",code="ab1",text="甲丙",context=""}}), "large history incremental update")
 clock=clock+61; learning.refresh_scores(large)
-check(learning.score(large.index,"test","ab1","甲丙","")>8.99, "lazy decay materialization")
+check(learning.score(large.index,"test","ab1","甲丙","")>=9, "incremental materialization keeps explicit correction")
 learning.runtime_index=runtime_index
 local capped=learning.open("runtime-cap-parity")
 for i=1,45 do

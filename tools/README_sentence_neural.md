@@ -3,7 +3,7 @@
 本目录包含整句语料处理、n-gram 训练、模型转换和离线评测工具。当前 Windows
 运行时只使用：
 
-- n-gram：20% 原发布模型与 80% mohu 214 MiB 模型的融合裁剪版（2026-09-19）；Windows 发布包携带 `sentence-ngram-v2.bin`，读取器也支持 `sentence-ngram-mobile.bin`；
+- n-gram：full-kn-m5-v2（2026-09-20 设为主线默认，与 Rime 当前默认模型一致）；Windows 发布包携带 `sentence-ngram-v2.bin`，读取器也支持 `sentence-ngram-mobile.bin`；
 - `sentence-qwen-q8.gguf`：Qwen3 0.6B Base Q8，重排前五个 n-gram 候选。
 
 两者均为仓库外原始文件，发布后只读映射，不加密。旧 compact n-gram、字符
@@ -36,9 +36,22 @@ C:\Archive\tigerclaw_sentence_ml\qwen3-0.6b-gguf\downloaded\Qwen3-0.6B-Base-Q8_0
 `publish.bat` 和 `publish_arm64.bat` 从上述仓库外位置复制 v2 格式 n-gram，
 成功复制后移除输出目录中旧的 mobile 文件。`pack_release.bat` 要求存在 v2 模型，
 并在暂存时排除残留 mobile 文件（保留源文件）；普通包和 no-qwen 包均适用。
-这是 2026-09-20 用户为优先考虑下载包体而选择的发布策略，不回退融合模型参数。
+这是用户为优先考虑下载包体而选择的发布策略；两种布局均使用当前 full-kn-m5-v2 参数。
 `next/build_next.bat` 的调试输出与 Rime 仍使用 mobile；Core-only 发布不改模型。
 不要把模型复制回源码目录长期保存。
+
+2026-09-20 按用户要求将虎爪主线模型源由融合 214 MiB 版切换为 full-kn-m5-v2。
+原始来源为 `C:\Archive\tigerclaw_sentence_ml\trainer_v2\full-kn-m5-v2\`：
+
+- Windows v2：606,906,584 字节，SHA256
+  `a76ec7c7b776c0bb8227616e986592bf340de0e7ffc3bb84e2a3680042f4161a`。
+- Mobile：469,886,928 字节，SHA256
+  `c0063898fdff27c1fb00c1c72fa28a6c1b375fade1ec2045d731b9db958bdecc`。
+
+已验证 v2 转换成 mobile 与上述文件逐字节一致。旧模型及清单保存在仓库外
+`backups/pre-full-m5-20260920-*/`，当前来源与备份信息记录在
+`runtime/ngram-model-manifest.json`。本次只更新后续构建/发布的模型源，
+不替换已有日用目录中的模型，也不上传公共 Release 附件。
 
 ### Windows 双格式读取
 
@@ -81,7 +94,8 @@ ARM64/x64 Native AOT 构建通过，普通/no-qwen 包含 mobile 模型的隔离
 文件减少 45.90 MiB（17.65%），并与 Rime 共用文件。结果及逐键明细保存在
 `next/_run/mobile-ngram-20260919/comparison-prefetch.{json,tsv}`。
 
-2026-09-19 按用户选择，将上述两个 n-gram 源更新为单文件融合 214 MiB 版。
+历史记录：2026-09-19 曾将上述两个 n-gram 源更新为单文件融合 214 MiB 版，
+2026-09-20 已由 full-kn-m5-v2 替代。
 移动格式为 224,475,584 字节（214.08 MiB），SHA256
 `23216acd8319885aa2431ffbf2231dab4677c5d4abb55a08a404450a15b865ca`；
 Windows 格式为 272,600,424 字节（259.97 MiB），SHA256

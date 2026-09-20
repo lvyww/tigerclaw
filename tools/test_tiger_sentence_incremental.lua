@@ -8,7 +8,7 @@ for i = 2, #arg do
         require_model = true
     end
 end
-package.path = repo .. "/rime/tiger_sentence/lua/?.lua;" .. package.path
+package.path = repo .. "/lua/?.lua;" .. package.path
 
 -- Mirror a real frontend so the decoder also exercises the default
 -- per-schema supplemental corpus during incremental/full parity checks.
@@ -56,8 +56,8 @@ local function check_lazy_scoring(raw)
         for i = 1, #result do
             local candidate = result[i]
             if sentence.path_isolation_penalty(candidate.path) ~=
-                sentence.reference_isolation_penalty(candidate.text) then
-                fail("incremental isolation differs from full-text oracle: " .. candidate.text)
+                sentence.reference_path_isolation_penalty(candidate.path) then
+                fail("incremental isolation differs from full-path oracle: " .. candidate.text)
             end
             if rawget(candidate, "segmented") ~= nil then
                 fail("decode eagerly constructed display segmentation")
@@ -102,6 +102,18 @@ end
 print(string.format(
     "OK  plain-text data files loaded (%d codes, %d ranks, %d whitelist)",
     status.codes_count, status.ranks_count, status.whitelist_count))
+
+local competing_end = sentence.competing_boundary_end("jreynvtah", 4, 6, 1)
+if competing_end ~= 7 then
+    fail("aligned retention missed nv | nvt competition: " .. tostring(competing_end))
+end
+if sentence.competing_boundary_end("jreynvtahx", 4, 7, 1) ~= 7 then
+    fail("second output element incorrectly delayed a one-element boundary")
+end
+if sentence.competing_boundary_end("jreynvtahx", 4, 9, 2) ~= 10 then
+    fail("two-element retention missed nv|tah versus nvt|ahx")
+end
+print("OK  retained lookahead aligns competing paths by emitted text elements")
 
 for _, raw in ipairs({ "awmenamcunta", "iejryfenahbmsp", "jqtusotuqiueottu",
         "nnczggqrrjrrltwwbwkedmkswgjgiuapnphbszbp" }) do
@@ -154,7 +166,12 @@ end
 if not lets_single or not lets[1] or lets[1].text ~= "旋" then
     fail("optimal whole-input single-character reward did not restore 旋 for lets")
 end
-if math.abs((lets_single.score - lets_single.confidence_score) - 5.0) > 1e-9 then
+local lets_ranking_priors = (lets_single.code_score or 0.0) +
+    (lets_single.lexical_score or 0.0) +
+    sentence.reference_isolation_penalty(lets_single.text) -
+    sentence.path_isolation_penalty(lets_single.path)
+if math.abs((lets_single.score - lets_single.confidence_score) -
+    5.0 - lets_ranking_priors) > 1e-9 then
     fail("whole-input single-character reward was not exactly 5.0 or leaked into confidence")
 end
 print("OK  optimal whole-input single-character reward is +5.0 and ranking-only")
@@ -234,11 +251,19 @@ if math.abs((supplement_target.supplement_score or 0.0) - expected_supplement) >
         expected_supplement,
         supplement_target.supplement_score or 0.0))
 end
-if math.abs(
-    supplement_target.score - supplement_target.confidence_score - expected_supplement) > 1e-9 then
-    fail("supplement reward leaked into confidence mass")
+local supplement_ranking_priors = (supplement_target.code_score or 0.0) +
+    (supplement_target.lexical_score or 0.0) +
+    sentence.reference_isolation_penalty(supplement_target.text) -
+    sentence.path_isolation_penalty(supplement_target.path)
+if math.abs(supplement_target.score - supplement_target.confidence_score -
+    expected_supplement - supplement_ranking_priors) > 1e-9 then
+    fail("supplement reward leaked into base confidence mass")
 end
-print("OK  supplemental corpus loaded, ranked, and excluded from confidence mass")
+if not supplement_target.early_commit_confidence_score or
+    supplement_target.early_commit_confidence_score <= supplement_target.confidence_score then
+    fail("supplement reward did not contribute bounded personalized early confidence")
+end
+print("OK  supplemental corpus keeps base confidence pure and contributes bounded early confidence")
 
 for i = 1, #samples do
     sentence.reset_decode_cache()
@@ -278,11 +303,15 @@ local evidence_metadata_40 = evidence_40.early_commit_evidence or {}
 if not evidence_metadata_40.confidence_truncated then
     fail("40-key ambiguity sample did not exercise truncated confidence")
 end
-if #(evidence_metadata_40.prefixes or {}) ~= 0 or
-    (evidence_metadata_40.proposal or "") ~= "" then
-    fail("truncated confidence retained unusable early-commit evidence")
+if #(evidence_metadata_40.prefixes or {}) == 0 then
+    fail("truncated confidence failed to retain strong-policy evidence")
 end
-print("OK  40-key truncated confidence reuses the lattice and skips prefix materialization")
+for _, prefix in ipairs(evidence_metadata_40.prefixes or {}) do
+    if prefix.base_share == nil then
+        fail("truncated confidence prefix lost model-only BaseShare")
+    end
+end
+print("OK  40-key truncated confidence retains flagged BaseShare evidence for strong policy")
 
 sentence.reset_decode_cache()
 local shrinking = {}
@@ -420,7 +449,20 @@ local kept = retained["甲乙" .. string.char(31) .. "2"]
 if not kept or kept.gap_count ~= 1 then
     fail("a supported tracker did not survive a comparison-only gap")
 end
-print("OK  comparison-only gaps follow contradiction and support rules")
+local mature_trackers = {
+    ["甲乙" .. string.char(31) .. "2"] = {
+        text = "甲乙", raw_length = 2,
+        evidence_count = 3, strong_count = 2,
+        gap_count = 0, last_share = 0.99
+    }
+}
+retained = sentence.retain_trackers_without_counting(
+    mature_trackers, stale_prefixes, true)
+kept = retained["甲乙" .. string.char(31) .. "2"]
+if not kept or kept.evidence_count ~= 0 or kept.strong_count ~= 0 then
+    fail("a low-confidence gap preserved stale maturity")
+end
+print("OK  comparison-only gaps retain identity while low-confidence gaps reset maturity")
 
 local strong_eligible = {
     { text = "甲", confidence_score = 0.0 },
@@ -525,7 +567,7 @@ if sentence.processor(fake_key("semicolon"), env_idle_punct) ~= 2 or
     fail("idle semicolon/apostrophe did not pass through to punctuator")
 end
 local punctuation_schema = assert(io.open(
-    repo .. "/rime/tiger_sentence/tiger_sentence.schema.yaml", "rb"))
+    repo .. "/tiger_sentence.schema.yaml", "rb"))
 local punctuation_schema_content = punctuation_schema:read("*a")
 punctuation_schema:close()
 if not punctuation_schema_content:find("import_preset: symbols", 1, true) then
@@ -535,7 +577,7 @@ if not punctuation_schema_content:match('\npunctuator:%s*\n.-\n  digit_separator
     fail("schema must disable Rime's pending ASCII digit-separator candidates")
 end
 local symbols_file = assert(io.open(
-    repo .. "/rime/tiger_sentence/symbols.yaml", "rb"))
+    repo .. "/symbols.yaml", "rb"))
 local symbols_content = symbols_file:read("*a")
 symbols_file:close()
 for _, mapping in ipairs({
@@ -571,7 +613,7 @@ if context_tab.select_calls ~= 0 or context_tab.highlight_calls ~= 4 then
     fail("Tab called context:select and could commit a sentence candidate")
 end
 local schema_file = assert(io.open(
-    repo .. "/rime/tiger_sentence/tiger_sentence.schema.yaml", "rb"))
+    repo .. "/tiger_sentence.schema.yaml", "rb"))
 local schema_content = schema_file:read("*a")
 schema_file:close()
 if not schema_content:find("accept: Tab, send: Down", 1, true) or
@@ -953,16 +995,26 @@ local function run_early_commit_sample(sample)
     return joined, yielded, env, context
 end
 
+-- Final-stage code/lexical priors may reorder the visible menu without
+-- changing the confidence pool. Such confidence must never authorize a
+-- prefix from a different candidate; generations without a visible candidate
+-- still support the established merged-incomplete-tail policy.
+if sentence.auto_commit_matches_visible_top("鼎丁", "甲乙") then
+    fail("ranking-only confidence could commit a non-top prefix")
+end
+if not sentence.auto_commit_matches_visible_top("鼎丁", "鼎") or
+    not sentence.auto_commit_matches_visible_top(nil, "甲乙") then
+    fail("visible-top guard rejected a matching or displayless prefix")
+end
+print("OK  automatic commit always follows the final displayed top")
+
 if model.loaded then
     local joined, yielded = run_early_commit_sample("awmenamcunta")
-    if joined ~= "买" then
-        fail("awmenamcunta did not probabilistically commit 买 first: " .. joined)
+    local final = joined .. (yielded[1] or "")
+    if final ~= "买椟还珠" or ("买椟还珠"):sub(1, #joined) ~= joined then
+        fail("awmenamcunta lost a safe prefix/final sentence: " .. joined .. " + " .. tostring(yielded[1]))
     end
-    if yielded[1] ~= "椟还珠" then
-        fail("awmenamcunta continuation lost 椟还珠 as top candidate: " ..
-            tostring(yielded[1]))
-    end
-    print("OK  awmenamcunta commits 买 and keeps 椟还珠 visible first")
+    print("OK  awmenamcunta commits a safe prefix and finishes 买椟还珠")
 
     joined, yielded = run_early_commit_sample("uriczwxmjou")
     if joined:find("可佛", 1, true) then
@@ -984,6 +1036,15 @@ if model.loaded then
         fail("iejryfenahbmsp entered the 新人上窦 continuation")
     end
     print("OK  iejryfenahbmsp finishes as 新人上午来面试")
+
+    joined, yielded = run_early_commit_sample("jreynvtahx")
+    if joined .. (yielded[1] or "") ~= "人也郁闷" then
+        fail(string.format("jreynvtahx became %s + %s", joined, tostring(yielded[1])))
+    end
+    if joined:find("有", 1, true) then
+        fail("jreynvtahx committed 有 before the nvt competing boundary had three-key lookahead")
+    end
+    print("OK  jreynvtahx preserves nvt crossing split until 人也郁闷 wins")
 else
     print("SKIP Windows early-commit regressions (no real model)")
 end
@@ -1052,7 +1113,7 @@ end
 print("OK  high_freq_limit changes rebuild the index immediately")
 
 local original_user_dir = rime_api.get_user_data_dir
-local import_dir = repo .. "/rime/tiger_sentence/.test_import"
+local import_dir = repo .. "/.test_import"
 local windows = package.config:sub(1, 1) == "\\"
 local quoted_import_dir = '"' .. import_dir .. '"'
 os.execute((windows and "mkdir " or "mkdir -p ") .. quoted_import_dir)

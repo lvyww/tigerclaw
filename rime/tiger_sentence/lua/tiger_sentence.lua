@@ -2774,7 +2774,7 @@ local function prefix_belongs_to_visible(prefix, visible)
     return boundary and boundary[prefix.text] or false
 end
 
-local function retain_trackers_without_counting(trackers, prefixes)
+local function retain_trackers_without_counting(trackers, prefixes, reset_maturity)
     local next_trackers = {}
     for key, tracker in pairs(trackers) do
         local current = find_prefix_evidence(prefixes, tracker.text, tracker.raw_length)
@@ -2782,6 +2782,10 @@ local function retain_trackers_without_counting(trackers, prefixes)
             tracker.gap_count = tracker.gap_count + 1
             if tracker.gap_count <= early_commit_maximum_neutral_gap then
                 tracker.last_share = current.share
+                if reset_maturity then
+                    tracker.evidence_count = 0
+                    tracker.strong_count = 0
+                end
                 next_trackers[key] = tracker
             end
         end
@@ -2799,6 +2803,50 @@ local function tracker_better(left, right)
         return left.last_share > right.last_share
     end
     return left.raw_length < right.raw_length
+end
+
+-- Retained lookahead must be compared after the same number of emitted text
+-- elements, not after the same raw boundary. For example, committing 有 at nv
+-- must also wait until the one-element alternative 郁 at nvt has K raw keys of
+-- suffix evidence. A second edge such as nv|tah must not delay a one-element
+-- commit, because it has already emitted two text elements.
+local function competing_boundary_end(
+    raw, committed_raw_length, proposed_raw_length, target_text_elements)
+    if type(raw) ~= "string" or proposed_raw_length <= committed_raw_length or
+        committed_raw_length < 0 or proposed_raw_length > #raw or
+        type(target_text_elements) ~= "number" or target_text_elements < 1 then
+        return proposed_raw_length
+    end
+    local reachable = {[committed_raw_length] = {[0] = true}}
+    local furthest = proposed_raw_length
+    for start = committed_raw_length, #raw - 1 do
+        local counts = reachable[start]
+        if counts then
+            local maximum = math.min(lexicon_state.max_code_len, #raw - start)
+            for length = 1, maximum do
+                local finish = start + length
+                local entries = lexicon_state.codes[raw:sub(start + 1, finish)]
+                if entries then
+                    for count in pairs(counts) do
+                        for index = 1, #entries do
+                            local next_count = count + utf_length(entries[index].t)
+                            if next_count == target_text_elements then
+                                furthest = math.max(furthest, finish)
+                            elseif next_count < target_text_elements then
+                                local next_counts = reachable[finish]
+                                if not next_counts then
+                                    next_counts = {}
+                                    reachable[finish] = next_counts
+                                end
+                                next_counts[next_count] = true
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return furthest
 end
 
 local function has_selection_suffix(raw)
@@ -3145,7 +3193,10 @@ local function try_empty_code_commit(env, state, full_before, appended_letter)
     end
 
     local required_retain = get_min_retained_raw_length(env)
-    if required_retain > 0 and #full_raw - pending.base_raw_length < required_retain then
+    local pending_commit = pending.candidate_text:sub(#pending.committed_text + 1)
+    local protected_boundary = competing_boundary_end(
+        full_raw, #state.committed_raw, pending.base_raw_length, utf_length(pending_commit))
+    if required_retain > 0 and #full_raw - protected_boundary < required_retain then
         save_transient_state(context, state, env)
         return false
     end
@@ -3202,7 +3253,10 @@ local function try_commit_mature_prefix(env, state, evidence_raw, visible_top)
             tracker.strong_count >= early_commit_required_strong) and
             tracker.raw_length > #state.committed_raw and
             tracker.raw_length <= #evidence_raw and
-            #evidence_raw - tracker.raw_length >= retain and
+            #evidence_raw - competing_boundary_end(
+                evidence_raw, #state.committed_raw, tracker.raw_length,
+                (tracker.text_char_count or utf_length(tracker.text)) -
+                    utf_length(state.committed_text)) >= retain and
             #tracker.text > #state.committed_text and
             tracker.text:sub(1, #state.committed_text) == state.committed_text and
             auto_commit_matches_visible_top(visible_top, tracker.text) then
@@ -3321,7 +3375,8 @@ local function try_early_commit(env)
     if retain_without_counting then
         -- Comparison-only gap: keep supported trackers alive without letting
         -- them gain evidence, for at most three consecutive generations.
-        state.trackers = retain_trackers_without_counting(state.trackers, prefixes)
+        state.trackers = retain_trackers_without_counting(
+            state.trackers, prefixes, early_commit_evidence.neutral_low_confidence)
         save_transient_state(context, state, env)
         try_commit_mature_prefix(env, state, evidence_raw, visible_top)
         return
@@ -3433,13 +3488,7 @@ local function learning_stage(env, state, selected, raw, submitted_first)
     if baseline and learning.candidate_is_composed_only(baseline) and learning.candidate_is_composed_only(selected) then
         local lock = active_lock(state)
         local floor = math.max(#state.committed_raw, lock and #lock.raw or 0)
-        local events
-        if not state.tab_pending and submitted_first and selected.text == submitted_first.text and
-            live.store and live.store.index then
-            events = learning.reinforce(live.store.index, live.mode, raw, selected, floor)
-        else
-            events = learning.diff(raw, baseline, selected, floor, live.mode)
-        end
+        local events = learning.diff(raw, baseline, selected, floor, live.mode)
         for _, e in ipairs(events) do if #live.pending < 256 then live.pending[#live.pending + 1] = e end end
     end
     live.baseline = nil
@@ -4011,6 +4060,7 @@ M.prefix_extends = prefix_extends
 M.prefix_contradicted = prefix_contradicted
 M.retain_trackers_without_counting = retain_trackers_without_counting
 M.auto_commit_matches_visible_top = auto_commit_matches_visible_top
+M.competing_boundary_end = competing_boundary_end
 M.performance_status = function()
     return {
         current = {

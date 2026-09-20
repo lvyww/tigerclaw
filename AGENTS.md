@@ -158,7 +158,8 @@ block Core on a paused reader. Contract: `Protocol/ui_state.md`.
   model pages remain OS-managed. Preserve zero-valued observed records, empty
   contexts' backoff weights, and includeUnigram=false scoring. Windows release
   packages use only legacy v2 layout by user preference (download size); they
-  retain the current fused model parameters. Debug builds and Rime use mobile.
+  use full-kn-m5-v2 parameters (mainline default since 2026-09-20, matching
+  Rime). Debug builds and Rime use mobile.
   Core-only upgrades do not replace models. Beam
   expansion adds `2.0` per emitted Unicode character. Supplemental entries use
   `clamp(9 + 2 * ln(weight / 1000), 0, 16)` and affect sentence ranking only.
@@ -563,12 +564,12 @@ release tree. Keep `.bat` files CRLF.
     from Releases, data-file customization. Do not leak internal paths
     (`release_arm64/`, `dist_config.txt`, dev model paths) into it; the Lua
     module keeps its inert dev fallback paths to stay byte-identical.
-  - The n-gram model never enters git (224 MB, above the 100 MB limit); it
+  - The n-gram model never enters git (above the 100 MB limit); it
     ships only as a Release attachment. Canonical local copy:
     `C:\Archive\tigerclaw_sentence_ml\runtime\sentence-ngram-mobile.bin`
-    (2026-09-19 fused/pruned 214.08 MiB; SHA256
-    `23216acd8319885aa2431ffbf2231dab4677c5d4abb55a08a404450a15b865ca`).
-    The legacy Windows TCSKNM01 copy holds the same parameters (259.97 MiB);
+    (2026-09-20 full-kn-m5-v2, 469886928 bytes; SHA256
+    `c0063898fdff27c1fb00c1c72fa28a6c1b375fade1ec2045d731b9db958bdecc`).
+    The legacy Windows TCSKNM01 copy holds the same parameters (606906584 bytes);
     Windows release packages use this v2 layout; Rime keeps mobile. Conversion,
     identities and evaluation limits are in `tools/README_sentence_neural.md`.
     Local replacement does not upload or replace public Release attachments.
