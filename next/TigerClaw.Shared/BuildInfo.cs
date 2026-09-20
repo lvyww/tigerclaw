@@ -2,8 +2,8 @@
 {
     public static class BuildInfo
     {
-        public const string VersionLabel = "2026.09.19-1632";
-        public const string Commit = "a18b334d";
-        public const string BuildUtc = "2026-09-19T16:32:15Z";
+        public const string VersionLabel = "2026.09.20-1805";
+        public const string Commit = "1d63ee50";
+        public const string BuildUtc = "2026-09-20T18:05:57Z";
     }
 }

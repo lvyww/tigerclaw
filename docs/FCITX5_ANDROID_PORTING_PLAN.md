@@ -152,3 +152,27 @@ cd /home/yc/fx5/fcitx5-android
 只有纯 C++ 测试和黄金一致性通过、真机长期输入稳定、性能达到目标或存在经确认的
 例外、安装升级可复现且签名发布完成后，才可宣布移植完成。Qwen 未包含，不能宣称
 与 Windows 神经重排完全等价。
+
+## 2026-09-21：同步当前 Rime 主线
+
+Android 源码位于 `/home/yc/fx5/fcitx5-android`，本次以公开 Rime `abad411`
+为行为基线，参考虎娘 `native/SentenceLearning.h`、`SentenceLexicalPrior.h` 和
+竞争切分保留码查询；未移植最近隔离目录内的 C# 提前上屏阈值实验。
+
+- 默认 full-kn-m5-v2（TCSKNM02，469886928 字节，SHA-256
+  `c0063898fdff27c1fb00c1c72fa28a6c1b375fade1ec2045d731b9db958bdecc`）。
+  两个 APK 共用该模型；构建时核对模型体积和摘要，避免错误模型静默打包。
+- Beam 对齐 Rime compact 的 200/长句 48；加入主码奖励、四码隔离惩罚保护和
+  Top-5 Bloom 词先验。提前上屏采用完整保留 Beam，传播祖先截断标记，区分
+  纯模型/有界个性化置信度；普通 0.99、强证据 0.999、边界/空码强证据 0.99999。
+  按同等输出字数的最远竞争切分边界核对最短保留码，保持可见首选一致性。
+- 人工纠正采用永久 10 级：跨上下文 6～24，同上下文 9～27，无时间衰减。
+  使用 `.tigerclaw-learning-levels-v2.log`，旧日志保留但不混入新命名空间；
+  增量不可变分区与全量回放 oracle 对照。修复 Tab 后标点提交回执不匹配。
+- 新增 `EarlyCommitToPreedit`（默认关）：暂存提前确认文字，候选仅显示后缀；
+  删除编码至边界后继续退格删除 Unicode 文字，不恢复原编码。提交时一次释放
+  暂存文字和学习回执，删除/取消不学习。锁定续输/回删复用 lattice。
+- 验证入口：native core 全套测试、`test_sync.cpp`、ASan/UBSan、full-m5 实模
+  回归及主机耗时测试；APK 核验工具 `plugin/tigerclaw/tools/verify_apks.py`。
+  最终 APK、签名、版本和摘要以 Android 仓库 `HANDOFF.md` 与交付目录
+  `VALIDATION.json` 为准。未执行手机安装或真机输入验收。
