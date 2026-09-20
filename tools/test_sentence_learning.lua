@@ -55,17 +55,53 @@ local indexed=learning.build(pressure,now)
 for i=1,10000 do check(learning.prefix_score(indexed,"test","ab","甲",tostring(i%10))>0,"indexed prefix pressure") end
 
 sentence.set_learning_for_test(index,"test")
-local result=sentence.decode("ab",true)
-check(result[1].text=="疒" and result.learning_affected,"learning ranks a legal whole edge")
-check(#result.early_commit_evidence.prefixes==0,"learning cannot create confidence")
-check(sentence.capture_empty_code_candidate("ab","")==nil,"learning cannot create empty-code proof")
-local full=sentence.decode_full("ab",true)
-check(result[1].score==full[1].score,"learned incremental full parity")
+local direct=sentence.decode("ab",true)
+check(direct[1].text=="交" and not direct.learning_affected and
+    (direct[1].source_mask==1 or direct[1].source_mask==3) and (direct[1].learning_score or 0)==0,
+    "Direct-to-Direct history cannot change exact table order")
+
+local composed_event=event("abcd","疒否")
+local composed_index=learning.build({composed_event},now)
+sentence.set_learning_for_test(composed_index,"test")
+local result=sentence.decode("abcd",true)
+check(result[1].text=="疒否" and result.learning_affected,"learning ranks a legal Composed path")
+check(#result.early_commit_evidence.prefixes>0,"Composed learning participates in ordinary early-commit evidence")
+check(math.abs((result[1].early_commit_confidence_score or result[1].confidence_score)-result[1].confidence_score)<1e-12,
+    "first Composed correction contributes zero early confidence")
+local full=sentence.decode_full("abcd",true)
+check(result[1].score==full[1].score,"learned Composed incremental full parity")
+local twice=learning.build({event("abcd","疒否"),event("abcd","疒否")},now)
+sentence.set_learning_for_test(twice,"test")
+local second=sentence.decode("abcd",true)
+check((second[1].early_commit_confidence_score or second[1].confidence_score)>second[1].confidence_score,
+    "second stable Composed observation adds partial early confidence")
+local thrice=learning.build({event("abcd","疒否"),event("abcd","疒否"),event("abcd","疒否")},now)
+sentence.set_learning_for_test(thrice,"test")
+local mature=sentence.decode("abcd",true)
+check((mature[1].early_commit_confidence_score or mature[1].confidence_score)>
+    (second[1].early_commit_confidence_score or second[1].confidence_score),
+    "third stable Composed observation adds more early confidence")
+check(learning.early_commit_maturity(9)==0 and
+    math.abs(learning.early_commit_maturity(9+2*math.log(2))-0.5)<1e-9 and
+    learning.early_commit_maturity(9+2*math.log(3))>0.999999,
+    "learning maturity maps first/second/third observations to 0/0.5/1")
+
+local fusion_mode="sentence-v2|test"
+sentence.set_learning_for_test(nil,fusion_mode)
+local merge={{text="A",source_mask=2},{text="B",source_mask=1,direct_rank=1},{text="C",source_mask=1,direct_rank=2}}
+sentence.apply_fusion_ordering_for_test("ii",merge)
+check(merge[1].text=="A" and merge[2].text=="B" and merge[3].text=="C","baseline cross-source order preserved")
+local fusion_event=learning.fusion_event(fusion_mode,"ii","C","A",true,2)
+sentence.set_learning_for_test(learning.build({fusion_event},now),fusion_mode)
+merge={{text="A",source_mask=2},{text="B",source_mask=1,direct_rank=1},{text="C",source_mask=1,direct_rank=2}}
+sentence.apply_fusion_ordering_for_test("ii",merge)
+check(merge[1].text=="B" and merge[2].text=="C" and merge[3].text=="A",
+    "Direct C over Composed A promotes only Direct prefix B,C")
 sentence.set_learning_for_test(nil,"")
-check(sentence.decode("ab")[1].text=="交","disable restores base ranking")
+check(sentence.decode("abcd")[1].text=="交否","disable restores base Composed ranking")
 
 local function key(repr)
-    return {repr=function()return repr end,release=function()return false end,
+    return {keycode=({comma=44,period=46})[repr],repr=function()return repr end,release=function()return false end,
         ctrl=function()return false end,alt=function()return false end,
         super=function()return false end,shift=function()return false end}
 end
@@ -102,10 +138,12 @@ local function host(name, early)
     local env={engine={context=context,schema={schema_id=name,config=config},
         commit_text=function(_,text)commits[#commits+1]=text end}}
     local function press(repr)return sentence.processor(key(repr),env)end
-    local function type_ot()press("a");press("b")end
+    local function type_ot()press("a");press("b");press("c");press("d")end
     return env,context,press,type_ot,commits,config
 end
 local env,ctx,press,type_ot,commits,config=host("learning-test",false)
+press("a");press("b");press("Tab");press("space")
+check(writes==0 and sentence.decode("ab")[1].text=="交","manual Direct-to-Direct selection never learns")
 type_ot();press("Tab");press("Escape")
 check(writes==0,"cancel is not a correction")
 type_ot();press("Down");press("space")
@@ -113,19 +151,21 @@ check(writes==0,"navigation without Tab does not learn")
 type_ot();press("Tab");ctx.transform=true;press("space");ctx.transform=false
 check(writes==0,"transformed commit does not learn")
 type_ot();press("Tab");press("space")
-check(writes==1 and commits[#commits]=="疒","host submission learns once")
-type_ot();check(sentence.decode("ab")[1].text=="疒","next composition uses learning")
-press("space");check(writes==1,"ordinary learned first choice is not reinforced")
+check(writes==1 and commits[#commits]=="疒否","host Composed submission learns once")
+type_ot();check(sentence.decode("abcd")[1].text=="疒否","next composition uses Composed learning")
+press("space");check(writes==2,"ordinary learned first choice reinforces the first stable repeat")
+type_ot();press("space");check(writes==3,"second stable repeat advances learning to full maturity")
+type_ot();press("space");check(writes==3,"fully mature top1 stops redundant reinforcement writes")
 config.enabled=false;type_ot()
-check(sentence.decode("ab")[1].text=="交","schema setting disables scoring")
+check(sentence.decode("abcd")[1].text=="交否","schema setting disables scoring")
 press("Escape");config.enabled=true;type_ot()
-check(sentence.decode("ab")[1].text=="疒","reenable retains preferences")
+check(sentence.decode("abcd")[1].text=="疒否","reenable retains preferences")
 press("Escape")
 sentence.processor_component.fini(env)
 local other,_,other_press,other_type=host("other-schema",false)
-other_type();check(sentence.decode("ab")[1].text=="交","schemas do not share records")
+other_type();check(sentence.decode("abcd")[1].text=="交否","schemas do not share records")
 other_press("Tab");fail_write=true;other_press("space");fail_write=false
-other_type();check(sentence.decode("ab")[1].text=="交","failed persistence does not publish score")
+other_type();check(sentence.decode("abcd")[1].text=="交否","failed persistence does not publish score")
 other_press("Escape");sentence.processor_component.fini(other)
 local lock_env,lock_ctx,lock_press,lock_type=host("lock-schema",true)
 lock_type();lock_press("Tab");local previous=writes;lock_press("a")
@@ -134,9 +174,9 @@ check(lock_ctx.input=="a","Tab learning keeps live raw suffix")
 sentence.processor_component.fini(lock_env)
 local reopened = dofile(repo.."/lua/tiger_sentence_learning.lua")
 local persisted = reopened.open("tiger_sentence_learning_"..learning.hash("learning-test"))
-check(persisted.count==1 and #persisted.events==1,"database restart loads one event")
+check(persisted.count==3 and #persisted.events==3,"database restart loads correction plus mature reinforcements")
 local saved=persisted.events[1]
-check(reopened.score(persisted.index,saved.mode,"ab","疒","")==9,"length-framed persistence round trip")
+check(reopened.score(persisted.index,saved.mode,saved.code,saved.text,saved.context)>11,"length-framed persistence preserves mature score")
 check(not learning.confirm({db={update=function()error("must not write")end},count=10000}, {event("ab","乙")}),"bounded event history")
 local tap_env,tap_ctx,tap_press,tap_type,_,tap_config=host("tap-schema",false)
 local before_taps=writes
@@ -146,14 +186,29 @@ tap_type();tap_ctx:highlight(1);tap_ctx.transform=true;tap_ctx:confirm_current_s
 check(writes==before_taps,"transformed tap is not learned")
 tap_type();tap_ctx:highlight(1);tap_ctx.repeat_notification=true;tap_ctx:confirm_current_selection()
 check(writes==before_taps+1,"non-first tap learns exactly once without Tab or space")
-tap_type();check(sentence.decode("ab")[1].text=="疒","tap changes next composition ranking")
+tap_type();check(sentence.decode("abcd")[1].text=="疒否","tap changes next Composed ranking")
 tap_ctx:highlight(0);tap_ctx:confirm_current_selection()
-check(writes==before_taps+1,"tapping learned first candidate does not reinforce")
+check(writes==before_taps+2,"tapping learned first candidate reinforces a stable preference")
 tap_config.enabled=false;tap_type();tap_ctx:highlight(1);tap_ctx:confirm_current_selection()
-check(writes==before_taps+1,"disabled learning ignores taps")
+check(writes==before_taps+2,"disabled learning ignores taps")
 tap_config.enabled=true;tap_type();tap_press("Tab");tap_ctx:confirm_current_selection()
-check(writes==before_taps+2,"Tab followed by tap records one correction")
+check(writes==before_taps+3,"Tab followed by tap records one correction")
 sentence.processor_component.fini(tap_env)
+for _, punctuation in ipairs({"comma", "period"}) do
+    local p_env,p_ctx,p_press,p_type=host("punct-"..punctuation,false)
+    local start_writes=writes
+    p_type();p_press("Tab");p_press("Escape");p_press(punctuation)
+    check(writes==start_writes,"cancel before punctuation does not learn")
+    p_type();p_press("Tab");p_ctx.transform=true;p_press(punctuation);p_ctx.transform=false
+    check(writes==start_writes,"transformed punctuation commit does not learn")
+    p_type();p_press("Tab");p_ctx.repeat_notification=true
+    check(p_press(punctuation)==2,"punctuation stays with native punctuator")
+    check(writes==start_writes+1,"punctuation confirmation learns exactly once")
+    check(p_ctx.input=="","sentence submitted before punctuation input")
+    p_press(punctuation)
+    check(writes==start_writes+1,"idle punctuation cannot replay correction")
+    sentence.processor_component.fini(p_env)
+end
 -- Runtime partitions must match an independent full journal replay, including
 -- competing choices, generalization, cap/decay, old snapshots and clock jumps.
 local real_time, clock = os.time, now

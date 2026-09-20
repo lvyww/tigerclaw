@@ -106,9 +106,10 @@ schema 默认值一致（不一致直接报错），白名单可用 `--full-code
 `tiger_sentence/tab_learning: true` 默认开启，同时控制点选与 Tab 学习。直接点选
 非首选候选提交，也会与当前首选比较并学习改变的片段；点选首选不反复强化。
 Rime 的手动候选确认共用提交通知，因此键盘改选非首选后确认也适用。
-Tab/Shift+Tab 改选后，空格提交，
+Tab/Shift+Tab 改选后，空格或标点提交，
 或开启提前上屏时下一字母确认提交，才记录改变的片段；关闭提前上屏时，锁定的
-纠正暂存到后续提交。普通首选、仅高亮后取消、原始编码退出不学习。手动编辑编码
+纠正暂存到后续提交，包括继续输入后用标点上屏。标点处理前先确认句子，
+学习只记录句子中的纠正，标点仍由用户的标点表处理。普通首选、仅高亮后取消、原始编码退出不学习。手动编辑编码
 会保守地丢弃尚未提交的学习记录。输出转换后的文字与原候选不一致时也不学习。
 
 按共同编码边界提取最多 16 个 Unicode 字符，前文只取当前组合中的最后两字。
@@ -303,20 +304,18 @@ Lua 按一次 composition 在内存中汇总解码次数、模型缺页、读取
 无损分页重排，上下文页 LRU 上限 8 MiB，不会一次读入
 完整模型。
 
-2026-09-19 本地发布模型源切换为 20% 原发布版 + 80% mohu 的单文件融合裁剪版，
-224,475,584 字节（214.08 MiB），SHA256 为
-`23216acd8319885aa2431ffbf2231dab4677c5d4abb55a08a404450a15b865ca`。
-读取格式不变，仍默认 compact。两万条离线首选准确率 99.260%，原发布版为
-99.000%；样本已参与模型选择，不代表独立测试或实机验收。公开 Release 附件需另行发布。
+2026-09-20 Rime 默认模型切换为 full-kn-m5-v2，469,886,928 字节（448.12 MiB），
+SHA256：`c0063898fdff27c1fb00c1c72fa28a6c1b375fade1ec2045d731b9db958bdecc`。
+格式和文件名不变，仍默认 compact。旧/新两组各一万句离线首选准确率分别为
+99.41% / 99.52%，合计 99.465%；样本已参与模型选择，不是独立验收集。
+单模型同参数 7z 为 162.98 MiB。默认模型身份见 `default-model.json`，本机打包源为
+`C:\Archive\tigerclaw_sentence_ml\runtime\rime\sentence-ngram-mobile.bin`。
+此变更仅针对 Rime，虎爪 Windows 发布模型不变。公开 Release 附件尚未更新。
 
-```bash
-python3 tools/convert_sentence_ngram_mobile.py \
-  /mnt/c/Archive/tigerclaw_sentence_ml/runtime/sentence-ngram-v2.bin \
-  /mnt/c/Archive/tigerclaw_sentence_ml/runtime/sentence-ngram-mobile.bin
-```
+
 
 查找顺序：用户目录 `models/`、用户目录根部、共享目录 `models/`，再尝试对应的
-`sentence-ngram-v2.bin`；开发机最后回退到 `C:\Archive\tigerclaw_sentence_ml\runtime`。
+`sentence-ngram-v2.bin`；开发机 mobile 回退到 `C:\Archive\tigerclaw_sentence_ml\runtime\rime`，legacy 回退仍兼容原 runtime 目录。
 大模型不得提交 Git。
 
 ## 验证

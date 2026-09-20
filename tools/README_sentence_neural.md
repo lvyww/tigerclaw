@@ -3,7 +3,7 @@
 本目录包含整句语料处理、n-gram 训练、模型转换和离线评测工具。当前 Windows
 运行时只使用：
 
-- `sentence-ngram-mobile.bin`：20% 原发布模型与 80% mohu 214 MiB 模型的融合裁剪版（2026-09-19）；旧 `sentence-ngram-v2.bin` 仍可读取；
+- n-gram：20% 原发布模型与 80% mohu 214 MiB 模型的融合裁剪版（2026-09-19）；Windows 发布包携带 `sentence-ngram-v2.bin`，读取器也支持 `sentence-ngram-mobile.bin`；
 - `sentence-qwen-q8.gguf`：Qwen3 0.6B Base Q8，重排前五个 n-gram 候选。
 
 两者均为仓库外原始文件，发布后只读映射，不加密。旧 compact n-gram、字符
@@ -33,9 +33,12 @@ C:\Archive\tigerclaw_sentence_ml\runtime\sentence-ngram-mobile.bin
 C:\Archive\tigerclaw_sentence_ml\qwen3-0.6b-gguf\downloaded\Qwen3-0.6B-Base-Q8_0.gguf
 ```
 
-`next/build_next.bat`、`publish.bat` 和 `publish_arm64.bat` 默认从上述仓库外位置复制
-mobile n-gram 和 Qwen 模型，成功复制 mobile 后的输出不再保留旧 v2 n-gram。
-Core-only 发布不改模型，可继续读取已有 v2 文件。不要把模型复制回源码目录长期保存。
+`publish.bat` 和 `publish_arm64.bat` 从上述仓库外位置复制 v2 格式 n-gram，
+成功复制后移除输出目录中旧的 mobile 文件。`pack_release.bat` 要求存在 v2 模型，
+并在暂存时排除残留 mobile 文件（保留源文件）；普通包和 no-qwen 包均适用。
+这是 2026-09-20 用户为优先考虑下载包体而选择的发布策略，不回退融合模型参数。
+`next/build_next.bat` 的调试输出与 Rime 仍使用 mobile；Core-only 发布不改模型。
+不要把模型复制回源码目录长期保存。
 
 ### Windows 双格式读取
 

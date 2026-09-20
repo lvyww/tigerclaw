@@ -11,7 +11,9 @@ def main():
     parser.add_argument('--plugin', required=True)
     parser.add_argument('--model', required=True)
     args = parser.parse_args()
-    for selection in ('tap', 'tab'):
+    for selection in ('tap', 'tab', 'tab-comma', 'tab-period',
+                      'tab-continue', 'tab-continue-comma', 'tab-continue-period',
+                      'tab-buffer-continue-comma', 'tab-buffer-continue-period'):
         with temporary_tree() as root:
             isolated_sources(root)
             shared = root / '_shared'

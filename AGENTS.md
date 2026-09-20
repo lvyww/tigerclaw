@@ -156,9 +156,10 @@ block Core on a paused reader. Contract: `Protocol/ui_state.md`.
   Search Models/ then runtime root for mobile, then the same legacy locations.
   Mobile context-position caches belong to query sessions and are bounded;
   model pages remain OS-managed. Preserve zero-valued observed records, empty
-  contexts' backoff weights, and includeUnigram=false scoring. New full builds
-  publish only mobile; Core-only upgrades can continue using an existing legacy
-  model. Beam
+  contexts' backoff weights, and includeUnigram=false scoring. Windows release
+  packages use only legacy v2 layout by user preference (download size); they
+  retain the current fused model parameters. Debug builds and Rime use mobile.
+  Core-only upgrades do not replace models. Beam
   expansion adds `2.0` per emitted Unicode character. Supplemental entries use
   `clamp(9 + 2 * ln(weight / 1000), 0, 16)` and affect sentence ranking only.
   A whole-input single-character candidate gets a ranking-only `5.0` reward
@@ -568,7 +569,7 @@ release tree. Keep `.bat` files CRLF.
     (2026-09-19 fused/pruned 214.08 MiB; SHA256
     `23216acd8319885aa2431ffbf2231dab4677c5d4abb55a08a404450a15b865ca`).
     The legacy Windows TCSKNM01 copy holds the same parameters (259.97 MiB);
-    new Windows full builds use the shared mobile file. Conversion,
+    Windows release packages use this v2 layout; Rime keeps mobile. Conversion,
     identities and evaluation limits are in `tools/README_sentence_neural.md`.
     Local replacement does not upload or replace public Release attachments.
   - Release procedure per version: sync files into the mirror layout ->

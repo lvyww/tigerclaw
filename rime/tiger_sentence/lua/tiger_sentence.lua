@@ -1653,28 +1653,32 @@ local function dedup_limit(bucket, limit)
         if (item.learning_score or 0) > 0 then better = state_better_score_first; break end
     end
     if truncated_now then
-        local reserved = {}
+        local reserved
         for _, item in ipairs(result) do
-            if (item.learning_potential or 0) > 0 then reserved[#reserved + 1] = item end
+            if (item.learning_potential or 0) > 0 then
+                reserved = reserved or {}; reserved[#reserved + 1] = item
+            end
         end
-        table.sort(reserved, function(a, b) return a.score + a.learning_potential > b.score + b.learning_potential end)
+        if reserved then
+            table.sort(reserved, function(a, b) return a.score + a.learning_potential > b.score + b.learning_potential end)
+        end
         result = select_exact_top(result, limit, better)
-        local kept, added = {}, 0
-        for _, item in ipairs(result) do kept[item] = true end
-        for _, item in ipairs(reserved) do
-            if added == 4 then break end
-            if not kept[item] then result[#result + 1] = item; added = added + 1 end
+        if reserved then
+            local kept, added = {}, 0
+            for _, item in ipairs(result) do kept[item] = true end
+            for _, item in ipairs(reserved) do
+                if added == 4 then break end
+                if not kept[item] then result[#result + 1] = item; added = added + 1 end
+            end
         end
     else
         table.sort(result, better)
     end
-    local limited = new_bucket()
-    for i = 1, #result do
-        limited[i] = result[i]
-    end
-    limited._truncated = truncated
-    limited._frozen = true
-    return limited
+    -- result is private to this invocation; publishing it directly avoids
+    -- allocating/copying a second array without touching an older snapshot.
+    result._truncated = truncated
+    result._frozen = true
+    return result
 end
 
 local function new_states(length)
@@ -1694,6 +1698,7 @@ local function new_states(length)
         code_score = 0.0,
         previous = nil,
         text_length = 0,
+        text_char_count = 0,
         raw_length = 0,
         edge_count = 0
     })
@@ -1810,6 +1815,8 @@ local function expand_range(raw, states, from_pos, length, minimum_consumed_end)
                                             (candidate.primary_single or selected_rank > 0),
                                         edge_code_length = protect_primary_rare and code_length or nil,
                                         text_length = #text,
+                                        text_char_count = (utf8 and utf8.len and item.text_char_count) and
+                                            item.text_char_count + #chars or nil,
                                         raw_length = consumed_end,
                                         edge_count = (item.edge_count or 0) + 1
                                     })
@@ -1884,6 +1891,18 @@ local function evaluate_state(item)
     }
 end
 
+-- Partial tails are probability evidence, not menu candidates. Preserve the
+-- exact confidence operation order, but do not compute unused ranking priors.
+local function evaluate_evidence_state(item)
+    local confidence_ending_adjustment = logp(item.prev2, item.prev1, EOS) - isolation_penalty(item.text)
+    local base_confidence = (item.mass_score or item.score) + confidence_ending_adjustment
+    local personalization = math.min(ranking_prior.personalized_early_commit_cap,
+        ranking_prior.supplement_early_commit_contribution(item.supplement_score or 0) +
+        (learning.candidate_is_direct(item) and 0 or (item.learning_early_commit_bonus or 0)))
+    return {text=item.text, path=item, confidence_score=base_confidence,
+        early_commit_confidence_score=base_confidence + personalization}
+end
+
 local function add_early_commit_pool_candidate(pool, pool_index, candidate)
     if not candidate.text or candidate.text == "" then
         return
@@ -1915,26 +1934,20 @@ end
 -- candidate and raw boundary so negligible crossing paths cannot veto an
 -- otherwise closed boundary.
 local function build_prefix_evidence(pool)
-    local prefixes = {}
-    if #pool == 0 then return prefixes end
+    if #pool == 0 then return {} end
     local base_max, early_max = pool[1].confidence_score or pool[1].score, ranking_prior.early_confidence(pool[1])
     for i = 2, #pool do
         base_max = math.max(base_max, pool[i].confidence_score or pool[i].score)
         early_max = math.max(early_max, ranking_prior.early_confidence(pool[i]))
     end
     local base_total, early_total = 0, 0
-    local base_weights, early_weights = {}, {}
-    for i = 1, #pool do
-        base_weights[i] = math.exp((pool[i].confidence_score or pool[i].score) - base_max)
-        early_weights[i] = math.exp(ranking_prior.early_confidence(pool[i]) - early_max)
-        base_total = base_total + base_weights[i]
-        early_total = early_total + early_weights[i]
-    end
-    if base_total <= 0 or early_total <= 0 then return prefixes end
     local mass_by_boundary, order, base_boundary_mass = {}, {}, {}
     for i = 1, #pool do
         local item = pool[i]
-        local base_weight, early_weight = base_weights[i], early_weights[i]
+        local base_weight = math.exp((item.confidence_score or item.score) - base_max)
+        local early_weight = math.exp(ranking_prior.early_confidence(item) - early_max)
+        base_total = base_total + base_weight
+        early_total = early_total + early_weight
         local state = item.path
         while state do
             local prefix_text = state.text
@@ -1948,7 +1961,7 @@ local function build_prefix_evidence(pool)
                 local entry = boundary[prefix_text]
                 if not entry then
                     entry = {text=prefix_text,raw_length=state.raw_length,base_weight=0.0,early_weight=0.0,
-                        text_char_count=utf_length(prefix_text)}
+                        text_char_count=state.text_char_count or utf_length(prefix_text)}
                     boundary[prefix_text] = entry; order[#order + 1] = entry
                 end
                 entry.base_weight = entry.base_weight + base_weight
@@ -1958,6 +1971,7 @@ local function build_prefix_evidence(pool)
             state = state.previous
         end
     end
+    if base_total <= 0 or early_total <= 0 then return {} end
     for i = 1, #order do
         local entry = order[i]
         local boundary_share = (base_boundary_mass[entry.raw_length] or 0) / base_total
@@ -2041,7 +2055,7 @@ local function build_early_commit_evidence(
             states[consumed_length] = partial
             local added = false
             for i = 1, #partial do
-                local candidate = evaluate_state(partial[i])
+                local candidate = evaluate_evidence_state(partial[i])
                 if candidate.text and candidate.text ~= "" and
                     (required_text_prefix == "" or
                      candidate.text:sub(1, #required_text_prefix) == required_text_prefix) then
@@ -2127,6 +2141,11 @@ end
 
 function learning.apply_fusion_ordering(raw, candidates)
     if #candidates < 2 then return candidates end
+    local has_direct = false
+    for i = 1, #candidates do
+        if learning.candidate_is_direct(candidates[i]) then has_direct = true; break end
+    end
+    if not has_direct then return candidates end
     local base, direct, composed = {}, {}, {}
     for i = 1, #candidates do
         local item = candidates[i]
@@ -2145,17 +2164,31 @@ function learning.apply_fusion_ordering(raw, candidates)
         end
         return candidates
     end
+    -- Private to this merge: no preference can survive a learning/schema epoch.
+    -- Zero is a cached score, not a miss. Avoid constructing/hashing each pair
+    -- repeatedly while its source prefix is promoted.
+    local pair_scores = {}
+    local function pair_score(d, c)
+        if not learning_index or learning_mode == "" then return 0 end
+        local key = (d - 1) * #composed + c
+        local score = pair_scores[key]
+        if score == nil then
+            score = learning.fusion_score(learning_index, learning_mode, raw, direct[d].text, composed[c].text)
+            pair_scores[key] = score
+        end
+        return score
+    end
     local merged, di, ci = {}, 1, 1
     while di <= #direct and ci <= #composed do
         local d, c = direct[di], composed[ci]
         local direct_prefix, composed_prefix = 0, 0
         for i = di, #direct do
             direct_prefix = math.max(direct_prefix,
-                learning.fusion_score(learning_index, learning_mode, raw, direct[i].text, c.text))
+                pair_score(i, ci))
         end
         for i = ci, #composed do
             composed_prefix = math.max(composed_prefix,
-                -learning.fusion_score(learning_index, learning_mode, raw, d.text, composed[i].text))
+                -pair_score(di, i))
         end
         local take_direct
         if direct_prefix > 0 or composed_prefix > 0 then
@@ -2445,7 +2478,7 @@ local function decode(raw_code, include_early_commit, required_text_prefix, lock
             local seed = { text = "", prev2 = BOS, prev1 = BOS, score = 0, mass_score = 0,
                 max_rank = 1, supplement_state = 1, supplement_score = 0,
                 code_score = 0,
-                raw_length = 0, text_length = 0, edge_count = 0 }
+                raw_length = 0, text_length = 0, text_char_count = 0, edge_count = 0 }
             for raw_boundary, text_boundary in locked.boundaries:gmatch("(%d+),(%d+);") do
                 local r, t = tonumber(raw_boundary), tonumber(text_boundary)
                 local edge_text = locked.text:sub(seed.text_length + 1, t)
@@ -2464,6 +2497,8 @@ local function decode(raw_code, include_early_commit, required_text_prefix, lock
                     ranking_prior.canonical_isolation_factor < 1.0
                 local item = { text = locked.text:sub(1, t), previous = seed, edge_chars = chars,
                     raw_length = r, text_length = t, edge_count = seed.edge_count + 1,
+                    text_char_count = (utf8 and utf8.len and seed.text_char_count) and
+                        seed.text_char_count + #chars or nil,
                     prev2 = seed.prev2, prev1 = seed.prev1, score = seed.score,
                     supplement_state = seed.supplement_state,
                     supplement_score = seed.supplement_score,
@@ -3669,13 +3704,17 @@ local function processor(key_event, env)
         return 2
     end
     local codepoint = key_event.keycode
-    if state.buffered_text ~= "" and type(codepoint) == "number" and
+    if context:has_menu() and type(codepoint) == "number" and
         codepoint >= 33 and codepoint <= 126 and
         string.char(codepoint):match("%p") and
         not key_event:ctrl() and not key_event:alt() and not key_event:super() then
-        -- Letters and rank selectors were handled above. Flush this complete
-        -- composition BEFORE punctuator creates/closes another Rime segment;
-        -- then let the configured punctuation table handle the original key.
+        -- Letters and rank selectors were handled above. Submit while the
+        -- sentence menu/raw input still identifies the corrected path. Once
+        -- punctuator appends its segment, learning_selection cannot decode
+        -- that input (e.g. zhhbi,) or recover the sentence's selected index.
+        -- Keep punctuation handling in the configured Rime punctuator.
+        local selected, _, raw = learning_selection(env, state)
+        learning_stage(env, state, selected, raw)
         context:confirm_current_selection()
         return 2
     end

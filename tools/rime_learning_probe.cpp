@@ -31,7 +31,11 @@ static void start() {
 }
 int main(int argc, char** argv) {
     try {
-        check(argc == 5, "usage: probe user shared plugin tap|tab");
+        check(argc == 5, "usage: probe user shared plugin selection");
+        const std::string selection = argv[4];
+        const bool continuation = selection.find("continue") != std::string::npos;
+        const bool comma = selection.find("comma") != std::string::npos;
+        const bool period = selection.find("period") != std::string::npos;
         api = rime_get_api();
         check(dlopen(argv[3], RTLD_NOW | RTLD_GLOBAL), "Lua plugin load failed");
         const char* modules[] = {"default", "lua", nullptr};
@@ -43,6 +47,10 @@ int main(int argc, char** argv) {
         if (api->start_maintenance(True)) api->join_maintenance_thread();
         start(); type();
         check(first() == "其父", "unexpected model baseline");
+        if (selection.find("buffer") != std::string::npos) {
+            api->set_option(session, "tiger_sentence_early_commit", True);
+            api->set_option(session, "tiger_sentence_early_commit_to_preedit", True);
+        }
         for (int round = 0; round < 2; ++round) {
             RIME_STRUCT(RimeContext, ctx);
             check(api->get_context(session, &ctx), "missing correction menu");
@@ -50,19 +58,24 @@ int main(int argc, char** argv) {
             for (int i = 0; i < ctx.menu.num_candidates; ++i)
                 if (std::string(ctx.menu.candidates[i].text) == "虎娘") index = i;
             api->free_context(&ctx);
-            check(index > 0, "correction must remain a non-first candidate before learning");
+            check(index >= 0 && (round > 0 || index > 0), "missing correction or unexpected initial rank");
             if (std::string(argv[4]) == "tap") {
                 check(api->select_candidate(session, index), "candidate tap rejected");
             } else {
                 for (int i = 0; i < index; ++i)
                     check(api->process_key(session, 0xff09, 0), "Tab rejected");
-                check(api->process_key(session, ' ', 0), "space rejected");
+                if (continuation)
+                    for (char c : std::string("tuja"))
+                        check(api->process_key(session, c, 0), "continuation rejected");
+                check(api->process_key(session, comma ? ',' : period ? '.' : ' ', 0), "commit key rejected");
             }
             RIME_STRUCT(RimeCommit, commit);
             check(api->get_commit(session, &commit), "selection did not submit");
             const std::string text = commit.text ? commit.text : "";
             api->free_commit(&commit);
-            check(text == "虎娘", "submitted wrong text");
+            const std::string expected = std::string("虎娘") + (continuation ? "我们" : "") +
+                (comma ? "，" : period ? "。" : "");
+            check(text == expected, "submitted wrong text");
             type();
             std::cout << argv[4] << " correction " << round + 1 << " first=" << first() << std::endl;
         }
