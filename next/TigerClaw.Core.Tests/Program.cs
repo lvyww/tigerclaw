@@ -286,6 +286,7 @@ namespace TigerClaw.Core.Tests
                 SentenceAutoCommitRequiresConsecutiveAppendEvidence();
                 SentenceAutoCommitSuspendsAfterManualNavigation();
                 SentenceAutoCommitRetainsAtLeastThreeRawCodes();
+                SentenceRetainedLookaheadProtectsCrossingSegmentation();
                 SentenceProbabilisticAutoCommitRetainsDuplicateSingleContinuation();
                 SentenceAutoCommitHonorsConfiguredMinRetainedRawLength();
                 SentenceEmptyCodeAutoCommitHonorsConfiguredMinRetainedRawLength();
@@ -5073,6 +5074,23 @@ namespace TigerClaw.Core.Tests
                 nameof(SentenceAutoCommitRetainsAtLeastThreeRawCodes));
         }
 
+        private static void SentenceRetainedLookaheadProtectsCrossingSegmentation()
+        {
+            var decoder = CreateSentenceDecoder(new Dictionary<string, List<string>>
+            {
+                ["nv"] = new List<string> { "有" },
+                ["nvt"] = new List<string> { "郁" },
+                ["tah"] = new List<string> { "衅" },
+                ["ahx"] = new List<string> { "闷" }
+            });
+            True(decoder.GetCompetingBoundaryEnd("jreynvtah", 4, 6, 1) == 7,
+                nameof(SentenceRetainedLookaheadProtectsCrossingSegmentation) + ".one_element_crossing");
+            True(decoder.GetCompetingBoundaryEnd("jreynvtahx", 4, 7, 1) == 7,
+                nameof(SentenceRetainedLookaheadProtectsCrossingSegmentation) + ".one_element_aligned");
+            True(decoder.GetCompetingBoundaryEnd("jreynvtahx", 4, 9, 2) == 10,
+                nameof(SentenceRetainedLookaheadProtectsCrossingSegmentation) + ".two_elements_aligned");
+        }
+
         private static void SentenceProbabilisticAutoCommitRetainsDuplicateSingleContinuation()
         {
             var state = new CoreRuntimeState();
@@ -5292,7 +5310,10 @@ namespace TigerClaw.Core.Tests
                 beamWidth: 100));
             engine.SentenceEmptyCodeAutoCommitOverride = false;
 
-            TypeLetters(engine, "abcdef");
+            TypeLetters(engine, "abcde");
+            Equal(null, Press(engine, 0x46).TextToOutput,
+                nameof(SentenceAutoCommitDoesNotCountMergedEvidenceAcrossLowConfidenceGap) +
+                ".cross_boundary_delays_first_strong");
             Equal(null, Press(engine, 0x47).TextToOutput,
                 nameof(SentenceAutoCommitDoesNotCountMergedEvidenceAcrossLowConfidenceGap) +
                 ".gap_does_not_commit");
