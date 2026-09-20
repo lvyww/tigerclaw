@@ -933,6 +933,65 @@ namespace TigerClaw.Core
             return _lexicon.IsProperCodePrefix(NormalizeRawCode(code));
         }
 
+        // Compare retained lookahead after the same number of emitted text
+        // elements. Thus nv -> 有 must also wait for nvt -> 郁, but a second
+        // edge such as nv|tah does not delay a one-element nvt boundary.
+        internal int GetCompetingBoundaryEnd(
+            string rawCode, int committedRawLength, int proposedRawLength,
+            int targetTextElements)
+        {
+            string raw = NormalizeRawCode(rawCode);
+            if (proposedRawLength <= committedRawLength ||
+                committedRawLength < 0 || proposedRawLength > raw.Length ||
+                targetTextElements < 1)
+            {
+                return proposedRawLength;
+            }
+
+            var reachable = new bool[raw.Length + 1, targetTextElements + 1];
+            reachable[committedRawLength, 0] = true;
+            int furthest = proposedRawLength;
+            for (int start = committedRawLength; start < raw.Length; start++)
+            {
+                for (int count = 0; count < targetTextElements; count++)
+                {
+                    if (!reachable[start, count])
+                    {
+                        continue;
+                    }
+                    foreach (int length in _lexicon.CodeLengths)
+                    {
+                        int finish = start + length;
+                        if (finish > raw.Length)
+                        {
+                            continue;
+                        }
+                        SentenceLexiconCandidate[] candidates =
+                            _lexicon.GetCandidates(raw.Substring(start, length));
+                        if (candidates == null)
+                        {
+                            continue;
+                        }
+                        foreach (SentenceLexiconCandidate candidate in candidates)
+                        {
+                            int emitted = candidate.TextElements?.Length ??
+                                new StringInfo(candidate.Text ?? string.Empty).LengthInTextElements;
+                            int nextCount = count + emitted;
+                            if (nextCount == targetTextElements)
+                            {
+                                furthest = Math.Max(furthest, finish);
+                            }
+                            else if (nextCount < targetTextElements)
+                            {
+                                reachable[finish, nextCount] = true;
+                            }
+                        }
+                    }
+                }
+            }
+            return furthest;
+        }
+
         private bool RankMatches(SentenceLexiconCandidate candidate, int selectedRank, bool wholeInputEdge)
         {
             if (selectedRank > 0)

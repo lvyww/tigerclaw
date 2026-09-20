@@ -2543,8 +2543,12 @@ namespace TigerClaw.Core
             }
 
             int requiredRetain = _state.GetSentenceMinRetainedRawLength();
+            int pendingElements = new StringInfo(
+                pending.CandidateText.Substring(pending.CommittedText.Length)).LengthInTextElements;
+            int protectedBoundary = _sentenceInputDecoder.GetCompetingBoundaryEnd(
+                fullRaw, _sentenceCommittedRawLength, pending.BaseRawLength, pendingElements);
             if (requiredRetain > 0 &&
-                fullRaw.Length - pending.BaseRawLength < requiredRetain)
+                fullRaw.Length - protectedBoundary < requiredRetain)
             {
                 return null;
             }
@@ -2704,7 +2708,7 @@ namespace TigerClaw.Core
             if (retainWithoutCounting)
             {
                 _sentenceAutoCommitTrackers = RetainSentenceAutoCommitTrackersWithoutCounting(
-                    prefixes, lookup);
+                    prefixes, lookup, earlyCommitEvidence.NeutralLowConfidence);
                 return TryCommitMatureSentencePrefix(evidenceRaw, currentGeneration, visibleTop);
             }
 
@@ -2739,7 +2743,7 @@ namespace TigerClaw.Core
         }
 
         private Dictionary<string, SentenceAutoCommitTracker> RetainSentenceAutoCommitTrackersWithoutCounting(
-            SentencePrefixEvidence[] prefixes, SentenceEvidenceLookup lookup)
+            SentencePrefixEvidence[] prefixes, SentenceEvidenceLookup lookup, bool resetMaturity)
         {
             var nextTrackers = new Dictionary<string, SentenceAutoCommitTracker>(
                 StringComparer.Ordinal);
@@ -2761,6 +2765,15 @@ namespace TigerClaw.Core
                 if (current != null)
                 {
                     tracker.LastShare = current.Share;
+                }
+                // A low-confidence completed generation means the model no
+                // longer supplies consecutive support for this prefix. Keep
+                // the tracker identity for contradiction/history handling, but
+                // require fresh evidence before it can mature again.
+                if (resetMaturity)
+                {
+                    tracker.EvidenceCount = 0;
+                    tracker.ConsecutiveStrongCount = 0;
                 }
 
                 nextTrackers[item.Key] = tracker;
@@ -2864,8 +2877,7 @@ namespace TigerClaw.Core
                     IsSentenceAutoCommitTrackerMature(tracker) &&
                     tracker.RawLength > _sentenceCommittedRawLength &&
                     tracker.RawLength <= evidenceRaw.Length &&
-                    evidenceRaw.Length - tracker.RawLength >=
-                        GetSentenceAutoCommitRetainRawLength() &&
+                    HasSentenceAutoCommitRetainedLookahead(evidenceRaw, tracker) &&
                     tracker.Text.Length > _sentenceCommittedText.Length &&
                     tracker.Text.StartsWith(_sentenceCommittedText, StringComparison.Ordinal) &&
                     (visibleTop == null ||
@@ -2906,6 +2918,17 @@ namespace TigerClaw.Core
                 RequestSentenceRerank(_sentenceGeneration, evidenceRaw, _sentenceDecodeResult.Candidates);
             }
             return commit;
+        }
+
+        private bool HasSentenceAutoCommitRetainedLookahead(
+            string raw, SentenceAutoCommitTracker tracker)
+        {
+            int targetElements = new StringInfo(
+                tracker.Text.Substring(_sentenceCommittedText.Length)).LengthInTextElements;
+            int protectedBoundary = _sentenceInputDecoder?.GetCompetingBoundaryEnd(
+                raw, _sentenceCommittedRawLength, tracker.RawLength, targetElements) ??
+                tracker.RawLength;
+            return raw.Length - protectedBoundary >= GetSentenceAutoCommitRetainRawLength();
         }
 
         private int GetSentenceAutoCommitRetainRawLength()
