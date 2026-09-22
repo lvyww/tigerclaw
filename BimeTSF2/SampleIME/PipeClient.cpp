@@ -338,6 +338,7 @@ HRESULT CPipeClient::SendMessageAndWait(const char *jsonMessage, _Out_ BimeRespo
     pResponse->learningReceipt.clear();
     pResponse->textToOutput.clear();
     pResponse->inputBuffer.clear();
+    pResponse->inputCursor = -1;
     pResponse->hasProtocolVersion = FALSE;
     pResponse->protocolVersion = 0;
     pResponse->coreBuild.clear();
@@ -548,6 +549,15 @@ HRESULT CPipeClient::SendKeyAndWait(UINT vkCode,
                       caretValid);
 
     return SendMessageAndWait(message, pResponse, timeoutMs);
+}
+
+HRESULT CPipeClient::SendCandidateAndWait(const char *token, UINT index, ULONGLONG eventId, BimeResponse *response, DWORD timeoutMs)
+{
+    char message[512];
+    int length = sprintf_s(message, sizeof(message),
+        "{\"type\":\"key\",\"learning_ack_version\":1,\"seq\":%ld,\"client_session\":\"%s\",\"event_id\":\"%llu\",\"action\":\"down\",\"vk\":0,\"scan\":%u,\"candidate_token\":\"%s\"}\n",
+        InterlockedIncrement(&_seq), _clientSession, eventId, index, token);
+    return length > 0 ? SendMessageAndWait(message, response, timeoutMs) : E_FAIL;
 }
 
 ULONGLONG CPipeClient::NextKeyEventId()
@@ -1094,6 +1104,8 @@ BOOL CPipeClient::ParseResponse(const char *json, _Out_ BimeResponse *pResponse)
     parseString(json, "learning_receipt", pResponse->learningReceipt);
     parseString(json, "commit_text", pResponse->textToOutput);
     parseString(json, "input_buffer", pResponse->inputBuffer);
+    pResponse->inputCursor = -1;
+    tryParseLong(json, "input_cursor", &pResponse->inputCursor);
     parseString(json, "core_build", pResponse->coreBuild);
     parseString(json, "core_commit", pResponse->coreCommit);
     parseString(json, "core_branch", pResponse->coreBranch);

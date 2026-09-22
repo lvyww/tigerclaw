@@ -15,7 +15,7 @@ namespace tiger::overlay
         bool vertical = false, showIndex = false, hideCandidates = false;
         bool hideStatus = false, showCode = false, nativeHook = false;
         Text status, input, codeMask, theme, font;
-        Text candidateFrameSession;
+        Text candidateFrameSession, candidateSelectionToken;
         std::vector<Text> candidates, annotations;
         int composition = 0, caretX = 0, caretY = 0, caretHeight = 0;
         int soundVk = 0, soundVolume = 0, candidateDelay = 0, annotationDelay = 0;
@@ -36,6 +36,7 @@ namespace tiger::overlay
         DisplayMode mode = DisplayMode::Hidden;
         Text text;
         int selectionStart = -1, selectionLength = 0;
+        std::vector<std::pair<int, int>> candidateRanges;
     };
     Display Format(const State& state, bool expanded = true, bool annotations = true);
     DisplayMode ModeFor(const State& state, bool expanded = true);
@@ -45,7 +46,7 @@ namespace tiger::overlay
     inline bool PendingCandidateFrame(const State& state)
     {
         return state.candidateHoldWhilePending && !state.candidateVisible &&
-            state.isChinese && !state.isOff && state.composition == 5 &&
+            state.isChinese && !state.isOff && (state.composition == 5 || state.composition == 6) &&
             !state.input.empty() && state.candidates.empty() &&
             !(state.hideCandidates && state.candidateDelay <= 0);
     }

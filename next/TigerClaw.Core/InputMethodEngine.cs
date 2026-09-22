@@ -20,7 +20,8 @@ namespace TigerClaw.Core
             CnComposing = 2,
             CnUpperCase = 3,
             CnPinyin = 4,
-            CnSentence = 5
+            CnSentence = 5,
+            FullPinyin = 6
         }
 
         private const int VK_SHIFT = 0x10;
@@ -270,9 +271,12 @@ namespace TigerClaw.Core
         public InputMethodEngine(
             CoreRuntimeState state,
             SentenceInputDecoder sentenceInputDecoder = null,
-            bool? sentenceDecodeSynchronously = null)
+            bool? sentenceDecodeSynchronously = null,
+            TigerClaw.Pinyin.PinyinResources fullPinyinResources = null)
         {
             _state = state ?? throw new ArgumentNullException(nameof(state));
+            if (fullPinyinResources != null)
+                _pinyinResources[fullPinyinResources.Directory] = Task.FromResult(fullPinyinResources);
             _mixedInputDecoder = new FixedLengthMixedInputDecoder(ResolveCandidates, GetCandidateOutputText);
             _sentenceInputDecoder = sentenceInputDecoder;
             _sentenceDecoderExternallyProvided = sentenceInputDecoder != null;
@@ -285,6 +289,7 @@ namespace TigerClaw.Core
             {
                 ReloadSentenceResources();
             }
+            ConfigureFullPinyin();
             LoadCustomSelectionKeyConfig();
         }
 
@@ -292,6 +297,7 @@ namespace TigerClaw.Core
         {
             lock (_lock)
             {
+                ConfigureFullPinyin();
                 if (_sentenceDecoderExternallyProvided)
                 {
                     return;
@@ -314,7 +320,7 @@ namespace TigerClaw.Core
                 bool allowDuplicateSingleCharacters = _state.GetSentenceAllowDuplicateSingleCharacters();
                 if (_sentenceLanguageModel == null)
                 {
-                    _sentenceLanguageModel = SentenceNgramModel.LoadAvailable(_state.GetRuntimeBaseDirectory());
+                    _sentenceLanguageModel = SentenceFivegramModel.LoadAvailable(_state.GetRuntimeBaseDirectory());
                 }
                 if (_sentenceLanguageModel == null)
                 {
@@ -359,10 +365,12 @@ namespace TigerClaw.Core
             lock (_lock)
             {
                 _engineDisposed = true;
+                DisposeFullPinyin();
                 ReplaceSentenceDecoder(null);
                 DisposeSentenceLanguageModel();
                 _sentenceLanguageModel = null;
-                pendingLearning = _learningStore?.FlushAsync();
+                pendingLearning = Task.WhenAll(_pinyinLearningStores.Values.Select(store => store.FlushAsync())
+                    .Append(_learningStore?.FlushAsync() ?? Task.CompletedTask));
             }
             // Only orderly shutdown may wait; never wait on the per-key lock.
             try { pendingLearning?.Wait(TimeSpan.FromSeconds(2)); } catch (Exception) { }
@@ -566,7 +574,7 @@ namespace TigerClaw.Core
                     _compositionState == CompositionState.CnComposing ||
                     _compositionState == CompositionState.CnPinyin ||
                     _compositionState == CompositionState.CnUpperCase ||
-                    _compositionState == CompositionState.CnSentence;
+                    _compositionState == CompositionState.CnSentence || _compositionState == CompositionState.FullPinyin;
                 int activeLength = _compositionState == CompositionState.CnSentence
                     ? _sentenceRawBuffer.Length
                     : _inputBuffer.Length;
@@ -926,7 +934,7 @@ namespace TigerClaw.Core
                                      (_compositionState == CompositionState.CnComposing ||
                                       _compositionState == CompositionState.CnPinyin ||
                                       _compositionState == CompositionState.CnUpperCase ||
-                                      _compositionState == CompositionState.CnSentence);
+                                      (_compositionState == CompositionState.CnSentence || _compositionState == CompositionState.FullPinyin));
 
                     if (_oneShotActionKey == resolvedVk)
                     {
@@ -960,7 +968,7 @@ namespace TigerClaw.Core
                         (_compositionState == CompositionState.CnComposing ||
                          _compositionState == CompositionState.CnPinyin ||
                          _compositionState == CompositionState.CnUpperCase ||
-                         _compositionState == CompositionState.CnSentence);
+                         (_compositionState == CompositionState.CnSentence || _compositionState == CompositionState.FullPinyin));
 
                     if (!ctrl && !win && !shift &&
                         _compositionState == CompositionState.CnComposing &&
@@ -993,6 +1001,28 @@ namespace TigerClaw.Core
                     return KeyEngineResult.Pass(_compositionState != CompositionState.En, null, null, false, shouldCancelCompositionBeforePass);
                 }
 
+                if (ctrl && !alt && !win && !shift && _compositionState == CompositionState.FullPinyin &&
+                    (resolvedVk == 0xdb || resolvedVk == 0xdd))
+                    return PinyinSelectCharacter(resolvedVk == 0xdd);
+                if (ctrl && !alt && !win && !shift && _compositionState == CompositionState.FullPinyin &&
+                    (resolvedVk == 0x25 || resolvedVk == 0x27 || resolvedVk == VK_BACK))
+                {
+                    if (EnsureFullPinyinCurrent())
+                    {
+                        _pinyinAuxCode = null;
+                        _pinyinSession.EditSyllable(resolvedVk == 0x27, resolvedVk == VK_BACK);
+                        if (_pinyinSession.Raw.Length == 0) return FinishFullPinyin("");
+                        RebuildFullPinyin();
+                    }
+                    return FullPinyinResult();
+                }
+                if (ctrl && !alt && !win && !shift && _compositionState == CompositionState.FullPinyin &&
+                    (resolvedVk == 0x50 || resolvedVk == 0x4c || resolvedVk == 0x2e))
+                {
+                    if (_oneShotActionKey == resolvedVk) return FullPinyinResult();
+                    _oneShotActionKey = resolvedVk;
+                    return ManagePinyinCandidate(resolvedVk == 0x50 ? "pin" : resolvedVk == 0x4c ? "unpin" : "forget", _pinyinSession.Selected);
+                }
                 if (ctrl)
                 {
                     if (!alt && !win &&
@@ -1031,7 +1061,7 @@ namespace TigerClaw.Core
                         (_compositionState == CompositionState.CnComposing ||
                          _compositionState == CompositionState.CnPinyin ||
                          _compositionState == CompositionState.CnUpperCase ||
-                         _compositionState == CompositionState.CnSentence);
+                         (_compositionState == CompositionState.CnSentence || _compositionState == CompositionState.FullPinyin));
 
                     if (shouldCancelCompositionBeforePass)
                     {
@@ -1050,7 +1080,7 @@ namespace TigerClaw.Core
                         (_compositionState == CompositionState.CnComposing ||
                          _compositionState == CompositionState.CnPinyin ||
                          _compositionState == CompositionState.CnUpperCase ||
-                         _compositionState == CompositionState.CnSentence);
+                         (_compositionState == CompositionState.CnSentence || _compositionState == CompositionState.FullPinyin));
 
                     if (shouldCancelCompositionBeforePass)
                     {
@@ -1064,7 +1094,7 @@ namespace TigerClaw.Core
                 {
                     if (_inputBuffer.Length > 0)
                     {
-                        string commit = _compositionState == CompositionState.CnSentence
+                        string commit = (_compositionState == CompositionState.CnSentence || _compositionState == CompositionState.FullPinyin)
                             ? CommitCodeBuffer()
                             : CombineMixedCommit(ResolveCommitTextForCurrentState(_inputBuffer.ToString()));
                         ClearCompositionInput();
@@ -1094,6 +1124,8 @@ namespace TigerClaw.Core
                         return ProcessCnUpperCaseKeyDown(resolvedVk, shift);
                     case CompositionState.CnPinyin:
                         return ProcessCnPinyinKeyDown(resolvedVk, shift);
+                    case CompositionState.FullPinyin:
+                        return ProcessFullPinyinKeyDown(resolvedVk, shift);
                     case CompositionState.CnSentence:
                         return ProcessCnSentenceKeyDown(resolvedVk, shift);
                     default:
@@ -1105,6 +1137,16 @@ namespace TigerClaw.Core
         private KeyEngineResult ProcessCnIdleKeyDown(int vk, bool shift)
         {
             _isChinese = true;
+
+            if (vk == VK_OEM_2 && !shift && _state.IsFullPinyinActive())
+            { StartFullPinyin("/"); return FullPinyinResult(); }
+            if (vk >= VK_A && vk <= VK_Z && _state.IsFullPinyinActive())
+            {
+                StartFullPinyin(((char)((shift ? 'A' : 'a') + vk - VK_A)).ToString());
+                return FullPinyinResult();
+            }
+
+
 
             if (vk == VK_SPACE)
             {
@@ -1498,7 +1540,8 @@ namespace TigerClaw.Core
             {
                 lock (_lock)
                 {
-                    return _compositionState == CompositionState.CnSentence && _sentenceRawBuffer.Length > 0;
+                    return (_compositionState == CompositionState.FullPinyin && _pinyinSession.Raw.Length > 0) ||
+                        (_compositionState == CompositionState.CnSentence && _sentenceRawBuffer.Length > 0);
                 }
             }
         }
@@ -1509,6 +1552,7 @@ namespace TigerClaw.Core
             {
                 lock (_lock)
                 {
+                    if (_compositionState == CompositionState.FullPinyin) return FullPinyinPending;
                     if (_compositionState != CompositionState.CnSentence || _sentenceRawBuffer.Length == 0)
                     {
                         return false;
@@ -3267,6 +3311,7 @@ namespace TigerClaw.Core
 
         private void ClearCompositionInput()
         {
+            ClearFullPinyin();
             CancelSentenceWork();
             _pendingLearning.Clear(); _learningBaseline = null; _learningContextValid = true;
             InvalidateCandidateFrame();
@@ -4335,7 +4380,7 @@ namespace TigerClaw.Core
         {
             lock (_lock)
             {
-                bool convertible = _compositionState == CompositionState.CnSentence ||
+                bool convertible = _compositionState == CompositionState.FullPinyin || _compositionState == CompositionState.CnSentence ||
                                    _compositionState == CompositionState.CnComposing;
                 if (!convertible)
                 {
@@ -4352,6 +4397,10 @@ namespace TigerClaw.Core
                 if (rawCode.Length == 0)
                 {
                     _compositionState = CompositionState.CnIdle;
+                }
+                else if (_state.IsFullPinyinActive())
+                {
+                    StartFullPinyin(rawCode);
                 }
                 else if (_state.IsSentenceInputActive() && _sentenceInputDecoder != null)
                 {
@@ -4609,6 +4658,10 @@ namespace TigerClaw.Core
             lock (_lock)
             {
                 EnsureMixedDecodeCurrent();
+                if (_compositionState == CompositionState.FullPinyin)
+                {
+                    prefix = _pinyinSession.LockedText; activeCode = _pinyinSession.Raw[_pinyinSession.LockedEnd..]; return;
+                }
                 prefix = GetMixedResolvedPrefixText();
                 activeCode = _compositionState == CompositionState.CnSentence
                     ? GetSentenceDisplayCode()
@@ -4641,6 +4694,7 @@ namespace TigerClaw.Core
         {
             lock (_lock)
             {
+                if (_compositionState == CompositionState.FullPinyin) return GetFullPinyinUi(pageSize);
                 EnsureMixedDecodeCurrent();
 
                 string inputCode = _compositionState == CompositionState.CnSentence
@@ -4649,7 +4703,7 @@ namespace TigerClaw.Core
                 bool isComposing = _compositionState == CompositionState.CnComposing ||
                                    _compositionState == CompositionState.CnPinyin ||
                                    _compositionState == CompositionState.CnUpperCase ||
-                                   _compositionState == CompositionState.CnSentence;
+                                   _compositionState == CompositionState.CnSentence || _compositionState == CompositionState.FullPinyin;
 
                 IReadOnlyList<string> allList = null;
                 IReadOnlyList<string> list = null;
@@ -5024,6 +5078,7 @@ namespace TigerClaw.Core
         public string InputCode { get; set; }
         public string CompositionPrefix { get; set; }
         public string ActiveInputCode { get; set; }
+        public string CandidateSelectionToken { get; set; }
         public string[] Candidates { get; set; }
         public string[] CandidateAnnotations { get; set; }
         public int SelectedCandidateIndex { get; set; }

@@ -17,6 +17,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\TigerClaw.Pinyin\TigerClaw.Pinyin.csproj" />
     <Compile Include="..\TigerClaw.Shared\*.cs" Link="Shared\%(Filename)%(Extension)" />
   </ItemGroup>
 

@@ -24,6 +24,7 @@
 | `COMPACT_RANKING_PRIORS.md` | 整句主码、四码生僻字保护与紧凑 Top-5 词先验 |
 | `SENTENCE_EARLY_COMMIT_EVAL.md` | 整句提前上屏准确度与积极性端到端评测 |
 | `../tools/README_sentence_neural.md` | n-gram 训练和离线模型实验 |
+| `../tools/FullPinyinEval/README.md` | 独立全拼切分、Top-10 Qwen 融合与离线评测 |
 
 `用户使用说明书.pdf` 是 Markdown 手册的发布版附件；内容变更时应同步重新导出。
 
@@ -33,3 +34,7 @@
 - 已完成的阶段计划改写成“现状 + 剩余验收”，不长期保留逐阶段任务流水账。
 - 历史资料只有在仍能帮助复现问题时才移入 `docs/archive/`，否则直接删除。
 - `reference/`、构建目录和发布目录不是当前文档来源。
+
+- [虎爪全拼内测版：实现、构建与验收](FULL_PINYIN.md)
+- [全拼性能优化：实现、测量、回归与部署](PINYIN_PERFORMANCE_20260922.md)
+- [虎整句压缩五阶：主线接入、发布与验证](SHAPE_FIVEGRAM.md)

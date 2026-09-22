@@ -722,6 +722,7 @@ void CSampleIME::_StorePendingResponseCache(BOOL isKeyDown, WPARAM wParam, UINT 
     _pendingResponseLearningReceipt = response.learningReceipt;
     _pendingResponseTextToOutput = response.textToOutput;
     _pendingResponseInputBuffer = response.inputBuffer;
+    _pendingResponseInputCursor = response.inputCursor;
     Global::LogToFileVerbose("KeySink pending_store msg=%s wParam=%llu scan=%u ext=%d handled=%d text_len=%u input_len=%u",
                              isKeyDown ? "down" : "up",
                              static_cast<unsigned long long>(wParam),
@@ -821,6 +822,7 @@ BOOL CSampleIME::_TryConsumePendingResponseCache(BOOL isKeyDown, WPARAM wParam, 
     pResponse->learningReceipt = _pendingResponseLearningReceipt;
     pResponse->textToOutput = _pendingResponseTextToOutput;
     pResponse->inputBuffer = _pendingResponseInputBuffer;
+    pResponse->inputCursor = _pendingResponseInputCursor;
 
     Global::LogToFileVerbose("KeySink pending_consume hit msg=%s handled=%d text_len=%u input_len=%u",
                              isKeyDown ? "down" : "up",
@@ -896,6 +898,24 @@ void CSampleIME::_PruneFailedKeyQueue(ULONGLONG nowTick)
         Global::LogToFileVerbose("KeyFailQueue: drop overflow vk=%u size=%u", front.vkCode, static_cast<unsigned>(_failedKeyQueue.size()));
         _failedKeyQueue.pop_front();
     }
+}
+
+BOOL CSampleIME::_EnqueueCandidateClick(const COPYDATASTRUCT *data)
+{
+    // Fixed cross-bitness wire payload: index byte, 32 ASCII hex token bytes.
+    if (data == nullptr || data->dwData != 0x54435059 || data->cbData != 33 || data->lpData == nullptr || _pPipeClient == nullptr)
+        return FALSE;
+    const unsigned char *bytes = static_cast<const unsigned char *>(data->lpData);
+    if (bytes[0] >= 64 || bytes[0] % 16 >= 10) return FALSE;
+    for (int i = 1; i < 33; ++i) if (!((bytes[i] >= '0' && bytes[i] <= '9') || (bytes[i] >= 'a' && bytes[i] <= 'f'))) return FALSE;
+    DWORD foregroundProcess = 0;
+    DWORD foregroundThread = GetWindowThreadProcessId(GetForegroundWindow(), &foregroundProcess);
+    if (foregroundProcess != GetCurrentProcessId() || foregroundThread != GetCurrentThreadId() || _BypassProtectedInput(nullptr)) return FALSE;
+    ULONGLONG id = _pPipeClient->NextKeyEventId();
+    _EnqueueFailedKeyMessage(0, bytes[0], TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, 1, FALSE, FALSE, 0, 0, "candidate_click", id);
+    if (_failedKeyQueue.empty() || _failedKeyQueue.back().eventId != id) return FALSE;
+    _failedKeyQueue.back().candidateToken.assign(reinterpret_cast<const char *>(bytes + 1), 32);
+    return TRUE;
 }
 
 void CSampleIME::_EnqueueFailedKeyMessage(UINT vkCode,
@@ -997,7 +1017,9 @@ BOOL CSampleIME::_FlushFailedKeyQueue(_In_opt_ ITfContext *pContext, _In_z_ cons
         }
 
         BimeResponse response;
-        HRESULT hr = _pPipeClient->SendKeyAndWait(message.vkCode,
+        HRESULT hr = !message.candidateToken.empty()
+            ? _pPipeClient->SendCandidateAndWait(message.candidateToken.c_str(), message.scanCode, message.eventId, &response, static_cast<DWORD>(kFailedKeyFlushBudgetMs - elapsed))
+            : _pPipeClient->SendKeyAndWait(message.vkCode,
                                                   message.scanCode,
                                                   message.isKeyDown,
                                                   "flush_replay",
@@ -1187,6 +1209,7 @@ STDAPI CSampleIME::OnTestKeyDown(ITfContext *pContext, WPARAM wParam, LPARAM lPa
         cachedResponse.learningReceipt = _pendingResponseLearningReceipt;
         cachedResponse.textToOutput = _pendingResponseTextToOutput;
         cachedResponse.inputBuffer = _pendingResponseInputBuffer;
+        cachedResponse.inputCursor = _pendingResponseInputCursor;
 
         BOOL forceEatCached = ShouldForceEatKey(vkCode, cachedResponse);
         *pIsEaten = cachedResponse.handled || forceEatCached;
@@ -1638,6 +1661,7 @@ STDAPI CSampleIME::OnTestKeyUp(ITfContext *pContext, WPARAM wParam, LPARAM lPara
         cachedResponse.learningReceipt = _pendingResponseLearningReceipt;
         cachedResponse.textToOutput = _pendingResponseTextToOutput;
         cachedResponse.inputBuffer = _pendingResponseInputBuffer;
+        cachedResponse.inputCursor = _pendingResponseInputCursor;
 
         *pIsEaten = cachedResponse.handled;
         if (cachedResponse.hasKeyboardOpen)

@@ -36,6 +36,12 @@ int main(int argc, char** argv)
             u8"今天我们一起讨论输入法的内存优化方案。", u8"今天我们一起讨论输入法的性能优化计划。" };
         std::array<double, 5> baseline{}, output{};
         Require(tcs_score(raw, texts, 5, baseline.data()) == 0, tcs_last_error());
+        const char* six[] = { texts[0], texts[1], texts[2], texts[3], texts[4], texts[0] };
+        std::array<double, 6> rejected;
+        rejected.fill(123456.0);
+        Require(tcs_score(raw, six, 6, rejected.data()) != 0,
+            "production scorer unexpectedly accepted more than five candidates");
+        for (double score : rejected) Require(score == 123456.0, "rejected request wrote scores");
         for (int limit : { 1, 16, 64 })
         {
             AbortState state; state.Limit = limit;

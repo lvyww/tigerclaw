@@ -22,7 +22,7 @@ namespace TigerClaw.Core
 
 {
 
-    internal sealed class CoreRuntimeState
+    internal sealed partial class CoreRuntimeState
 
     {
 
@@ -210,6 +210,20 @@ namespace TigerClaw.Core
 
             new KeyValuePair<string, string>(KeyAutoEnableSentenceBySchema, Yes),
             new KeyValuePair<string, string>("整句Tab自学习", Yes),
+            new KeyValuePair<string, string>("全拼纠正学习", Yes),
+            new KeyValuePair<string, string>("全拼简拼", Yes),
+            new KeyValuePair<string, string>("全拼拼写兼容", Yes),
+            new KeyValuePair<string, string>("全拼错拼纠正", No),
+            new KeyValuePair<string, string>("全拼模糊音n-l", No),
+            new KeyValuePair<string, string>("全拼模糊音z-zh", No),
+            new KeyValuePair<string, string>("全拼模糊音c-ch", No),
+            new KeyValuePair<string, string>("全拼模糊音s-sh", No),
+            new KeyValuePair<string, string>("全拼模糊音en-eng", No),
+            new KeyValuePair<string, string>("全拼模糊音in-ing", No),
+            new KeyValuePair<string, string>("全拼模糊音an-ang", No),
+            new KeyValuePair<string, string>("拼音英文候选", Yes),
+            new KeyValuePair<string, string>("拼音表情候选", Yes),
+            new KeyValuePair<string, string>("拼音繁体输出", No),
 
             new KeyValuePair<string, string>(KeySentenceNeuralRerank, Yes),
 
@@ -1365,7 +1379,7 @@ namespace TigerClaw.Core
 
         public bool IsSentenceInputActive()
         {
-            if (!GetAutoEnableSentenceBySchema())
+            if (IsFullPinyinActive() || !GetAutoEnableSentenceBySchema())
             {
                 return false;
             }

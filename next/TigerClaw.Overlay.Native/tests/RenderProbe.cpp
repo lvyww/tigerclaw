@@ -15,6 +15,13 @@ namespace tiger::overlay
         {
             return {{"formats", r.creations_[0]}, {"layouts", r.creations_[1]}, {"dibs", r.creations_[2]}, {"targets", r.creations_[3]}};
         }
+        static POINT CandidatePoint(const Renderer& r, int position)
+        {
+            FLOAT x = 0, y = 0; DWRITE_HIT_TEST_METRICS hit{};
+            CheckHr(r.layout_->HitTestTextPosition(position, FALSE, &x, &y, &hit));
+            return {static_cast<LONG>((r.textOrigin_.x + x + hit.width / 2) * r.textScale_),
+                static_cast<LONG>((r.textOrigin_.y + y + hit.height / 2) * r.textScale_)};
+        }
         static void LoseTarget(Renderer& r) { r.target_.Reset(); }
         static void IncompleteFrame(Renderer& r) { r.frameReady_ = false; }
         static std::uint64_t Pixels(const Renderer& r)
@@ -55,7 +62,23 @@ int main(int argc, char** argv)
         LARGE_INTEGER frequency{}; QueryPerformanceFrequency(&frequency);
         nlohmann::json result;
         bool verify = argc > 1 && std::string(argv[1]) == "--verify";
-        if (argc > 1 && std::string(argv[1]) == "--present-check")
+        if (argc > 1 && std::string(argv[1]) == "--pinyin-hit-check")
+        {
+            Renderer renderer(L".");
+            auto state = Base(); state.composition = 6;
+            for (bool vertical : {false, true}) for (UINT dpi : {96u, 144u, 192u})
+            {
+                state.vertical = vertical;
+                auto display = Format(state);
+                renderer.Prepare(state, display, dpi);
+                for (int i = 0; i < static_cast<int>(display.candidateRanges.size()); ++i)
+                    if (renderer.HitCandidate(RendererProbe::CandidatePoint(renderer, display.candidateRanges[i].first), display) != i)
+                        throw std::runtime_error("Candidate hit test selected a different item");
+                if (renderer.HitCandidate(POINT{-10, -10}, display) != -1) throw std::runtime_error("Outside click selected an item");
+            }
+            result["pinyin_hit_checks"] = "passed";
+        }
+        else if (argc > 1 && std::string(argv[1]) == "--present-check")
         {
             Renderer renderer(L".");
             auto state = Base();

@@ -9,7 +9,7 @@ namespace TigerClaw.Core
 {
     internal sealed partial class SentenceInputDecoder
     {
-        private readonly SentenceNgramModel.QuerySession _modelSession;
+        private readonly IDisposable _modelSession;
         private Dictionary<BeamBucket, (int Revision, List<SentenceCandidate> Values)> _evaluated = new();
         private SentenceLockedPrefix _cachedLockedPrefix;
         private CancellationToken _cancellation;
@@ -244,6 +244,7 @@ namespace TigerClaw.Core
             var seed = new BeamState
             {
                 Text = prefix.Text, Previous2 = Bos, Previous1 = Bos, MaxLexiconRank = 1,
+                History = _historyModel?.BeginHistory ?? default,
                 Boundary = CopyUnlearnedBoundary(prefix.Boundary),
                 CodeScore = prefix.Boundary?.CodeScore ?? 0.0
             };
@@ -252,7 +253,7 @@ namespace TigerClaw.Core
             {
                 CheckCancellation();
                 string target = elements.GetTextElement();
-                seed.Score += TransitionScore(seed.Previous2, seed.Previous1, target) + _emittedCharacterReward;
+                seed.Score += StepScore(ref seed.History, seed.Previous2, seed.Previous1, target) + _emittedCharacterReward;
                 if (_hasSupplements)
                 {
                     seed.SupplementState = _supplementMatcher.Advance(seed.SupplementState, target, out double reward);

@@ -103,6 +103,8 @@ namespace TigerClaw.Shared
         // Optional display-continuity token. Missing/empty tokens cannot hold a frame.
         [DataMember(Order = 35)]
         public string CandidateFrameSession { get; set; }
+        [DataMember(Order = 36)]
+        public string CandidateSelectionToken { get; set; }
     }
 }
 

@@ -282,7 +282,7 @@ namespace
         const auto candidatesItem = request.find("candidates");
         if (candidatesItem == request.end() || !candidatesItem->is_array())
         {
-            throw std::invalid_argument("rerank candidates must contain 1 to 5 items.");
+            throw std::invalid_argument("rerank candidates must be an array.");
         }
         std::vector<std::string> candidates;
         for (const Json& candidate : *candidatesItem)
@@ -293,9 +293,10 @@ namespace
             }
             candidates.push_back(candidate.get<std::string>());
         }
-        if (candidates.empty() || candidates.size() > 5)
+        if (candidates.empty() || candidates.size() > TIGERCLAW_SENTENCE_MAX_CANDIDATES)
         {
-            throw std::invalid_argument("rerank candidates must contain 1 to 5 items.");
+            throw std::invalid_argument("rerank candidates must contain 1 to " +
+                std::to_string(TIGERCLAW_SENTENCE_MAX_CANDIDATES) + " items.");
         }
 
         const std::int64_t generation = ReadInteger(request, "generation");

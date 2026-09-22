@@ -1428,6 +1428,34 @@ namespace TigerClaw.Dialog
                     return "方案名含“整句”时启用整句输入：连续编码由本地模型自动切分并生成整句候选。";
                 case "整句神经重排":
                     return "使用 Qwen3 0.6B Base Q8 重排前 5 个整句候选。下方提供模型下载链接和配置说明；不可用时保留三元模型结果。";
+                case "全拼简拼":
+                    return "允许声母简拼和全简拼混输，例如 nh、nhao。独立双拼方案不使用此设置。";
+                case "全拼拼写兼容":
+                    return "按音节兼容 nue/nve、lue/lve、ju/jv 等写法，不改动原始输入。";
+                case "全拼错拼纠正":
+                    return "识别一个音节内相邻字母错序，例如 zhogn → zhong；不纠正成另一个已有完整音节。";
+                case "拼音英文候选":
+                    return "显示英文补全和中英混合词候选，保留大小写；英文前缀可选定后继续输入中文。";
+                case "拼音表情候选":
+                    return "在相关中文候选后附加表情；也可用 /emoji 打开表情列表。";
+                case "拼音繁体输出":
+                    return "使用 Windows 简繁转换显示并输出繁体，模型和学习保留原始简体路径。";
+                case "全拼模糊音n-l":
+                    return "按需放宽 n-l 发音匹配。默认关闭；与精确拼音候选共同排序。";
+                case "全拼模糊音z-zh":
+                    return "按需放宽 z-zh 发音匹配。默认关闭；与精确拼音候选共同排序。";
+                case "全拼模糊音c-ch":
+                    return "按需放宽 c-ch 发音匹配。默认关闭；与精确拼音候选共同排序。";
+                case "全拼模糊音s-sh":
+                    return "按需放宽 s-sh 发音匹配。默认关闭；与精确拼音候选共同排序。";
+                case "全拼模糊音en-eng":
+                    return "按需放宽 en-eng 发音匹配。默认关闭；与精确拼音候选共同排序。";
+                case "全拼模糊音in-ing":
+                    return "按需放宽 in-ing 发音匹配。默认关闭；与精确拼音候选共同排序。";
+                case "全拼模糊音an-ang":
+                    return "按需放宽 an-ang 发音匹配。默认关闭；与精确拼音候选共同排序。";
+                case "全拼纠正学习":
+                    return "全拼方案仅在目标应用确认上屏后学习明确纠正，记录独立保存。关闭后保留记录但不参与排序。";
                 case "整句Tab自学习":
                     return "仅学习 Tab 明确纠正且目标应用确认成功上屏的片段；记录保存在当前方案目录，不改变原码表。关闭后保留记录但不参与排序。";
                 case "整句自动提前上屏":
@@ -1533,6 +1561,20 @@ namespace TigerClaw.Dialog
 
                 case "自动启用整句模式":
                 case "整句神经重排":
+                case "全拼简拼":
+                case "全拼拼写兼容":
+                case "全拼错拼纠正":
+                case "全拼模糊音n-l":
+                case "全拼模糊音z-zh":
+                case "全拼模糊音c-ch":
+                case "全拼模糊音s-sh":
+                case "全拼模糊音en-eng":
+                case "全拼模糊音in-ing":
+                case "全拼模糊音an-ang":
+                case "拼音英文候选":
+                case "拼音表情候选":
+                case "拼音繁体输出":
+                case "全拼纠正学习":
                 case "整句Tab自学习":
                 case "整句自动提前上屏":
                 case "保留最少编码数量":

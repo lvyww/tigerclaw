@@ -21,6 +21,8 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <Label Grid.Row="0"
@@ -60,7 +62,7 @@
                     Click="OnNextHistoryClick" />
         </StackPanel>
 
-        <Label Grid.Row="1"
+        <Label x:Name="CodeLabel" Grid.Row="1"
                Grid.Column="0"
                Foreground="LightGray"
                Content="编码"
@@ -76,6 +78,10 @@
                  Padding="3,3,3,3"
                  InputMethod.IsInputMethodEnabled="False" />
 
+        <Button x:Name="DeletePinyinButton" Grid.Row="4" Grid.ColumnSpan="2" Content="删除此用户词"
+                Visibility="Collapsed" Margin="5" Click="OnDeletePinyinClick" />
+        <Button x:Name="PinyinManagerButton" Grid.Row="5" Grid.ColumnSpan="2" Content="短语与候选管理…"
+                Visibility="Collapsed" Margin="5" Click="OnPinyinManagerClick" />
         <TextBlock x:Name="StatusText"
                    Grid.Row="2"
                    Grid.ColumnSpan="2"

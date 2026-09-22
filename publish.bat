@@ -193,6 +193,8 @@ if errorlevel 1 (
 )
 
 echo.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\next\stage_sentence_fivegram.ps1" -Architecture x64 -OutputDirectory "%CORE_OUT%" || exit /b 1
+
 echo [4/13] Build TigerClaw.Overlay Release
 call "%OVERLAY_PROJECT%" x64 "%OVERLAY_OUT%" Release
 if errorlevel 1 (
@@ -275,6 +277,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\tools\verify_tsf_art
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\tools\verify_tsf_artifact.ps1" -Source "%TSF_X86_DLL%" -Architecture Win32 || exit /b 1
 
 call :CopyFileStrict "%CORE_OUT%\TigerClaw.Core.exe" "%RELEASE_DIR%\TigerClaw.Core.exe" || exit /b 1
+call :CopyFileStrict "%CORE_OUT%\jointkenlm.dll" "%RELEASE_DIR%\jointkenlm.dll" || exit /b 1
+call :CopyFileStrict "%CORE_OUT%\Models\sentence-fivegram.klm" "%RELEASE_MODELS%\sentence-fivegram.klm" || exit /b 1
+if not exist "%RELEASE_DIR%\licenses\kenlm" mkdir "%RELEASE_DIR%\licenses\kenlm"
+for %%F in (LICENSE COPYING COPYING.3 COPYING.LESSER.3) do call :CopyFileStrict "%CORE_OUT%\licenses\kenlm\%%F" "%RELEASE_DIR%\licenses\kenlm\%%F" || exit /b 1
 if exist "%RELEASE_DIR%\TigerClaw.Core.exe.config" del /q "%RELEASE_DIR%\TigerClaw.Core.exe.config"
 if exist "%CORE_OUT%\TigerClaw.Core.pdb" del /q "%RELEASE_DIR%\TigerClaw.Core.pdb" >nul 2>&1
 

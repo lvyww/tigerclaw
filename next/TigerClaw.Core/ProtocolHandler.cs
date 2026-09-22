@@ -59,12 +59,12 @@ namespace TigerClaw.Core
 
         internal ProtocolHandler(Action<CoreUiCommand> uiCommandCallback, CoreRuntimeState state,
             UiStatePublisher uiStatePublisher, SentenceInputDecoder decoder, bool? synchronous,
-            bool enableSentenceService = true)
+            bool enableSentenceService = true, TigerClaw.Pinyin.PinyinResources fullPinyinResources = null)
         {
             _uiCommandCallback = uiCommandCallback;
             _state = state ?? throw new ArgumentNullException(nameof(state));
             _uiStatePublisher = uiStatePublisher;
-            _engine = new InputMethodEngine(_state, decoder, synchronous);
+            _engine = new InputMethodEngine(_state, decoder, synchronous, fullPinyinResources);
             _sentenceRerankClient = enableSentenceService ? new SentenceRerankClient(
                 _state,
                 new ProcessLauncher(),
@@ -124,6 +124,8 @@ namespace TigerClaw.Core
                    "\"active_input_code\":" + Quote(ui.ActiveInputCode) + "," +
                    "\"candidates\":" + QuoteArray(ui.Candidates) + "," +
                    "\"candidate_annotations\":" + QuoteArray(ui.CandidateAnnotations) + "," +
+                   "\"candidate_selection_token\":" + Quote(ui.CandidateSelectionToken) + "," +
+                   "\"input_cursor\":" + _engine.FullPinyinCursor + "," +
                    "\"selected_index\":" + ui.SelectedCandidateIndex + "," +
                    "\"candidate_page\":" + differential.CandidatePageIndex + "," +
                    "\"composition_tracking\":" + (_engine.IsSentenceCompositionActive ? "true" : "false") + "," +
@@ -196,7 +198,7 @@ namespace TigerClaw.Core
             switch (type)
             {
                 case "learning_commit":
-                    if (_state.GetSentenceLearningEnabled())
+                    if (_state.IsFullPinyinActive() ? _state.GetFullPinyinLearningEnabled() : _state.GetSentenceLearningEnabled())
                         _learningReceipts.Acknowledge(ConvertToString(msg.GetValue("client_session")),
                             ConvertToString(msg.GetValue("learning_receipt")), ConvertToBool(msg.GetValue("applied"), false));
                     else _learningReceipts.Cancel();
@@ -466,11 +468,32 @@ namespace TigerClaw.Core
                             extraJsonPairs: extra);
                     }
 
+                case "pinyin_preferences":
+                    try { return BuildResponseWithUiState(seq, true, true, keyboardOpen: _engine.IsChinese,
+                        extraJsonPairs: ",\"items\":" + Quote(_engine.ListPinyinPreferences())); }
+                    catch (Exception e) { return BuildResponseWithUiState(seq, false, false, keyboardOpen: _engine.IsChinese, extraJsonPairs: ",\"error\":" + Quote(e.Message)); }
+                case "pinyin_manage":
+                    {
+                        bool ok = _engine.TryManagePinyin(ConvertToString(msg.GetValue("action")), ConvertToString(msg.GetValue("code")), ConvertToString(msg.GetValue("text")), out string error);
+                        return BuildResponseWithUiState(seq, ok, ok, keyboardOpen: _engine.IsChinese, extraJsonPairs: ",\"error\":" + Quote(error));
+                    }
+                case "full_pinyin_info":
+                    return BuildResponseWithUiState(seq, true, true, keyboardOpen: _engine.IsChinese,
+                        extraJsonPairs: ",\"full_pinyin\":" + (_state.IsFullPinyinActive() ? "true" : "false"));
+                case "delete_pinyin_word":
+                    {
+                        bool ok = _state.IsFullPinyinActive() && _engine.TryEditFullPinyinWord(
+                            ConvertToString(msg.GetValue("text")), ConvertToString(msg.GetValue("code")), true, out _);
+                        return BuildResponseWithUiState(seq, ok, ok, keyboardOpen: _engine.IsChinese);
+                    }
                 case "add_ci":
                     {
                         string code = ConvertToString(msg.GetValue("code"));
                         string text = ConvertToString(msg.GetValue("text"));
-                        bool ok = _state.TryAddCi(code, text, out string reason);
+                        string reason;
+                        bool ok = _state.IsFullPinyinActive()
+                            ? _engine.TryEditFullPinyinWord(text, code, false, out reason)
+                            : _state.TryAddCi(code, text, out reason);
                         string extra = string.IsNullOrEmpty(reason) ? null : ",\"error\":" + Quote(reason);
                         return BuildResponseWithUiState(seq, ok, ok, keyboardOpen: _engine.IsChinese, extraJsonPairs: extra);
                     }
@@ -602,7 +625,10 @@ namespace TigerClaw.Core
             }
 
             if (isKeyDown) Interlocked.Exchange(ref _candidateBackgroundUntil, 0);
-            KeyEngineResult result = _engine.ProcessKey(vk, scan, action, shift, ctrl, alt, win, capsLock, numLock, repeat, extended);
+            string candidateToken = ConvertToString(msg.GetValue("candidate_token"));
+            KeyEngineResult result = !string.IsNullOrEmpty(candidateToken)
+                ? _engine.SelectFullPinyinCandidate(candidateToken, scan)
+                : _engine.ProcessKey(vk, scan, action, shift, ctrl, alt, win, capsLock, numLock, repeat, extended);
             _engine.PostProcessKey(vk, action, result, shift, ctrl, alt, win, capsLock);
             if (wasComposing && result.Handled && !result.IsComposing && result.IsChinese &&
                 wasChinese == result.IsChinese && !string.IsNullOrEmpty(result.TextToOutput) &&
@@ -636,7 +662,7 @@ namespace TigerClaw.Core
             if (learningReceipt != null) extraJsonPairs += ",\"learning_receipt\":" + Quote(learningReceipt);
             if (isKeyDown)
             {
-                bool expectKeyUp = _engine.ShouldExpectKeyUp(vk, scan, extended);
+                bool expectKeyUp = string.IsNullOrEmpty(candidateToken) && _engine.ShouldExpectKeyUp(vk, scan, extended);
                 extraJsonPairs += ",\"expect_keyup\":" + (expectKeyUp ? "true" : "false");
             }
             if (IsHookNativeFrontend(frontend) &&
@@ -773,7 +799,7 @@ namespace TigerClaw.Core
 
         private string BuildCompositionStatusExtraJson()
         {
-            return ",\"composition_tracking\":" + (_engine.IsSentenceCompositionActive ? "true" : "false") +
+            return ",\"input_cursor\":" + _engine.FullPinyinCursor + ",\"composition_tracking\":" + (_engine.IsSentenceCompositionActive ? "true" : "false") +
                    ",\"composition_pending\":" + (_engine.IsSentenceDecodePending ? "true" : "false");
         }
 
@@ -858,6 +884,7 @@ namespace TigerClaw.Core
             }
 
             string trimmed = key.Trim();
+            if (trimmed == "全拼纠正学习") return true;
             return string.Equals(trimmed, "\u81ea\u52a8\u542f\u7528\u6574\u53e5\u6a21\u5f0f", StringComparison.OrdinalIgnoreCase) || // 自动启用整句模式
                    string.Equals(trimmed, "\u9ad8\u9891\u5b57\u4ec5\u4f7f\u7528\u6700\u4f18\u7801\u7ec4\u53e5", StringComparison.OrdinalIgnoreCase) || // 高频字仅使用最优码组句
                    string.Equals(trimmed, "\u6574\u53e5\u5141\u8bb8\u5168\u7801\u7ec4\u53e5\u767d\u540d\u5355", StringComparison.OrdinalIgnoreCase) || // 整句允许全码组句白名单
@@ -912,6 +939,7 @@ namespace TigerClaw.Core
                         CandidateVisible = candidateVisible,
                         CandidateHoldWhilePending = holdCandidateFrame,
                         CandidateFrameSession = candidateFrameSession,
+                        CandidateSelectionToken = engineState.CandidateSelectionToken,
                         InputCode = BuildDisplayComposition(engineState),
                         Candidates = engineState.Candidates ?? Array.Empty<string>(),
                         CandidateAnnotations = engineState.CandidateAnnotations ?? Array.Empty<string>(),
@@ -1076,7 +1104,7 @@ namespace TigerClaw.Core
 
         private string BuildDisplayComposition(string prefix, string activeCode)
         {
-            return (prefix ?? string.Empty) + MaskInputBufferForDisplay(activeCode ?? string.Empty);
+            return (prefix ?? string.Empty) + (_state.IsFullPinyinActive() ? activeCode ?? string.Empty : MaskInputBufferForDisplay(activeCode ?? string.Empty));
         }
 
         private static string Quote(string text)

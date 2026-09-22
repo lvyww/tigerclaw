@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "engine": "full_pinyin",
+  "name": "虎爪小鹤双拼",
+  "lexicon": "resources/wanxiang-pinyin.txt",
+  "tokens": "resources/wanxiang-tokens.json",
+  "model": "resources/joint_3gram.klm",
+  "decoder": "joint-trigram-beam200-v1",
+  "llm": false,
+  "layout": "xiaohe",
+  "lexicon_provider": "wanxiang-base-v18.0.8"
+}

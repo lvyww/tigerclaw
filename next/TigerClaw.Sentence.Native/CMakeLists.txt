@@ -40,6 +40,22 @@ endif()
 set_target_properties(TigerClaw.Sentence.Host PROPERTIES
     OUTPUT_NAME "TigerClaw.Sentence")
 
+# Independent offline experiment; never included in the default/publish build.
+add_executable(TigerClaw.Sentence.FullPinyinProbe WIN32 EXCLUDE_FROM_ALL
+    SentenceHost.cpp SentenceQwenNative.cpp SentenceQwenNative.h)
+target_compile_features(TigerClaw.Sentence.FullPinyinProbe PRIVATE cxx_std_17)
+target_compile_definitions(TigerClaw.Sentence.FullPinyinProbe PRIVATE
+    TIGERCLAW_SENTENCE_NATIVE_STATIC TIGERCLAW_SENTENCE_MAX_CANDIDATES=10
+    TIGERCLAW_SENTENCE_CONTEXT_SIZE=4096 TIGERCLAW_SENTENCE_BATCH_SIZE=2048
+    TIGERCLAW_SENTENCE_THREADS=4)
+target_include_directories(TigerClaw.Sentence.FullPinyinProbe PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/llama.cpp/include"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/llama.cpp/vendor")
+target_link_libraries(TigerClaw.Sentence.FullPinyinProbe PRIVATE llama shell32)
+if(MSVC)
+    target_compile_options(TigerClaw.Sentence.FullPinyinProbe PRIVATE /utf-8 /EHsc)
+endif()
+
 # Explicitly requested diagnostic target; never packaged or run by normal builds.
 add_executable(TigerClaw.Sentence.CancelProbe EXCLUDE_FROM_ALL
     tests/CancelProbe.cpp SentenceQwenNative.cpp SentenceQwenNative.h)

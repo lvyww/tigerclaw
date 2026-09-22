@@ -148,3 +148,17 @@ Core 仅在支持回执的按键响应中携带可选 `learning_receipt`（32 �
 
 自定义选重键支持十进制、`0x` 十六进制和 `VK_*` 名称；空绑定行用于清除该选位
 默认键。
+
+
+### Full-pinyin v1 additions (optional)
+
+Key/query responses may include `input_cursor` (UTF-16 offset in `input_buffer`, -1 means legacy end placement). Updated TSF caches it with the response and applies it to initial and existing preedit ranges. Other schemes keep -1.
+
+Native Overlay publishes a full-pinyin-only `CandidateSelectionToken`. A click uses a fixed 33-byte `WM_COPYDATA` payload (dwData `0x54435059`, one action/index byte and 32 ASCII lowercase hex token bytes) to the foreground thread's `TigerClaw.CaretCoalesceWindow`. TSF validates the payload and foreground/protected context, then enqueues it in its existing FIFO retry queue. No keyboard input is injected. The pipe request is a `key` message with `vk: 0`, `scan: <action/index>`, `candidate_token`, stable `client_session/event_id`, `action: down`, and `learning_ack_version: 1`. Core rejects stale menu tokens; successful selections use the same replay cache and successful-insertion learning receipt as physical keys. No physical keyup is expected. Focus/clear invalidates tokens and queued events.
+
+`full_pinyin_info` returns `full_pinyin: bool`. Existing `add_ci` dispatches to the independent user-word store when this engine is active; `code` contains one untoned pinyin syllable per Unicode character, separated by spaces/apostrophes. `delete_pinyin_word` accepts the same `text`/`code` pair. These operations never edit shape-code or temporary reverse-lookup tables.
+
+
+Pinyin candidate action/index byte: `0..9` select, `16..25` pin, `32..41` unpin, `48..57` forget learned corrections. The low four bits are the page index; other values are invalid. Management never submits application text. All actions preserve the immutable candidate token and physical-event replay identity. The native candidate context menu retains application focus; stale tokens are rejected after a decode, edit, menu change or focus change.
+
+`pinyin_preferences` returns an `items` string, one line per record: `kind<TAB>code<TAB>base64(UTF-8 text)`. Kinds: phrase, pin, word, learned. `pinyin_manage` accepts `action` (phrase_add, phrase_delete, pin, unpin, forget), `code`, `text`. Phrase/pin updates are atomic and idempotent. Forget queues durable TCL1 undo records, then asynchronously refreshes active candidates; its immediate success acknowledges queue acceptance. These requests use the current pinyin scheme. The UI does not delete entire journals.

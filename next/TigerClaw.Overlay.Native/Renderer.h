@@ -30,6 +30,8 @@ namespace tiger::overlay
         HGDIOBJ original_ = nullptr;
         SIZE size_{};
         bool frameReady_ = false;
+        D2D1_POINT_2F textOrigin_{};
+        float textScale_ = 1;
         void Surface(int width, int height);
         void ReleaseSurface();
         void LoadLocalFonts(const std::wstring& directory);
@@ -41,5 +43,6 @@ namespace tiger::overlay
         SIZE Render(HWND window, const State& state, const Display& display, UINT dpi, bool status = false);
         SIZE Prepare(const State& state, const Display& display, UINT dpi, bool status = false, const SIZE* frameSize = nullptr);
         void Present(HWND window, const POINT* destination = nullptr);
+        int HitCandidate(POINT point, const Display& display) const;
     };
 }

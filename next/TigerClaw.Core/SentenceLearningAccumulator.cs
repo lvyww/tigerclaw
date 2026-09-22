@@ -87,7 +87,7 @@ namespace TigerClaw.Core
             private void Apply(SentenceLearningEvent e)
             {
                 if (!_groups.TryGetValue(e.Code, out var code)) _groups[e.Code] = code = new();
-                var key = (e.Mode, e.Context);
+                var key = (Mode: SentenceLearning.EffectiveMode(e.Mode, e.Text), e.Context);
                 if (!code.Groups.TryGetValue(key, out var choices)) code.Groups[key] = choices = new(StringComparer.Ordinal);
 
                 foreach (var entry in choices)
@@ -121,6 +121,7 @@ namespace TigerClaw.Core
                 }
                 foreach (var index in modes.Values)
                 {
+                    index.SealPinyin();
                     foreach (var entry in index.Texts)
                     {
                         for (int length = 1; length < entry.Key.Length; length++)

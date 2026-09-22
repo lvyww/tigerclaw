@@ -14,6 +14,7 @@ namespace TigerClaw.Dialog
         private int _remoteHistoryCount;
         private readonly UiStateReader _uiStateReader = new UiStateReader();
         private bool _frontRaised;
+        private bool _fullPinyin;
 
         public AddCiWindow()
         {
@@ -65,6 +66,16 @@ namespace TigerClaw.Dialog
             return ok;
         }
 
+        private void OnDeletePinyinClick(object sender, RoutedEventArgs e)
+        {
+            if (!_fullPinyin) return;
+            bool ok = CorePipeClient.TryDeletePinyinWord(CodeTextBox.Text.Trim(), WordTextBox.Text, out string error);
+            StatusText.Text = ok ? "已删除用户词：" + WordTextBox.Text : "删除失败：" + error;
+        }
+
+        private void OnPinyinManagerClick(object sender, RoutedEventArgs e)
+        { new PinyinManagerWindow { Owner = this }.ShowDialog(); }
+
         private void OnCancelClick(object sender, RoutedEventArgs e)
         {
             Close();
@@ -72,6 +83,16 @@ namespace TigerClaw.Dialog
 
         private void OnWindowLoaded(object sender, RoutedEventArgs e)
         {
+            _fullPinyin = CorePipeClient.IsFullPinyin();
+            if (_fullPinyin)
+            {
+                Title = "虎爪全拼用户词";
+                CodeLabel.Content = "拼音";
+                CodeTextBox.ToolTip = "每字一个无声调拼音，用空格分隔；ü 写 v，例如：hu zhua";
+                DeletePinyinButton.Visibility = Visibility.Visible;
+                PinyinManagerButton.Visibility = Visibility.Visible;
+                StatusText.Text = "拼音按字分隔，例如：hu zhua";
+            }
             PlaceWindow();
             InitText();
             BringToFrontOnce();
@@ -99,6 +120,7 @@ namespace TigerClaw.Dialog
 
         private void OnWordTextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
         {
+            if (_fullPinyin) return;
             if (CorePipeClient.TryConstructCi(WordTextBox.Text ?? string.Empty, 1000, out string code, out _))
             {
                 CodeTextBox.Text = code ?? string.Empty;

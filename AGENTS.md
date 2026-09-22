@@ -29,6 +29,109 @@ Windows TSF
 
 Active components:
 
+- `next/TigerClaw.Pinyin/` and `next/TigerClaw.Pinyin.Native/`: Windows full-pinyin
+  internal build (2026-09-21), integrated into the maintained C# Core through
+  explicit `schema.json` engine metadata. Joint-token trigram/Beam 200, no LLM;
+  prefix selection, raw editing, user words and TSF receipt-based learning.
+  Default dictionaries changed by explicit user request on 2026-09-22 to Wanxiang
+  Base v18.0.8 (2,202,473 entries), with source-aligned joint tokens; this overrides
+  older notes requesting the original 65k dictionary. Model files remain unchanged.
+  Source schemas and packaging default to wanxiang-pinyin.txt/wanxiang-tokens.json;
+  --dictionary original retains the frozen small-lexicon packaging path. Desktop
+  schemas are updated, with original resources and a pre-Wanxiang backup retained.
+  See docs/FULL_PINYIN.md for provenance, cold-load cost and validation limits.
+  The normal menu (2026-09-22) shows 1 sentence when retained-pool score mass
+  reaches 0.90, otherwise 2, then independent lexicon prefixes by descending
+  character length and entry frequency. This confidence is UI-only, not calibrated
+  correctness. Preserve exact-spelling/raw-boundary and auxiliary constraints,
+  explicit pins/phrases and the F2 whole-sentence menu. Prefix cuts must leave
+  a legal syllable suffix; do not cut chang into cha/ng or chan/g. English
+  requires an exact match or completion of the entire live input (wind -> Windows),
+  never a shorter entry matching only its start (Windowsma must not offer Windows).
+  The r3 expansion adds mixed full/initial spelling, syllable aliases, optional
+  transposition correction and individual fuzzy rules, fixed phrases/pins/forget,
+  English/mixed words, literal URLs/email, tools, syllable editing, Tiger-code
+  auxiliary filtering, traditional output and an independent Xiaohe schema.
+  Full spelling wins over abbreviation search; bare consonant interjections
+  remain exact in sentences with at least two regular full syllables. Auxiliary
+  constraints enter search before Beam. Typo/fuzzy/traditional default off.
+  Preferences and user words stay schema-local; forgetting appends TCL1 undo
+  records. Candidate actions use immutable menu tokens and existing TSF replay
+  identities. Do not infer real-app acceptance from offline checks.
+  Build/package outputs remain isolated in `next/_run/FullPinyin/`. On
+  2026-09-21 the user uninstalled the former ARM64 installation and explicitly
+  requested installing r3. The active registered Core and Overlay now run from
+  `C:\Users\yc\Desktop\虎爪全拼内测-r3`; current scheme is `虎爪全拼`.
+  ARM64X/ARM64/x64 and Win32 TSF registrations and installed DLL hashes were
+  verified, as were live Core IPC and Overlay startup. The original
+  `release_arm64/` files/settings were preserved; do not overwrite them as part
+  of this test installation. Runtime evidence is in
+  `next/_run/FullPinyin/install-r3/installed-runtime.json`. Read
+  `docs/FULL_PINYIN.md` for frozen parity evidence, build commands and
+  outstanding real-app acceptance; installation is not typing acceptance.
+  On 2026-09-22 the desktop r3 runtime was upgraded at the user's request to
+  original trigram Beam200 Top50 + full Q8 five-gram reranking (2,481.68 MB
+  combined models, no LLM). Optional schema `rerank_model` enables this path;
+  missing/failed reranking falls back to trigram. Preserve word bonuses,
+  spelling costs, locked prefixes and receipt learning. Frozen 8019 rows /
+  400950 candidates match the experiment exactly (4890 correct). Backup is
+  `backup-before-fivegram-20260922-014718` inside the desktop runtime; evidence
+  is `next/_run/FullPinyin/fivegram-20260922/`. Tiger shape-code five-gram
+  feasibility was evaluated offline only; see
+  `tools/FullPinyinEval/HigherOrder/TIGER_SHAPE.md`. Do not deploy it implicitly.
+
+- Tiger shape-code compressed fivegram (2026-09-22) is now integrated into the
+  maintained C# Core search. `SentenceFivegramModel` prefers
+  `Models/sentence-fivegram.klm` (419,929,926 bytes, pure characters) plus the updated
+  `jointkenlm.dll`; missing/failed model or old ABI falls back to the original
+  trigram. Beam paths carry four token IDs, including BOS until it leaves the
+  window, through expansion/EOS, incremental reuse and locked prefixes. The
+  original trigram remains ONLY for observed-bigram isolation priors while
+  fivegram is active. Query sessions lease both native and mapped resources.
+  Debug/full release builds stage the verified model, DLL and KenLM licenses;
+  Core-only publishing still does not replace models/dependencies. Offline C#
+  20k first candidates match the frozen Lua run exactly: old 9958, fresh 9968,
+  total 19926 (trigram 19893). Both ARM64/x64 AOT probes pass. On 2026-09-22
+  16:51, at the user's explicit request, full-pinyin r3 was unregistered and the
+  maintained mainline was installed from the existing release_arm64 directory.
+  HKCU/HKLM CorePath, autorun, live Core/Overlay, Tiger sentence scheme and mapped
+  fivegram/DLL were verified. Existing mainline config/data were preserved
+  (Qwen and early commit are ON); the old pinyin directory/journals remain backed
+  up. No new Desktop installation directory remains. Evidence:
+  next/_run/MainlineInstall/installed-runtime.json. This supersedes earlier r3
+  active-install notes. Fivegram real-app typing and early commit calibration
+  remain unaccepted. See docs/SHAPE_FIVEGRAM.md.
+
+- Full-pinyin performance implementation (2026-09-22): compact source-order-preserving
+  code/syllable indexes, streaming pooled tokens, physical-file-keyed shared resource
+  bundles, model-local integer/batched context scoring and bounded query caches.
+  Preserve exact Beam/candidate order, OOV source-token identity and float addition
+  order; do not shrink Wanxiang, Beam 200 or five-gram Top50 to meet latency targets.
+  Core uses one latest-request worker, transactional cancellation and off-lock menu
+  preparation; confirmation joins the existing task without repeating search.
+  Await initial schema-local learning replay before taking the generation snapshot.
+  The new native batch ABI is optional: old jointkenlm.dll falls back to scalar
+  queries, but full speed needs the updated DLL alongside Core. Shared resources
+  have reference-counted ownership and query leases; user preferences/journals
+  remain schema-local. See docs/PINYIN_PERFORMANCE_20260922.md and
+  tools/FullPinyinEval/Performance/README.md for evidence and acceptance limits.
+  Desktop r3 Core + jointkenlm.dll were updated at 14:08; backup is
+  backup-before-pinyin-performance-20260922-140813. Configuration, journals,
+  model files, TSF and daily Overlay were preserved. Frozen 8241 signatures
+  match; 24 real-key RichEdit commits match the frozen first candidate.
+  Hot compute P95 22.0..23.8 ms and load 6.4..6.5 s meet the compute targets,
+  but observed first-frame P95 with current animation is 51.5..83.7 ms; the
+  <=50 ms end-to-end target remains unmet. Do not claim all latency gates passed.
+
+- Full-pinyin single-character learning uses independent mode/index
+  `full-pinyin-character-v1` (2026-09-22). The schema TCL1 journal remains shared
+  for receipt/undo compatibility; legacy `full-pinyin-v1` single-character events
+  are classified into the character bucket on replay. Only standalone, whole-code,
+  non-incomplete character selections learn; sentence prefix/tail characters do not.
+  Character rewards/retention require an exact whole raw-code match and a complete
+  single-character output, never a sentence prefix. Phrase learning is unchanged.
+  Forget handles both old and new event identities. See `docs/FULL_PINYIN.md`.
+
 - `next/TigerClaw.Core.Native/`: user-requested parallel C++ Core, **paused at the
   user's request on 2026-09-09 due to usage cost**. Do not automatically resume;
   wait for an explicit user request. The README's opening pause/resume section

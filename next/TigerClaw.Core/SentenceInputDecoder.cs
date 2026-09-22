@@ -7,9 +7,8 @@ using System.Threading;
 
 namespace TigerClaw.Core
 {
-    internal interface ISentenceLanguageModel
+    internal interface ISentenceLanguageModel : TigerClaw.Pinyin.IPinyinLanguageModel
     {
-        double LogProbability(string previous2, string previous1, string target);
 
         bool HasObservedBigram(string previous, string target);
     }
@@ -543,6 +542,7 @@ namespace TigerClaw.Core
         private const int IsolationPenaltyCacheCapacity = 8192;
         private readonly SentenceLexiconIndex _lexicon;
         private readonly ISentenceLanguageModel _languageModel;
+        private readonly ISentenceHistoryLanguageModel _historyModel;
         private readonly int _beamWidth;
         private readonly double _rankPenalty;
         private readonly SentenceIsolationPenalty _isolationPenalty;
@@ -586,6 +586,7 @@ namespace TigerClaw.Core
             public double Score;
             public double LogMass;
             public string Text;
+            public SentenceLmHistory History;
             public string Previous2;
             public string Previous1;
             public int SupplementState;
@@ -763,8 +764,17 @@ namespace TigerClaw.Core
             int lexicalCandidateLimit = 5)
         {
             _lexicon = lexicon ?? throw new ArgumentNullException(nameof(lexicon));
-            _modelSession = (languageModel as SentenceNgramModel)?.CreateQuerySession();
-            _languageModel = _modelSession != null ? _modelSession : languageModel ?? NeutralSentenceLanguageModel.Instance;
+            if (!scoreSentenceBoundaries && (languageModel is SentenceFivegramModel || languageModel is ISentenceHistoryLanguageModel))
+                throw new ArgumentException("Fivegram search requires BOS/EOS scoring", nameof(scoreSentenceBoundaries));
+            ISentenceLanguageModel session = languageModel switch
+            {
+                SentenceFivegramModel fivegram => fivegram.CreateQuerySession(),
+                SentenceNgramModel trigram => trigram.CreateQuerySession(),
+                _ => null
+            };
+            _modelSession = session as IDisposable;
+            _languageModel = session ?? languageModel ?? NeutralSentenceLanguageModel.Instance;
+            _historyModel = _languageModel as ISentenceHistoryLanguageModel;
             _beamWidth = Math.Max(1, beamWidth);
             _rankPenalty = Math.Max(0.0, rankPenalty);
             _isolationPenalty = isolationPenalty ?? SentenceIsolationPenalty.CreateDefault();
@@ -1037,6 +1047,14 @@ namespace TigerClaw.Core
             return true;
         }
 
+        private double StepScore(ref SentenceLmHistory history, string previous2, string previous1, string target)
+        {
+            if (_historyModel == null) return TransitionScore(previous2, previous1, target);
+            double score = _historyModel.Step(history, target, out var next);
+            history = next;
+            return score;
+        }
+
         private double TransitionScore(string previous2, string previous1, string target)
         {
             bool isBoundary =
@@ -1073,7 +1091,7 @@ namespace TigerClaw.Core
             return result;
         }
 
-        private static BeamBucket[] CreateStates(int length)
+        private BeamBucket[] CreateStates(int length)
         {
             var states = new BeamBucket[length + 1];
             for (int i = 0; i < states.Length; i++)
@@ -1086,6 +1104,7 @@ namespace TigerClaw.Core
                 Score = 0.0,
                 LogMass = 0.0,
                 Text = string.Empty,
+                History = _historyModel?.BeginHistory ?? default,
                 Previous2 = Bos,
                 Previous1 = Bos,
                 MaxLexiconRank = 1
@@ -1191,13 +1210,14 @@ namespace TigerClaw.Core
                             double score = item.Score;
                             double supplementAdded = 0.0;
                             int supplementState = item.SupplementState;
+                            var history = item.History;
                             string previous2 = item.Previous2;
                             string previous1 = item.Previous1;
                             string[] textElements = candidate.TextElements;
                             for (int elementIndex = 0; elementIndex < textElements.Length; elementIndex++)
                             {
                                 string target = textElements[elementIndex];
-                                score += TransitionScore(previous2, previous1, target);
+                                score += StepScore(ref history, previous2, previous1, target);
                                 score += _emittedCharacterReward;
                                 if (_hasSupplements)
                                 {
@@ -1260,6 +1280,7 @@ namespace TigerClaw.Core
                                 LogMass = item.LogMass +
                                     (score - item.Score - supplementAdded - wholeInputSingleCharacterRewardAdded - learningAdded),
                                 Text = nextText,
+                                History = history,
                                 Previous2 = previous2,
                                 Previous1 = previous1,
                                 SupplementState = supplementState,
@@ -1411,7 +1432,8 @@ namespace TigerClaw.Core
 
         private SentenceCandidate EvaluateState(BeamState item)
         {
-            double eosScore = TransitionScore(item.Previous2, item.Previous1, Eos);
+            var history = item.History;
+            double eosScore = StepScore(ref history, item.Previous2, item.Previous1, Eos);
             double endingAdjustment = eosScore - ApplyPathIsolationPenalty(item) + item.CodeScore;
             double confidenceEndingAdjustment = eosScore - ApplyIsolationPenalty(item.Text);
             double score = item.Score + endingAdjustment;

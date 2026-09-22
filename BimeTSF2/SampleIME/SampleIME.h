@@ -26,6 +26,7 @@ class CAnchorPrimeTextExtentEditSession;
 struct BimeResponse;
 struct FailedKeyMessage
 {
+    std::string candidateToken;
     ULONGLONG tick;
     ULONGLONG eventId;
     UINT vkCode;
@@ -205,6 +206,7 @@ private:
     void _CancelCompositionRefresh();
     void _HandleCompositionRefresh();
     void _PruneFailedKeyQueue(ULONGLONG nowTick);
+    BOOL _EnqueueCandidateClick(const COPYDATASTRUCT *data);
     void _EnqueueFailedKeyMessage(UINT vkCode,
                                   UINT scanCode,
                                   BOOL isKeyDown,
@@ -252,8 +254,8 @@ private:
     HRESULT _EnsureCaretAnchorComposition(_In_ ITfContext *pContext);
     void _EndCaretAnchorComposition(_In_opt_ ITfContext *pContext);
     HRESULT _CancelCaretAnchorComposition(_In_ ITfContext *pContext);
-    HRESULT _SetInitialCaretAnchorInputString(_In_ ITfContext *pContext, _In_ const WCHAR *pText);
-    HRESULT _UpdateCaretAnchorText(_In_ ITfContext *pContext, _In_ const WCHAR *pText);
+    HRESULT _SetInitialCaretAnchorInputString(_In_ ITfContext *pContext, _In_ const WCHAR *pText, LONG cursor = -1);
+    HRESULT _UpdateCaretAnchorText(_In_ ITfContext *pContext, _In_ const WCHAR *pText, LONG cursor = -1);
     HRESULT _CommitAndEndCaretAnchorComposition(_In_ ITfContext *pContext, _In_ const WCHAR *pText);
     HRESULT _ClearCaretAnchorTextForExternallyTerminatedComposition(_In_ ITfContext *pContext, _In_ ITfComposition *pComposition);
     void _SendCompositionCanceledMessage();
@@ -361,6 +363,8 @@ private:
     std::wstring _pendingResponseLearningReceipt;
     std::wstring _pendingResponseTextToOutput;
     std::wstring _pendingResponseInputBuffer;
+    LONG _pendingResponseInputCursor = -1;
+    LONG _lastAnchorInputCursor = -1;
     std::wstring _lastAnchorInputBuffer;
     ITfContext *_pDeferredReopenContext = nullptr;
     std::wstring _deferredReopenInputBuffer;

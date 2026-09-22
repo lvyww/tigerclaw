@@ -86,6 +86,28 @@ int main()
         server.join();
         Check(response.seq == 1 && !pipe.client.IsBusy(), "menu response sequence and guard");
     }
+    for (int candidateAction : {2, 18, 34, 50})
+    {
+        TestPipe pipe;
+        std::thread server([&] {
+            char request[768]{}; DWORD count = 0;
+            Check(ReadFile(pipe.server, request, sizeof(request) - 1, &count, nullptr), "candidate request read");
+            std::string wire(request, count);
+            Check(wire.find("\"candidate_token\":\"0123456789abcdef0123456789abcdef\"") != std::string::npos &&
+                  wire.find("\"event_id\":\"77\"") != std::string::npos && wire.find("\"scan\":" + std::to_string(candidateAction) + ",") != std::string::npos,
+                  "candidate token/index/replay identity on wire");
+            const char reply[] = "{\"seq\":1,\"success\":true,\"handled\":true,\"input_buffer\":\"nihao\",\"input_cursor\":2}\n";
+            WriteFile(pipe.server, reply, sizeof(reply) - 1, &count, nullptr);
+            ReadFile(pipe.server, request, sizeof(request) - 1, &count, nullptr);
+            const char legacy[] = "{\"seq\":2,\"success\":true,\"handled\":false}\n";
+            WriteFile(pipe.server, legacy, sizeof(legacy) - 1, &count, nullptr);
+        });
+        BimeResponse response;
+        Check(SUCCEEDED(pipe.client.SendCandidateAndWait("0123456789abcdef0123456789abcdef", candidateAction, 77, &response, 1000)), "candidate response");
+        Check(response.inputCursor == 2 && response.inputBuffer == L"nihao", "preedit cursor parsed");
+        Check(SUCCEEDED(pipe.client.SendQueryStateAndWait(&response, 1000)) && response.inputCursor == -1, "legacy reply resets cursor");
+        server.join();
+    }
     for (int i = 0; i < 20; ++i)
     {
         TestPipe pipe;

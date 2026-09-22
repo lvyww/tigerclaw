@@ -89,7 +89,7 @@ if "!FAILED!"=="1" goto :failed
 
 echo [Success] Install completed.
 call :log "Install completed successfully."
-call :popup "TigerClaw" "Install completed with ARM64X TSF registration. Keep this release folder because Core runs from here." "Info"
+if /I not "%~2"=="--quiet" call :popup "TigerClaw" "Install completed with ARM64X TSF registration. Keep this release folder because Core runs from here." "Info"
 exit /b 0
 
 :dotnet_missing

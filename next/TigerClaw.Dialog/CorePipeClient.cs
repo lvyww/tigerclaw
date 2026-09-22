@@ -75,6 +75,27 @@ namespace TigerClaw.Dialog
             return TrySendRequest(request, timeoutMs, out _, out error);
         }
 
+        public static string GetPinyinPreferences()
+        {
+            if (!TrySendRequest("{\"type\":\"pinyin_preferences\",\"seq\":1}", 5000, out string json, out string error)) throw new InvalidOperationException(error);
+            return ExtractJsonField(json, "items");
+        }
+        public static bool TryManagePinyin(string action, string code, string text, out string error)
+        {
+            string request = "{\"type\":\"pinyin_manage\",\"seq\":1,\"action\":\"" + Escape(action) + "\",\"code\":\"" + Escape(code) + "\",\"text\":\"" + Escape(text) + "\"}";
+            return TrySendRequest(request, 5000, out _, out error);
+        }
+        public static bool IsFullPinyin()
+        {
+            return TrySendRequest("{\"type\":\"full_pinyin_info\",\"seq\":1}", 1000, out string json, out _) &&
+                ExtractJsonBool(json, "full_pinyin", false);
+        }
+        public static bool TryDeletePinyinWord(string code, string text, out string error)
+        {
+            string request = "{\"type\":\"delete_pinyin_word\",\"seq\":1,\"code\":\"" + Escape(code) + "\",\"text\":\"" + Escape(text) + "\"}";
+            return TrySendRequest(request, 1000, out _, out error);
+        }
+
         public static bool TryAddCi(string code, string text, int timeoutMs, out string error)
         {
             string request = "{\"type\":\"add_ci\",\"seq\":" + DefaultSeq + ",\"code\":\"" + Escape(code) + "\",\"text\":\"" + Escape(text) + "\"}";

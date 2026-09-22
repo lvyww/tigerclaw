@@ -123,6 +123,14 @@ namespace TigerClaw.Core
         {
             lock (_lock)
             {
+                if (_pinyinLearningOutput != null)
+                {
+                    store = _pinyinLearning;
+                    var pinyin = _state.GetFullPinyinLearningEnabled() && result?.TextToOutput == _pinyinLearningOutput
+                        ? _pinyinReadyLearning : Array.Empty<SentenceLearningEvent>();
+                    _pinyinReadyLearning = Array.Empty<SentenceLearningEvent>(); _pinyinLearningOutput = null;
+                    return pinyin;
+                }
                 store = _learningStore;
                 var events = _state.GetSentenceLearningEnabled() && result != null && !string.IsNullOrEmpty(result.TextToOutput) &&
                     string.Equals(result.TextToOutput, _learningOutput, StringComparison.Ordinal)

@@ -3,6 +3,20 @@
 #include <cstddef>
 #include <cstdint>
 
+// Production remains Top-5. Explicit offline targets may use a larger batch.
+#ifndef TIGERCLAW_SENTENCE_MAX_CANDIDATES
+#define TIGERCLAW_SENTENCE_MAX_CANDIDATES 5
+#endif
+#ifndef TIGERCLAW_SENTENCE_CONTEXT_SIZE
+#define TIGERCLAW_SENTENCE_CONTEXT_SIZE 512
+#endif
+#ifndef TIGERCLAW_SENTENCE_BATCH_SIZE
+#define TIGERCLAW_SENTENCE_BATCH_SIZE 512
+#endif
+#ifndef TIGERCLAW_SENTENCE_THREADS
+#define TIGERCLAW_SENTENCE_THREADS 0
+#endif
+
 #if defined(_WIN32)
 #if defined(TIGERCLAW_SENTENCE_NATIVE_STATIC)
 #define TCS_API extern "C"

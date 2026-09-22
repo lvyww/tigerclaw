@@ -15,6 +15,13 @@ namespace TigerClaw.Core
 
     internal static class SentenceLearning
     {
+        internal const string PinyinPhraseMode = "full-pinyin-v1";
+        internal const string PinyinCharacterMode = "full-pinyin-character-v1";
+        // Replay legacy character events into a separate competition bucket without
+        // rewriting the receipt journal or losing its undo identities.
+        internal static string EffectiveMode(string mode, string text) =>
+            mode == PinyinPhraseMode && Characters(text) == 1 ? PinyinCharacterMode : mode;
+
         internal static string ConfigurationHash(string text)
         {
             ulong hash = 14695981039346656037UL;
@@ -147,6 +154,9 @@ namespace TigerClaw.Core
         {
             internal readonly Dictionary<string, Scores> Texts = new(StringComparer.Ordinal);
             internal readonly Dictionary<string, Scores> Prefixes = new(StringComparer.Ordinal);
+            internal KeyValuePair<string, Scores>[] PinyinChoices = Array.Empty<KeyValuePair<string, Scores>>();
+            internal void SealPinyin() => PinyinChoices = Texts.OrderByDescending(p => p.Value.ForContext(""))
+                .ThenBy(p => p.Key, StringComparer.Ordinal).Take(16).ToArray();
         }
 
         private readonly Dictionary<string, Dictionary<string, ModeIndex>> _byCode = new(StringComparer.Ordinal);
@@ -178,7 +188,7 @@ namespace TigerClaw.Core
             {
                 if (e.Mode.Length == 0 || e.Mode.Length > 512 || e.Code.Length == 0 || e.Code.Length > 128 || !SentenceLearning.StaticText(e.Text) ||
                     (e.Context.Length > 0 && SentenceLearning.Characters(e.Context) == 0) || SentenceLearning.Characters(e.Context) > 2) continue;
-                var key = (e.Code, e.Mode, e.Context);
+                var key = (e.Code, Mode: SentenceLearning.EffectiveMode(e.Mode, e.Text), e.Context);
                 if (!groups.TryGetValue(key, out var choices))
                     groups[key] = choices = new(StringComparer.Ordinal);
 
@@ -223,6 +233,7 @@ namespace TigerClaw.Core
             {
                 foreach (var index in modes.Values)
                 {
+                    index.SealPinyin();
                     foreach (var entry in index.Texts)
                     {
                         for (int length = 1; length < entry.Key.Length; length++)
@@ -256,6 +267,28 @@ namespace TigerClaw.Core
                     score = Math.Max(score, scores.ForContext(context));
             }
             return score;
+        }
+
+        // At most 128 raw boundaries and 16 preferred fragments; no journal scan.
+        internal (string Code, string Text, double Score)[] PinyinMatches(string mode, string raw)
+        {
+            var matches = new List<(string Code, string Text, double Score)>();
+            for (int n = 1; n <= Math.Min(raw.Length, 128); n++)
+            {
+                string code = raw.Substring(0, n);
+                if (_byCode.TryGetValue(code, out var modes) && modes.TryGetValue(mode, out var index))
+                    foreach (var pair in index.PinyinChoices)
+                        matches.Add((code, pair.Key, pair.Value.ForContext("")));
+            }
+            return matches.OrderByDescending(m => m.Score).ThenByDescending(m => m.Code.Length).ThenBy(m => m.Text, StringComparer.Ordinal).Take(16).ToArray();
+        }
+
+        internal (string Code, string Text, double Score)[] PinyinCharacterMatches(string raw)
+        {
+            if (!_byCode.TryGetValue(raw, out var modes) || !modes.TryGetValue(SentenceLearning.PinyinCharacterMode, out var index))
+                return Array.Empty<(string Code, string Text, double Score)>();
+            return index.PinyinChoices.Where(p => SentenceLearning.Characters(p.Key) == 1)
+                .Select(p => (raw, p.Key, p.Value.ForContext(""))).ToArray();
         }
 
         internal double Score(string mode, string code, string text, string context)

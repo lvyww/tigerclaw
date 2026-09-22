@@ -14,9 +14,9 @@
 
 namespace
 {
-    constexpr int32_t MaximumCandidates = 5;
-    constexpr uint32_t ContextSize = 512;
-    constexpr uint32_t BatchSize = 512;
+    constexpr int32_t MaximumCandidates = TIGERCLAW_SENTENCE_MAX_CANDIDATES;
+    constexpr uint32_t ContextSize = TIGERCLAW_SENTENCE_CONTEXT_SIZE;
+    constexpr uint32_t BatchSize = TIGERCLAW_SENTENCE_BATCH_SIZE;
 
     thread_local std::string LastError;
 
@@ -95,7 +95,7 @@ namespace
         {
             if (candidates.empty() || candidates.size() > MaximumCandidates)
             {
-                throw std::runtime_error("candidate count must be between 1 and 5");
+                throw std::runtime_error("candidate count must be between 1 and " + std::to_string(MaximumCandidates));
             }
 
             _abort = abort;
@@ -437,7 +437,8 @@ int TCS_CALL tcs_create_from_file(
         }
         const int32_t logicalProcessors = static_cast<int32_t>(
             std::max(1u, std::thread::hardware_concurrency()));
-        const int32_t threadCount = std::max(1, logicalProcessors / 2);
+        const int32_t threadCount = TIGERCLAW_SENTENCE_THREADS > 0
+            ? TIGERCLAW_SENTENCE_THREADS : std::max(1, logicalProcessors / 2);
         *scorer = new Scorer(model, threadCount);
     });
 }
@@ -456,7 +457,7 @@ int TCS_CALL tcs_score_cancellable(
         }
         if (candidateCount < 1 || candidateCount > MaximumCandidates)
         {
-            throw std::runtime_error("candidate count must be between 1 and 5");
+            throw std::runtime_error("candidate count must be between 1 and " + std::to_string(MaximumCandidates));
         }
         std::vector<std::string> candidates;
         candidates.reserve(candidateCount);

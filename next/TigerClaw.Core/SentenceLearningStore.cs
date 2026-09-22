@@ -48,6 +48,22 @@ namespace TigerClaw.Core
             var copy = events.Select(e => e.Copy()).ToArray();
             return Queue(() => Confirm(copy));
         }
+        internal bool ForgetAsync(string mode, string code, string text)
+        {
+            return Queue(() =>
+            {
+                lock (_ioGate)
+                {
+                    using var guard = Acquire(); string data = ReadBytes();
+                    var entries = ReadJournal(data).VisibleEvents;
+                    var addition = new StringBuilder();
+                    foreach (var entry in entries.Where(e => SentenceLearning.EffectiveMode(e.Mode, e.Text) == SentenceLearning.EffectiveMode(mode, text) && e.Code == code && e.Text == text))
+                        addition.Append(Seal("TCL1\tU\t" + Guid.NewGuid().ToString("N") + "\t" + DateTimeOffset.UtcNow.ToUnixTimeSeconds() + "\t" + entry.Id));
+                    if (addition.Length != 0) Append(data, addition.ToString());
+                    else Publish(entries);
+                }
+            });
+        }
         internal void RefreshAsync()
         {
             lock (_gate)

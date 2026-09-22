@@ -359,6 +359,9 @@ LRESULT CALLBACK CSampleIME_WindowProc(HWND wndHandle, UINT uMsg, WPARAM wParam,
         return TRUE;
     }
 
+    case WM_COPYDATA:
+        return pTextService != nullptr && pTextService->_EnqueueCandidateClick(reinterpret_cast<const COPYDATASTRUCT *>(lParam));
+
     case WM_TIMER:
         if (pTextService != nullptr)
         {
@@ -1072,8 +1075,8 @@ public:
 class CStartInitialCaretAnchorEditSession : public CEditSessionBase
 {
 public:
-    CStartInitialCaretAnchorEditSession(_In_ CSampleIME *pTextService, _In_ ITfContext *pContext, _In_ const WCHAR *pText)
-        : CEditSessionBase(pTextService, pContext)
+    CStartInitialCaretAnchorEditSession(_In_ CSampleIME *pTextService, _In_ ITfContext *pContext, _In_ const WCHAR *pText, LONG cursor)
+        : CEditSessionBase(pTextService, pContext), _cursor(cursor)
     {
         if (pText != nullptr)
         {
@@ -1153,6 +1156,12 @@ public:
             }
 
             pInsertionRange->Collapse(ec, TF_ANCHOR_END);
+            if (_cursor >= 0 && _cursor <= static_cast<LONG>(_text.length()))
+            {
+                LONG shifted = 0;
+                pInsertionRange->ShiftStart(ec, _cursor - static_cast<LONG>(_text.length()), &shifted, nullptr);
+                pInsertionRange->Collapse(ec, TF_ANCHOR_START);
+            }
             TF_SELECTION selection = {};
             selection.range = pInsertionRange;
             selection.style.ase = TF_AE_NONE;
@@ -1168,6 +1177,7 @@ public:
 
 private:
     std::wstring _text;
+    LONG _cursor;
 };
 
 class CEndCaretAnchorEditSession : public CEditSessionBase
@@ -1218,8 +1228,8 @@ private:
 class CUpdateCaretAnchorEditSession : public CEditSessionBase
 {
 public:
-    CUpdateCaretAnchorEditSession(_In_ CSampleIME *pTextService, _In_ ITfContext *pContext, _In_ const WCHAR *pText)
-        : CEditSessionBase(pTextService, pContext)
+    CUpdateCaretAnchorEditSession(_In_ CSampleIME *pTextService, _In_ ITfContext *pContext, _In_ const WCHAR *pText, LONG cursor)
+        : CEditSessionBase(pTextService, pContext), _cursor(cursor)
     {
         if (pText != nullptr)
         {
@@ -1246,6 +1256,12 @@ public:
             }
 
             pRange->Collapse(ec, TF_ANCHOR_END);
+            if (_cursor >= 0 && _cursor <= static_cast<LONG>(_text.length()))
+            {
+                LONG shifted = 0;
+                pRange->ShiftStart(ec, _cursor - static_cast<LONG>(_text.length()), &shifted, nullptr);
+                pRange->Collapse(ec, TF_ANCHOR_START);
+            }
             TF_SELECTION selection = {};
             selection.range = pRange;
             selection.style.ase = TF_AE_NONE;
@@ -1281,6 +1297,7 @@ public:
 
 private:
     std::wstring _text;
+    LONG _cursor;
 };
 
 class CDeferredReopenCaretAnchorEditSession : public CEditSessionBase
@@ -1961,7 +1978,7 @@ BOOL CSampleIME::_GetCaretAnchorRange(_Outptr_result_maybenull_ ITfRange **ppRan
     return TRUE;
 }
 
-HRESULT CSampleIME::_UpdateCaretAnchorText(_In_ ITfContext *pContext, _In_ const WCHAR *pText)
+HRESULT CSampleIME::_UpdateCaretAnchorText(_In_ ITfContext *pContext, _In_ const WCHAR *pText, LONG cursor)
 {
     if (pContext == nullptr)
     {
@@ -1975,7 +1992,7 @@ HRESULT CSampleIME::_UpdateCaretAnchorText(_In_ ITfContext *pContext, _In_ const
     }
 
     const WCHAR *textToSet = (pText != nullptr) ? pText : L"";
-    CUpdateCaretAnchorEditSession *pEditSession = new (std::nothrow) CUpdateCaretAnchorEditSession(this, pContext, textToSet);
+    CUpdateCaretAnchorEditSession *pEditSession = new (std::nothrow) CUpdateCaretAnchorEditSession(this, pContext, textToSet, cursor);
     if (pEditSession == nullptr)
     {
         return E_OUTOFMEMORY;
@@ -1994,7 +2011,7 @@ HRESULT CSampleIME::_UpdateCaretAnchorText(_In_ ITfContext *pContext, _In_ const
     return (hrSession == S_OK) ? S_OK : S_FALSE;
 }
 
-HRESULT CSampleIME::_SetInitialCaretAnchorInputString(_In_ ITfContext *pContext, _In_ const WCHAR *pText)
+HRESULT CSampleIME::_SetInitialCaretAnchorInputString(_In_ ITfContext *pContext, _In_ const WCHAR *pText, LONG cursor)
 {
     if (pContext == nullptr)
     {
@@ -2009,7 +2026,7 @@ HRESULT CSampleIME::_SetInitialCaretAnchorInputString(_In_ ITfContext *pContext,
     _EndCaretAnchorComposition(nullptr);
     _StartCaretTrackingOnContext(pContext);
 
-    CStartInitialCaretAnchorEditSession *pEditSession = new (std::nothrow) CStartInitialCaretAnchorEditSession(this, pContext, pText);
+    CStartInitialCaretAnchorEditSession *pEditSession = new (std::nothrow) CStartInitialCaretAnchorEditSession(this, pContext, pText, cursor);
     if (pEditSession == nullptr)
     {
         return E_OUTOFMEMORY;
@@ -2153,10 +2170,11 @@ BOOL CSampleIME::_SyncCaretAnchorForResponse(_In_opt_ ITfContext *pContext, _Ino
             }
             else
             {
-                HRESULT hrUpdate = _UpdateCaretAnchorText(pEffectiveContext, pResponse->inputBuffer.c_str());
+                HRESULT hrUpdate = _UpdateCaretAnchorText(pEffectiveContext, pResponse->inputBuffer.c_str(), pResponse->inputCursor);
                 if (hrUpdate == S_OK)
                 {
                     _lastAnchorInputBuffer = pResponse->inputBuffer;
+                    _lastAnchorInputCursor = pResponse->inputCursor;
                     compositionApplied = TRUE;
                 }
                 else
@@ -2165,17 +2183,18 @@ BOOL CSampleIME::_SyncCaretAnchorForResponse(_In_opt_ ITfContext *pContext, _Ino
                 }
             }
         }
-        else if (_lastAnchorInputBuffer != pResponse->inputBuffer ||
+        else if (_lastAnchorInputBuffer != pResponse->inputBuffer || _lastAnchorInputCursor != pResponse->inputCursor ||
                  _pCaretAnchorComposition == nullptr ||
                  _pCaretAnchorContext != pEffectiveContext)
         {
             const BOOL needsInitialComposition = (_pCaretAnchorComposition == nullptr || _pCaretAnchorContext != pEffectiveContext) ? TRUE : FALSE;
             HRESULT hrUpdate = needsInitialComposition
-                ? _SetInitialCaretAnchorInputString(pEffectiveContext, pResponse->inputBuffer.c_str())
-                : _UpdateCaretAnchorText(pEffectiveContext, pResponse->inputBuffer.c_str());
+                ? _SetInitialCaretAnchorInputString(pEffectiveContext, pResponse->inputBuffer.c_str(), pResponse->inputCursor)
+                : _UpdateCaretAnchorText(pEffectiveContext, pResponse->inputBuffer.c_str(), pResponse->inputCursor);
             if (hrUpdate == S_OK)
             {
                 _lastAnchorInputBuffer = pResponse->inputBuffer;
+                    _lastAnchorInputCursor = pResponse->inputCursor;
                 compositionApplied = TRUE;
             }
             else

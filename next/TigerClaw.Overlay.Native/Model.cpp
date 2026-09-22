@@ -121,6 +121,7 @@ namespace tiger::overlay
             text("StatusText", next.status); text("InputCode", next.input); text("CodeMasking", next.codeMask);
             text("ThemeName", next.theme); text("FontName", next.font);
             text("CandidateFrameSession", next.candidateFrameSession);
+            text("CandidateSelectionToken", next.candidateSelectionToken);
             array("Candidates", next.candidates); array("CandidateAnnotations", next.annotations);
             if (!std::isfinite(next.fontSize)) return false;
             state = std::move(next);
@@ -191,6 +192,7 @@ namespace tiger::overlay
             result.text += Escape(state.candidates[i]);
             if (annotations && i < state.annotations.size() && !state.annotations[i].empty())
                 result.text += u"\u3014" + Escape(state.annotations[i]) + u"\u3015";
+            result.candidateRanges.emplace_back(static_cast<int>(start), static_cast<int>(result.text.size() - start));
             if (state.selected == static_cast<int>(i) && !(state.composition == 5 && i == 0))
             {
                 result.selectionStart = static_cast<int>(start);

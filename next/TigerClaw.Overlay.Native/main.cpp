@@ -532,6 +532,47 @@ namespace tiger::overlay
                     100 + i, Wide(openMenuSchemas_[i]).c_str());
             if (openMenuSchemas_.empty()) AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, L"\u6682\u65e0\u65b9\u6848");
         }
+        void SendPinyinCandidate(int actionIndex, const Text& token)
+        {
+            DWORD process = 0;
+            DWORD thread = GetWindowThreadProcessId(GetForegroundWindow(), &process);
+            HWND target = nullptr;
+            while ((target = FindWindowExW(HWND_MESSAGE, target, L"TigerClaw.CaretCoalesceWindow", nullptr)) != nullptr)
+            {
+                DWORD candidateProcess = 0;
+                if (GetWindowThreadProcessId(target, &candidateProcess) != thread || candidateProcess != process) continue;
+                unsigned char payload[33]{}; payload[0] = static_cast<unsigned char>(actionIndex);
+                for (int i = 0; i < 32; ++i) payload[i + 1] = static_cast<unsigned char>(token[i]);
+                COPYDATASTRUCT data{0x54435059, sizeof(payload), payload}; DWORD_PTR result = 0;
+                SendMessageTimeoutW(target, WM_COPYDATA, reinterpret_cast<WPARAM>(candidate_), reinterpret_cast<LPARAM>(&data), SMTO_ABORTIFHUNG | SMTO_BLOCK, 100, &result);
+                break;
+            }
+        }
+        bool PinyinCandidateMenu(HWND hwnd, LPARAM lp)
+        {
+            if (hwnd != candidate_ || demo_ || menuOpen_ || transition_.Active() || state_.composition != 6 || state_.candidateSelectionToken.size() != 32) return false;
+            POINT point{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+            int index = candidateRenderer_.HitCandidate(point, display_);
+            if (index < 0 || index >= 10) return false;
+            Text token = state_.candidateSelectionToken;
+            HWND foreground = GetForegroundWindow();
+            HMENU menu = CreatePopupMenu(); if (!menu) return true;
+            AppendMenuW(menu, MF_STRING, 1, L"置顶候选  Ctrl+P");
+            AppendMenuW(menu, MF_STRING, 2, L"取消置顶  Ctrl+L");
+            AppendMenuW(menu, MF_STRING, 3, L"忘记学习  Ctrl+Delete");
+            POINT cursor{}; GetCursorPos(&cursor);
+            menuOpen_ = true;
+            menuDismiss_ = {KeyDown(VK_LBUTTON), KeyDown(VK_RBUTTON), KeyDown(VK_ESCAPE)};
+            UINT_PTR timer = SetTimer(candidate_, 2, 20, nullptr);
+            // Do not activate a menu host: the application retains its TSF
+            // composition. The immutable token rejects updates while open.
+            int action = TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY, cursor.x, cursor.y, candidate_, nullptr);
+            if (timer) KillTimer(candidate_, timer);
+            menuOpen_ = false; DestroyMenu(menu);
+            if (action >= 1 && action <= 3 && GetForegroundWindow() == foreground)
+                SendPinyinCandidate(action * 16 + index, token);
+            return true;
+        }
         void Menu()
         {
             if (menuOpen_) return;
@@ -697,7 +738,8 @@ namespace tiger::overlay
                 }
                 return 0;
             case StaleMessage: PostQuitMessage(0); return 0;
-            case MenuMessage: case WM_RBUTTONUP: Menu(); return 0;
+            case MenuMessage: Menu(); return 0;
+            case WM_RBUTTONUP: if (!PinyinCandidateMenu(hwnd, lp)) Menu(); return 0;
             case WM_MBUTTONUP: if (hwnd == candidate_) Cycle(); return 0;
             case WM_MOUSEWHEEL:
                 if (hwnd == candidate_)
@@ -708,6 +750,16 @@ namespace tiger::overlay
                 }
                 return 0;
             case WM_LBUTTONDOWN:
+                if (hwnd == candidate_ && !demo_ && !transition_.Active() && state_.composition == 6 && state_.candidateSelectionToken.size() == 32)
+                {
+                    POINT point{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
+                    int index = candidateRenderer_.HitCandidate(point, display_);
+                    if (index >= 0 && index < 10)
+                    {
+                        SendPinyinCandidate(index, state_.candidateSelectionToken);
+                    }
+                    return 0;
+                }
                 if (hwnd == status_)
                 {
                     GetCursorPos(&dragPoint_); RECT rect{}; GetWindowRect(hwnd, &rect);

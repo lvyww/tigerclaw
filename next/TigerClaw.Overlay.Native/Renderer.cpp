@@ -235,6 +235,7 @@ namespace tiger::overlay
         stroke(border);
         D2D1_POINT_2F origin = status ? D2D1::Point2F((width - measured.width) / 2, 12 + (34 - measured.height) / 2) :
             D2D1::Point2F(inset + static_cast<float>(metrics.left + palette.borderWidth), inset + static_cast<float>(metrics.top + palette.borderWidth));
+        textOrigin_ = origin; textScale_ = scale;
         if (status) target_->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(9, 9, 17, 12), 2, 2), brush.Get());
         else if (display.selectionStart >= 0 && display.selectionLength > 0)
         {
@@ -280,4 +281,20 @@ namespace tiger::overlay
         if (!UpdateLayeredWindow(window, nullptr, destination ? &position : nullptr, &size_, dc_, &source, 0, &blend, ULW_ALPHA))
             throw std::runtime_error("UpdateLayeredWindow failed");
     }
+    int Renderer::HitCandidate(POINT point, const Display& display) const
+    {
+        if (!layout_ || !frameReady_ || display.text != layoutText_) return -1;
+        BOOL trailing = FALSE, inside = FALSE;
+        DWRITE_HIT_TEST_METRICS hit{};
+        if (FAILED(layout_->HitTestPoint(point.x / textScale_ - textOrigin_.x,
+            point.y / textScale_ - textOrigin_.y, &trailing, &inside, &hit)) || !inside) return -1;
+        for (std::size_t i = 0; i < display.candidateRanges.size(); ++i)
+        {
+            const auto& range = display.candidateRanges[i];
+            if (hit.textPosition >= static_cast<UINT32>(range.first) &&
+                hit.textPosition < static_cast<UINT32>(range.first + range.second)) return static_cast<int>(i);
+        }
+        return -1;
+    }
+
 }

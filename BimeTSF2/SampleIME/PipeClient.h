@@ -18,6 +18,7 @@ struct BimeResponse
     std::wstring learningReceipt; // Opaque commit receipt; never user text.
     std::wstring textToOutput;
     std::wstring inputBuffer;
+    LONG inputCursor = -1; // Optional UTF-16 preedit caret; -1 preserves legacy end.
     BOOL hasProtocolVersion;
     LONG protocolVersion;
     std::wstring coreBuild;
@@ -79,6 +80,7 @@ public:
                            DWORD timeoutMs = BIME_DEFAULT_TIMEOUT_MS,
                            ULONGLONG eventId = 0);
 
+    HRESULT SendCandidateAndWait(const char *token, UINT index, ULONGLONG eventId, BimeResponse *response, DWORD timeoutMs);
     ULONGLONG NextKeyEventId();
 
     HRESULT SendCtrlSpaceAndWait(_Out_ BimeResponse *pResponse, DWORD timeoutMs = BIME_DEFAULT_TIMEOUT_MS);

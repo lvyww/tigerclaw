@@ -4,6 +4,7 @@ chcp 65001 >nul
 if /I "%~1"=="--worker" goto :Worker
 set "BUILD_MAX_PARALLEL=2"
 set "BUILD_ONLY=0"
+set "PUBLISH_BATCH_PATH=%~f0"
 
 echo ====================================
 echo Publish TigerClaw (Windows on Arm64)
@@ -131,7 +132,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "$p='%SHARED_BUILD_INFO%'
 
 echo.
 echo [2-7/10] Build dependency graph
-powershell -NoProfile -ExecutionPolicy Bypass -File "%BUILD_SCHEDULER%" -BatchPath "%~f0" -MaxParallel %BUILD_MAX_PARALLEL% || exit /b 1
+powershell -NoProfile -ExecutionPolicy Bypass -File "%BUILD_SCHEDULER%" -BatchPath "%PUBLISH_BATCH_PATH%" -MaxParallel %BUILD_MAX_PARALLEL% || exit /b 1
 
 echo.
 echo [8/10] Validate artifacts
@@ -164,6 +165,10 @@ if not exist "%RELEASE_DIR%\Models" mkdir "%RELEASE_DIR%\Models"
 if exist "%RELEASE_DIR%\Models\sentence-ngram.bin" del /q "%RELEASE_DIR%\Models\sentence-ngram.bin"
 if exist "%RELEASE_DIR%\Models\sentence-ngram.tcmodel" del /q "%RELEASE_DIR%\Models\sentence-ngram.tcmodel"
 copy /Y "%CORE_OUT%\TigerClaw.Core.exe" "%RELEASE_DIR%\TigerClaw.Core.exe" >nul || exit /b 1
+copy /Y "%CORE_OUT%\jointkenlm.dll" "%RELEASE_DIR%\jointkenlm.dll" >nul || exit /b 1
+copy /Y "%CORE_OUT%\Models\sentence-fivegram.klm" "%RELEASE_DIR%\Models\sentence-fivegram.klm" >nul || exit /b 1
+if not exist "%RELEASE_DIR%\licenses\kenlm" mkdir "%RELEASE_DIR%\licenses\kenlm"
+for %%F in (LICENSE COPYING COPYING.3 COPYING.LESSER.3) do copy /Y "%CORE_OUT%\licenses\kenlm\%%F" "%RELEASE_DIR%\licenses\kenlm\%%F" >nul || exit /b 1
 if exist "%RELEASE_DIR%\TigerClaw.Core.exe.config" del /q "%RELEASE_DIR%\TigerClaw.Core.exe.config"
 copy /Y "%UI_OUT%\TigerClaw.Overlay.exe" "%RELEASE_DIR%\TigerClaw.Overlay.exe" >nul || exit /b 1
 if not exist "%UI_OUT%\TigerClaw.Overlay.exe.config" if exist "%RELEASE_DIR%\TigerClaw.Overlay.exe.config" del /q "%RELEASE_DIR%\TigerClaw.Overlay.exe.config"
@@ -234,6 +239,8 @@ exit /b 2
 
 :WorkerCore
 "%DOTNET%" publish "%CORE_PROJECT%" -c Release -r win-arm64 --self-contained true -o "%CORE_OUT%" /p:PublishAot=true /m:%BUILD_WORKER_JOBS%
+if errorlevel 1 exit /b 1
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\next\stage_sentence_fivegram.ps1" -Architecture ARM64 -OutputDirectory "%CORE_OUT%"
 exit /b %errorlevel%
 
 :WorkerOverlay

@@ -156,3 +156,6 @@ intermediate/final animations, publication failure, missing identity and reentry
 Two compiled negative controls remove session checks and exclude input-only
 frames, and must fail for the corresponding reported defects. The real Core
 trace also includes an empty decode followed by another pending key.
+
+
+Full-pinyin internal v1 uses `CompositionState = 6`. Optional `CandidateSelectionToken` identifies the current selectable candidate page and is empty while decoding is pending. It changes on decode/application/menu navigation and is invalidated on clear. Native Overlay hit-tests the actual DirectWrite candidate text ranges, preserving foreground focus, and routes clicks through the updated TSF FIFO/receipt path documented in messages.md. Older overlays ignore this field. The existing pending-frame contract also applies to state 6.

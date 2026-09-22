@@ -41,6 +41,8 @@ echo [1/6] Build TigerClaw.Shared
 echo [2/6] Publish TigerClaw.Core Native AOT (win-x64)
 "%DOTNET%" publish "%~dp0TigerClaw.Core\TigerClaw.Core.csproj" -c Debug -r win-x64 --self-contained true -o "%UNIFIED_OUT%" /p:PublishAot=true || exit /b 1
 
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0stage_sentence_fivegram.ps1" -Architecture x64 -OutputDirectory "%UNIFIED_OUT%" -Configuration Debug || exit /b 1
+
 echo [3/6] Build TigerClaw.Overlay (OutDir: Core)
 call "%~dp0build_overlay.bat" x64 "%UNIFIED_OUT%" Debug || exit /b 1
 

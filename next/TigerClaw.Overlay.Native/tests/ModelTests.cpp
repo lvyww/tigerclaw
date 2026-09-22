@@ -13,6 +13,12 @@ int main()
 {
     try
     {
+        State pinyin;
+        Check(ParseState(R"({"CompositionState":6,"CandidateSelectionToken":"0123456789abcdef0123456789abcdef","CandidateVisible":true,"Candidates":["你好","你"],"InputCode":"nihao","ShowInputCodeInCandidateWindow":true})", pinyin), "pinyin UI parse");
+        auto pinyinDisplay = Format(pinyin);
+        Check(pinyin.candidateSelectionToken.size() == 32 && pinyinDisplay.candidateRanges.size() == 2, "pinyin click token and hit ranges");
+        for (const auto& range : pinyinDisplay.candidateRanges)
+            Check(range.first >= 0 && range.second > 0 && range.first + range.second <= static_cast<int>(pinyinDisplay.text.size()), "candidate hit range bound");
         FrameTransition transition;
         State animated;
         Check(ParseState(R"({})", animated) && animated.animationEnabled &&
