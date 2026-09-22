@@ -5,6 +5,14 @@ protocol, user, porting and model documents are indexed in `docs/README.md`.
 
 Last reorganized: 2026-08-28.
 
+## Full-pinyin main repository (2026-09-22)
+
+Full-pinyin development has moved to https://github.com/lvyww/claw_pinyin .
+Use `C:\Users\yc\Desktop\claw_pinyin` (WSL: `/mnt/c/Users/yc/Desktop/claw_pinyin`)
+for subsequent full-pinyin changes, tests and releases. This TigerClaw worktree and
+its origin remain preserved for the shared/shape project. Read the new repository
+AGENTS.md first for pinyin work. The installed desktop r3 runtime is unchanged.
+
 ## Current Status
 
 TigerClaw is a Windows input method with a split-process runtime. The C# Core in
