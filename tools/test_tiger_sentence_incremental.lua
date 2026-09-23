@@ -8,13 +8,13 @@ for i = 2, #arg do
         require_model = true
     end
 end
-package.path = repo .. "/lua/?.lua;" .. package.path
+package.path = repo .. "/rime/tiger_sentence/lua/?.lua;" .. package.path
 
 -- Mirror a real frontend so the decoder also exercises the default
 -- per-schema supplemental corpus during incremental/full parity checks.
 rime_api = {
     get_user_data_dir = function()
-        return repo .. "/rime/tiger_sentence"
+        return repo .. ""
     end
 }
 
@@ -567,7 +567,7 @@ if sentence.processor(fake_key("semicolon"), env_idle_punct) ~= 2 or
     fail("idle semicolon/apostrophe did not pass through to punctuator")
 end
 local punctuation_schema = assert(io.open(
-    repo .. "/tiger_sentence.schema.yaml", "rb"))
+    repo .. "/rime/tiger_sentence/tiger_sentence.schema.yaml", "rb"))
 local punctuation_schema_content = punctuation_schema:read("*a")
 punctuation_schema:close()
 if not punctuation_schema_content:find("import_preset: symbols", 1, true) then
@@ -613,7 +613,7 @@ if context_tab.select_calls ~= 0 or context_tab.highlight_calls ~= 4 then
     fail("Tab called context:select and could commit a sentence candidate")
 end
 local schema_file = assert(io.open(
-    repo .. "/tiger_sentence.schema.yaml", "rb"))
+    repo .. "/rime/tiger_sentence/tiger_sentence.schema.yaml", "rb"))
 local schema_content = schema_file:read("*a")
 schema_file:close()
 if not schema_content:find("accept: Tab, send: Down", 1, true) or
@@ -1117,7 +1117,7 @@ local import_dir = repo .. "/.test_import"
 local windows = package.config:sub(1, 1) == "\\"
 local quoted_import_dir = '"' .. import_dir .. '"'
 os.execute((windows and "mkdir " or "mkdir -p ") .. quoted_import_dir)
-local import_codes = io.open(import_dir .. "/tiger_sentence.codes.txt", "wb")
+local import_codes = io.open(import_dir .. "/rime/tiger_sentence/tiger_sentence.codes.txt", "wb")
 import_codes:write(
     "# minimal imported table\n",
     "的\td\r\n",
@@ -1135,7 +1135,7 @@ rime_api.get_user_data_dir = function()
 end
 sentence.apply_high_freq_limit(1500)
 local imported = sentence.data_status()
-if imported.codes_path ~= import_dir .. "/tiger_sentence.codes.txt" then
+if imported.codes_path ~= import_dir .. "/rime/tiger_sentence/tiger_sentence.codes.txt" then
     fail("imported table was not preferred from the user directory")
 end
 if imported.codes_entries ~= 7 then

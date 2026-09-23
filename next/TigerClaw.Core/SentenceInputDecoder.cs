@@ -769,7 +769,6 @@ namespace TigerClaw.Core
             ISentenceLanguageModel session = languageModel switch
             {
                 SentenceFivegramModel fivegram => fivegram.CreateQuerySession(),
-                SentenceNgramModel trigram => trigram.CreateQuerySession(),
                 _ => null
             };
             _modelSession = session as IDisposable;

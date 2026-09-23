@@ -1,7 +1,7 @@
 -- TigerClaw-style sentence lattice for Rime, with optional Lua KN scoring.
 -- Lexicon data is loaded from plain-text files (see load_lexicon_data below),
 -- so users can edit or replace the code table without re-running exporters.
--- Pure Lua Kneser-Ney V2 reader. TCSKNM02 uses paged I/O and a bounded cache.
+-- Pure Lua TCSKNM03 Q8 fivegram reader with paged I/O and bounded caches.
 local BOS = "\2"
 local EOS = "\3"
 local ISOLATION_CACHE_ENTRIES = 8192
@@ -719,10 +719,10 @@ local model_generation = 0
 local model_failure = {} -- Only model-operation failures may trigger decode retry.
 
 local function call_model(model, operation, ...)
-    local ok, value = pcall(model[operation], ...)
-    if ok and (operation ~= "logp" or
+    local ok, value, v2, v3, v4, v5, v6 = pcall(model[operation], ...)
+    if ok and ((operation ~= "logp" and operation ~= "step") or
         (type(value) == "number" and value == value and math.abs(value) < math.huge)) then
-        return value
+        return value, v2, v3, v4, v5, v6
     end
     model_failure.reason = ok and "non-finite model probability" or tostring(value)
     error(model_failure, 0)
@@ -1049,6 +1049,22 @@ local function logp(prev2, prev1, target)
     logp_cache_keys[logp_cache_next] = key
     logp_cache_next = logp_cache_next % logp_cache_limit + 1
     return value
+end
+
+function ranking_prior.begin_search_history()
+    local model = ensure_kn()
+    if model and model.step then
+        return model.bos_id, 0, 0, 0, 1
+    end
+    return 0, 0, 0, 0, 0
+end
+
+function ranking_prior.search_logp(lm1, lm2, lm3, lm4, lm_count, prev2, prev1, target)
+    local model = ensure_kn()
+    if model and model.step then
+        return call_model(model, "step", lm1, lm2, lm3, lm4, lm_count, target)
+    end
+    return logp(prev2, prev1, target), lm1, lm2, lm3, lm4, lm_count
 end
 
 local function trailing_selector_span(raw)
@@ -1686,10 +1702,16 @@ local function new_states(length)
     for index = 0, length do
         states[index] = new_bucket()
     end
+    local lm1, lm2, lm3, lm4, lm_count = ranking_prior.begin_search_history()
     add_state(states[0], {
         score = 0,
         mass_score = 0,
         text = "",
+        lm1 = lm1,
+        lm2 = lm2,
+        lm3 = lm3,
+        lm4 = lm4,
+        lm_count = lm_count,
         prev2 = BOS,
         prev1 = BOS,
         max_rank = 1,
@@ -1740,11 +1762,17 @@ local function expand_range(raw, states, from_pos, length, minimum_consumed_end)
                                     local candidate = selected_candidates[k]
                                     local score = item.score
                                     local prev2, prev1 = item.prev2, item.prev1
+                                    local lm1, lm2, lm3, lm4, lm_count =
+                                        item.lm1, item.lm2, item.lm3, item.lm4, item.lm_count
                                     local supplement_state = item.supplement_state or 1
                                     local supplement_added = 0.0
                                     local chars = candidate_chars(candidate)
                                     for ci = 1, #chars do
-                                        score = score + logp(prev2, prev1, chars[ci])
+                                        local probability
+                                        probability, lm1, lm2, lm3, lm4, lm_count = ranking_prior.search_logp(
+                                            lm1, lm2, lm3, lm4, lm_count,
+                                            prev2, prev1, chars[ci])
+                                        score = score + probability
                                         score = score + emitted_character_reward
                                         if has_supplements then
                                             local supplement_reward
@@ -1798,6 +1826,11 @@ local function expand_range(raw, states, from_pos, length, minimum_consumed_end)
                                             score - item.score - supplement_added -
                                             whole_input_single_character_reward_added,
                                         text = text,
+                                        lm1 = lm1,
+                                        lm2 = lm2,
+                                        lm3 = lm3,
+                                        lm4 = lm4,
+                                        lm_count = lm_count,
                                         prev2 = prev2,
                                         prev1 = prev1,
                                         max_rank = math.max(item.max_rank or 1, candidate.r),
@@ -1860,7 +1893,9 @@ local candidate_display_meta = {
 }
 
 local function evaluate_state(item)
-    local eos_score = logp(item.prev2, item.prev1, EOS)
+    local eos_score = ranking_prior.search_logp(
+        item.lm1, item.lm2, item.lm3, item.lm4, item.lm_count,
+        item.prev2, item.prev1, EOS)
     local ending_adjustment = eos_score - path_isolation_penalty(item) +
         (item.code_score or 0.0)
     -- Code-conditioned rare-character relief is a ranking heuristic, just
@@ -1894,7 +1929,9 @@ end
 -- Partial tails are probability evidence, not menu candidates. Preserve the
 -- exact confidence operation order, but do not compute unused ranking priors.
 local function evaluate_evidence_state(item)
-    local confidence_ending_adjustment = logp(item.prev2, item.prev1, EOS) - isolation_penalty(item.text)
+    local confidence_ending_adjustment = ranking_prior.search_logp(
+        item.lm1, item.lm2, item.lm3, item.lm4, item.lm_count,
+        item.prev2, item.prev1, EOS) - isolation_penalty(item.text)
     local base_confidence = (item.mass_score or item.score) + confidence_ending_adjustment
     local personalization = math.min(ranking_prior.personalized_early_commit_cap,
         ranking_prior.supplement_early_commit_contribution(item.supplement_score or 0) +
@@ -2311,7 +2348,9 @@ local function paths_equal(left, right)
     while left and right do
         if left.raw_length ~= right.raw_length or left.text_length ~= right.text_length or
             left.text ~= right.text or left.prev2 ~= right.prev2 or left.prev1 ~= right.prev1 or
-            left.score ~= right.score or
+            left.lm1 ~= right.lm1 or left.lm2 ~= right.lm2 or
+            left.lm3 ~= right.lm3 or left.lm4 ~= right.lm4 or
+            left.lm_count ~= right.lm_count or left.score ~= right.score or
             (left.mass_score or left.score) ~= (right.mass_score or right.score) or
             (left.learning_score or 0) ~= (right.learning_score or 0) or
             (left.learning_potential or 0) ~= (right.learning_potential or 0) or
@@ -2475,7 +2514,10 @@ local function decode(raw_code, include_early_commit, required_text_prefix, lock
             states = new_states(#raw)
             -- Reconstruct confirmed boundaries and score their text as context,
             -- without re-searching or allowing an edge to cross the lock.
-            local seed = { text = "", prev2 = BOS, prev1 = BOS, score = 0, mass_score = 0,
+            local lm1, lm2, lm3, lm4, lm_count = ranking_prior.begin_search_history()
+            local seed = { text = "", prev2 = BOS, prev1 = BOS,
+                lm1 = lm1, lm2 = lm2, lm3 = lm3, lm4 = lm4, lm_count = lm_count,
+                score = 0, mass_score = 0,
                 max_rank = 1, supplement_state = 1, supplement_score = 0,
                 code_score = 0,
                 raw_length = 0, text_length = 0, text_char_count = 0, edge_count = 0 }
@@ -2499,7 +2541,10 @@ local function decode(raw_code, include_early_commit, required_text_prefix, lock
                     raw_length = r, text_length = t, edge_count = seed.edge_count + 1,
                     text_char_count = (utf8 and utf8.len and seed.text_char_count) and
                         seed.text_char_count + #chars or nil,
-                    prev2 = seed.prev2, prev1 = seed.prev1, score = seed.score,
+                    prev2 = seed.prev2, prev1 = seed.prev1,
+                    lm1 = seed.lm1, lm2 = seed.lm2, lm3 = seed.lm3,
+                    lm4 = seed.lm4, lm_count = seed.lm_count,
+                    score = seed.score,
                     supplement_state = seed.supplement_state,
                     supplement_score = seed.supplement_score,
                     code_score = seed.code_score or 0,
@@ -2510,7 +2555,11 @@ local function decode(raw_code, include_early_commit, required_text_prefix, lock
                         (candidate.primary_single or selected_rank > 0),
                     edge_code_length = candidate and protect_primary_rare and code_length or nil }
                 for _, ch in ipairs(chars) do
-                    item.score = item.score + logp(item.prev2, item.prev1, ch) + emitted_character_reward
+                    local probability
+                    probability, item.lm1, item.lm2, item.lm3, item.lm4, item.lm_count =
+                        ranking_prior.search_logp(item.lm1, item.lm2, item.lm3, item.lm4, item.lm_count,
+                            item.prev2, item.prev1, ch)
+                    item.score = item.score + probability + emitted_character_reward
                     if has_supplements then
                         local reward
                         item.supplement_state, reward = supplement.advance(supplement_matcher, item.supplement_state, ch)

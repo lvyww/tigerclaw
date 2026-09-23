@@ -163,7 +163,7 @@ Lua 5.4、LuaJIT 的测试覆盖取消、输出转换、失败写入、开关、
 ```sh
 g++ -std=c++17 tools/rime_learning_probe.cpp -lrime -ldl -o /tmp/rime-learning-probe
 python3 tools/test_rime_learning_integration.py --exe /tmp/rime-learning-probe \
-  --plugin /usr/lib64/rime-plugins/librime-lua.so --model /path/to/sentence-ngram-mobile.bin
+  --plugin /usr/lib64/rime-plugins/librime-lua.so --model /path/to/sentence-fivegram-mobile.bin
 ```
 
 插件路径按发行版调整；测试使用自己的临时用户目录，不修改已安装的输入法。
@@ -300,23 +300,14 @@ Lua 按一次 composition 在内存中汇总解码次数、模型缺页、读取
 
 ## 模型
 
-移动端优先使用仓库外的 `sentence-ngram-mobile.bin`（TCSKNM02）。它是 V2 模型的
-无损分页重排，上下文页 LRU 上限 8 MiB，不会一次读入
-完整模型。
-
-2026-09-20 Rime 默认模型切换为 full-kn-m5-v2，469,886,928 字节（448.12 MiB），
-SHA256：`c0063898fdff27c1fb00c1c72fa28a6c1b375fade1ec2045d731b9db958bdecc`。
-格式和文件名不变，仍默认 compact。旧/新两组各一万句离线首选准确率分别为
-99.41% / 99.52%，合计 99.465%；样本已参与模型选择，不是独立验收集。
-单模型同参数 7z 为 162.98 MiB。默认模型身份见 `default-model.json`，本机打包源为
-`C:\Archive\tigerclaw_sentence_ml\runtime\rime\sentence-ngram-mobile.bin`。
-此变更仅针对 Rime，虎爪 Windows 发布模型不变。公开 Release 附件尚未更新。
-
-
-
-查找顺序：用户目录 `models/`、用户目录根部、共享目录 `models/`，再尝试对应的
-`sentence-ngram-v2.bin`；开发机 mobile 回退到 `C:\Archive\tigerclaw_sentence_ml\runtime\rime`，legacy 回退仍兼容原 runtime 目录。
-大模型不得提交 Git。
+当前主线只读取 `sentence-fivegram-mobile.bin`（TCSKNM03），默认Q8 version 2，
+356,492,204字节，SHA256：
+`5c46b7c2734886e868c6207a724f4dff2d9c64cb3eba193e7dd44ea9df244361`。
+虎爪与Rime使用同一文件，保留原主线全部记录。模型由纯Lua分页读取。
+查找用户目录models/、用户目录根部、共享目录models/。没有KLM或旧三阶回退。
+文件缺失/损坏时走无模型路径；更新必须同时带上新版Lua与Q8模型。
+详见 [格式与验证](docs/TCSKNM03.md) 和 `default-model.json`。
+模型源为 `C:\Archive\tigerclaw_sentence_ml\runtime\sentence-fivegram-mobile.bin`，不提交Git。
 
 ## 验证
 
@@ -357,6 +348,6 @@ lua tools/bench_tiger_sentence_lua.lua . --mode mobile --repeat 50 --require-mod
 lua tools/bench_tiger_sentence_lua.lua . --mode none --repeat 50
 ```
 
-`mobile` 要求实际加载 TCSKNM02；`auto` 接受搜索路径中第一个可用模型；`none`
+`mobile` 要求实际加载 TCSKNM03；`auto` 接受搜索路径中第一个可用模型；`none`
 显式关闭模型，用于检查降级路径。`incremental` 是普通逐键解码，`evidence` 是
 每一键都构建提前上屏证据的压力测试。

@@ -3,7 +3,7 @@
 -- hooks or copied decoder implementations enter the runtime module.
 local repo=arg[1] or "."
 rime_api={get_user_data_dir=function()return repo end}
-local sentence=dofile(os.getenv("TIGER_SENTENCE_MODULE") or repo.."/lua/tiger_sentence.lua")
+local sentence=dofile(os.getenv("TIGER_SENTENCE_MODULE") or repo.."/rime/tiger_sentence/lua/rime/tiger_sentence/tiger_sentence.lua")
 sentence.ensure_lexicon(nil)
 sentence.set_model_enabled(false)
 local checks,cases=0,0
@@ -69,8 +69,10 @@ do
     expand("ot",states,0,2)
     check(#states[2]>0 and states[2]._truncated,"Descendant lost ancestor truncation")
     local result=emit("ot",states,2,true,"")
-    check(result.early_commit_evidence.confidence_truncated and result.early_commit_evidence.proposal=="",
-        "Descendant published confidence after lost search mass")
+    check(result.early_commit_evidence.confidence_truncated and
+        #result.early_commit_evidence.prefixes>0 and
+        result.early_commit_evidence.prefixes[1].base_share~=nil,
+        "Descendant truncation must stay flagged while retaining model-only BaseShare")
     cases=cases+1
 end
 -- A ranking-only top 20 can hide the dominant dissent in confidence space.
@@ -165,7 +167,7 @@ do
     local original=io.open;local closes=0
     io.open=function(name,mode)
         if name~="injected-model.bin" then return original(name,mode)end
-        return {read=function()return "TCSKNM02" end,close=function()closes=closes+1 end}
+        return {read=function()return "TCSKNM03" end,seek=function()return 8 end,close=function()closes=closes+1 end}
     end
     local ok=pcall(sentence.load_ngram_model,"injected-model.bin")
     io.open=original

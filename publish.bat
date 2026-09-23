@@ -92,7 +92,6 @@ set "OVERLAY_OUT=%ROOT%\next\_run\Release\net48"
 set "DIALOG_OUT=%ROOT%\next\_run\Release\net48"
 set "SENTENCE_OUT=%ROOT%\next\_run\Release\sentence"
 set "SENTENCE_MODEL_ROOT=C:\Archive\tigerclaw_sentence_ml\runtime"
-set "SENTENCE_NGRAM_MODEL=%SENTENCE_MODEL_ROOT%\sentence-ngram-v2.bin"
 set "SENTENCE_QWEN_MODEL=C:\Archive\tigerclaw_sentence_ml\qwen3-0.6b-gguf\downloaded\Qwen3-0.6B-Base-Q8_0.gguf"
 set "SENTENCE_QWEN_LICENSE=C:\Archive\tigerclaw_sentence_ml\qwen3-0.6b-base\LICENSE"
 set "HOOK_NATIVE_OUT=%ROOT%\next\_run\Release\native"
@@ -220,7 +219,6 @@ if errorlevel 1 (
 
 echo.
 echo [7/13] Validate sentence n-gram model
-call :RequireFile "%SENTENCE_NGRAM_MODEL%" "sentence n-gram model" || exit /b 1
 
 echo.
 echo [8/13] Update EmbeddedBuildInfo.h
@@ -266,7 +264,6 @@ call :RequireFile "%OVERLAY_OUT%\TigerClaw.Overlay.exe" "TigerClaw.Overlay.exe" 
 for %%F in (Overlay-THIRD-PARTY-NOTICES.txt sounds\KeyNormal.wav sounds\KeySpace.wav sounds\KeyFunc.wav) do call :RequireFile "%OVERLAY_OUT%\%%F" "%%F" || exit /b 1
 call :RequireFile "%DIALOG_OUT%\TigerClaw.Dialog.exe" "TigerClaw.Dialog.exe" || exit /b 1
 call :RequireFile "%SENTENCE_OUT%\TigerClaw.Sentence.exe" "TigerClaw.Sentence.exe" || exit /b 1
-call :RequireFile "%SENTENCE_NGRAM_MODEL%" "sentence n-gram model" || exit /b 1
 if "%PUBLISH_NO_QWEN%"=="0" call :RequireFile "%SENTENCE_QWEN_MODEL%" "Qwen Q8 model" || exit /b 1
 call :RequireFile "%ROOT%\third_party\llama.cpp\LICENSE" "llama.cpp license" || exit /b 1
 if "%PUBLISH_NO_QWEN%"=="0" call :RequireFile "%SENTENCE_QWEN_LICENSE%" "Qwen license" || exit /b 1
@@ -277,10 +274,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\tools\verify_tsf_art
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\tools\verify_tsf_artifact.ps1" -Source "%TSF_X86_DLL%" -Architecture Win32 || exit /b 1
 
 call :CopyFileStrict "%CORE_OUT%\TigerClaw.Core.exe" "%RELEASE_DIR%\TigerClaw.Core.exe" || exit /b 1
-call :CopyFileStrict "%CORE_OUT%\jointkenlm.dll" "%RELEASE_DIR%\jointkenlm.dll" || exit /b 1
-call :CopyFileStrict "%CORE_OUT%\Models\sentence-fivegram.klm" "%RELEASE_MODELS%\sentence-fivegram.klm" || exit /b 1
-if not exist "%RELEASE_DIR%\licenses\kenlm" mkdir "%RELEASE_DIR%\licenses\kenlm"
-for %%F in (LICENSE COPYING COPYING.3 COPYING.LESSER.3) do call :CopyFileStrict "%CORE_OUT%\licenses\kenlm\%%F" "%RELEASE_DIR%\licenses\kenlm\%%F" || exit /b 1
+call :CopyFileStrict "%CORE_OUT%\Models\sentence-fivegram-mobile.bin" "%RELEASE_MODELS%\sentence-fivegram-mobile.bin" || exit /b 1
 if exist "%RELEASE_DIR%\TigerClaw.Core.exe.config" del /q "%RELEASE_DIR%\TigerClaw.Core.exe.config"
 if exist "%CORE_OUT%\TigerClaw.Core.pdb" del /q "%RELEASE_DIR%\TigerClaw.Core.pdb" >nul 2>&1
 
@@ -310,7 +304,6 @@ if exist "%RELEASE_SENTENCE%\Models\sentence-transformer.tcmodel" del /q "%RELEA
 if exist "%RELEASE_SENTENCE%\Models\sentence-vocabulary.tcmodel" del /q "%RELEASE_SENTENCE%\Models\sentence-vocabulary.tcmodel"
 if exist "%RELEASE_SENTENCE%\Models\sentence-transformer.json" del /q "%RELEASE_SENTENCE%\Models\sentence-transformer.json"
 if "%PUBLISH_NO_QWEN%"=="0" call :CopyFileStrict "%SENTENCE_QWEN_MODEL%" "%RELEASE_SENTENCE%\Models\sentence-qwen-q8.gguf" || exit /b 1
-call :CopyFileStrict "%SENTENCE_NGRAM_MODEL%" "%RELEASE_MODELS%\sentence-ngram-v2.bin" || exit /b 1
 if exist "%RELEASE_MODELS%\sentence-ngram-mobile.bin" del /q "%RELEASE_MODELS%\sentence-ngram-mobile.bin" || exit /b 1
 call :CopyFileStrict "%ROOT%\third_party\llama.cpp\LICENSE" "%RELEASE_SENTENCE%\licenses\llama.cpp-LICENSE.txt" || exit /b 1
 if "%PUBLISH_NO_QWEN%"=="0" call :CopyFileStrict "%SENTENCE_QWEN_LICENSE%" "%RELEASE_SENTENCE%\licenses\Qwen3-LICENSE.txt" || exit /b 1

@@ -6,22 +6,16 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 if (!$ModelPath) {
-    $ModelPath = 'C:\Archive\tigerclaw_sentence_ml\experiments\brightmart-char5-500mb-20260922\char5-context128-q8.klm'
+    $ModelPath = 'C:\Archive\tigerclaw_sentence_ml\runtime\sentence-fivegram-mobile.bin'
 }
-$expected = '580ed90ced0ac72e453e0d647635cec2d3879e2e47ae1a231b96f49b2d34eafa'
+$expected = '5c46b7c2734886e868c6207a724f4dff2d9c64cb3eba193e7dd44ea9df244361'
 if (!(Test-Path -LiteralPath $ModelPath -PathType Leaf)) { throw "Missing shape fivegram: $ModelPath. Set TIGERCLAW_SHAPE_FIVEGRAM_MODEL to the verified model." }
-if ((Get-Item -LiteralPath $ModelPath).Length -ne 419929926 -or (Get-FileHash -LiteralPath $ModelPath -Algorithm SHA256).Hash -ne $expected) {
-    throw 'Shape fivegram size/hash does not match the validated 419.93 MB model.'
+if ((Get-Item -LiteralPath $ModelPath).Length -ne 356492204 -or (Get-FileHash -LiteralPath $ModelPath -Algorithm SHA256).Hash -ne $expected) {
+    throw 'Shape fivegram size/hash does not match the validated 356.49 MB TCS Q8 model.'
 }
-& "$PSScriptRoot\build_pinyin_native.bat" $Architecture $OutputDirectory $Configuration
-if ($LASTEXITCODE -ne 0) { throw 'KenLM native build failed' }
 $models = Join-Path $OutputDirectory 'Models'
-$licenses = Join-Path $OutputDirectory 'licenses\kenlm'
-New-Item -ItemType Directory -Force $models,$licenses | Out-Null
-$destination = Join-Path $models 'sentence-fivegram.klm'
+New-Item -ItemType Directory -Force $models | Out-Null
+$destination = Join-Path $models 'sentence-fivegram-mobile.bin'
 Copy-Item -LiteralPath $ModelPath -Destination $destination -Force
 if ((Get-FileHash -LiteralPath $destination -Algorithm SHA256).Hash -ne $expected) { throw 'Copied fivegram hash mismatch' }
-foreach ($name in @('LICENSE','COPYING','COPYING.3','COPYING.LESSER.3')) {
-    Copy-Item -LiteralPath "$PSScriptRoot\..\third_party\kenlm\$name" -Destination $licenses -Force
-}
-Write-Host "Staged shape fivegram + $Architecture KenLM into $OutputDirectory"
+Write-Host "Staged standalone TCS Q8 fivegram into $OutputDirectory ($Architecture)"

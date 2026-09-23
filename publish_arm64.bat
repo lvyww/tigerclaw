@@ -136,7 +136,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "%BUILD_SCHEDULER%" -BatchPa
 
 echo.
 echo [8/10] Validate artifacts
-for %%P in ("%CORE_OUT%\TigerClaw.Core.exe" "%UI_OUT%\TigerClaw.Overlay.exe" "%UI_OUT%\TigerClaw.Dialog.exe" "%UI_OUT%\TigerClaw.Shared.dll" "%SENTENCE_MODEL_ROOT%\sentence-ngram-v2.bin" "%SENTENCE_OUT%\TigerClaw.Sentence.exe" "%SENTENCE_QWEN_MODEL%" "%SENTENCE_QWEN_LICENSE%" "%ROOT%\third_party\llama.cpp\LICENSE" "%HOOK_OUT%\TigerClaw.Hook.Native.exe" "%TSF_X86%" "%TSF_X64%" "%TSF_ARM64%" "%TSF_SERVER%" "%WRAPPER_DLL%") do if not exist "%%~P" (
+for %%P in ("%CORE_OUT%\TigerClaw.Core.exe" "%UI_OUT%\TigerClaw.Overlay.exe" "%UI_OUT%\TigerClaw.Dialog.exe" "%UI_OUT%\TigerClaw.Shared.dll" "%SENTENCE_OUT%\TigerClaw.Sentence.exe" "%SENTENCE_QWEN_MODEL%" "%SENTENCE_QWEN_LICENSE%" "%ROOT%\third_party\llama.cpp\LICENSE" "%HOOK_OUT%\TigerClaw.Hook.Native.exe" "%TSF_X86%" "%TSF_X64%" "%TSF_ARM64%" "%TSF_SERVER%" "%WRAPPER_DLL%") do if not exist "%%~P" (
   echo ERROR: Missing %%~P
   exit /b 1
 )
@@ -165,10 +165,7 @@ if not exist "%RELEASE_DIR%\Models" mkdir "%RELEASE_DIR%\Models"
 if exist "%RELEASE_DIR%\Models\sentence-ngram.bin" del /q "%RELEASE_DIR%\Models\sentence-ngram.bin"
 if exist "%RELEASE_DIR%\Models\sentence-ngram.tcmodel" del /q "%RELEASE_DIR%\Models\sentence-ngram.tcmodel"
 copy /Y "%CORE_OUT%\TigerClaw.Core.exe" "%RELEASE_DIR%\TigerClaw.Core.exe" >nul || exit /b 1
-copy /Y "%CORE_OUT%\jointkenlm.dll" "%RELEASE_DIR%\jointkenlm.dll" >nul || exit /b 1
-copy /Y "%CORE_OUT%\Models\sentence-fivegram.klm" "%RELEASE_DIR%\Models\sentence-fivegram.klm" >nul || exit /b 1
-if not exist "%RELEASE_DIR%\licenses\kenlm" mkdir "%RELEASE_DIR%\licenses\kenlm"
-for %%F in (LICENSE COPYING COPYING.3 COPYING.LESSER.3) do copy /Y "%CORE_OUT%\licenses\kenlm\%%F" "%RELEASE_DIR%\licenses\kenlm\%%F" >nul || exit /b 1
+copy /Y "%CORE_OUT%\Models\sentence-fivegram-mobile.bin" "%RELEASE_DIR%\Models\sentence-fivegram-mobile.bin" >nul || exit /b 1
 if exist "%RELEASE_DIR%\TigerClaw.Core.exe.config" del /q "%RELEASE_DIR%\TigerClaw.Core.exe.config"
 copy /Y "%UI_OUT%\TigerClaw.Overlay.exe" "%RELEASE_DIR%\TigerClaw.Overlay.exe" >nul || exit /b 1
 if not exist "%UI_OUT%\TigerClaw.Overlay.exe.config" if exist "%RELEASE_DIR%\TigerClaw.Overlay.exe.config" del /q "%RELEASE_DIR%\TigerClaw.Overlay.exe.config"
@@ -185,7 +182,6 @@ for %%F in (sentence-transformer.onnx sentence-transformer.json sentence-transfo
 copy /Y "%SENTENCE_QWEN_MODEL%" "%RELEASE_DIR%\sentence\Models\sentence-qwen-q8.gguf" >nul || exit /b 1
 copy /Y "%ROOT%\third_party\llama.cpp\LICENSE" "%RELEASE_DIR%\sentence\licenses\llama.cpp-LICENSE.txt" >nul || exit /b 1
 copy /Y "%SENTENCE_QWEN_LICENSE%" "%RELEASE_DIR%\sentence\licenses\Qwen3-LICENSE.txt" >nul || exit /b 1
-copy /Y "%SENTENCE_MODEL_ROOT%\sentence-ngram-v2.bin" "%RELEASE_DIR%\Models\sentence-ngram-v2.bin" >nul || exit /b 1
 if exist "%RELEASE_DIR%\Models\sentence-ngram-mobile.bin" del /q "%RELEASE_DIR%\Models\sentence-ngram-mobile.bin" || exit /b 1
 copy /Y "%HOOK_OUT%\TigerClaw.Hook.Native.exe" "%RELEASE_DIR%\TigerClaw.exe" >nul || exit /b 1
 if exist "%ROOT%\next\TigerClaw.Dialog\bime.ico" copy /Y "%ROOT%\next\TigerClaw.Dialog\bime.ico" "%RELEASE_DIR%\bime.ico" >nul || exit /b 1

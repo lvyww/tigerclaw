@@ -34,10 +34,12 @@ namespace TigerClaw.Core.Tests
                     RunStartupContextTests();
                     return 0;
                 }
-                if (args.Length == 6 && args[0] == "--shape-fivegram-eval")
-                    return RunShapeFivegramEvaluation(args[1], args[2], args[3], args[4], args[5]);
+                if (args.Length == 5 && args[0] == "--shape-fivegram-eval")
+                    return RunShapeFivegramEvaluation(args[1], args[2], args[3], args[4]);
+                if (args.Length == 4 && args[0] == "--shape-fivegram-scores")
+                    return RunShapeFivegramScores(args[1], args[2], args[3]);
                 if (args.Length >= 1 && args[0] == "--shape-fivegram-tests")
-                    return RunShapeFivegramTests(args.Length > 1 ? args[1] : null, args.Length > 2 ? args[2] : null);
+                    return RunShapeFivegramTests(args.Length > 1 ? args[1] : null);
                 if (args.Length == 1 && args[0] == "--full-pinyin-tests") return RunFullPinyinTests();
                 if (args.Length == 2 && args[0] == "--full-pinyin-real-tests") return RunRealPinyinTests(args[1]);
                 if (args.Length == 2 && args[0] == "--fivegram-feedback-tests") return RunPinyinFeedbackTests(args[1], true);

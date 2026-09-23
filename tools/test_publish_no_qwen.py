@@ -29,7 +29,7 @@ def main():
             if not source.exists():
                 source = ROOT / 'release' / name
             shutil.copy2(source, release / name)
-        files = ['jointkenlm.dll', 'Models/sentence-fivegram.klm', 'licenses/kenlm/LICENSE', 'TigerClaw.Core.exe', 'TigerClaw.Overlay.exe', 'Overlay-THIRD-PARTY-NOTICES.txt',
+        files = ['jointkenlm.dll', 'Models/sentence-fivegram.klm', 'Models/sentence-fivegram-mobile.bin', 'licenses/kenlm/LICENSE', 'TigerClaw.Core.exe', 'TigerClaw.Overlay.exe', 'Overlay-THIRD-PARTY-NOTICES.txt',
                  'TigerClaw.Dialog.exe', 'TigerClaw.Dialog.exe.config', 'TigerClaw.exe',
                  'TigerClaw.Shared.dll', 'bime.ico', '更新日志.txt', '安装.bat', '卸载.bat',
                  '自定义选重键.txt', 'x64/TigerClaw.dll', 'Win32/TigerClaw.dll',
@@ -57,27 +57,28 @@ def main():
             listing = subprocess.check_output([str(release / '7z.exe'), 'l', '-slt', win(archive)]).decode(errors='replace')
             assert ('.gguf' in listing.lower()) == (not no_qwen)
             assert 'sentence-ngram-mobile.bin' not in listing
-            for name in ('sentence-ngram-v2.bin', 'sentence-fivegram.klm', 'jointkenlm.dll', 'TigerClaw.Sentence.exe', 'llama.cpp-LICENSE.txt'):
+            for name in ('sentence-ngram-v2.bin', 'sentence-fivegram.klm', 'jointkenlm.dll'):
+                assert name not in listing, name
+            for name in ('sentence-fivegram-mobile.bin', 'TigerClaw.Sentence.exe', 'llama.cpp-LICENSE.txt'):
                 assert name in listing, name
             assert (release / 'TigerClaw' / 'config.txt').read_text() == 'distribution config'
             subprocess.run([str(release / '7z.exe'), 't', win(archive)], check=True, capture_output=True)
         assert (release / 'Models/sentence-qwen-q8.gguf').read_text() == 'fixture'
         assert (release / 'Models/sentence-ngram-mobile.bin').read_text() == 'fixture'
-        # A fivegram without its scoring DLL must not become a silent trigram package.
+        # Q8 packages have no native KenLM dependency.
         dll = release / 'jointkenlm.dll'
         dll.rename(dll.with_suffix('.saved'))
-        result = subprocess.run(['cmd.exe', '/d', '/c', win(root / 'pack_release.bat'), 'missing-native'], capture_output=True)
-        assert result.returncode != 0
-        assert not list(release.glob('*missing-native*.7z'))
+        result = subprocess.run(['cmd.exe', '/d', '/c', win(root / 'pack_release.bat'), 'without-native'], capture_output=True)
+        assert result.returncode == 0
         dll.with_suffix('.saved').rename(dll)
         # A stale mobile model must not silently substitute for the chosen format.
-        model = release / 'Models/sentence-ngram-v2.bin'
+        model = release / 'Models/sentence-fivegram-mobile.bin'
         model.rename(model.with_suffix('.saved'))
         result = subprocess.run(['cmd.exe', '/d', '/c', win(root / 'pack_release.bat'), 'missing-model'], capture_output=True)
         assert result.returncode != 0
         assert not list(release.glob('*missing-model*.7z'))
         assert table.read_text() == 'fixture'
-        assert len(list(release.glob('*.7z'))) == 2
+        assert len(list(release.glob('*.7z'))) == 3
     print('No-Qwen/full packaging, stale models, wrapper failure propagation and CRC checks passed.')
 
 

@@ -16,7 +16,7 @@ namespace TigerClaw.Core
                 var loaded = SentenceFivegramModel.LoadAvailable(AppContext.BaseDirectory);
                 using var owned = loaded as IDisposable;
                 if (loaded is not SentenceFivegramModel)
-                    throw new InvalidOperationException("Fivegram unavailable; runtime selected trigram fallback or no model");
+                    throw new InvalidOperationException("Q8 fivegram unavailable; runtime has no sentence model");
                 var entries = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
                 foreach (string line in File.ReadLines(lexiconPath))
                 {

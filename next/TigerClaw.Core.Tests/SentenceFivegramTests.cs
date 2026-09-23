@@ -23,13 +23,6 @@ namespace TigerClaw.Core.Tests
                 return target == "五" ? (h.Count == 4 && h.D == '乙' ? 100 : -100) : 0;
             }
         }
-        [DllImport("jointkenlm", CallingConvention = CallingConvention.Cdecl)]
-        private static extern IntPtr joint_load_fivegram([MarshalAs(UnmanagedType.LPUTF8Str)] string path);
-        [DllImport("jointkenlm", CallingConvention = CallingConvention.Cdecl)]
-        private static extern double joint_sentence_score(IntPtr model, [MarshalAs(UnmanagedType.LPUTF8Str)] string tokens);
-        [DllImport("jointkenlm", CallingConvention = CallingConvention.Cdecl)]
-        private static extern void joint_free(IntPtr model);
-
         private static void ReviewHistoryDecoder(ISentenceLanguageModel model)
         {
             var lex = new Dictionary<string, List<string>> {
@@ -63,7 +56,7 @@ namespace TigerClaw.Core.Tests
             ReviewSame(decoder.Decode(raw + "aa", 20, true), full.DecodeFull(raw + "aa", 20, true));
         }
 
-        private static int RunShapeFivegramEvaluation(string modelPath, string priorPath, string fixture, string casesPath, string output)
+        private static int RunShapeFivegramEvaluation(string modelPath, string fixture, string casesPath, string output)
         {
             var lexicon = SentenceLexiconIndex.Build(LoadSentenceLexiconSource(Path.Combine(fixture, "tiger_sentence.codes.txt")),
                 SentenceCharacterRanks.TakeTop(1500), CoreRuntimeState.ParseCharacterSet(File.ReadAllText(Path.Combine(fixture, "tiger_sentence.full_code_whitelist.txt"))));
@@ -71,83 +64,84 @@ namespace TigerClaw.Core.Tests
                 .Select(x => x.Split('#')[0].Split((char[])null, StringSplitOptions.RemoveEmptyEntries))
                 .Where(x => x.Length > 0).Select(x => SentenceSupplementEntry.Create(x[0], x.Length > 1 ? long.Parse(x[1]) : 1000));
             var matcher = SentenceSupplementMatcher.Build(supplements);
-            using var prior = SentenceNgramModel.Load(priorPath);
-            using var five = new SentenceFivegramModel(modelPath, SentenceNgramModel.Load(priorPath));
+            using var five = new SentenceFivegramModel(modelPath);
             SentenceInputDecoder Create(ISentenceLanguageModel m) => new(lexicon, m,
                 emittedCharacterReward: 2, wholeInputSingleCharacterReward: 5,
                 supplementMatcher: matcher, allowDuplicateSingleCharacters: true,
                 canonicalCodeReward: 2, canonicalIsolationFactor: 0, canonicalIsolationMinCodeLength: 4,
                 lexicalPrior: SentenceLexicalPrior.LoadEmbedded(), lexicalPriorWeight: 0.1, lexicalCandidateLimit: 5);
-            using var a = Create(prior); using var b = Create(five);
+            using var b = Create(five);
             using var writer = new StreamWriter(output);
-            writer.WriteLine("id\tsource\tcode\ttarget\ttrigram\tfivegram\tfivegram_rank");
+            writer.WriteLine("id\tsource\tcode\ttarget\tfivegram\tfivegram_rank");
             int count = 0;
             foreach (string line in File.ReadLines(casesPath))
             {
                 var fields = line.Split('\t');
-                a.ResetDecodeCache(); b.ResetDecodeCache();
-                var x = a.Decode(fields[2], 20).Candidates; var y = b.Decode(fields[2], 20).Candidates;
-                writer.WriteLine(line + "\t" + x.FirstOrDefault()?.Text + "\t" + y.FirstOrDefault()?.Text + "\t" + (Array.FindIndex(y, c => c.Text == fields[3]) + 1));
+                b.ResetDecodeCache();
+                var y = b.Decode(fields[2], 20).Candidates;
+                writer.WriteLine(line + "\t" + y.FirstOrDefault()?.Text + "\t" + (Array.FindIndex(y, c => c.Text == fields[3]) + 1));
                 if (++count % 250 == 0) { writer.Flush(); Console.WriteLine("rows " + count); }
             }
             return 0;
         }
 
-        private static int RunShapeFivegramTests(string modelPath = null, string priorPath = null)
+        private static int RunShapeFivegramScores(string path, string queries, string output)
+        {
+            using var model = new SentenceFivegramModel(path);
+            using var session = model.CreateQuerySession();
+            using var writer = new StreamWriter(output);
+            foreach (string line in File.ReadLines(queries))
+            {
+                var h = session.BeginHistory; double score = 0;
+                foreach (string token in line.Split('\t')) score = session.Step(h, token, out h);
+                writer.WriteLine(score.ToString("R", CultureInfo.InvariantCulture));
+            }
+            return 0;
+        }
+
+        private static int RunShapeFivegramTests(string modelPath = null)
         {
             _reviewChecks = _reviewSnapshots = 0;
             ReviewHistoryDecoder(new HistoryTestModel());
             string folder = Path.Combine(Path.GetTempPath(), "tiger-shape-fivegram-" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(Path.Combine(folder, "Models"));
-            string priorFixture = Path.Combine(folder, "Models", "sentence-ngram-v2.bin");
+            string models = Path.Combine(folder, "Models"); Directory.CreateDirectory(models);
             try
             {
-                ReviewWriteModel(priorFixture);
-                var absent = SentenceFivegramModel.LoadAvailable(folder);
-                Review(absent is SentenceNgramModel, "absent fivegram uses trigram"); ((IDisposable)absent).Dispose();
-                File.WriteAllText(Path.Combine(folder, "Models", SentenceFivegramModel.FileName), "invalid model");
-                var corrupt = SentenceFivegramModel.LoadAvailable(folder);
-                Review(corrupt is SentenceNgramModel, "corrupt fivegram or absent DLL uses trigram"); ((IDisposable)corrupt).Dispose();
+                Review(SentenceFivegramModel.LoadAvailable(folder) == null, "missing Q8 has no model");
+                foreach (string name in new[] { "sentence-fivegram.klm", "sentence-ngram-v2.bin", "sentence-ngram-mobile.bin" })
+                    File.WriteAllText(Path.Combine(models, name), "retired format must not be opened");
+                Review(SentenceFivegramModel.LoadAvailable(folder) == null, "retired paths ignored");
+                string bad = Path.Combine(models, SentenceFivegramModel.FileName);
+                File.WriteAllBytes(bad, new byte[256]);
+                Review(SentenceFivegramModel.LoadAvailable(folder) == null, "corrupt Q8 has no model; no legacy fallback");
                 if (modelPath != null)
                 {
-                    var prior = SentenceNgramModel.Load(priorPath ?? priorFixture);
-                    using var model = new SentenceFivegramModel(modelPath, prior);
-                    ReviewHistoryDecoder(model);
-                    ReviewFuzz(model);
-                    // Full-state KenLM is an independent reference for the history ABI.
-                    IntPtr reference = joint_load_fivegram(modelPath); Review(reference != IntPtr.Zero, "reference load");
-                    try
+                    using var model = new SentenceFivegramModel(modelPath);
+                    ReviewHistoryDecoder(model); ReviewFuzz(model);
+                    double Score()
                     {
-                        Parallel.For(0, 8, worker => {
-                            using var session = model.CreateQuerySession();
-                            foreach (string text in new[] { "", "我", "马云雷军入选大亨名单", "新人上午来面试", "甲一二三五", "乙一二三五", "𠀀🙂的测试", "这是一个用于检查上下文状态的较长句子" })
-                            {
-                                var history = session.BeginHistory; double score = 0;
-                                var tokens = new List<string>();
-                                var e = StringInfo.GetTextElementEnumerator(text);
-                                while (e.MoveNext()) { string t = e.GetTextElement(); tokens.Add(t); score += session.Step(history, t, out history); }
-                                score += session.Step(history, "\u0003", out _);
-                                double expected = joint_sentence_score(reference, string.Join(" ", tokens)) * Math.Log(10);
-                                Review(Math.Abs(score - expected) < 1e-9, "full-state probability parity including BOS/EOS/OOV");
-                                Review(session.HasObservedBigram("一", "国") == prior.HasObservedBigram("一", "国"), "original isolation prior retained");
-                            }
-                        });
+                        using var q = model.CreateQuerySession(); var h = q.BeginHistory; double sum = 0;
+                        foreach (string t in new[] { "我", "𠀀", "🙂", "的", "测试", "\u0003" }) sum += q.Step(h, t, out h);
+                        return sum;
                     }
-                    finally { joint_free(reference); }
+                    double reference = Score();
+                    Parallel.For(0, 8, _ => ReviewNumber(reference, Score(), "concurrent sessions and OOV/BOS/EOS"));
                     using var retained = model.CreateQuerySession();
-                    var begin = retained.BeginHistory;
-                    double before = retained.Step(begin, "我", out _);
+                    var begin = retained.BeginHistory; double before = retained.Step(begin, "我", out _);
+                    Review(!retained.HasObservedBigram("not-in-vocabulary", "我"), "OOV is not an observed bigram");
                     model.Dispose();
-                    ReviewNumber(before, retained.Step(begin, "我", out _), "retired native model kept alive by decoder lease");
+                    Review(!model.MappingClosed, "retired mapping retained by query lease");
+                    ReviewNumber(before, retained.Step(begin, "我", out _), "retained lease scores after owner disposal");
                     bool rejected = false;
                     try { model.CreateQuerySession(); } catch (ObjectDisposedException) { rejected = true; }
-                    Review(rejected, "disposed owner rejects new queries");
+                    Review(rejected, "disposed owner rejects new sessions");
                     retained.Dispose();
+                    Review(model.MappingClosed, "last lease closes mapping");
                     rejected = false;
                     try { retained.Step(begin, "我", out _); } catch (ObjectDisposedException) { rejected = true; }
-                    Review(rejected && prior.MappingClosed, "last lease closes native and prior resources");
+                    Review(rejected, "disposed session rejects access");
                 }
-                Console.WriteLine($"Shape fivegram passed: {_reviewChecks} checks, {_reviewSnapshots} snapshots; real model={modelPath != null}");
+                Console.WriteLine($"Shape Q8 passed: {_reviewChecks} checks, {_reviewSnapshots} snapshots; real model={modelPath != null}");
                 return 0;
             }
             finally { Directory.Delete(folder, true); }

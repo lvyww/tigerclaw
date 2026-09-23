@@ -1,7 +1,7 @@
 -- Run in the isolated public-pack layout. Production decoder and processor,
 -- with a small host/LevelDb fake; never touches an installed input method.
 local repo = arg[1] or "."
-package.path = repo .. "/lua/?.lua;" .. package.path
+package.path = repo .. "/rime/tiger_sentence/lua/?.lua;" .. package.path
 rime_api = {get_user_data_dir=function() return repo end}
 local databases = {}
 local writes, fail_write = 0, false
@@ -174,7 +174,7 @@ lock_type();lock_press("Tab");local previous=writes;lock_press("a")
 check(writes==previous+1,"Tab next letter submission learns")
 check(lock_ctx.input=="a","Tab learning keeps live raw suffix")
 sentence.processor_component.fini(lock_env)
-local reopened = dofile(repo.."/lua/tiger_sentence_learning.lua")
+local reopened = dofile(repo.."/rime/tiger_sentence/lua/tiger_sentence_learning.lua")
 local persisted = reopened.open("tiger_sentence_learning_"..learning.hash("learning-test"))
 check(persisted.count==1 and #persisted.events==1,"database restart loads only the explicit correction")
 local saved=persisted.events[1]

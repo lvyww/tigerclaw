@@ -22,7 +22,7 @@ def main():
                 'config_version: "1.0"\nschema_list:\n  - schema: tiger_sentence\n'
                 'menu:\n  page_size: 20\nrecognizer:\n  patterns: {}\n')
             (root / 'models').mkdir()
-            (root / 'models/sentence-ngram-mobile.bin').symlink_to(Path(args.model).resolve())
+            (root / 'models/sentence-fivegram-mobile.bin').symlink_to(Path(args.model).resolve())
             subprocess.run([str(Path(args.exe).resolve()), str(root), str(shared),
                             str(Path(args.plugin).resolve()), selection], check=True, timeout=120)
 

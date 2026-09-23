@@ -56,10 +56,7 @@ if not exist "%SENTENCE_OUT%\Models" mkdir "%SENTENCE_OUT%\Models"
 if exist "%UNIFIED_OUT%\Models\sentence-ngram.bin" del /q "%UNIFIED_OUT%\Models\sentence-ngram.bin"
 if exist "%UNIFIED_OUT%\Models\sentence-ngram.tcmodel" del /q "%UNIFIED_OUT%\Models\sentence-ngram.tcmodel"
 if exist "%UNIFIED_OUT%\Models\sentence-ngram-v2.tcmodel" del /q "%UNIFIED_OUT%\Models\sentence-ngram-v2.tcmodel"
-if exist "%SENTENCE_MODEL_ROOT%\sentence-ngram-mobile.bin" (
-  copy /Y "%SENTENCE_MODEL_ROOT%\sentence-ngram-mobile.bin" "%UNIFIED_OUT%\Models\sentence-ngram-mobile.bin" >nul || exit /b 1
-  if exist "%UNIFIED_OUT%\Models\sentence-ngram-v2.bin" del /q "%UNIFIED_OUT%\Models\sentence-ngram-v2.bin"
-)
+
 if exist "%SENTENCE_QWEN_MODEL%" copy /Y "%SENTENCE_QWEN_MODEL%" "%SENTENCE_OUT%\Models\sentence-qwen-q8.gguf" >nul
 
 if exist "%HOOK_NATIVE_PROJECT%" (

@@ -2,7 +2,7 @@
 -- The fake implements byte-offset insertion/deletion and lazy Menu::Prepare.
 local repo = arg[1] or "."
 rime_api = {get_user_data_dir = function() return repo end}
-local sentence = dofile(os.getenv("TIGER_SENTENCE_MODULE") or (repo .. "/lua/tiger_sentence.lua"))
+local sentence = dofile(os.getenv("TIGER_SENTENCE_MODULE") or (repo .. "/rime/tiger_sentence/lua/rime/tiger_sentence/tiger_sentence.lua"))
 sentence.set_model_enabled(false)
 sentence.ensure_lexicon(nil)
 local checks, cases = 0, 0

@@ -37,4 +37,4 @@
 
 - [虎爪全拼内测版：实现、构建与验收](FULL_PINYIN.md)
 - [全拼性能优化：实现、测量、回归与部署](PINYIN_PERFORMANCE_20260922.md)
-- [虎整句压缩五阶：主线接入、发布与验证](SHAPE_FIVEGRAM.md)
+- [虎整句 Q8 五阶：主线格式、发布与验证](SHAPE_FIVEGRAM.md)

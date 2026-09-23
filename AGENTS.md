@@ -88,27 +88,24 @@ Active components:
   feasibility was evaluated offline only; see
   `tools/FullPinyinEval/HigherOrder/TIGER_SHAPE.md`. Do not deploy it implicitly.
 
-- Tiger shape-code compressed fivegram (2026-09-22) is now integrated into the
-  maintained C# Core search. `SentenceFivegramModel` prefers
-  `Models/sentence-fivegram.klm` (419,929,926 bytes, pure characters) plus the updated
-  `jointkenlm.dll`; missing/failed model or old ABI falls back to the original
-  trigram. Beam paths carry four token IDs, including BOS until it leaves the
-  window, through expansion/EOS, incremental reuse and locked prefixes. The
-  original trigram remains ONLY for observed-bigram isolation priors while
-  fivegram is active. Query sessions lease both native and mapped resources.
-  Debug/full release builds stage the verified model, DLL and KenLM licenses;
-  Core-only publishing still does not replace models/dependencies. Offline C#
-  20k first candidates match the frozen Lua run exactly: old 9958, fresh 9968,
-  total 19926 (trigram 19893). Both ARM64/x64 AOT probes pass. On 2026-09-22
-  16:51, at the user's explicit request, full-pinyin r3 was unregistered and the
-  maintained mainline was installed from the existing release_arm64 directory.
-  HKCU/HKLM CorePath, autorun, live Core/Overlay, Tiger sentence scheme and mapped
-  fivegram/DLL were verified. Existing mainline config/data were preserved
-  (Qwen and early commit are ON); the old pinyin directory/journals remain backed
-  up. No new Desktop installation directory remains. Evidence:
-  next/_run/MainlineInstall/installed-runtime.json. This supersedes earlier r3
-  active-install notes. Fivegram real-app typing and early commit calibration
-  remain unaccepted. See docs/SHAPE_FIVEGRAM.md.
+- Tiger shape-code mainline now uses the shared Rime TCSKNM03 Q8 fivegram
+  (2026-09-24, explicitly requested by the user):
+  `Models/sentence-fivegram-mobile.bin`, 356,492,204 bytes, SHA256
+  `5c46b7c2734886e868c6207a724f4dff2d9c64cb3eba193e7dd44ea9df244361`.
+  `SentenceFivegramModel` maps this format directly in managed C#; no shape
+  KenLM DLL, KLM reader or legacy trigram fallback remains. The same file supplies
+  observed-bigram isolation priors. Missing/corrupt models use the existing
+  no-model behavior. Query sessions lease the mapping through cancellation,
+  incremental reuse and locked prefixes. Historical trigram fixture readers live
+  only in Core.Tests, not the Core assembly. Full-pinyin KenLM is unrelated and
+  unchanged. Debug/full builds stage only the verified Q8 model; release packing
+  excludes stale KLM/trigram/native dependencies. Core-only publishing still does
+  not replace models, so this migration needs matching Core and Q8 model.
+  ARM64/x64 AOT isolated probes and Q8/decoder/lifecycle tests pass. Mainline
+  source and artifacts are updated; this change has not been deployed to the
+  daily `release_arm64` installation. The prior 2026-09-22 installed Core/model,
+  config and user data remain preserved. See docs/SHAPE_FIVEGRAM.md for results,
+  source identity, packaging and real-app acceptance limits.
 
 - Full-pinyin performance implementation (2026-09-22): compact source-order-preserving
   code/syllable indexes, streaming pooled tokens, physical-file-keyed shared resource
@@ -262,16 +259,13 @@ block Core on a paused reader. Contract: `Protocol/ui_state.md`.
   Manual sentence navigation freezes Qwen ordering for that generation; editing
   raw code re-enables reranking. Apply a Beam generation only once, including
   when a synchronous key-path completion races the asynchronous worker.
-- Modified Kneser-Ney V2 prefers `sentence-ngram-mobile.bin` (TCSKNM02), with
-  `sentence-ngram-v2.bin` (TCSKNM01) compatibility; both are mapped read-only.
-  Search Models/ then runtime root for mobile, then the same legacy locations.
-  Mobile context-position caches belong to query sessions and are bounded;
-  model pages remain OS-managed. Preserve zero-valued observed records, empty
-  contexts' backoff weights, and includeUnigram=false scoring. Windows release
-  packages use only legacy v2 layout by user preference (download size); they
-  use full-kn-m5-v2 parameters (mainline default since 2026-09-20, matching
-  Rime). Debug builds and Rime use mobile.
-  Core-only upgrades do not replace models. Beam
+- Shape sentence loading is TCSKNM03-only (Q8 version 2 mainline, same-format
+  Q16 version 1 readable). Search Models/ then runtime root for
+  `sentence-fivegram-mobile.bin`; never search KLM or legacy trigram paths.
+  Rime likewise searches only this fivegram filename. Preserve observed records
+  independently of quantized zero codes and preserve empty-context backoff.
+  Models are mapped read-only in Core and paged in Lua. Core-only upgrades do
+  not replace model files. Beam
   expansion adds `2.0` per emitted Unicode character. Supplemental entries use
   `clamp(9 + 2 * ln(weight / 1000), 0, 16)` and affect sentence ranking only.
   A whole-input single-character candidate gets a ranking-only `5.0` reward
@@ -492,7 +486,7 @@ Input behavior and data:
 - `next/TigerClaw.Core/InputMethodEngine.cs`
 - `next/TigerClaw.Core/CoreRuntimeState.cs`
 - `next/TigerClaw.Core/SentenceInputDecoder.cs`
-- `next/TigerClaw.Core/SentenceNgramModel.cs`
+- `next/TigerClaw.Core/SentenceFivegramModel.cs`
 - `next/TigerClaw.Core/SentenceSupplementModel.cs`
 
 TSF/UI:
@@ -675,15 +669,13 @@ release tree. Keep `.bat` files CRLF.
     from Releases, data-file customization. Do not leak internal paths
     (`release_arm64/`, `dist_config.txt`, dev model paths) into it; the Lua
     module keeps its inert dev fallback paths to stay byte-identical.
-  - The n-gram model never enters git (above the 100 MB limit); it
-    ships only as a Release attachment. Canonical local copy:
-    `C:\Archive\tigerclaw_sentence_ml\runtime\sentence-ngram-mobile.bin`
-    (2026-09-20 full-kn-m5-v2, 469886928 bytes; SHA256
-    `c0063898fdff27c1fb00c1c72fa28a6c1b375fade1ec2045d731b9db958bdecc`).
-    The legacy Windows TCSKNM01 copy holds the same parameters (606906584 bytes);
-    Windows release packages use this v2 layout; Rime keeps mobile. Conversion,
-    identities and evaluation limits are in `tools/README_sentence_neural.md`.
-    Local replacement does not upload or replace public Release attachments.
+  - The Q8 fivegram never enters git (above the 100 MB limit); distribute it
+    as a release attachment. Canonical local source is
+    `C:\Archive\tigerclaw_sentence_ml\runtime\sentence-fivegram-mobile.bin`,
+    356,492,204 bytes, SHA256
+    `5c46b7c2734886e868c6207a724f4dff2d9c64cb3eba193e7dd44ea9df244361`.
+    Both mainlines use the same file. No old KLM or trigram reader fallback.
+    Local changes do not publish public Release attachments automatically.
   - Release procedure per version: sync files into the mirror layout ->
     run the full test suite from the mirror layout (Lua 5.4 with model and
     luajit no-model) -> tag `vX.Y.Z` and push (SSH works) -> build the

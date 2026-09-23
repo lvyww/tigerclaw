@@ -60,15 +60,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "if(-not (Test-Path -LiteralPath $armSentenceLexicon)){ throw ('Missing sentence lexicon: {0}' -f $armSentenceLexicon) };" ^
   "New-Item -ItemType Directory -Path (Split-Path -Parent $releaseSentenceLexicon) -Force | Out-Null;" ^
   "Copy-Item -LiteralPath $armSentenceLexicon -Destination $releaseSentenceLexicon -Force;" ^
-  "$items=@('jointkenlm.dll','licenses','TigerClaw.Core.exe','TigerClaw.Overlay.exe','Overlay-THIRD-PARTY-NOTICES.txt','TigerClaw.Dialog.exe','TigerClaw.Dialog.exe.config','TigerClaw.exe','TigerClaw.Shared.dll','bime.ico',$changelog,$installBat,$uninstallBat,'x64','Win32','Models','sentence','sounds',$fontDir,$reverseDir,$lexiconDir,$selectionKeys);" ^
+  "$items=@('licenses','TigerClaw.Core.exe','TigerClaw.Overlay.exe','Overlay-THIRD-PARTY-NOTICES.txt','TigerClaw.Dialog.exe','TigerClaw.Dialog.exe.config','TigerClaw.exe','TigerClaw.Shared.dll','bime.ico',$changelog,$installBat,$uninstallBat,'x64','Win32','Models','sentence','sounds',$fontDir,$reverseDir,$lexiconDir,$selectionKeys);" ^
   "if(Test-Path -LiteralPath (Join-Path $release 'TigerClaw.Overlay.exe.config')){ $items += 'TigerClaw.Overlay.exe.config' };" ^
   "foreach($item in $items){ $src=Join-Path $release $item; if(-not (Test-Path -LiteralPath $src)){ throw ('Missing required item: {0}' -f $src) } };" ^
-  "if(-not (Test-Path -LiteralPath (Join-Path $release 'Models\sentence-ngram-v2.bin') -PathType Leaf)){ throw 'Missing release v2 n-gram model; run publish before packing' };" ^
-  "if(-not (Test-Path -LiteralPath (Join-Path $release 'Models\sentence-fivegram.klm') -PathType Leaf)){ throw 'Missing release shape fivegram; run publish before packing' };" ^
-  "if(-not (Test-Path -LiteralPath (Join-Path $release 'licenses\kenlm\LICENSE') -PathType Leaf)){ throw 'Missing KenLM license' };" ^
+  "if(-not (Test-Path -LiteralPath (Join-Path $release 'Models\sentence-fivegram-mobile.bin') -PathType Leaf)){ throw 'Missing release shape fivegram; run publish before packing' };" ^
   "if(Test-Path -LiteralPath $stage){ Remove-Item -LiteralPath $stage -Recurse -Force };" ^
   "New-Item -Path $stage -ItemType Directory -Force | Out-Null;" ^
-  "function Copy-Payload($src,$dst){ if(Test-Path -LiteralPath $src -PathType Container){ New-Item -ItemType Directory -Path $dst -Force | Out-Null; foreach($child in Get-ChildItem -LiteralPath $src -Force){ Copy-Payload $child.FullName (Join-Path $dst $child.Name) } } elseif(([IO.Path]::GetFileName($src) -ine 'sentence-ngram-mobile.bin') -and -not ($noQwen -and [IO.Path]::GetExtension($src) -ieq '.gguf')){ Copy-Item -LiteralPath $src -Destination $dst -Force } };" ^
+  "function Copy-Payload($src,$dst){ if(([IO.Path]::GetFileName($src) -ieq 'kenlm') -and ((Split-Path (Split-Path $src -Parent) -Leaf) -ieq 'licenses')){ return }; if(Test-Path -LiteralPath $src -PathType Container){ New-Item -ItemType Directory -Path $dst -Force | Out-Null; foreach($child in Get-ChildItem -LiteralPath $src -Force){ Copy-Payload $child.FullName (Join-Path $dst $child.Name) } } elseif(([IO.Path]::GetFileName($src) -notin @('sentence-ngram-mobile.bin','sentence-ngram-v2.bin','sentence-ngram.bin','sentence-ngram.tcmodel','sentence-ngram-v2.tcmodel','sentence-fivegram.klm','jointkenlm.dll')) -and -not ($noQwen -and [IO.Path]::GetExtension($src) -ieq '.gguf')){ Copy-Item -LiteralPath $src -Destination $dst -Force } };" ^
   "foreach($item in $items){ Copy-Payload (Join-Path $release $item) (Join-Path $stage $item) };" ^
   "Copy-Item -LiteralPath $distConfig -Destination (Join-Path $stage 'config.txt') -Force;" ^
   "$fileName = '{0}-{1}.7z' -f $imeName,$version;" ^

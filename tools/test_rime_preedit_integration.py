@@ -16,7 +16,7 @@ def main():
         isolated_sources(root)
         if args.production_model:
             (root / 'models').mkdir()
-            (root / 'models/sentence-ngram-mobile.bin').symlink_to(Path(args.production_model).resolve())
+            (root / 'models/sentence-fivegram-mobile.bin').symlink_to(Path(args.production_model).resolve())
         shared = root / '_shared'
         shared.mkdir()
         (shared / 'default.yaml').write_text(
