@@ -4,6 +4,7 @@
 #include "Placement.h"
 #include "MenuDismiss.h"
 #include "FrameTransition.h"
+#include "AnimationWake.h"
 #include <shellapi.h>
 #include <shellscalingapi.h>
 #include <windowsx.h>
@@ -32,6 +33,12 @@ namespace tiger::overlay
         std::wstring directory_;
         Renderer candidateRenderer_, statusRenderer_, transitionRenderer_;
         FrameTransition transition_;
+        AnimationWake animationWake_;
+        double (*animationClock_)() = AnimationNow;
+        RefreshRateCache rateCache_;
+        unsigned rateHz_ = 60;
+        bool transitionDeferred_ = false, transitionFinish_ = false;
+        static constexpr UINT AnimationMessage = WM_APP + 0x155;
         bool transitionsEnabled_ = true;
         bool frameCanBeHeld_ = false;
         bool blankResidence_ = false;
@@ -51,9 +58,17 @@ namespace tiger::overlay
         // and reject the older publication without reusing an active renderer.
         struct FrameGuard
         {
-            bool& active;
-            explicit FrameGuard(bool& value) : active(value) { active = true; }
-            ~FrameGuard() { active = false; }
+            Application& app;
+            explicit FrameGuard(Application& value) : app(value) { app.inFrame_ = true; }
+            ~FrameGuard()
+            {
+                app.inFrame_ = false;
+                if (app.transitionDeferred_)
+                {
+                    app.transitionDeferred_ = false;
+                    app.TransitionTick(app.transitionFinish_);
+                }
+            }
         };
         static bool CanRetainFrame(const Display& display)
         {
@@ -230,27 +245,39 @@ namespace tiger::overlay
             candidateDrawn_ = false; // completion must rebuild, never reuse a stale layout
             if (!CanHoldCandidateFrame()) HideImmediately();
         }
-        unsigned RefreshRate(POINT point)
+        unsigned RefreshRate(const FrameRect& rect)
         {
-            MONITORINFOEXW monitor{}; monitor.cbSize = sizeof(monitor);
-            DEVMODEW mode{}; mode.dmSize = sizeof(mode);
-            if (GetMonitorInfoW(MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST), &monitor) &&
-                EnumDisplaySettingsW(monitor.szDevice, ENUM_CURRENT_SETTINGS, &mode) && mode.dmDisplayFrequency > 1)
-                return mode.dmDisplayFrequency;
-            return 60;
+            RECT bounds{rect.x, rect.y, rect.x + rect.width, rect.y + rect.height};
+            auto screen = MonitorFromRect(&bounds, MONITOR_DEFAULTTONEAREST);
+            rateHz_ = rateCache_.Get(reinterpret_cast<std::uintptr_t>(screen), animationClock_(), [screen] {
+                MONITORINFOEXW monitor{}; monitor.cbSize = sizeof(monitor);
+                DEVMODEW mode{}; mode.dmSize = sizeof(mode);
+                return GetMonitorInfoW(screen, &monitor) &&
+                    EnumDisplaySettingsW(monitor.szDevice, ENUM_CURRENT_SETTINGS, &mode) ? mode.dmDisplayFrequency : 0u;
+            });
+            return rateHz_;
+        }
+        bool ScheduleTransition()
+        {
+            RECT r{}; GetWindowRect(candidate_, &r);
+            auto hz = RefreshRate({r.left, r.top, r.right-r.left, r.bottom-r.top});
+            return animationWake_.Initialize(candidate_, AnimationMessage) &&
+                animationWake_.Arm(transition_.Next(animationClock_(), hz));
         }
 
         void StopTransition()
         {
-            transition_.Cancel(); KillTimer(candidate_, 4); pendingPlacement_.reset();
+            transition_.Cancel(); animationWake_.Cancel(); transitionDeferred_ = transitionFinish_ = false; pendingPlacement_.reset();
         }
-        void TransitionTick()
+        void TransitionTick(bool finish = false)
         {
-            if (inFrame_ || !transition_.Active() || !pendingPlacement_) return;
-            FrameGuard guard(inFrame_);
+            if (inFrame_) { transitionDeferred_ = true; transitionFinish_ |= finish; return; }
+            if (!transition_.Active() || !pendingPlacement_) return;
+            transitionFinish_ = false;
+            FrameGuard guard(*this);
             const auto revision = visualRevision_;
             auto placement = *pendingPlacement_;
-            auto rect = transition_.Sample(GetTickCount64());
+            auto rect = transition_.Sample(finish ? transition_.End() : animationClock_());
             POINT point{rect.x, rect.y}; SIZE size{std::max(1, rect.width), std::max(1, rect.height)};
             try
             {
@@ -262,13 +289,21 @@ namespace tiger::overlay
                 }
                 else
                 {
-                    KillTimer(candidate_, 4);
+                    animationWake_.Cancel();
                     PresentCandidate(candidateRenderer_, point, revision);
                     if (ShowCandidate(revision))
                     {
                         placement_ = placement;
                         pendingPlacement_.reset();
                     }
+                }
+                if (transition_.Active() && !ScheduleTransition())
+                {
+                    auto target = transition_.Target();
+                    StopTransition();
+                    POINT finalPoint{target.x, target.y};
+                    PresentCandidate(candidateRenderer_, finalPoint, revision);
+                    if (ShowCandidate(revision)) placement_ = placement;
                 }
             }
             catch (...)
@@ -291,12 +326,13 @@ namespace tiger::overlay
                     transition_.Duration() != static_cast<unsigned>(state_.animationDurationMs))
                 {
                     StopTransition();
-                    transition_.Start(from, target, GetTickCount64(), RefreshRate(destination),
+                    transition_.Start(from, target, animationClock_(), RefreshRate(target),
                         state_.animationDurationMs);
-                    if (transition_.Active() && SetTimer(candidate_, 4, transition_.Interval(), nullptr))
+                    if (transition_.Active() && animationWake_.Initialize(candidate_, AnimationMessage) &&
+                        animationWake_.Arm(transition_.Next(animationClock_(), rateHz_)))
                     { pendingPlacement_ = placement; return; }
                 }
-                else { pendingPlacement_ = placement; return; }
+                else if (ScheduleTransition()) { pendingPlacement_ = placement; return; }
             }
             StopTransition();
             PresentCandidate(candidateRenderer_, destination, revision);
@@ -403,7 +439,7 @@ namespace tiger::overlay
                     HideImmediately();
                 return;
             }
-            FrameGuard guard(inFrame_);
+            FrameGuard guard(*this);
             if (RefreshBlankResidence(revision))
             {
                 RefreshStatus(force);
@@ -690,9 +726,14 @@ namespace tiger::overlay
             case WM_ERASEBKGND: return 1;
             case WM_PAINT: { PAINTSTRUCT paint{}; BeginPaint(hwnd, &paint); EndPaint(hwnd, &paint); return 0; }
             case RefreshMessage: refreshQueued_ = false; Refresh(true); return 0;
+            case AnimationMessage:
+            {
+                bool failed = false;
+                if (animationWake_.Take(wp, &failed)) TransitionTick(failed);
+                return 0;
+            }
             case WM_TIMER:
-                if (wp == 4) TransitionTick();
-                else if (wp == 2) CheckMenuDismiss();
+                if (wp == 2) CheckMenuDismiss();
                 else { if (wp == 3) KillTimer(candidate_, 3); Refresh(false); }
                 return 0;
             case StateMessage:
@@ -776,7 +817,8 @@ namespace tiger::overlay
                 return 0;
             case WM_LBUTTONUP: if (dragging_) { dragging_ = false; ReleaseCapture(); } return 0;
             case WM_CAPTURECHANGED: dragging_ = false; return 0;
-            case WM_DPICHANGED: case WM_DISPLAYCHANGE: Refresh(true); return 0;
+            case WM_DPICHANGED: case WM_DISPLAYCHANGE:
+                rateCache_.Invalidate(); Refresh(true); return 0;
             case WM_SETTINGCHANGE:
                 if (wp == SPI_SETWORKAREA) { Refresh(true); return 0; }
                 break;
@@ -806,6 +848,7 @@ namespace tiger::overlay
         }
         ~Application()
         {
+            animationWake_.Shutdown();
             source_.reset(); commands_.reset();
             if (candidate_) DestroyWindow(candidate_);
             if (status_) DestroyWindow(status_);

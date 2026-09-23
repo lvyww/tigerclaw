@@ -20,6 +20,19 @@ int main()
         for (const auto& range : pinyinDisplay.candidateRanges)
             Check(range.first >= 0 && range.second > 0 && range.first + range.second <= static_cast<int>(pinyinDisplay.text.size()), "candidate hit range bound");
         FrameTransition transition;
+        RefreshRateCache rates;
+        unsigned queries=0, rate=144;
+        auto query=[&] { ++queries; return rate; };
+        Check(rates.Get(1,0,query)==144 && queries==1, "initial display query");
+        rate=240;
+        Check(rates.Get(1,1999,query)==144 && queries==1, "refresh cache TTL");
+        Check(rates.Get(1,2000,query)==240 && queries==2, "same display rate changed");
+        rate=75;
+        Check(rates.Get(2,2001,query)==75 && queries==3, "cross display immediate query");
+        rates.Invalidate(); rate=0;
+        Check(rates.Get(2,2002,query)==60 && queries==4, "display notification and query failure fallback");
+        for(unsigned invalid:{1,29,1001}) { rates.Invalidate();rate=invalid;
+            Check(rates.Get(2,2003,query)==60,"invalid display rate fallback"); }
         State animated;
         Check(ParseState(R"({})", animated) && animated.animationEnabled &&
             animated.animationDurationMs == 200, "default geometry animation duration");
@@ -33,19 +46,35 @@ int main()
         for (FrameRect target : {FrameRect{200,300,400,200}, FrameRect{100,200,600,300}, FrameRect{100,200,200,100}})
         {
             transition.Start(from, target, 1000, 60);
-            Check(transition.Duration() == 200 && transition.Interval() == 4, "all geometry shares default duration");
+            Check(transition.Duration() == 200 && transition.Interval() == 1000.0/60, "all geometry shares default duration");
             Check(transition.Sample(1000) == from, "starts at displayed rectangle");
             auto middle = transition.Sample(1100);
             Check(middle != from && middle != target, "intermediate geometry");
             Check(transition.Sample(1200) == target && !transition.Active(), "deadline reaches target");
             transition.Start(middle, from, 2000, 144, 350);
-            Check(transition.Duration() == 350 && transition.Interval() == 2, "custom duration preserves cadence");
+            Check(transition.Duration() == 350 && transition.Interval() == 1000.0/144, "custom duration preserves cadence");
             Check(transition.Sample(2000) == middle && transition.Sample(2350) == from, "interruption starts from current rectangle");
         }
         transition.Start(from, {0,0,10,10}, 0, 60, 0);
         Check(!transition.Active() && transition.Sample(0).width == 10, "zero duration is immediate");
         transition.Cancel();
         Check(!transition.Active(), "cancel clears animation");
+        for (unsigned hz : {30,60,75,120,144,165,240,360,1000})
+        {
+            transition.Start(from, {1000,2000,800,600}, 123.25, hz, 60000);
+            for (int i=0;i<10000;++i)
+            {
+                double now = 123.25 + i*5.91;
+                double next = transition.Next(now,hz);
+                Check(next > now && next-now <= 1000.0/hz + 1e-8, "future deadline skips missed frames");
+                double index = (next-123.25)*hz/1000;
+                Check(std::abs(index-std::round(index)) < 1e-7, "no accumulated cadence drift");
+            }
+            auto before = transition.Sample(30123.25);
+            transition.Next(30123.25, hz==60?144:60);
+            Check(transition.Sample(30123.25)==before, "rate change preserves progress");
+            Check(transition.Sample(70000)==transition.Target() && !transition.Active(), "blocked UI lands at final geometry");
+        }
         MenuDismiss dismiss{false, true, false};
         Check(!dismiss.Update(false, false, true, false), "opening right-button hold does not dismiss");
         Check(!dismiss.Update(false, false, false, false), "button release does not dismiss");

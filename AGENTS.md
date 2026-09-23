@@ -158,6 +158,14 @@ Active components:
   2026-09-09. Release x64/ARM64 and debug builds default to this implementation.
   `next/build_overlay.bat` is the shared build entry; it does not deploy.
   `--demo` remains isolated from production IPC. See its README for validation.
+  Candidate animation now follows monitor display-mode refresh rate (2026-09-24):
+  QPC elapsed-time sampling, high-resolution one-shot waitable timer with ordinary
+  fallback, one generation-tagged queued wake, two-second monitor cache and
+  display/DPI invalidation. Preserve existing duration/easing, first-show/hold/
+  residence behavior and final-publication-only placement history. No IPC/settings
+  changes. ARM64/x64 isolated tests pass; hardware timing tested at 60 Hz only,
+  other rates/cross-monitor changes simulated. See Native README and
+  `next/_run/OverlayRefresh/` for measurements and Overlay-only deployment backup.
 - `next/TigerClaw.Overlay/`: retained WPF fallback and display-parity reference.
   Set `TIGERCLAW_OVERLAY_BACKEND=wpf` before building to explicitly use it.
 - `next/TigerClaw.Dialog/`: settings, add-word and selection-key UI.

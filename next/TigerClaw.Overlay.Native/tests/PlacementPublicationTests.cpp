@@ -44,6 +44,7 @@ struct PlacementPublicationProbe
     RECT work{};
     PlacementPublicationProbe()
     {
+        app.animationClock_ = [] { return double(history_probe::nowTick); };
         using namespace history_probe;
         nowTick+=1000; frames.clear(); failPresent=failShow=0;duringPresent={};
         for(const auto name:{CandidateClass,StatusClass})
@@ -137,6 +138,20 @@ struct PlacementPublicationProbe
         }
         {
             PlacementPublicationProbe p;p.app.state_.animationEnabled=true;p.app.transitionsEnabled_=true;
+            p.Rows(5);p.app.Refresh(false);nowTick+=50;
+            duringPresent=[&] { nowTick+=30;p.app.TransitionTick(); };
+            auto before=frames.size();p.app.TransitionTick();
+            Check(frames.size()>=before+2 && !p.app.transitionDeferred_,"reentrant wake lost next frame");
+            nowTick+=300;p.app.TransitionTick();p.Above();
+            Check(p.app.placement_.RecordCount()==2,"reentrant completion counted once");++cases;
+        }
+        {
+            PlacementPublicationProbe p;p.app.state_.animationEnabled=true;p.app.transitionsEnabled_=true;
+            p.Rows(5);p.app.Refresh(false);p.app.TransitionTick(true);p.Above();
+            Check(!p.app.transition_.Active() && p.app.placement_.RecordCount()==2,"scheduler failure did not publish final frame");++cases;
+        }
+        {
+            PlacementPublicationProbe p;p.app.state_.animationEnabled=true;p.app.transitionsEnabled_=true;
             p.Rows(5);p.app.Refresh(false);p.Hide();
             nowTick+=1000;p.app.TransitionTick();
             Check(p.app.placement_.RecordCount()==1 && !p.app.placement_.IsAbove(),"hidden pending target recorded");
@@ -202,7 +217,7 @@ struct PlacementPublicationProbe
             p.app.Refresh(false);p.Below();p.Drain();p.Below();
             Check(p.app.placement_.EvidenceCount()==0,"superseded tall layout seeded evidence");++cases;
         }
-        Check(cases==14,"missing publication scenarios");
+        Check(cases==16,"missing publication scenarios");
     }
 };
 }

@@ -92,9 +92,70 @@ Empty/invalid configuration falls back to 200. The old separate show/hide
 settings are ignored and hidden from the settings UI.
 Old Core uses the new default automatically; custom duration requires updated
 Core and Dialog. `TIGERCLAW_OVERLAY_TRANSITION=0` remains a diagnostic override.
-Intermediate frames retain normal-size text and selection. Monitor-based cadence
-is unchanged (requested 2..4 ms; WM_TIMER minimum is 10 ms). Late callbacks skip
-frames rather than queue playback; no global timer-resolution changes are used.
+Intermediate frames retain normal-size text and selection. As of 2026-09-24,
+animation cadence follows the candidate window's current monitor display mode
+(30..1000 Hz, failed/invalid queries fall back to 60 Hz). The initial query uses
+the target rectangle. Monitor changes query immediately; display/DPI notifications
+invalidate the cache, and active animations refresh it after two seconds.
+The cache policy references [Hufu's refresh-cache change](https://github.com/LeafHW/hufu-ime-rust/commit/0c5816d3ebd845652d6b3bdd86f8e329babec42d).
+
+`AnimationWake.h` uses a QPC timeline and a high-resolution one-shot waitable timer,
+falling back to an ordinary waitable timer on unsupported systems. Its worker
+only posts a coalesced, generation-tagged wake; all rendering stays on the UI
+thread. Cancellation drains old wakes; teardown joins the worker before destroying
+windows. Render reentry defers sampling until the active render returns.
+Ordinary timers that signal early rearm for the QPC remainder. Timer creation or
+arming failure publishes final geometry through the usual publication guard.
+Frame deadlines remain anchored to the animation epoch; late callbacks skip missed
+frames, and `FrameTransition` samples elapsed time with the existing smoothstep
+curve. Refresh-rate changes do not restart progress. Only a successfully published
+final frame records placement history. No IPC/settings or global timer-resolution
+changes are used. This follows display-mode cadence, not vertical synchronization;
+software rendering is not guaranteed to sustain every display's refresh rate.
+
+`overlay_model_tests` simulates 30/60/75/120/144/165/240/360/1000 Hz, long timelines,
+missed deadlines, rate changes, cache expiry/invalidation and failed queries.
+`overlay_animation_tests` explicitly runs isolated Windows timer/renderer probes:
+forced ordinary fallback, failed creation/arming, cancellation, retarget storms,
+blocked UI, idle silence, final geometry, quit preservation and worker teardown.
+It reports display Hz, frame interval P50/P95, mean draw time and process CPU time
+over a one-second transition. The HWND remains hidden; this is publication timing,
+not visible-screen or photon latency. `overlay_placement_publication_tests` also
+covers reentrant animation wakes and scheduler-failure final publication.
+`overlay_pending_frame_tests --synthetic` exercises the existing hold scenarios
+without requiring a Core-generated trace; its output explicitly identifies this
+limit. The original trace-driven mode remains available.
+
+Validation on 2026-09-24: Linux CTest 3/3, ARM64 and x64 CTest 4/4 each;
+both Windows targets passed timer probes, 16 publication scenarios (966 checks),
+31 blank-residence scenarios (638 checks), 57 synthetic pending-frame scenarios,
+isolated IPC windows, passive real popup menus and atomic presentation checks.
+The model test now compiles as UTF-8 under MSVC; the old pending-policy test was
+updated to recognize the already-supported pinyin composition state 6.
+Logs and deployment/rollback identities are in `next/_run/OverlayRefresh/`.
+The verified ARM64 executable was deployed to the daily `release_arm64/` on
+2026-09-24, restarting only Overlay. Its SHA256 is
+`1ef0a177f0c2bf5468b20cef218f379f01a4d9acd5a1981ec0b20d81cc9c4449`;
+rollback copy: `release_arm64/backup-overlay-refresh-20260924-015504/TigerClaw.Overlay.exe`.
+Core PID 20204 and its executable hash remained unchanged; Overlay restarted as
+PID 21912. No configuration, tables or other runtime components were replaced.
+
+One-second isolated hidden-window measurements on the available 60 Hz Windows
+ARM device (x64 runs under emulation; one run per path, includes rendering setup):
+
+| Binary / timer | Frames | Interval P50 / P95 (ms) | Mean draw (ms) | Process CPU (ms) | Final frame (ms) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| ARM64 / high resolution | 59 | 16.67 / 19.60 | 2.80 | 156.25 | 1000.36 |
+| ARM64 / ordinary fallback | 52 | 16.75 / 32.12 | 2.73 | 187.50 | 1003.62 |
+| x64 / high resolution | 56 | 16.72 / 17.79 | 4.00 | 234.38 | 1000.10 |
+| x64 / ordinary fallback | 54 | 16.57 / 31.53 | 2.47 | 187.50 | 1002.39 |
+
+CPU is accumulated process CPU time, not whole-machine utilization. Final geometry
+was exact; actual final publication can occur after the nominal deadline due to
+scheduling/rendering. Refresh rates other than 60 Hz and cross-monitor changes
+were simulated only. Real multi-monitor/DPI transitions, visible high-refresh
+smoothness and typing acceptance remain separate from these tests. No prior
+Core-generated pending-frame trace was available in this checkout for this run.
 
 Candidate redraws prepare the complete offscreen frame before publishing pixels,
 size and final caret-relative position in one `UpdateLayeredWindow` call. A failed

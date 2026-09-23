@@ -26,7 +26,7 @@ int main() {
         for(int delay:{1,200,60000}) {auto state=pending;state.hideCandidates=true;
             state.candidateDelay=delay;check(PendingCandidateFrame(state));}
         for(int composition=0;composition<8;++composition) {auto state=pending;
-            state.composition=composition;check(PendingCandidateFrame(state)==(composition==5));}
+            state.composition=composition;check(PendingCandidateFrame(state)==(composition==5 || composition==6));}
         check(!PendingCandidateFrame({}));
         std::cout<<"{\"probe\":\"pending_frame_policy\",\"status\":\"passed\",\"checks\":"<<checks<<"}\n";
     }catch(const std::exception& e){std::cerr<<e.what()<<'\n';return 1;}

@@ -50,6 +50,7 @@ struct CandidateFrameHoldProbe {
     POINT caret{};
     bool vertical=true;
     CandidateFrameHoldProbe(bool columns=true):vertical(columns) {
+        app.animationClock_ = [] { return double(pending_probe::now); };
         using namespace pending_probe;
         now+=1000;published=failPresent=failShow=0;duringPresent={};
         MONITORINFO info{sizeof(info)};
@@ -398,6 +399,28 @@ int main(int argc,char** argv) {
             std::cout<<"blank residence passed: "<<cases<<" cases, "<<checks<<" checks\n";return 0;
         }
         std::map<std::string,tiger::overlay::State> wire;
+        if(std::string(argv[1])=="--synthetic") {
+            tiger::overlay::State ready;ready.isChinese=true;ready.composition=5;
+            ready.candidateVisible=true;ready.input=u"abcd";ready.candidates={u"Alpha",u"Beta"};
+            ready.candidateFrameSession=u"session";ready.showCode=false;
+            auto pending=ready;pending.candidateVisible=false;pending.candidates.clear();
+            pending.candidateHoldWhilePending=true;pending.input+=u"e";
+            wire["ready"]=wire["completed_candidates"]=ready;
+            wire["pending"]=wire["pending_after_empty"]=wire["initial_pending"]=pending;
+            auto empty=ready;empty.candidates.clear();empty.showCode=true;wire["completed_empty"]=empty;
+            auto hidden=ready;hidden.input.clear();hidden.candidates.clear();hidden.candidateVisible=false;
+            for(auto name:{"cancel","focus","inactive","english","disabled"})wire[name]=hidden;
+            for(std::string name:{"commit","cancel","escape","backspace"}) {
+                wire["previous_"+name]=ready;
+                auto next=ready;next.candidateFrameSession=u"new-session";
+                wire["new_"+name+"_ready"]=next;
+                next=pending;next.candidateFrameSession=u"new-session";
+                wire["new_"+name+"_pending"]=wire["new_"+name+"_continuation"]=next;
+            }
+            tiger::overlay::CandidateFrameHoldProbe::Run(wire);CoUninitialize();
+            std::cout<<"synthetic pending-frame passed: "<<cases<<" cases, "<<checks<<" checks (no Core-generated trace)\n";
+            return 0;
+        }
         std::ifstream file(argv[1]);Check(file.good(),"Cannot read Core-generated trace");
         std::string line;
         while(std::getline(file,line)) {
