@@ -110,6 +110,53 @@ namespace TigerClaw.Core
             return result;
         }
 
+        internal static List<SentenceLearningEvent> ReinforceExisting(string raw, SentenceCandidate before,
+            SentenceCandidate selected, int floor, string mode, SentenceLearningSnapshot snapshot)
+        {
+            var result = new List<SentenceLearningEvent>();
+            if (snapshot == null || snapshot.IsEmpty || before == null || selected == null ||
+                before.Text == selected.Text || string.IsNullOrEmpty(mode)) return result;
+            var a = Boundaries(before, raw.Length); var b = Boundaries(selected, raw.Length);
+            if (a == null || b == null) return result;
+            int previous = 0;
+            foreach (var edge in a)
+            {
+                int end = edge.Key;
+                if (end == 0 || !b.ContainsKey(end)) continue;
+                string changed = selected.Text.Substring(b[previous], b[end] - b[previous]);
+                string old = before.Text.Substring(a[previous], edge.Value - a[previous]);
+                if (previous >= floor && changed != old)
+                {
+                    var matches = new List<(int rs,int re,int ts,int te,int n,string code,string text,string context)>();
+                    foreach (var start in b.Where(x => x.Key >= previous && x.Key < end))
+                    foreach (var finish in b.Where(x => x.Key > start.Key && x.Key <= end))
+                    {
+                        string text = selected.Text.Substring(start.Value, finish.Value - start.Value);
+                        int n = Characters(text);
+                        if (n == 0 || n > 16 || !StaticText(text) || before.Text.Contains(text, StringComparison.Ordinal)) continue;
+                        string code = raw.Substring(start.Key, finish.Key - start.Key).ToLowerInvariant();
+                        string context = Context(selected.Text, start.Value);
+                        if (snapshot.Score(mode, code, text, context) > 0)
+                            matches.Add((start.Key,finish.Key,start.Value,finish.Value,n,code,text,context));
+                    }
+                    if (matches.Count > 0)
+                    {
+                        int longest = matches.Max(x => x.n);
+                        var bests = matches.Where(x => x.n == longest).ToArray();
+                        if (bests.Length == 1 && matches.All(x => x.rs >= bests[0].rs && x.re <= bests[0].re))
+                        {
+                            var best = bests[0];
+                            result.Add(new SentenceLearningEvent { Mode=mode, Code=best.code, Text=best.text, Context=best.context,
+                                RawStart=best.rs, RawEnd=best.re, TextStart=best.ts, TextEnd=best.te });
+                        }
+                    }
+                }
+                previous = end;
+            }
+            if (result.Count != 1) result.Clear();
+            return result;
+        }
+
     }
 
     // Immutable query snapshot. Replay/aggregation happens once on the store

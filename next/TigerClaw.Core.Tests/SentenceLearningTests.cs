@@ -123,6 +123,19 @@ namespace TigerClaw.Core.Tests
             diff = SentenceLearning.Diff("aabb", old, chosen, 0, "test-v1");
             LearningCheck(diff.Count == 1 && diff[0].Code == "aabb" && diff[0].Text == "甲丙", "shared raw boundaries");
             LearningCheck(SentenceLearning.Diff("aabb", old, chosen, 2, "test-v1").Count == 0, "locked floor cannot be crossed");
+            old = Candidate("设置父女窗口", (2, 2), (6, 6));
+            chosen = Candidate("设置八妾关系", (2, 2), (4, 4), (6, 6));
+            var known = LearningEvent("bb", "八妾", "旧文");
+            var knownSnapshot = SentenceLearningSnapshot.Build(new[] { known });
+            var reinforced = SentenceLearning.ReinforceExisting("aabbcc", old, chosen, 0, "test-v1", knownSnapshot);
+            LearningCheck(reinforced.Count == 1 && reinforced[0].Code == "bb" && reinforced[0].Text == "八妾" &&
+                reinforced[0].Context == "设置", "whole-candidate diff reinforces an existing aligned inner fragment");
+            var leveled = SentenceLearningSnapshot.Build(new[] { known, reinforced[0] });
+            LearningCheck(leveled.Score("test-v1", "bb", "八妾", "其他") == 8,
+                "implicit confirmation advances cross-context learning exactly one level");
+            var ambiguousSnapshot = SentenceLearningSnapshot.Build(new[] { known, LearningEvent("cc", "关系", "旧文") });
+            LearningCheck(SentenceLearning.ReinforceExisting("aabbcc", old, chosen, 0, "test-v1", ambiguousSnapshot).Count == 0,
+                "independent learned fragments in one diff are not guessed");
         }
         private static void LearningStorage(string root)
         {

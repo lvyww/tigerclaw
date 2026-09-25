@@ -68,7 +68,15 @@ namespace TigerClaw.Core
                 return;
             }
             int floor = Math.Max(_sentenceCommittedRawLength, ActiveSentenceLockedPrefix?.RawCode.Length ?? 0);
-            _pendingLearning.AddRange(SentenceLearning.Diff(_sentenceRawBuffer.ToString(), _learningBaseline, selected, floor, _sentenceDecodeResult.LearningMode));
+            string raw = _sentenceRawBuffer.ToString();
+            var events = SentenceLearning.Diff(raw, _learningBaseline, selected, floor, _sentenceDecodeResult.LearningMode);
+            var reinforced = SentenceLearning.ReinforceExisting(
+                raw, _learningBaseline, selected, floor, _sentenceDecodeResult.LearningMode, _learningStore?.Snapshot);
+            foreach (var e in reinforced)
+            {
+                if (!events.Any(old => old.Mode == e.Mode && old.Code == e.Code && old.Text == e.Text)) events.Add(e);
+            }
+            _pendingLearning.AddRange(events);
             _learningBaseline = null;
         }
         private void CaptureSentenceFusionLearning(int index)
