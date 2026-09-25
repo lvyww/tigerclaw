@@ -300,10 +300,16 @@ Lua 按一次 composition 在内存中汇总解码次数、模型缺页、读取
 
 ## 模型
 
+词汇排序辅助文件放在 `models/tiger_sentence.lexical.bin`。librime 的部署清理
+会将用户目录顶层的 `.bin` 文件移到 `trash/`，因此不要把该文件放在顶层。
+新版优先读取 `models/`，保留顶层路径仅用于兼容旧包；不会从 `trash/` 自动恢复。
+升级时一并更新 Lua 和 `models/`，保留个人码表、配置及学习数据。
+
 当前主线只读取 `sentence-fivegram-mobile.bin`（TCSKNM03），默认Q8 version 2，
-356,492,204字节，SHA256：
-`5c46b7c2734886e868c6207a724f4dff2d9c64cb3eba193e7dd44ea9df244361`。
-虎爪与Rime使用同一文件，保留原主线全部记录。模型由纯Lua分页读取。
+405,663,171字节，SHA256：
+`756f6c92cf43ad6e8e3087ce66b711ac6ad0fc41e6f3fb82b3766e35ecab8681`。
+虎爪与Rime使用同一文件：Corpus4 50% / Articles 25% / 非新闻 25%，
+融合后按此前主线二至五阶记录预算剪枝，保留20,799项联合词表。模型由纯Lua分页读取。
 查找用户目录models/、用户目录根部、共享目录models/。没有KLM或旧三阶回退。
 文件缺失/损坏时走无模型路径；更新必须同时带上新版Lua与Q8模型。
 详见 [格式与验证](docs/TCSKNM03.md) 和 `default-model.json`。

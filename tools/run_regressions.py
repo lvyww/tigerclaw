@@ -49,8 +49,9 @@ def isolated_sources(destination):
     for pattern in ("*.txt", "*.yaml", "rime.lua"):
         for path in PACK.glob(pattern):
             shutil.copy2(path, destination / path.name)
-    shutil.copy2(PACK / "tiger_sentence.lexical.bin",
-                 destination / "tiger_sentence.lexical.bin")
+    (destination / "models").mkdir()
+    shutil.copy2(PACK / "models/tiger_sentence.lexical.bin",
+                 destination / "models/tiger_sentence.lexical.bin")
     (destination / "tools/test_high_freq_limit.lua").write_text((ROOT / "tools/test_high_freq_limit.lua").read_text().replace("/rime/tiger_sentence", ""))
     (destination / "tools/test_backspace.lua").write_text((ROOT / "tools/test_backspace.lua").read_text().replace("/rime/tiger_sentence", ""))
 

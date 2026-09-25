@@ -50,11 +50,17 @@ def tokenize(batch):
     return lines
 
 
-def inputs(source):
+def inputs(source, exclude_news=False, only_news=False):
+    if exclude_news and only_news:
+        raise ValueError('Cannot both exclude and select only news')
     train = [(source/'baike2018qa/baike_qa_train.json', ['title', 'desc', 'answer']),
              (source/'new2016zh/news2016zh_train.json', ['title', 'content']),
              (source/'webtext2019zh/web_text_zh_train.json', ['title', 'content'])]
     train += [(p, ['text']) for p in sorted((source/'wiki_zh_2019/wiki_zh').glob('*/wiki_*'))]
+    if exclude_news:
+        train = [(p, fields) for p, fields in train if p.relative_to(source).parts[0] != 'new2016zh']
+    if only_news:
+        train = [(p, fields) for p, fields in train if p.relative_to(source).parts[0] == 'new2016zh']
     for path, _ in train:
         if not path.is_file():
             raise FileNotFoundError(path)
@@ -73,13 +79,18 @@ def preprocess(args, manifest):
     db.execute('PRAGMA cache_size=-65536')
     db.execute('CREATE TABLE seen (hash BLOB PRIMARY KEY) WITHOUT ROWID')
     counts = dict(records=0, unique_fields=0, duplicate_fields=0, train_segments=0,
-                  train_tokens=0, heldout_excluded=0, heldout_saved=0, input_bytes=0)
+                  train_tokens=0, heldout_excluded=0, heldout_saved=0, input_bytes=0,
+                  evaluation_segments_excluded=0)
+    excluded = set()
+    for path in getattr(args, 'exclude_cases', []):
+        for line in path.read_text().splitlines():
+            excluded.add(line.split('\t')[3])
     heldout_seen = set()
     last = time.monotonic()
     def batches():
         batch = []
         size = 0
-        for path, fields in inputs(args.source):
+        for path, fields in inputs(args.source, getattr(args, 'exclude_news', False), getattr(args, 'only_news', False)):
             print('reading', path, flush=True)
             with path.open('rb') as stream:
                 for row in stream:
@@ -110,6 +121,9 @@ def preprocess(args, manifest):
             max_workers=args.workers) as pool:
         for result in pool.map(tokenize, batches(), buffersize=args.workers * 2):
             for tokens, sentence, heldout in result:
+                if sentence in excluded:
+                    counts['evaluation_segments_excluded'] += 1
+                    continue
                 if heldout:
                     counts['heldout_excluded'] += 1
                     if len(heldout_seen) < 20000 and sentence not in heldout_seen:

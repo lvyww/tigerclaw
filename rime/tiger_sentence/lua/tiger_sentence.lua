@@ -741,6 +741,9 @@ local has_supplements = (supplement_matcher.count or 0) > 0
 do
     local paths = {}
     for _, directory in ipairs(data_directories()) do
+        -- librime cleanup_trash moves top-level *.bin files during deployment.
+        paths[#paths + 1] = join_path(directory, "models/tiger_sentence.lexical.bin")
+        -- Compatibility with older packs; new packs only ship models/.
         paths[#paths + 1] = join_path(directory, "tiger_sentence.lexical.bin")
     end
     ranking_prior.lexical_model, ranking_prior.lexical_load_error =

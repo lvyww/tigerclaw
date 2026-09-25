@@ -15,7 +15,7 @@ def main():
     with temporary_tree() as root:
         isolated_sources(root)
         if args.production_model:
-            (root / 'models').mkdir()
+            (root / 'models').mkdir(exist_ok=True)
             (root / 'models/sentence-fivegram-mobile.bin').symlink_to(Path(args.production_model).resolve())
         shared = root / '_shared'
         shared.mkdir()

@@ -21,7 +21,7 @@ def main():
             (shared / 'default.yaml').write_text(
                 'config_version: "1.0"\nschema_list:\n  - schema: tiger_sentence\n'
                 'menu:\n  page_size: 20\nrecognizer:\n  patterns: {}\n')
-            (root / 'models').mkdir()
+            (root / 'models').mkdir(exist_ok=True)
             (root / 'models/sentence-fivegram-mobile.bin').symlink_to(Path(args.model).resolve())
             subprocess.run([str(Path(args.exe).resolve()), str(root), str(shared),
                             str(Path(args.plugin).resolve()), selection], check=True, timeout=120)

@@ -7,10 +7,11 @@
 
 - 源：`C:\Archive\tigerclaw_sentence_ml\runtime\sentence-fivegram-mobile.bin`
 - 运行文件：`Models/sentence-fivegram-mobile.bin`
-- 大小：356,492,204 字节（356.49 MB）
-- SHA256：`5c46b7c2734886e868c6207a724f4dff2d9c64cb3eba193e7dd44ea9df244361`
-- TCSKNM03 version 2，概率/回退各 8 位，字 ID 16 位。保留原主线全部词表和
-  1–5 阶记录，从原 Q16 参数再次量化，无重新训练或剪枝。
+- 大小：405,663,171 字节（405.66 MB）
+- SHA256：`756f6c92cf43ad6e8e3087ce66b711ac6ad0fc41e6f3fb82b3766e35ecab8681`
+- TCSKNM03 version 2，概率/回退各 8 位，字 ID 16 位。对标旧主线
+  二至五阶记录预算；一阶联合词表20,799项。新模型为 Corpus4 50% / Articles 25% /
+  非新闻25% 原始概率融合，按历史加权 KL 剪枝后经 Q16 转为 Q8。
 - 同格式 version 1/Q16 仍可读取；构建默认严格校验上述 Q8 身份。
 
 `SentenceFivegramModel.LoadAvailable` 只搜索 `Models/` 和运行根目录的上述文件名。
@@ -45,7 +46,7 @@ Core-only 路径仍只更新 Core；跨此格式升级必须同时带上 Q8 模�
 TigerClaw.Core.exe --shape-fivegram-probe 词表.txt 完整编码 probe.tsv
 ```
 
-## 验证
+## 2026-09-24 格式迁移历史验证（旧356.49 MB模型）
 
 - 全量 Core.Tests 通过，包括 938,714 项原解码器检查、7,388 次快照比较。
 - Q8 专项 56,278 项检查、2,376 次快照比较通过：四字历史、增量/回删、锁前缀、
@@ -74,6 +75,10 @@ Q8 量化实验：[TcsQ8/README.md](../tools/FullPinyinEval/HigherOrder/TcsQ8/RE
 
 ## 部署范围
 
+2026-09-25 用户指定三模型最佳剪枝Q8为两条主线默认模型。构建校验、Rime默认
+清单和共享模型源同步更新；旧模型保留在runtime/backup-before-threeway-20260925/。
+本次配套验证与更新包见 `C:\Archive\threeway-mainline-20260925`。
+
 本轮更改主线源代码、默认模型、构建与打包产物，未覆盖日用 `release_arm64`。
 2026-09-22 已安装的旧 Core/模型和个人配置、学习数据保留。需要同步替换 Core
 与 Q8 才会在日用安装生效。离线与探针通过不代表 TSF 实际输入、提前上屏校准
@@ -83,3 +88,38 @@ Q8 量化实验：[TcsQ8/README.md](../tools/FullPinyinEval/HigherOrder/TcsQ8/RE
 虎爪 ARM64/x64 Core＋模型更新包、逐句结果、测试日志、源文件/模型/包哈希。
 虎爪更新包需要已有对应架构安装，并非独立完整安装包。公开仓库未 push，Release
 附件未上传。
+
+## 2026-09-25 三模型主线验证
+
+- 新模型：405,663,171字节，TCSKNM03 version 2/Q8；二至五阶对标旧主线。
+- C# 真模型专项：56,344项检查、2,376次快照比较通过。
+- ARM64/x64 既有兼容 Native AOT Core 在隔离目录加载新模型成功；探针候选与
+  分数逐字节一致，`iejryfenahbmsp` 首选“新人上午来面试”。
+- Rime 当前源码的真模型增量/回删/锁定检查与 Lua 5.4 回归通过。
+- 实验冻结集的9945/32913/29964为历史解码口径；没有声称当前主线全量准确率
+  与其相同，也没有把这些离线检查等同于实际前端输入验收。
+- 模型及配套更新包位于 `C:\Archive\threeway-mainline-20260925`，日用安装和
+  公共Release未更新。
+
+## Rime 部署资源修复（2026-09-25）
+
+Rime 更新包应选 `虎整句-Rime-20260925-三模型Q8主线-部署修复版.7z`。
+词汇辅助 Bloom 文件现位于 `models/tiger_sentence.lexical.bin`，Lua 优先读取新路径，
+兼容旧顶层路径但不自动读取 trash。旧包把该文件放在用户目录顶层，会被 librime
+cleanup_trash 移走；此前仅加载回归未覆盖此流程。新测试在真实 librime 上运行
+部署维护和 cleanup_trash，并验证两轮新进程加载成功、文件字节不变。
+五阶Q8及虎爪Core/模型包未改变；日用Rime数据和公共Release未更新。
+
+## 日用ARM64更新（2026-09-25 22:17）
+
+随后按用户明确要求更新日用 `release_arm64` 的Core和三模型Q8，并重启Core。
+这取代上文主线晋升当时“未部署日用”的状态。备份：`C:\Users\yc\Desktop\bime_codex_src_20260513\release_arm64\backup-before-threeway-20260925-221723`。
+
+- Core SHA256：`c02a577d11f259a0f952455067b23957715704f8b5f0ba20b3752bcf9d416682`。
+- 模型 SHA256：`756f6c92cf43ad6e8e3087ce66b711ac6ad0fc41e6f3fb82b3766e35ecab8681`。
+- 更新后PID 60556，BimeIPC服务PID一致，hello握手正常。
+- 读取实际运行进程的映射文件列表，确认其映射的是
+  `release_arm64/Models/sentence-fivegram-mobile.bin`，不是旧KLM。
+- 安装目录探针首选“新人上午来面试”；配置、码表及Overlay/Dialog/TSF哈希未变。
+- 旧模型保留且另有完整备份；旧KLM/三阶文件不会被新Core使用。
+- 证据：`next/_run/ThreeWayDailyUpdate/`；此项不等于实际应用键入全面验收。

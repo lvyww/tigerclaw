@@ -10,7 +10,7 @@ local function check(value, message)
     assert(value, message)
 end
 
-local path = repo .. "/rime/tiger_sentence/tiger_sentence.lexical.bin"
+local path = repo .. "/rime/tiger_sentence/models/tiger_sentence.lexical.bin"
 local model, load_error = lexical.load(path)
 check(model ~= nil, load_error or "compact lexical model did not load")
 check(model.entry_count == 50000, "unexpected lexical entry count")
@@ -57,6 +57,8 @@ local sentence = dofile(os.getenv("TIGER_SENTENCE_MODULE") or
 local status = sentence.lexical_status()
 check(status.loaded and status.entries == 50000 and status.bytes == 150032,
     "decoder did not expose the loaded lexical model")
+check(status.path == repo .. "/models/tiger_sentence.lexical.bin",
+    "decoder did not prefer the deployment-safe models directory")
 local parameters = sentence.decoder_parameters()
 check(parameters.canonical_code_reward == 2.0,
     "production canonical-code prior changed")

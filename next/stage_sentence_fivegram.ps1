@@ -8,10 +8,10 @@ $ErrorActionPreference = 'Stop'
 if (!$ModelPath) {
     $ModelPath = 'C:\Archive\tigerclaw_sentence_ml\runtime\sentence-fivegram-mobile.bin'
 }
-$expected = '5c46b7c2734886e868c6207a724f4dff2d9c64cb3eba193e7dd44ea9df244361'
+$expected = '756f6c92cf43ad6e8e3087ce66b711ac6ad0fc41e6f3fb82b3766e35ecab8681'
 if (!(Test-Path -LiteralPath $ModelPath -PathType Leaf)) { throw "Missing shape fivegram: $ModelPath. Set TIGERCLAW_SHAPE_FIVEGRAM_MODEL to the verified model." }
-if ((Get-Item -LiteralPath $ModelPath).Length -ne 356492204 -or (Get-FileHash -LiteralPath $ModelPath -Algorithm SHA256).Hash -ne $expected) {
-    throw 'Shape fivegram size/hash does not match the validated 356.49 MB TCS Q8 model.'
+if ((Get-Item -LiteralPath $ModelPath).Length -ne 405663171 -or (Get-FileHash -LiteralPath $ModelPath -Algorithm SHA256).Hash -ne $expected) {
+    throw 'Shape fivegram size/hash does not match the validated 405.66 MB TCS Q8 model.'
 }
 $models = Join-Path $OutputDirectory 'Models'
 New-Item -ItemType Directory -Force $models | Out-Null

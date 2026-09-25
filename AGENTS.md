@@ -88,10 +88,13 @@ Active components:
   feasibility was evaluated offline only; see
   `tools/FullPinyinEval/HigherOrder/TIGER_SHAPE.md`. Do not deploy it implicitly.
 
-- Tiger shape-code mainline now uses the shared Rime TCSKNM03 Q8 fivegram
-  (2026-09-24, explicitly requested by the user):
-  `Models/sentence-fivegram-mobile.bin`, 356,492,204 bytes, SHA256
-  `5c46b7c2734886e868c6207a724f4dff2d9c64cb3eba193e7dd44ea9df244361`.
+- Tiger shape-code and Rime mainlines use the three-source TCSKNM03 Q8 fivegram
+  (2026-09-25, explicitly requested by the user):
+  `Models/sentence-fivegram-mobile.bin`, 405,663,171 bytes, SHA256
+  `756f6c92cf43ad6e8e3087ce66b711ac6ad0fc41e6f3fb82b3766e35ecab8681`.
+  Corpus4 .50 / Articles .25 / Brightmart non-news .25; history-weighted KL
+  pruning matches the previous mainline order-2..5 counts, with 20,799 unigrams.
+  The 2026-09-24 356.49 MB model remains the frozen experiment baseline.
   `SentenceFivegramModel` maps this format directly in managed C#; no shape
   KenLM DLL, KLM reader or legacy trigram fallback remains. The same file supplies
   observed-bigram isolation priors. Missing/corrupt models use the existing
@@ -102,10 +105,270 @@ Active components:
   excludes stale KLM/trigram/native dependencies. Core-only publishing still does
   not replace models, so this migration needs matching Core and Q8 model.
   ARM64/x64 AOT isolated probes and Q8/decoder/lifecycle tests pass. Mainline
-  source and artifacts are updated; this change has not been deployed to the
-  daily `release_arm64` installation. The prior 2026-09-22 installed Core/model,
-  config and user data remain preserved. See docs/SHAPE_FIVEGRAM.md for results,
+  source and artifacts are updated. On 2026-09-25, the user explicitly requested
+  updating daily `release_arm64`: compatible ARM64 Core and the three-source Q8
+  were installed and restarted. Live IPC and mapped model identity verified;
+  config, code tables and other component hashes unchanged. Old Core/models
+  backed up in release_arm64/backup-before-threeway-20260925-221723/.
+  See docs/SHAPE_FIVEGRAM.md for results,
   source identity, packaging and real-app acceptance limits.
+
+- Three-source Q8 promoted to TigerClaw/Rime mainline on 2026-09-25 by explicit
+  user request. Shared runtime source, staging hash and Rime default-model.json
+  use the 405,663,171-byte model above. Old 356.49 MB benchmark baseline is
+  retained in runtime/backup-before-threeway-20260925/. Model-only source change;
+  compatible Core probes pass on ARM64/x64, 56,344 C# checks / 2,376 snapshots
+  and current Rime real-model regressions pass. Companion packages/evidence:
+  C:\Archive\threeway-mainline-20260925. Daily ARM64 Core/model subsequently
+  deployed by explicit user request; public releases remain unchanged. See docs/SHAPE_FIVEGRAM.md.
+
+- Three-source original-model fusion completed (2026-09-25, user requested).
+  Chose non-news by Corpus4-error rescue (168 vs news 136), including 38 shared
+  Corpus4+Articles errors vs news 30. Same-set exploratory selection; not an
+  independent generalization benchmark. Weights Corpus4 .50 / Articles .25 /
+  non-news .25. Raw probability interpolation followed by union-support normalized
+  sparse materialization, history-weighted single-deletion KL/prefix pruning,
+  exact mainline order-2..5 budgets and Q8. No size ceiling; 20799 union unigrams.
+  Old10k/Articles/THUC dynamic=9954/32955/29974,
+  full=9952/32951/29971, pruned=9946/32910/29963,
+  Q8=9945/32913/29964; Q8 405.66 MB, net +99 mainline.
+  Independent toy/raw-record probability, mass/prefix/quantization and 4x3x666
+  lifecycle/frozen fixture checks passed. Source records/indexes reused as
+  read-only hardlinks. No production deployment. Work:
+  /home/yc/tmp/corpus4-articles-third-20260925; verified archive:
+  C:\Archive\corpus4-articles-third-20260925. See
+  tools/FullPinyinEval/HigherOrder/CORPUS4_ARTICLES_THREEWAY.md.
+
+- Brightmart news-only fivegram training completed (2026-09-25, user requested).
+  Only new2016zh/news2016zh_train.json title/content; original source preserved,
+  official valid and other domains excluded. Same cleaning/heldout/exact frozen
+  target exclusion and MKN --prune 0 0 1 1 1 as the prior non-news experiment.
+  2124481236 training Han tokens; 1309488 exact evaluation segments excluded.
+  TCS Q8 2650.46 MB; old10k/Articles/THUC=9931/32771/29947, net-74 vs mainline.
+  Counts 20213/5979128/47464406/126641011/178622419; heldout20k PPL35.252021, OOV1.
+  Recovers 156/191 previous non-news regressions; not its overall net gain.
+  Format/quantization,3x666 lifecycle and frozen input/fixture checks passed.
+  Original ARPA/Q8/evidence archived C:\Archive\brightmart-news-20260925;
+  work /home/yc/tmp/brightmart-news-20260925. Shared runner --news-only.
+  No fusion/deployment. See tools/FullPinyinEval/HigherOrder/BRIGHTMART_NEWS.md.
+  All jobs complete; historical tests are not independent weight selection.
+
+- Brightmart non-news fivegram training completed (2026-09-25, user requested).
+  Excluded new2016zh from the Brightmart input directory; preserved originals.
+  Selected baike/webtext train + wiki:1276 files,6781170023 bytes; trained on
+  1207652870 Han tokens. Existing Brightmart cleaning, MKN --prune 0 0 1 1 1;
+  extra exact frozen-target exclusion497032 occurrences. No fuzzy/substring
+  exclusion, and not a strict news-only ablation of the historical mainline.
+  TCS Q8 1551.71 MB; old10k/Articles/THUC=9942/32794/29902, net-85 vs mainline.
+  Counts 17627/6313914/39943905/84909197/92592712; heldout20k PPL43.084010, OOV0.
+  Format/quantization,3x666 lifecycle and frozen-case/fixture checks passed.
+  Original ARPA, final Q8 and evidence archived C:\Archive\brightmart-nonnews-20260925;
+  work /home/yc/tmp/brightmart-nonnews-20260925. No fusion or deployment.
+  See tools/FullPinyinEval/HigherOrder/BRIGHTMART_NONNEWS.md. Jobs complete.
+
+- Full Corpus4 + Articles merge-before-pruning experiment completed (2026-09-25).
+  Fixed alpha .10/.25, original ARPA float sources, normalized union vocabulary19070.
+  Sparse backoff materialization then history-weighted single-deletion KL budget
+  ranking with prefix protection; recompute backoff and convert Q8. Higher-order
+  counts exactly7959327/69562625/10273459/8415769, same as mainline.
+  alpha-0.10: 418.26 MB; old10k/Articles/THUC=9915/32882/29964, net +38 vs mainline.
+  alpha-0.25: 415.31 MB; old10k/Articles/THUC=9919/32904/29964, net +64 vs mainline.
+  Four stages evaluated separately: dynamic/full materialized/pruned float/Q8.
+  Original ARPA probabilities and union-UNK splitting differ from prior dual-Q8
+  experiments; differences cannot solely be attributed to pruning order. Fixed
+  historical exploratory weights, not independently validated. No deployment.
+  Archive C:\Archive\corpus4-articles-merge-budget-20260924; report
+  tools/FullPinyinEval/HigherOrder/CORPUS4_ARTICLES_MERGE_BUDGET.md. All jobs complete.
+
+- Corpus4-pruned + Articles interpolation completed (2026-09-24, user corrected
+  primary baseline): 413.52 MB count-matched Corpus4 TCS Q8 + Articles TCS Q8.
+  Fixed alpha .05/.10/.25; frozen Lua old10k/Articles/THUC correct counts:
+  alpha-0.05=9921/32880/29969, net +139 vs pruned, +47 vs mainline; version-loss rescue 117/226.
+  alpha-0.10=9920/32893/29966, net +148 vs pruned, +56 vs mainline; version-loss rescue 133/226.
+  alpha-0.25=9917/32906/29962, net +154 vs pruned, +62 vs mainline; version-loss rescue 146/226.
+  Endpoints121 full pools/scores byte-identical, five scalar weights x1431 tokens
+  and endpoint/all9 x666 lifecycle checks pass; all73129 input/fixture identities match.
+  Models total2.917 GB, no merged/compressed model or deployment. Historical
+  exploratory weights, not independently validated. Full/pruned version loss also
+  includes KenLM/TCS quantization differences; do not attribute all226 to pruning.
+  Archive C:\Archive\corpus4-pruned-articles-mixture-20260924; report
+  tools/FullPinyinEval/HigherOrder/CORPUS4_PRUNED_ARTICLES_MIXTURE.md. All jobs complete.
+
+- Corpus4-full + Articles probability interpolation experiment completed
+  (2026-09-24, user requested): fixed Articles alpha .05/.10/.25, each model
+  performs its own backoff then probabilities are mixed per token. Frozen Lua
+  old10k/Articles/THUC correct counts: .05=9926/32929/29968,
+  .10=9926/32936/29967, .25=9927/32952/29968. Net over full Corpus4 +67/+73/+91;
+  over current mainline +100/+106/+124 across 73,129 cases. .25 is best among
+  these exploratory points, not independently tuned/validated or an optimum.
+  Old10k still trails mainline; .25 finance -3 vs Corpus4. Existing two models
+  total10.274 GB; no merged/compressed model or deployment. Offline adapter
+  shape5_articles_mix.lua and optional evaluator arguments preserve normal path.
+  Five scalar weights x1431 tokens match oracle; alpha0/1 x121 full pools/scores
+  byte-identical; endpoint and all9 evaluations'666 lifecycle checks pass;
+  input/fixture identities match. Archive `C:\Archive\corpus4-articles-mixture-20260924`;
+  report `tools/FullPinyinEval/HigherOrder/CORPUS4_ARTICLES_MIXTURE.md`.
+  All jobs complete; do not rerun historical sweeps to pick production weights.
+
+- Articles/Corpus4 fusion feasibility steps 1–2 completed (2026-09-24): Articles
+  now has matched frozen Lua scores 9795/10000, 32924/33129, 29666/30000, using
+  same original 2.503 GB TCS Q8. Against full wsmerge, Articles-only correct
+  14/168/21 (203 total), Corpus4-only 147/106/321 (574); both wrong170, target
+  still in either candidate pool138. Against wsmerge413, Articles-only302,
+  Corpus4-only548. Complement is concentrated in Articles source groups; all
+  six THUCNews categories net favor Corpus4. Worth low-weight interpolation
+  testing, not proof of fusion gains. No interpolation or weight tuning yet.
+  Three 666-case regressions, 73,129 input identities and fixture hashes pass.
+  Pause/resume honored; all jobs now completed. Archive
+  `C:\Archive\articles-corpus4-complement-20260924`, report
+  `tools/FullPinyinEval/HigherOrder/ARTICLES_CORPUS4_COMPLEMENT.md`.
+
+- Mainline 345.99 MB size-pruning route retired and mohu v5 old10k completed
+  (2026-09-24, user requested): deleted selected archive model plus trial-4/6/7/8
+  ARPA/Q16/Q8 payloads, 17 files / 20.75 GB (Windows 0.346 GB, Linux 20.404 GB).
+  Shared counts/corpus/full rebuilt models/tools and all evidence retained;
+  566 retained identities and mainline/430 MB hashes verified. Do not rerun old
+  size-pruning pipeline or delete its shared work directory. Cleanup audit:
+  `C:\Archive\mainline-sizeprune-cleanup-20260924`.
+  mohu v5 (573,052,280 bytes, SHA256 c2c148ea…dfee34) old10k: 9918/10000,
+  Top5/20 9968; -41 versus mainline old10k and -45 across 73,129 cases. Twelve
+  workers, same verified frozen fixture/model as previous Articles/THUCNews,
+  666 lifecycle cases and input identity checks pass. No training/deployment.
+  Archive `C:\Archive\mohu-v5-old10k-20260924`; global comparison updated.
+
+- Model comparison now uses old 10k only (2026-09-24, user requested): replace
+  historical20k column with `source=old` / old_1..old_10000; exclude added THUCNews
+  10k from this column to avoid repeated weighting with THUCNews. Existing
+  predictions filtered, no decoder rerun; all input identities match. Frozen
+  mainline/size-pruned/count-matched/full correct: 9959/9953/9959/9963;
+  wsmerge full/count-matched: 9928/9918. New 73,129-row combined deltas versus
+  mainline: -50/+13/+69/+33/-92 respectively (excluding baseline).
+  C# mainline/Articles old10k: 9959/9786; mohu subsequently verified at 9918.
+  Global MODEL_COMPARISON.md updated; experiment reports retain original20k
+  historical results. Audit: `C:\Archive\model-comparison-old10k-20260924`.
+
+- Corpus4 488.68 MB count-pruned model retired (2026-09-24, user requested):
+  deleted Windows/Linux model copies and dedicated ARPA, 3 files / 4.403 GB
+  (Windows 0.489 GB, Linux filesystem 3.914 GB). Keep shared raw counts and all
+  historical evaluations/tools/logs in wsmerge-count500-20260924; do not delete
+  that directory or auto-rerun the retired pipeline. 2,733 retained file identities
+  and new 413 MB model hashes verified. Old manifests describe historical files.
+  New count-matched model and full wsmerge retained. Audit:
+  `C:\Archive\corpus4-count500-cleanup-20260924`; MODEL_COMPARISON.md separates
+  retained models from retired historical scores.
+
+- Corpus4 wsmerge mainline-count matching completed (2026-09-24): actual-frequency
+  thresholds `[0,1,7,256,278]`, independently nearest per-order counts and legal
+  nondecreasing thresholds, no byte cap or accuracy tuning. Counts are
+  18,673 / 8,379,906 / 67,621,519 / 10,276,050 / 8,412,543. Unlike prior wsmerge
+  pruning, singleton bigrams are removed; seven whitespace-repair probes remain.
+  TCS Q8 413,515,511 bytes, SHA256
+  `2cd06f487fc38d47fb03bbbc535373b3cc331f420db256053845bc96a6d0a67f`.
+  Frozen correct counts 19885/20000, 32758/33129, 29955/30000; +18/+16/+3
+  versus prior wsmerge489 (+37 total), -44/-69/+18 versus mainline (-95 total).
+  Reader, checkpoint bigram-pruning parity, three 666-case lifecycle checks and
+  83,129-row comparison checks pass. Prior wsmerge baselines are KenLM Q8, so
+  quantization path also differs. No deployment/interpolation. Archive
+  `C:\Archive\char5-corpus4_0-wsmerge-20260923\count-matched-mainline`;
+  report `tools/FullPinyinEval/HigherOrder/CORPUS4_WSMERGE_COUNT_MATCHED.md`.
+
+- Mainline record-count matching experiment completed (2026-09-24): user removed
+  byte budget and requested matching current per-order totals. Actual-frequency
+  thresholds `[0,0,1,29,29]` preserve first three orders exactly; fourth/fifth
+  counts 11,083,122 / 8,085,216 differ +7.88% / -3.93% from mainline. Independent
+  nearest thresholds 31/28 violate KenLM's monotonic closure constraint; chosen
+  legal pair minimizes squared relative count errors, before scoring.
+  TCS Q8 is 430,168,074 bytes, SHA256
+  `685d492e290a825fab3f199aa25485e282710abcf0b3a7415850140be23a401b`.
+  Frozen correct counts 19927/20000, 32834/33129, 29943/30000: -2/+7/+6 versus
+  mainline, +11 total; +66 versus prior 346 MB count pruning. This changes multiple
+  orders/backoffs, not an isolated third-order causal test. No deployment or
+  interpolation. Verified archive `C:\Archive\mainline-count-matched-20260924`;
+  report `tools/FullPinyinEval/HigherOrder/MAINLINE_COUNT_MATCHED.md`.
+
+- Mainline actual-frequency pruning completed (2026-09-24): `[0,0,7,14,28]`
+  chosen by actual TCS Q8 bytes under current 356,492,204-byte budget produces
+  345,992,115 bytes, SHA256
+  `91f35f32674927ba4c16d075c00b2d25531531cecccf1efa9480dfbd6f99b3c1`.
+  Frozen correct counts 19918/20000, 32795/33129, 29925/30000; -11/-32/-12
+  vs current mainline, -55 total. Do not deploy this result; mainline unchanged.
+  Compared with context128, it cuts third-order counts 69.56M→23.50M and raises
+  fourth-order counts 10.27M→22.35M. No general claim that count pruning is worse.
+  Original Brightmart preprocessing rebuilt with 12 workers: dedup index exactly
+  matches. Original full KLM has 8 anomalous bytes in two packed records (word IDs
+  exceed vocabulary); preserved for evidence. Stable rebuilt KLM is
+  `/home/yc/tmp/mainline-count-prune-20260924/full-q8.klm`, SHA256
+  `00252320a5cfac09906fe972c5e855d9ac56a3cc86ff1949200aeb37b91d376a`.
+  Two builds match, all 83,129 predictions/ranks match original; future training
+  should use reconstructed counts/full.arpa, not copy the anomalous bytes.
+  Count checkpoint and corpus remain in that work directory. Tests/hash checks
+  passed; archive `C:\Archive\mainline-count-pruned-20260924` and report
+  `tools/FullPinyinEval/HigherOrder/MAINLINE_COUNT_PRUNING.md`. No interpolation.
+
+- Mainline pre-context-pruning fivegram retested (2026-09-24): original
+  Brightmart KenLM Q8, 2,032,382,402 bytes, SHA256
+  `f13b5b6b61ef1440d3363510730b8fe122d727570cefbcc8a372bd42cadb1f70`,
+  preserved at `/home/yc/tmp/tiger-shape-direct5/char5-q8.klm`. Original training
+  singleton pruning remains; only later context128 pruning is absent.
+  Frozen Lua correct counts: 19930/20000, 32878/33129 Articles, 29951/30000
+  THUCNews (+1/+51/+14 vs current TCS Q8, +66 total). Historical predictions
+  and target ranks exactly reproduce prior full-model results. Three 666-case
+  lifecycle checks pass. KenLM/TCS quantization paths differ, so do not attribute
+  all changes solely to pruning. No deployment; see
+  `tools/FullPinyinEval/HigherOrder/MAINLINE_FULL5_ACCURACY.md` and archive
+  `C:\Archive\mainline-full5-eval-20260924`.
+
+- Retired corpus4 payload cleanup (2026-09-24, explicitly authorized): removed
+  the pre-wsmerge corpus4 training/model payloads, derived pruning/fusion models,
+  and wsmerge character-ranked pruning payloads/intermediates (41 files,
+  210.72 GB total: Windows 137.54 GB, Linux 73.18 GB). Keep historical reports
+  and shared frozen cases under the old archive; manifests there describe past
+  experiments, not currently present model payloads. New wsmerge sources,
+  count-pruned-500mb, and raw count checkpoint remain intact. Do not rerun retired
+  routes implicitly. Audit: `C:\Archive\corpus4-retired-cleanup-20260924`.
+
+- Actual-frequency wsmerge pruning completed (2026-09-24): 12 counting
+  processes plus exact integer merges took 93.3 minutes; full corpus counts and
+  original n-gram totals verified. Size-only thresholds [0,0,23,46,92] produce
+  KenLM Q8 488,684,661 bytes, SHA256
+  `6cacce36e4b8fc7914b14d34fded5bb2755b003cbbc5e1ac155a850d1c4fc71f`.
+  Frozen Lua correct counts: 19867/20000, 32742/33129 Articles, 29952/30000
+  THUCNews. Net +199 over the character-ranked 493 MB model, -169 versus full
+  wsmerge; all bigrams and seven whitespace-fix probes retained. Windows hash
+  verified. Archive: `C:\Archive\char5-corpus4_0-wsmerge-20260923\count-pruned-500mb`.
+  See `tools/FullPinyinEval/HigherOrder/CORPUS4_WSMERGE_COUNT500.md`.
+  Raw counts remain in `/home/yc/tmp/wsmerge-count500-20260924`; no need to
+  recount. No TCSKNM03 conversion, interpolation or deployment; model-only budget
+  excludes the frozen isolation-prior fixture.
+
+- wsmerge 500 MB compression (2026-09-24): selected KenLM Q8 context thresholds
+  [700,128,128] by size before evaluation; 493,072,710 bytes, SHA256
+  `8a5316da7e8ef517a3e9354e5d22164999c5d84d4635ef7f491c107e7b3b3fe3`.
+  Frozen Lua results: 19789/20000, 32686/33129 Articles, 29887/30000 THUCNews;
+  losses versus full wsmerge are 113/176/79 correct rows. All bigrams and the
+  seven whitespace-fix probes remain present. No interpolation or deployment.
+  Archive: `C:\Archive\char5-corpus4_0-wsmerge-20260923\compressed-500mb`;
+  see `tools/FullPinyinEval/HigherOrder/CORPUS4_WSMERGE_500MB.md`. This is the
+  fivegram-only budget, excluding the frozen isolation-prior fixture.
+
+- corpus4 wsmerge offline accuracy (2026-09-24): the retrained whitespace-merged
+  KenLM Q8 was tested with the frozen Lua shape decoder (not current C#).
+  Historical 20k: 19902 correct (unchanged from original corpus4); Articles:
+  32862/33129 (-3); THUCNews: 29966/30000 (+15). Total net +12/83129.
+  Same-environment mainline Q8 scores are 19929/32827/29937 respectively.
+  No conversion, further compression, interpolation or deployment in this test.
+  See `tools/FullPinyinEval/HigherOrder/CORPUS4_WSMERGE_ACCURACY.md` for paired
+  changes, provenance, frozen/current decoder differences and overlap limits.
+
+- Articles character-fivegram experiment (2026-09-24): trained independently from
+  `C:\Archive\Copus\articles`, 324,209,793 training characters, no n-gram pruning.
+  ARPA/Q16/Q8 are archived in `C:\Archive\articles-char5-20260924`; Q8 is
+  2,503,378,280 bytes. Heldout and Python/Lua/LuaJIT/C# reader checks passed;
+  repaired archive copies passed full SHA256 and Windows-native hash checks.
+  Matched C# standalone accuracy is recorded in accuracy-csharp: Articles heldout,
+  historical 20k and THUCNews 30k, with both models rerun using identical settings.
+  Interpolation is deferred; default and installed models are unchanged.
+  See `tools/FullPinyinEval/HigherOrder/ARTICLES_CHAR5.md` before the next experiment.
 
 - Full-pinyin performance implementation (2026-09-22): compact source-order-preserving
   code/syllable indexes, streaming pooled tokens, physical-file-keyed shared resource
@@ -610,6 +873,19 @@ release tree. Keep `.bat` files CRLF.
 
 ## Related Ports And Experiments
 
+- Rime deployment-resource fix (2026-09-25): ship the 50k-word Bloom filter at
+  `rime/tiger_sentence/models/tiger_sentence.lexical.bin`, never the user-root
+  `.bin` path that librime cleanup_trash moves into trash. Lua prefers models/
+  and retains root lookup only for old-pack compatibility. Do not read trash.
+  `tools/package_tiger_sentence_rime.py` rejects top-level binary resources and
+  verifies model identity, source bytes, archive CRC and extracted manifest.
+  `tools/test_rime_resource_deployment.py` + `rime_resource_deploy_probe.cpp`
+  exercise real librime maintenance/cleanup and fresh-process Lua loading twice.
+  Lua 5.4/5.5/LuaJIT regressions pass. Corrected Rime package:
+  C:\Archive\threeway-mainline-20260925\虎整句-Rime-20260925-三模型Q8主线-部署修复版.7z.
+  This supersedes the earlier same-day Rime package's root lexical-resource layout;
+  TigerClaw packages and the 405.66 MB Q8 model bytes are unchanged.
+
 - `rime/tiger_sentence/`: standalone experimental Rime pack.
   Synced public runtime through PR #18, `bd83900`, on 2026-09-19.
   The distributed schema defaults to `tiger_sentence/memory_profile: compact`;
@@ -680,8 +956,8 @@ release tree. Keep `.bat` files CRLF.
   - The Q8 fivegram never enters git (above the 100 MB limit); distribute it
     as a release attachment. Canonical local source is
     `C:\Archive\tigerclaw_sentence_ml\runtime\sentence-fivegram-mobile.bin`,
-    356,492,204 bytes, SHA256
-    `5c46b7c2734886e868c6207a724f4dff2d9c64cb3eba193e7dd44ea9df244361`.
+    405,663,171 bytes, SHA256
+    `756f6c92cf43ad6e8e3087ce66b711ac6ad0fc41e6f3fb82b3766e35ecab8681`.
     Both mainlines use the same file. No old KLM or trigram reader fallback.
     Local changes do not publish public Release attachments automatically.
   - Release procedure per version: sync files into the mirror layout ->
