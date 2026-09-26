@@ -16,6 +16,7 @@ namespace TigerClawHookNative
         bool NativeHookAltBackslashToggleEnabled = true;
         bool AutoSwitchSystemLayoutEnabled = true;
         bool UseClipboardCommit = false;
+        std::wstring LearningReceipt;
         std::wstring CommitText;
         std::wstring InputBuffer;
         std::wstring ClipboardCommitWhitelist;

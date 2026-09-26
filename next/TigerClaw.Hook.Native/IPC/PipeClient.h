@@ -28,6 +28,7 @@ namespace TigerClawHookNative
         std::string PrepareKey(const KeyboardHookEvent& keyEvent, const HookState& state, const CaretSnapshot& caret);
         bool TrySendPreparedKey(const std::string& request, const FocusSnapshot& focus, CoreResponse& response, std::wstring& error);
         bool TryCancelForRecovery(std::wstring& error);
+        bool TrySendLearningCommit(const std::wstring& receipt, bool applied, std::wstring& error);
 
     private:
         static constexpr DWORD ConnectTimeoutMs = 20;

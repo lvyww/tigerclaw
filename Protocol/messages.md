@@ -48,7 +48,7 @@ Native Overlay 尝试取得前台，但菜单显示不以授权成功为前提�
 | `exit_core` | Overlay | 是 | 回复后退出 Core |
 | `focus` / `caret` / `ime_active` | TSF | 否 | 窗口、光标和激活状态 |
 | `composition_canceled` | TSF/Hook | 否 | 前端已取消 composition |
-| `learning_commit` | TSF | 否 | 整句 Tab 改选的文档上屏结果回执 |
+| `learning_commit` | TSF/Hook | 否 | 整句 Tab 改选的文档上屏结果回执 |
 | `hook_native_disabled` | Hook | 否 | Native Hook 禁用状态 |
 
 未知消息返回 `success:false` 的普通 `response`，不使用独立错误消息类型。
@@ -97,7 +97,9 @@ Core 仅在支持回执的按键响应中携带可选 `learning_receipt`（32 �
 `false`。`S_FALSE` 或仅调度异步编辑不代表上屏成功。通知没有响应，避免污染按键回复流。
 令牌绑定 `client_session`，有效期 30 秒，最多保留 128 个；成功或失败确认均只消费一次。
 按键重试沿用缓存的同一令牌。焦点、外部 composition 取消和配置版本变化会作废待确认令牌；
-关闭自学习时不接受确认。旧前端和未实现回执的 Native Hook 仍可正常输入，但不会学习。
+关闭自学习时不接受确认。旧前端仍可正常输入，但不会学习。
+
+Native Hook 声明 `learning_ack_version:1`；文本发送成功且发送前后前台窗口/进程一致时回报 `applied:true`。空提交、抑制上屏、发送失败或前台变化不确认成功。Hook 的成功仅表示 SendInput/剪贴板粘贴等提交 API 成功，不证明目标应用实际插入文字。回执在原按键管道上先于后续按键写入；断线或通知失败时不重放文字、不单独重连补发，未确认令牌过期或取消。
 
 ## 统一响应
 

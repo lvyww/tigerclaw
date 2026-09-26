@@ -296,46 +296,49 @@ namespace TigerClaw.Core.Tests
             Console.WriteLine("learning-engine phase: disable-restore");
             state.TrySetConfigValue("整句Tab自学习", "否", out _, out _);TypeLetters(engine, "aabb");LearningCheck(engine.GetUiSnapshot(5).Candidates[0] == baseComposedTop, "disabled engine order restored");Press(engine, 27);
             state.TrySetConfigValue("整句Tab自学习", "是", out _, out _);
-            Console.WriteLine("learning-engine phase: protocol");
-            // Protocol test uses a fresh scheme and simulated TSF success/failure
-            // acknowledgements; it is not a live document editing test.
-            string separate = Path.Combine(root, "protocol");Directory.CreateDirectory(Path.Combine(separate, "码表", "虎整句"));
-            File.WriteAllText(Path.Combine(separate, "码表", "虎整句", "fixture.txt"), "aa\t甲\t乙\nbb\t中\n", new UTF8Encoding(false));
-            var protocolState = new CoreRuntimeState(separate);EnableSentenceMode(protocolState);
-            protocolState.TrySetConfigValue("整句Tab自学习", "是", out _, out _);protocolState.TrySetConfigValue("整句自动提前上屏", "否", out _, out _);
-            protocolState.TrySetConfigValue("整句神经重排", "否", out _, out _);
-            protocolState.TrySetConfigValue("允许单字重码组句", "是", out _, out _);
-            using var handler = new ProtocolHandler(_ => { }, protocolState, null, CreateSentenceDecoder(
-                new Dictionary<string, List<string>> { ["aa"] = new() { "甲", "乙" }, ["bb"] = new() { "中" } }, true), true);
-            var actual = (InputMethodEngine)typeof(ProtocolHandler).GetField("_engine", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(handler);
-            int serial = 0;string last = "";
-            string Key(int vk, bool capability = true)
+            foreach (string frontend in new[] { "tsf", "hook_native" })
             {
-                last = JsonSerializer.Serialize(new { type = "key", seq = ++serial, client_session = "test-client", event_id = serial.ToString(), action = "down", vk, learning_ack_version = capability ? 1 : 0 });
-                return handler.Handle(last);
-            }
-            // Exact Direct candidates commit normally but do not create a
-            // sentence-learning receipt.
-            Key('A');Key('A');Key(9);string response = Key(32);using (var directJson = JsonDocument.Parse(response))
-            {
-                LearningCheck(directJson.RootElement.GetProperty("commit_text").GetString() == "乙",
-                    "protocol Direct correction commits selected text");
-                LearningCheck(!directJson.RootElement.TryGetProperty("learning_receipt", out _),
-                    "protocol Direct-to-Direct choice has no learning receipt");
-            }
+                Console.WriteLine("learning-engine phase: protocol " + frontend);
+                // Protocol test uses a fresh scheme and simulated frontend success/failure
+                // acknowledgements; it is not a live document editing test.
+                string separate = Path.Combine(root, "protocol-" + frontend);Directory.CreateDirectory(Path.Combine(separate, "码表", "虎整句"));
+                File.WriteAllText(Path.Combine(separate, "码表", "虎整句", "fixture.txt"), "aa\t甲\t乙\nbb\t中\n", new UTF8Encoding(false));
+                var protocolState = new CoreRuntimeState(separate);EnableSentenceMode(protocolState);
+                protocolState.TrySetConfigValue("整句Tab自学习", "是", out _, out _);protocolState.TrySetConfigValue("整句自动提前上屏", "否", out _, out _);
+                protocolState.TrySetConfigValue("整句神经重排", "否", out _, out _);
+                protocolState.TrySetConfigValue("允许单字重码组句", "是", out _, out _);
+                using var handler = new ProtocolHandler(_ => { }, protocolState, null, CreateSentenceDecoder(
+                    new Dictionary<string, List<string>> { ["aa"] = new() { "甲", "乙" }, ["bb"] = new() { "中" } }, true), true);
+                var actual = (InputMethodEngine)typeof(ProtocolHandler).GetField("_engine", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(handler);
+                int serial = 0;string last = "";
+                string Key(int vk, bool capability = true)
+                {
+                    last = JsonSerializer.Serialize(new { type = "key", frontend, seq = ++serial, client_session = "test-client", event_id = serial.ToString(), action = "down", vk, learning_ack_version = capability ? 1 : 0 });
+                    return handler.Handle(last);
+                }
+                // Exact Direct candidates commit normally but do not create a
+                // sentence-learning receipt.
+                Key('A');Key('A');Key(9);string response = Key(32);using (var directJson = JsonDocument.Parse(response))
+                {
+                    LearningCheck(directJson.RootElement.GetProperty("commit_text").GetString() == "乙",
+                        "protocol Direct correction commits selected text");
+                    LearningCheck(!directJson.RootElement.TryGetProperty("learning_receipt", out _),
+                        "protocol Direct-to-Direct choice has no learning receipt");
+                }
 
-            // A composed correction keeps the full receipt/ack protocol.
-            Key('A');Key('A');Key('B');Key('B');Key(9);response = Key(32);using var json = JsonDocument.Parse(response);
-            LearningCheck(json.RootElement.GetProperty("commit_text").GetString() == "乙中", "protocol actual Composed corrected commit");
-            string receipt = json.RootElement.GetProperty("learning_receipt").GetString();
-            var actualStore = (SentenceLearningStore)typeof(InputMethodEngine).GetField("_learningStore", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(actual);
-            LearningCheck(!File.Exists(actualStore.Path), "Core response alone cannot learn");
-            using var replay = JsonDocument.Parse(handler.Handle(last));LearningCheck(replay.RootElement.GetProperty("learning_receipt").GetString() == receipt, "same key retry replays receipt");
-            string ack = JsonSerializer.Serialize(new { type = "learning_commit", client_session = "test-client", learning_receipt = receipt, applied = true });
-            LearningCheck(handler.Handle(ack) == null, "ack does not pollute response stream");actualStore.FlushAsync().GetAwaiter().GetResult();handler.Handle(ack);actualStore.FlushAsync().GetAwaiter().GetResult();
-            LearningCheck(actualStore.Entries().Length == 1, "protocol repeated success persists once");
-            Key('A');Key('A');Key('B');Key('B');Key(9);response = Key(32, false);using var oldBridge = JsonDocument.Parse(response);
-            LearningCheck(!oldBridge.RootElement.TryGetProperty("learning_receipt", out _), "old bridge safely does not learn");
+                // A composed correction keeps the full receipt/ack protocol.
+                Key('A');Key('A');Key('B');Key('B');Key(9);response = Key(32);using var json = JsonDocument.Parse(response);
+                LearningCheck(json.RootElement.GetProperty("commit_text").GetString() == "乙中", "protocol actual Composed corrected commit");
+                string receipt = json.RootElement.GetProperty("learning_receipt").GetString();
+                var actualStore = (SentenceLearningStore)typeof(InputMethodEngine).GetField("_learningStore", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(actual);
+                LearningCheck(!File.Exists(actualStore.Path), "Core response alone cannot learn");
+                using var replay = JsonDocument.Parse(handler.Handle(last));LearningCheck(replay.RootElement.GetProperty("learning_receipt").GetString() == receipt, "same key retry replays receipt");
+                string ack = JsonSerializer.Serialize(new { type = "learning_commit", client_session = "test-client", learning_receipt = receipt, applied = true });
+                LearningCheck(handler.Handle(ack) == null, "ack does not pollute response stream");actualStore.FlushAsync().GetAwaiter().GetResult();handler.Handle(ack);actualStore.FlushAsync().GetAwaiter().GetResult();
+                LearningCheck(actualStore.Entries().Length == 1, "protocol repeated success persists once");
+                Key('A');Key('A');Key('B');Key('B');Key(9);response = Key(32, false);using var oldBridge = JsonDocument.Parse(response);
+                LearningCheck(!oldBridge.RootElement.TryGetProperty("learning_receipt", out _), "old bridge safely does not learn");
+            }
         }
     }
 }

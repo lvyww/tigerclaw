@@ -76,6 +76,28 @@ namespace TigerClawHookNative
         return false;
     }
 
+    bool PipeClient::TrySendLearningCommit(const std::wstring& receipt, bool applied, std::wstring& error)
+    {
+        // Best effort on the same stream as the originating key. Never replay text
+        // to retry an acknowledgement, and never reconnect solely to send one.
+        if (receipt.size() != 32 || receipt.find_first_not_of(L"0123456789abcdef") != std::wstring::npos)
+        {
+            error = L"Invalid learning receipt.";
+            return false;
+        }
+        if (_requestPipe == INVALID_HANDLE_VALUE)
+        {
+            error = L"Learning request pipe disconnected.";
+            return false;
+        }
+        std::string line = "{\"type\":\"learning_commit\",\"client_session\":\"" + _clientSession +
+            "\",\"learning_receipt\":\"" + EscapeJson(receipt) + "\",\"applied\":" +
+            (applied ? "true" : "false") + "}";
+        if (TryWriteLine(_requestPipe, line, error)) return true;
+        DisconnectRequestPipe();
+        return false;
+    }
+
     PipeClient::~PipeClient()
     {
         DisconnectRequestPipe();
@@ -310,7 +332,7 @@ namespace TigerClawHookNative
         std::ostringstream stream;
         const long seq = InterlockedIncrement(&_nextSeq);
         stream << "{\"type\":\"key\",\"seq\":" << seq
-               << ",\"client_session\":\"" << _clientSession << "\""
+               << ",\"learning_ack_version\":1,\"client_session\":\"" << _clientSession << "\""
                << ",\"event_id\":\"" << ++_nextEventId << "\""
                << ",\"vk\":" << keyEvent.VirtualKey
                << ",\"scan\":" << keyEvent.ScanCode
@@ -382,6 +404,7 @@ namespace TigerClawHookNative
         CoreResponse response = {};
         response.Success = ExtractJsonBool(json, "success", false);
         response.Handled = ExtractJsonBool(json, "handled", false);
+        response.LearningReceipt = WideFromUtf8(ExtractJsonString(json, "learning_receipt"));
         response.CommitText = WideFromUtf8(ExtractJsonString(json, "commit_text"));
         response.InputBuffer = WideFromUtf8(ExtractJsonString(json, "input_buffer"));
         response.KeyboardOpen = ExtractJsonBool(json, "keyboard_open", false);

@@ -722,8 +722,10 @@ remaining removed. `整句Tab自学习` defaults on; only corrected text acknowl
 as successfully committed by the updated TSF is learned. Journals stay in each
 schema source directory. Learning scores use immutable indexes; learned search
 results cannot supply automatic-commit confidence. Existing candidate-length Qwen
-weights remain in effect, with the learning reward added afterwards. Hook does
-not gain learning receipts from this Windows change. The Rime and Fcitx5 ports
+weights remain in effect, with the learning reward added afterwards. Native Hook now advertises learning receipts (2026-09-26): successful text
+submission with unchanged foreground window/process acknowledges on the original
+key pipe. Failed/suppressed submissions do not learn; failed acknowledgements
+never replay text. This confirms OS submission, not application insertion. The Rime and Fcitx5 ports
 now share correction scoring, legal search retention and automatic-commit isolation;
 they learn after host submission, not a Windows TSF/application insertion receipt.
 Rime uses schema-scoped LevelDb and `tiger_sentence/tab_learning` (default on);

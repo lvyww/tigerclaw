@@ -12,6 +12,7 @@
 #undef private
 #include "../next/TigerClaw.Hook.Native/IPC/PipeClient.cpp"
 #include "../next/TigerClaw.Hook.Native/Replay/InputReplay.cpp"
+#include "../next/TigerClaw.Hook.Native/Replay/CommitLearning.h"
 namespace TigerClawHookNative
 {
     void Logger::Info(const wchar_t*, const std::wstring&) {}
@@ -81,6 +82,7 @@ int main()
     Check(request.find("\"ctrl\":true") != std::string::npos, "frozen modifier snapshot");
     Check(request.find("\"client_session\":\"hook-") != std::string::npos && request.find("\"event_id\":\"1\"") != std::string::npos, "event identity");
     Check(client.PrepareKey(event, state, {}).find("\"event_id\":\"2\"") != std::string::npos, "next physical event identity");
+    Check(request.find("\"learning_ack_version\":1") != std::string::npos, "learning capability frozen in retries");
     HANDLE server = Attach(client);
     CoreResponse response; std::wstring error;
     Check(!client.TrySendRequest(request, response, error), "timeout holds request");
@@ -142,5 +144,56 @@ int main()
     WriteFile(server, wrongReply, sizeof(wrongReply)-1, &written, nullptr);
     Check(!client.TrySendRequest(request, response, error), "mismatched response rejected");
     CloseHandle(server);
+    // Real receipt wire format, ordered ahead of later requests on the key pipe.
+    server = Attach(client);
+    const std::wstring receipt = L"0123456789abcdef0123456789abcdef";
+    auto parsed = PipeClient::ParseResponse("{\"success\":true,\"handled\":true,\"commit_text\":\"text\",\"learning_receipt\":\"0123456789abcdef0123456789abcdef\"}");
+    Check(parsed.LearningReceipt == receipt, "receipt parsed");
+    Check(PipeClient::ParseResponse("{}").LearningReceipt.empty(), "old Core response supported");
+    for (bool applied : {true, false})
+    {
+        Check(client.TrySendLearningCommit(receipt, applied, error), "receipt write");
+        char buffer[1024]; DWORD count = 0;
+        Check(ReadFile(server, buffer, sizeof(buffer), &count, nullptr) && count > 0, "read receipt");
+        std::string wire(buffer, count);
+        Check(wire.find("\"type\":\"learning_commit\"") != std::string::npos &&
+            wire.find(client._clientSession) != std::string::npos &&
+            wire.find("0123456789abcdef0123456789abcdef") != std::string::npos &&
+            wire.find(applied ? "\"applied\":true" : "\"applied\":false") != std::string::npos,
+            "receipt identity and result");
+    }
+    Check(!client.TrySendLearningCommit(L"bad\"receipt", true, error), "invalid receipt rejected");
+    client.DisconnectRequestPipe(); CloseHandle(server);
+    Check(!client.TrySendLearningCommit(receipt, true, error), "no reconnect for stale receipt");
+
+    server = Attach(client);
+    CloseHandle(server);
+    int failedAckReplays = 0;
+    ApplyCommitWithLearning(parsed, false, [] { return true; },
+        [&](const std::wstring&) { ++failedAckReplays; return true; },
+        [&](const std::wstring& token, bool applied) {
+            Check(!client.TrySendLearningCommit(token, applied, error), "broken receipt pipe rejected");
+        });
+    Check(failedAckReplays == 1 && client._requestPipe == INVALID_HANDLE_VALUE,
+        "ack failure disconnects without repeating text");
+
+    // Exercise the production commit/ack coordinator without a global hook.
+    for (int scenario = 0; scenario < 8; ++scenario)
+    {
+        auto result = parsed;
+        bool suppressed = scenario == 2;
+        if (scenario == 5) result.CommitText.clear();
+        if (scenario == 6) result.Handled = false;
+        if (scenario == 7) result.LearningReceipt.clear();
+        int focusChecks = 0, replays = 0, acks = 0;
+        bool positive = false;
+        ApplyCommitWithLearning(result, suppressed,
+            [&] { ++focusChecks; return scenario != 3 && !(scenario == 4 && focusChecks == 2); },
+            [&](const std::wstring&) { ++replays; return scenario != 1; },
+            [&](const std::wstring& token, bool applied) { Check(token == receipt, "same receipt"); ++acks; positive = applied; });
+        Check(replays == ((scenario == 2 || scenario == 3 || scenario == 5 || scenario == 6) ? 0 : 1), "suppressed/stale response does not replay");
+        Check(acks == (scenario == 7 ? 0 : 1), "one ack per consumed response");
+        Check(positive == (scenario == 0), "only successful stable-focus submission learns");
+    }
     std::puts("Native Hook alignment tests passed");
 }

@@ -1,4 +1,5 @@
 #include "HookRuntime.h"
+#include "../Replay/CommitLearning.h"
 
 #include "..\Common\Logger.h"
 #include "..\Common\NativeHelpers.h"
@@ -637,6 +638,8 @@ namespace TigerClawHookNative
 
         if (GetForegroundWindow() != focus.Window)
         {
+            if (!response.LearningReceipt.empty())
+                _pipeClient.TrySendLearningCommit(response.LearningReceipt, false, error);
             DropPendingKeys();
             return true;
         }
@@ -699,12 +702,20 @@ namespace TigerClawHookNative
             PostThreadMessageW(_threadId, CaretPublishMessage, 0, 0);
         }
 
+        ApplyCommitWithLearning(response, shouldSuppressCtrlSpaceResidualCommit,
+            [&] {
+                FocusSnapshot current;
+                return focus.IsValid() && _focusTracker.TryGetSnapshot(current) && current.Equals(focus);
+            },
+            [&](const std::wstring& text) { return TryReplayCommitText(text, focus, false); },
+            [&](const std::wstring& receipt, bool applied) {
+                std::wstring error;
+                if (!_pipeClient.TrySendLearningCommit(receipt, applied, error))
+                    Logger::Info(L"core", L"learning acknowledgement failed; text is not replayed");
+            });
+
         if (response.Handled)
         {
-            if (!response.CommitText.empty() && !shouldSuppressCtrlSpaceResidualCommit)
-            {
-                TryReplayCommitText(response.CommitText, focus, false);
-            }
 
             if (shouldEmitTrainerInternalBack)
             {
@@ -774,6 +785,8 @@ namespace TigerClawHookNative
             if (!_pipeClient.TrySendPreparedKey(pending.Request, pending.Focus, response, error)) return;
             if (GetForegroundWindow() != pending.Focus.Window)
             {
+                if (!response.LearningReceipt.empty())
+                    _pipeClient.TrySendLearningCommit(response.LearningReceipt, false, error);
                 DropPendingKeys();
                 return;
             }
