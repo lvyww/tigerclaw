@@ -51,6 +51,18 @@ local selected={text="甲丙",path=before.path}
 local diff=learning.diff("ABcd",before,selected,0,"test")
 check(#diff==1 and diff[1].code=="cd" and diff[1].context=="甲","shared-boundary correction")
 check(#learning.diff("abcd",before,selected,4,"test")==0,"locked boundary floor")
+local inner_before={text="设置父女窗口",path={raw_length=6,text_length=18,previous={raw_length=2,text_length=6}}}
+local inner_selected={text="设置八妾关系",path={raw_length=6,text_length=18,previous={raw_length=4,text_length=12,
+    previous={raw_length=2,text_length=6}}}}
+local known_inner=learning.build({event("bb","八妾","旧文")},now)
+local reinforced=learning.reinforce_existing(known_inner,"aabbcc",inner_before,inner_selected,0,"test")
+check(#reinforced==1 and reinforced[1].code=="bb" and reinforced[1].text=="八妾" and reinforced[1].context=="设置",
+    "whole-candidate diff reinforces existing aligned inner fragment")
+check(learning.score(learning.build({event("bb","八妾","旧文"),reinforced[1]},now),
+    "test","bb","八妾","其他")==8,"implicit confirmation advances cross-context learning exactly one level")
+local ambiguous_inner=learning.build({event("bb","八妾","旧文"),event("cc","关系","旧文")},now)
+check(#learning.reinforce_existing(ambiguous_inner,"aabbcc",inner_before,inner_selected,0,"test")==0,
+    "independent learned fragments are not guessed")
 check(learning.context("甲乙😀")=="乙😀","unicode scalar context")
 local pressure={}
 for i=1,10000 do pressure[i]=event("abcd","甲"..tostring(i),tostring(i%10)) end

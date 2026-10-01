@@ -22,6 +22,7 @@ def main():
     parser.add_argument('--model', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--threads', type=int, choices=range(1, 13), default=4)
+    parser.add_argument('--title', default='虎整句 Rime 三模型 Q8 主线')
     args = parser.parse_args()
     expected = json.loads((PACK / 'default-model.json').read_text())
     assert args.model.stat().st_size == expected['bytes']
@@ -40,7 +41,7 @@ def main():
         assert sha(package / 'models/sentence-fivegram-mobile.bin') == expected['sha256']
         assert not (package / 'tools').exists()
         (package / '安装说明.txt').write_text(
-            '虎整句 Rime 三模型 Q8 主线：部署清理修复版（2026-09-25）\n\n'
+            args.title + '\n\n' +
             '备份用户目录后，同时更新本包 Lua、方案和 models/，再重新部署。\n'
             '保留个人 custom 补丁、码表、tiger_sentence.options.yaml 和学习数据。\n'
             '词汇辅助文件必须位于 models/tiger_sentence.lexical.bin；顶层旧副本可由部署清理移入 trash。\n'

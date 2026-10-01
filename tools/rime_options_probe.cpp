@@ -31,6 +31,7 @@ int main(int argc, char** argv) {
         };
         auto a=create();
         const std::string mode=argv[4];
+        check(!!api->get_option(a,"tiger_sentence_key_correction")== (mode=="read"),"correction preference/default lost");
         if (mode=="read" || mode=="legacy") {
             expect(a,false,false,true);
             api->process_key(a,'a',0); expect(a,false,false,true);
@@ -40,11 +41,13 @@ int main(int argc, char** argv) {
         } else {
             expect(a,true,true,false);
             auto b=create(); expect(b,true,true,false);
+            api->set_option(a,"tiger_sentence_key_correction",True);
             api->set_option(a,"tiger_sentence_early_commit",False);
             api->set_option(a,"tiger_sentence_allow_duplicate_single",False);
             api->set_option(a,"tiger_sentence_early_commit_to_preedit",True);
             // Existing application catches up before its next input is decoded.
             api->process_key(b,'a',0); expect(b,false,false,true); api->clear_composition(b);
+            check(api->get_option(b,"tiger_sentence_key_correction"),"correction cross-session sync lost");
             // A stale session changes one flag: do not overwrite the other two.
             api->set_option(b,"tiger_sentence_early_commit",True);
             api->process_key(a,'a',0); expect(a,true,false,true); api->clear_composition(a);

@@ -46,6 +46,7 @@ def isolated_sources(destination):
         source = source.replace("/rime/tiger_sentence", "")
         (destination / "tools" / name).write_text(source, encoding="utf-8")
     shutil.copy2(ROOT / "tools/model_fixture.lua", destination / "tools/model_fixture.lua")
+    shutil.copy2(ROOT / "tools/test_key_correction.lua", destination / "tools/test_key_correction.lua")
     for pattern in ("*.txt", "*.yaml", "rime.lua"):
         for path in PACK.glob(pattern):
             shutil.copy2(path, destination / path.name)
@@ -196,6 +197,11 @@ def main():
         result.check_returncode()
         result = execute(lua, root, "test_backspace.lua")
         print(result.stdout, end="", flush=True)
+        result.check_returncode()
+        result = subprocess.run([lua, str(root / "tools/test_key_correction.lua"), str(root), str(root)],
+                                text=True, capture_output=True, timeout=120)
+        print(result.stdout, end="", flush=True)
+        if result.returncode: print(result.stderr, end="")
         result.check_returncode()
         if args.negative_control:
             negative_controls(lua, root)

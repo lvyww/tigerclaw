@@ -59,7 +59,7 @@ static void held(const char* text) {
 }
 int main(int argc, char** argv) {
     try {
-        check(argc >= 4 && argc <= 6, "usage: probe user shared plugin [production | raw mode]");
+        check(argc >= 4 && argc <= 8, "usage: probe user shared plugin [production | raw mode [correction early]]");
         api = rime_get_api();
         check(dlopen(argv[3], RTLD_NOW | RTLD_GLOBAL), "Lua plugin load failed");
         const char* modules[] = {"default", "lua", nullptr};
@@ -70,19 +70,100 @@ int main(int argc, char** argv) {
         if (api->start_maintenance(True)) api->join_maintenance_thread();
         session = api->create_session();
         check(api->select_schema(session, "tiger_sentence"), "schema selection failed");
-        if (argc == 6) {
+        if (argc == 6 || argc == 8) {
             for (int run = 0; run < 3; ++run) {
                 reset(std::string(argv[5]) == "buffer");
+                if (argc==8) {
+                    api->set_option(session,"tiger_sentence_key_correction",std::string(argv[6])=="1");
+                    api->set_option(session,"tiger_sentence_early_commit",std::string(argv[7])=="1");
+                }
                 const std::string raw = argv[4];
                 for (size_t i = 0; i < raw.size(); ++i) {
+                    const auto searches_before=property("review_correction_searches");
                     auto started = std::chrono::steady_clock::now();
                     key(raw[i]); first();
                     auto us = std::chrono::duration_cast<std::chrono::microseconds>(
                         std::chrono::steady_clock::now() - started).count();
-                    std::cout << "BENCH," << argv[5] << ',' << run << ',' << i + 1 << ',' << us << '\n';
+                    const auto searches_after=property("review_correction_searches");
+                    const auto searches=(searches_after.empty()?0:std::stol(searches_after))-
+                        (searches_before.empty()?0:std::stol(searches_before));
+                    std::cout << "BENCH," << argv[5] << ',' << run << ',' << i + 1 << ',' << us << ',' << searches << '\n';
                 }
             }
             api->destroy_session(session); session = 0; api->finalize(); return 0;
+        }
+        if (argc == 5 && std::string(argv[4]) == "exhaustion") {
+            for (bool buffered : {false, true}) {
+                reset(buffered);
+                api->set_option(session,"tiger_sentence_key_correction",True);
+                api->set_option(session,"tiger_sentence_early_commit",False);
+                type("kosp");
+                check(property("review_correction_exhausted")=="true","test did not exhaust quota");
+                api->set_option(session,"tiger_sentence_early_commit",True);
+                for (char ch : std::string("fify")) {
+                    key(ch);
+                    check(committed.empty(),"exhausted correction auto-committed");
+                    check(property("tiger_sentence_buffered_text").empty(),"exhausted correction auto-buffered");
+                    check(property("review_model_loaded")=="true","exhaustion disabled model");
+                }
+                check(first()=="测试一下","exhaustion damaged exact candidate");
+                key(' ');
+                check(committed=="测试一下","exhaustion blocked manual commit");
+            }
+            api->destroy_session(session);session=0;api->finalize();
+            std::cout << "real Rime exhausted quota blocks automatic commits and preserves manual confirmation\n";
+            return 0;
+        }
+        if (argc == 5 && std::string(argv[4]) == "correction") {
+            const std::string corrected = u8"\u5373\u4fbf\u5982\u6b64"; // 即便如此
+            const std::string comment = u8"\u7ea0\u9519"; // 纠错
+            const std::string comma = u8"\uff0c";
+            reset(false);
+            check(!api->get_option(session,"tiger_sentence_key_correction"),"correction must default off");
+            api->set_option(session,"tiger_sentence_early_commit",False);
+            type("izjfibdsb");
+            const auto original=first();
+            check(original!=corrected,"off corrected the input");
+            api->set_option(session,"tiger_sentence_key_correction",True);
+            check(first()==corrected,"toggle did not refresh current candidates");
+            check(std::string(api->get_input(session))=="izjfibdsb","toggle rewrote raw input");
+            RIME_STRUCT(RimeContext, menu);
+            check(api->get_context(session,&menu),"missing corrected menu");
+            check(menu.menu.num_candidates && std::string(menu.menu.candidates[0].comment)==comment,"missing correction comment");
+            api->free_context(&menu);
+            api->set_caret_pos(session,5);
+            key('a');
+            check(std::string(api->get_input(session))=="izjfiabdsb" &&
+                  api->get_caret_pos(session)==6 && committed.empty(),"correction changed middle insertion/caret");
+            key(0xff08);
+            check(std::string(api->get_input(session))=="izjfibdsb" &&
+                  api->get_caret_pos(session)==5,"correction backspace did not remove the actual key");
+            api->set_caret_pos(session,9);
+            api->set_option(session,"tiger_sentence_key_correction",False);
+            check(first()==original,"disable retained correction");
+            api->set_option(session,"tiger_sentence_key_correction",True);
+            key(' ');check(committed==corrected,"space failed to confirm correction");
+            reset(false);api->set_option(session,"tiger_sentence_early_commit",False);type("izjfibdsb");
+            check(first()==corrected,"missing corrected first candidate");
+            api->set_option(session,"tiger_sentence_early_commit",True);
+            key('q');
+            check(committed.empty(),"correction committed automatically");
+            key(0xff08);check(first()==corrected,"backspace lost correction");
+            key(',');check(committed==corrected+comma,"punctuation failed to confirm correction");
+            reset(false);api->set_option(session,"tiger_sentence_early_commit",False);type("izjfibdsb");
+            check(api->select_candidate(session,0),"tap correction failed");drain();
+            check(committed==corrected,"tap committed wrong text");
+            key('a');check(property("review_learning_count")=="0","correction polluted learning");
+            reset(false);api->set_option(session,"tiger_sentence_early_commit",False);type("izjfibdsb");
+            key(0xff09);key(0xfe20); // Tab and ISO_Left_Tab explicitly select the first candidate.
+            type("iej");
+            check(first().find(corrected)==0,"corrected lock was reinterpreted");
+            api->set_option(session,"tiger_sentence_key_correction",False);
+            check(first().find(corrected)==0,"toggle discarded confirmed correction");
+            key(' ');key('a');check(property("review_learning_count")=="0","locked correction polluted learning");
+            api->destroy_session(session);session=0;api->finalize();
+            std::cout << "real Rime key correction, toggles, locks, explicit commits and no learning passed\n";
+            return 0;
         }
         if (argc == 5) {
             reset(); type("kospfify");

@@ -46,14 +46,25 @@ local function history_id(history, index)
 end
 
 local function cache_new(limit)
-    return {values={}, keys={}, next=1, limit=math.max(1, limit or 16)}
+    return {values={}, keys={}, next=1, count=0, limit=math.max(1, limit or 16)}
 end
 
 local function cache_put(cache, key, value)
-    local old = cache.keys[cache.next]
-    if old then cache.values[old] = nil end
+    if cache.keys[cache.next] then
+        -- Leave spare hash slots. Removing just one entry at a power-of-two
+        -- capacity can make Lua rehash the entire table on every insertion.
+        for i=0,math.ceil(cache.limit/4)-1 do
+            local slot=(cache.next+i-1)%cache.limit+1
+            local old=cache.keys[slot]
+            if old then
+                cache.values[old]=nil; cache.keys[slot]=nil
+                cache.count=cache.count-1
+            end
+        end
+    end
     cache.keys[cache.next] = key
     cache.values[key] = value
+    cache.count=cache.count+1
     cache.next = cache.next % cache.limit + 1
     return value
 end
@@ -144,6 +155,11 @@ function M.load(path, limits)
         local index_limit=(limits and limits.index_pages) or 64
         local page_limit=(limits and limits.page_bytes) or 8*1024*1024
         local index_cache=cache_new(index_limit)
+        local context_limit=(limits and limits.context_entries) or 16384
+        local step_limit=(limits and limits.logp_entries) or 32768
+        local contexts,steps=cache_new(context_limit),cache_new(step_limit)
+        local diagnostics=false
+        local counters={step_hits=0,step_misses=0,context_hits=0,context_misses=0}
         local pages={values={}, keys={}, sizes={}, next=1, bytes=0, limit=page_limit, slots=math.max(8,index_limit*4)}
 
         local function page_put(key,value)
@@ -194,27 +210,57 @@ function M.load(path, limits)
             return 0
         end
 
+        local function get_page(key,offset,length)
+            local data=pages.values[key]
+            if not data then data=page_put(key,read_at(file,offset,length)) end
+            return data
+        end
+
+        local function successor(meta,data,target,order)
+            local lo,hi=0,meta.count
+            while lo<hi do
+                local mid=math.floor((lo+hi)/2)
+                local value=u16(data,meta.successors+mid*successor_bytes)
+                if value<target then lo=mid+1 else hi=mid end
+            end
+            if lo<meta.count and u16(data,meta.successors+lo*successor_bytes)==target then
+                return decode_probability(read_q(data,meta.successors+lo*successor_bytes+2),header.quant[order]),meta.bow,true
+            end
+            return nil,meta.bow,false
+        end
+
         local function lookup(order,history,start,target)
             local context_len=order-1
+            -- Fixed-width IDs make history length part of the key's identity.
+            -- Store offsets, not page strings: metadata cannot pin evicted pages.
+            local context_key=history:sub(start*2-1,(start+context_len-1)*2)
+            local cached=contexts.values[context_key]
+            if cached~=nil then
+                if diagnostics then counters.context_hits=counters.context_hits+1 end
+                if cached==false then return nil,0.0,false end
+                return successor(cached,get_page(cached.key,cached.offset,cached.length),target,order)
+            end
+            if diagnostics then counters.context_misses=counters.context_misses+1 end
             local first=history_id(history,start)
             local bucket=first%256
             local meta=directories[order][bucket]
-            if not meta or meta.block_count==0 or meta.index_count==0 then return nil,0.0,false end
+            if not meta or meta.block_count==0 or meta.index_count==0 then
+                cache_put(contexts,context_key,false); return nil,0.0,false
+            end
             local index=get_index(order,bucket,meta)
             local low,high=0,meta.index_count
             while low<high do
                 local mid=math.floor((low+high)/2)
                 if compare_index(index,mid,history,start,context_len)<=0 then low=mid+1 else high=mid end
             end
-            if low==0 then return nil,0.0,false end
+            if low==0 then cache_put(contexts,context_key,false); return nil,0.0,false end
             local entry=low-1
             local ip=entry*INDEX_ENTRY_SIZE+1
             local offset=u64(index,ip+8)
             local finish=meta.index_offset
             if entry+1<meta.index_count then finish=u64(index,ip+INDEX_ENTRY_SIZE+8) end
             local page_key=order..":"..bucket..":"..entry
-            local data=pages.values[page_key]
-            if not data then data=page_put(page_key,read_at(file,offset,finish-offset)) end
+            local data=get_page(page_key,offset,finish-offset)
             local pos=1
             local block_header=context_len*2+qbytes+2
             while pos<=#data do
@@ -223,22 +269,17 @@ function M.load(path, limits)
                 local count=u16(data,pos+context_len*2+qbytes)
                 local successors=pos+block_header
                 if compared==0 then
-                    local lo,hi=0,count
-                    while lo<hi do
-                        local mid=math.floor((lo+hi)/2)
-                        local value=u16(data,successors+mid*successor_bytes)
-                        if value<target then lo=mid+1 else hi=mid end
-                    end
-                    local bow=decode_backoff(bowq,header.quant[order-1])
-                    if lo<count and u16(data,successors+lo*successor_bytes)==target then
-                        return decode_probability(read_q(data,successors+lo*successor_bytes+2),header.quant[order]),bow,true
-                    end
-                    return nil,bow,false
+                    local located={key=page_key,offset=offset,length=finish-offset,
+                        successors=successors,count=count,bow=decode_backoff(bowq,header.quant[order-1])}
+                    cache_put(contexts,context_key,located)
+                    return successor(located,data,target,order)
                 elseif compared>0 then
+                    cache_put(contexts,context_key,false)
                     return nil,0.0,false
                 end
                 pos=successors+count*successor_bytes
             end
+            cache_put(contexts,context_key,false)
             return nil,0.0,false
         end
 
@@ -263,13 +304,22 @@ function M.load(path, limits)
             return (total+probability)*LN10
         end
         function model.step(lm1,lm2,lm3,lm4,count,target)
+            assert(file,"closed TCSKNM03")
             local id=token_id(target) or header.unknown
             local history
             if count<=1 then history=id_bytes(lm1)
             elseif count==2 then history=id_bytes(lm2)..id_bytes(lm1)
             elseif count==3 then history=id_bytes(lm3)..id_bytes(lm2)..id_bytes(lm1)
             else history=id_bytes(lm4)..id_bytes(lm3)..id_bytes(lm2)..id_bytes(lm1) end
-            local score=score_history(history,id)
+            local key=history..id_bytes(id)
+            local score=steps.values[key]
+            if score==nil then
+                if diagnostics then counters.step_misses=counters.step_misses+1 end
+                score=score_history(history,id)
+                -- Do not cache exceptional/non-finite results.
+                assert(score==score and math.abs(score)<math.huge,"non-finite TCSKNM03 score")
+                cache_put(steps,key,score)
+            elseif diagnostics then counters.step_hits=counters.step_hits+1 end
             return score,id,lm1,lm2,lm3,math.min(4,count+1)
         end
         function model.logp(prev2,prev1,target)
@@ -289,15 +339,25 @@ function M.load(path, limits)
             page_limit=values.page_bytes or page_limit
             pages.limit=page_limit
             index_cache=cache_new(values.index_pages or index_limit)
+            context_limit=values.context_entries or context_limit
+            step_limit=values.logp_entries or step_limit
+            contexts,steps=cache_new(context_limit),cache_new(step_limit)
             pages={values={},keys={},sizes={},next=1,bytes=0,limit=page_limit,slots=math.max(8,(values.index_pages or index_limit)*4)}
         end
         function model.cache_status()
             local entries=0
             for _ in pairs(pages.values) do entries=entries+1 end
-            return {page_bytes=pages.bytes,page_limit=pages.limit,page_entries=entries,index_cache_limit=index_cache.limit}
+            return {page_bytes=pages.bytes,page_limit=pages.limit,page_entries=entries,index_cache_limit=index_cache.limit,
+                context_entries=contexts.count,context_limit=contexts.limit,
+                step_entries=steps.count,step_limit=steps.limit}
+        end
+        function model.set_diagnostics(enabled) diagnostics=enabled==true end
+        function model.diagnostics()
+            local copy={}; for k,v in pairs(counters) do copy[k]=v end; return copy
         end
         function model.trim_caches()
             index_cache=cache_new(index_cache.limit)
+            contexts,steps=cache_new(context_limit),cache_new(step_limit)
             pages={values={},keys={},sizes={},next=1,bytes=0,limit=page_limit,slots=pages.slots}
         end
         function model.close()

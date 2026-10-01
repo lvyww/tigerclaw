@@ -408,6 +408,69 @@ function M.diff(raw, before, selected, floor, mode)
     return result
 end
 
+function M.reinforce_existing(index, raw, before, selected, floor, mode)
+    if not index or not index.codes or #index.codes == 0 or not before or not selected or
+        before.text == selected.text or mode == "" then return {} end
+    local function boundaries(item)
+        local map, ends, node = {[0]=0}, {}, item.path
+        while node and (node.raw_length or 0) > 0 do
+            map[node.raw_length] = node.text_length
+            ends[#ends + 1] = node.raw_length
+            node = node.previous
+        end
+        table.sort(ends)
+        local r, t = 0, 0
+        for _, last in ipairs(ends) do
+            if last <= r or map[last] <= t or map[last] > #item.text then return nil end
+            r, t = last, map[last]
+        end
+        if r ~= #raw or t ~= #item.text then return nil end
+        return map, ends
+    end
+    local a, aends = boundaries(before)
+    local b, bends = boundaries(selected)
+    if not a or not b then return {} end
+    local points = {0}; for _, value in ipairs(bends) do points[#points + 1] = value end
+    local result, previous = {}, 0
+    for _, last in ipairs(aends) do
+        if b[last] then
+            local changed = selected.text:sub(b[previous] + 1, b[last])
+            local old = before.text:sub(a[previous] + 1, a[last])
+            if previous >= floor and changed ~= old then
+                local matches = {}
+                for i = 1, #points - 1 do
+                    local rs = points[i]
+                    if rs >= previous and rs < last then
+                        for j = i + 1, #points do
+                            local re = points[j]
+                            if re > last then break end
+                            local text = selected.text:sub(b[rs] + 1, b[re])
+                            local n = #chars(text)
+                            if n > 0 and n <= 16 and static(text) and not before.text:find(text, 1, true) then
+                                local code = raw:sub(rs + 1, re):lower()
+                                local ctx = context(selected.text:sub(1, b[rs]))
+                                if M.score(index, mode, code, text, ctx) > 0 then
+                                    matches[#matches + 1] = {rs=rs,re=re,ts=b[rs],te=b[re],n=n,code=code,text=text,context=ctx}
+                                end
+                            end
+                        end
+                    end
+                end
+                local best, count = nil, 0
+                for _, m in ipairs(matches) do if not best or m.n > best.n then best, count = m, 1 elseif m.n == best.n then count = count + 1 end end
+                if best and count == 1 then
+                    local contains = true
+                    for _, m in ipairs(matches) do if m.rs < best.rs or m.re > best.re then contains = false; break end end
+                    if contains then result[#result + 1] = {time=os.time(),mode=mode,code=best.code,text=best.text,context=best.context,
+                        raw_start=best.rs,raw_end=best.re,text_start=best.ts,text_end=best.te} end
+                end
+            end
+            previous = last
+        end
+    end
+    return #result == 1 and result or {}
+end
+
 local stores = {}
 function M.open(name)
     if stores[name] then return stores[name] end

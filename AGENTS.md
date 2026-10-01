@@ -13,6 +13,44 @@ for subsequent full-pinyin changes, tests and releases. This TigerClaw worktree 
 its origin remain preserved for the shared/shape project. Read the new repository
 AGENTS.md first for pinyin work. The installed desktop r3 runtime is unchanged.
 
+## Rime same-row key correction (2026-10-01)
+
+**Paused at the user's request due to device temperature.** Holdout evaluation
+and finalization processes are SIGSTOP suspended; do not resume automatically.
+PID/start-time identities: `next/_run/RimeKeyCorrection-20261001/paused-processes.json`.
+Work and partial results: `/tmp/rime-key-correction-20261001`; verify identities
+before SIGCONT. The verified 255,673,903-byte early test package is already in
+that `_run` directory (`虎整句-Rime-20261001-邻键纠错先行测试版.7z`). Final holdout
+report is still pending. The old suspended finalizer is now obsolete after the
+performance revision: do not blindly resume it against changed source. The old
+package remains a comparison baseline.
+
+Rime's experimental `tiger_sentence_key_correction` switch defaults off and
+persists through the existing option store (no schema reset). Immediate QWERTY
+same-row substitutions only: up to two per unconfirmed suffix, four input
+letters and two output Han characters minimum. A separate bounded lattice
+preserves exact candidate order, with development-selected penalty 8 / margin 2.
+Corrected first candidates cannot auto-commit; explicit confirmation is required.
+Corrected locks preserve raw input/provenance and bypass learning even after
+turning the switch off. Exact candidates retain existing auto-commit behavior.
+The three-source Q8 is unchanged. Mirror commit `2921b25` learned-fragment
+reinforcement is merged back and must not be overwritten during source sync.
+See `rime/tiger_sentence/RIME_CORRECTNESS.md` for calibration, holdout, regression
+and performance evidence. The 2026-10-01 performance revision adds bounded scalar/context/variant caches,
+batched FIFO eviction, one-generation input reuse, safe prefix reuse for letter
+edits, and correction-only A/B/C search quotas (both error budgets always run).
+Provisional A uses 8 seeds / beams 16,8 / 4,096 scoring calls including EOS.
+At most two corrections within 4 score units are displayed. Exhaustion preserves
+the model/manual commits and blocks both automatic commit paths. No new setting.
+Reader parity, bounded tests on Lua/LuaJIT, existing regressions and actual librime
+correction/exhaustion probes pass. A 24-original development smoke test is not full
+accuracy acceptance. Linux 34-key warm host P95 is 12.028 ms (off 5.415 ms), with at
+most one correction search/key; this is not Xiaomi/UI acceptance. Full evaluation
+stays paused. Verified performance package/evidence:
+`next/_run/RimeKeyCorrectionPerf-20261001/`. Source mirror sync preserves commit
+`2921b25`; the performance package is isolated, with no production deployment
+or public release.
+
 ## Current Status
 
 TigerClaw is a Windows input method with a split-process runtime. The C# Core in

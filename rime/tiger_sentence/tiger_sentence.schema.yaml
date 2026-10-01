@@ -29,6 +29,8 @@ switches:
     states: [ 单字重码组句关, 单字重码组句开 ]
   - name: tiger_sentence_early_commit_to_preedit
     states: [ 提前上屏至应用, 提前上屏至编码 ]
+  - name: tiger_sentence_key_correction
+    states: [ 按键纠错关, 按键纠错开 ]
 engine:
   processors:
     - lua_processor@tiger_sentence_ascii
@@ -67,6 +69,7 @@ tiger_sentence:
     tiger_sentence_early_commit: true
     tiger_sentence_allow_duplicate_single: true
     tiger_sentence_early_commit_to_preedit: false
+    tiger_sentence_key_correction: false
   # Learn submitted candidate corrections (direct taps and Tab selections).
   tab_learning: true
   # 提前上屏与空码自动上屏共用的最短保留编码数；0 表示不额外限制。

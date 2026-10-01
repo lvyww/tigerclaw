@@ -17,6 +17,7 @@
 | `../next/TigerClaw.Overlay.Native/README.md` | 主线 C++ Overlay、构建、WPF 回退与验收记录 |
 | `../next/TigerClaw.Core.Native/README.md` | 平行 C++ Core（已暂停）：顶部为 2026-09-09 进度快照、恢复入口及剩余工作 |
 | `../rime/tiger_sentence/README.md` | 独立 Rime 方案部署与开发 |
+| `../rime/tiger_sentence/RIME_CORRECTNESS.md` | Rime 提交边界、邻键纠错校准与性能验证 |
 | `FCITX5_ANDROID_PORTING_PLAN.md` | Fcitx5 Android 当前完成度和剩余验收 |
 | `FCITX5_ANDROID_BASELINE.md` | Android 移植冻结的仓库/模型身份 |
 | `sentence_golden_v1.md` | 跨实现 sentence JSONL 黄金格式 |

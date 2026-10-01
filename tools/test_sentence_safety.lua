@@ -124,6 +124,23 @@ for _,operation in ipairs({"logp","has_observed_bigram","nonfinite"})do
     check(closed==1,"Failed model was reopened or closed twice")
     cases=cases+1
 end
+-- A page failure inside the optional channel must clear its dynamic search
+-- scope before the exact decoder retries in no-model mode.
+do
+    local closed=0
+    sentence.correction.set_enabled(true)
+    model({close=function()closed=closed+1 end,
+        logp=function()
+            if sentence.correction.searching then error('correction page failure') end
+            return -1
+        end,has_observed_bigram=function()return false end})
+    local ok,result=pcall(sentence.decode,'kispfidy',false,'')
+    check(ok and closed==1,'correction model failure escaped or was not retired')
+    check(sentence.correction.searching==nil,'correction scope leaked after failure')
+    check(sentence.results_equal(result,sentence.decode_full('kispfidy',false,'')),'correction mixed fallback scores')
+    for _,v in ipairs(result) do check(not v.correction_count,'correction remained without model') end
+    sentence.correction.set_enabled(false)
+end
 -- Non-model failures are never converted to a successful fallback result.
 do
     local closed=0
