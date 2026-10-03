@@ -55,6 +55,20 @@ namespace TigerClaw.Core.Tests
             LearningCheck(SentenceLearning.StaticText(new string('中', 16)) && !SentenceLearning.StaticText(new string('中', 17)), "16 scalar limit");
             var e = LearningEvent("aabb", "虎娘", "设置"); var s = SentenceLearningSnapshot.Build(new[] { e }, e.Time);
             LearningCheck(s.Score(e.Mode, e.Code, e.Text, e.Context) == 9, "first correction effective");
+            var seededTwo = new List<SentenceLearningEvent> { LearningEvent("gap", "陲机", "测试") };
+            SentenceLearning.SeedInitialLevels(seededTwo, SentenceLearningSnapshot.Empty, 10.0);
+            LearningCheck(seededTwo.Count == 2 &&
+                SentenceLearningSnapshot.Build(seededTwo).Score("test-v1", "gap", "陲机", "测试") == 11,
+                "first correction seeds level two when same-context gap requires it");
+            var seededThree = new List<SentenceLearningEvent> { LearningEvent("gap3", "陲机", "测试") };
+            SentenceLearning.SeedInitialLevels(seededThree, SentenceLearningSnapshot.Empty, 100.0);
+            LearningCheck(seededThree.Count == 3 &&
+                SentenceLearningSnapshot.Build(seededThree).Score("test-v1", "gap3", "陲机", "测试") == 13,
+                "first correction jump is capped at level three");
+            var alreadyLearned = LearningEvent("known", "陲机", "测试");
+            var subsequent = new List<SentenceLearningEvent> { LearningEvent("known", "陲机", "测试") };
+            SentenceLearning.SeedInitialLevels(subsequent, SentenceLearningSnapshot.Build(new[] { alreadyLearned }), 100.0);
+            LearningCheck(subsequent.Count == 1, "subsequent manual correction still advances one level");
             LearningCheck(s.Score(e.Mode, e.Code, e.Text, "其他") == 6 && s.Score("other", e.Code, e.Text, e.Context) == 0, "first correction generalizes across context but not mode");
             LearningCheck(s.PrefixScore(e.Mode, "aa", "虎", e.Context) == 9 && s.PrefixScore(e.Mode, "aa", "虎", "其他") == 6 &&
                 s.PrefixScore(e.Mode, "aa", "狼", e.Context) == 0, "prefix retention hint carries exact/general levels");

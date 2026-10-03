@@ -76,6 +76,8 @@ namespace TigerClaw.Core
             {
                 if (!events.Any(old => old.Mode == e.Mode && old.Code == e.Code && old.Text == e.Text)) events.Add(e);
             }
+            SentenceLearning.SeedInitialLevels(events, _learningStore?.Snapshot,
+                _learningBaseline.FinalScore - selected.FinalScore);
             _pendingLearning.AddRange(events);
             _learningBaseline = null;
         }

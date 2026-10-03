@@ -110,6 +110,35 @@ namespace TigerClaw.Core
             return result;
         }
 
+        internal static void SeedInitialLevels(List<SentenceLearningEvent> events, SentenceLearningSnapshot snapshot, double scoreGap)
+        {
+            if (events == null || events.Count == 0) return;
+            snapshot ??= SentenceLearningSnapshot.Empty;
+            var fresh = events.Where(e => snapshot.Score(e.Mode, e.Code, e.Text, e.Context) <= 0).ToArray();
+            if (fresh.Length == 0) return;
+
+            // First explicit correction should normally win this same context on
+            // the next attempt. Preserve the event journal format by materializing
+            // the chosen initial level as repeated explicit events. Never jump
+            // beyond L3; later manual corrections still advance exactly one level.
+            double required = Math.Max(0.0, scoreGap) + 1.0;
+            int level = 1;
+            while (level < 3 && fresh.Length * (7 + 2 * level) < required) level++;
+            if (level == 1) return;
+
+            foreach (var e in fresh)
+            {
+                for (int copy = 1; copy < level; copy++)
+                {
+                    events.Add(new SentenceLearningEvent
+                    {
+                        Time = e.Time, Mode = e.Mode, Code = e.Code, Text = e.Text, Context = e.Context,
+                        RawStart = e.RawStart, RawEnd = e.RawEnd, TextStart = e.TextStart, TextEnd = e.TextEnd
+                    });
+                }
+            }
+        }
+
         internal static List<SentenceLearningEvent> ReinforceExisting(string raw, SentenceCandidate before,
             SentenceCandidate selected, int floor, string mode, SentenceLearningSnapshot snapshot)
         {

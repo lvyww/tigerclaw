@@ -814,14 +814,14 @@ Rime uses schema-scoped LevelDb and `tiger_sentence/tab_learning` (default on);
 Fcitx5 uses an asynchronous TCL1 journal and `TabLearning` (default on). Both
 settings also cover direct non-first candidate taps: compare against the current
 first path, do not reinforce first-choice taps, and consume each submission once.
-Rime and Fcitx5 correction weights now align with supplemental corpus weights:
-each confirmation adds 1000, using `clamp(9 + 2 * ln(weight / 1000), 0, 16)`.
-The 30-day half-life applies to weight. Existing journals are replayed under
-this rule. Windows now uses the same 9/10.39/11.20 confirmation rewards and
-16-point cap (2026-09-19), including replay of existing journals; confidence
-maturity inverts this curve, and stable top1 reinforcement stops at 11 points.
-Real-model `zhhbi` needs two corrections to promote
-`虎娘` over `其父`; real librime tests cover taps, Tab/space and engine restart.
+Windows sentence learning uses persistent correction levels with no time decay:
+10 levels, cross-context rewards +6/+8/.../+24 and same-context rewards
++9/+11/.../+27. A first manual correction seeds L1-L3 according to the current
+displayed score gap plus a 1-point margin, capped at L3; later explicit
+corrections advance exactly one level. Normal learned top1 commits and automatic
+early commits never reinforce. The existing event journals remain compatible:
+an initial jump is represented as multiple explicit events rather than a schema
+change. The standalone Rime port mirrors this policy and has its own regression coverage.
 Rime's shared manual-confirm notification also covers keyboard selection. See each
 port README for persistence and acceptance limits. See `TAB_LEARNING.md` and
 `Protocol/messages.md`; tests include 10,000-record index pressure and score
