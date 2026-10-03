@@ -5,6 +5,7 @@ chcp 65001 >nul
 set "ROOT=%~dp0"
 if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
 set "RELEASE_DIR=%ROOT%\release"
+if defined TIGERCLAW_RELEASE_DIR set "RELEASE_DIR=%TIGERCLAW_RELEASE_DIR%"
 set "STAGE_DIR=%RELEASE_DIR%\TigerClaw"
 set "DIST_CONFIG=%ROOT%\dist_config.txt"
 set "SEVEN_Z=%RELEASE_DIR%\7z.exe"
@@ -60,7 +61,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
   "if(-not (Test-Path -LiteralPath $armSentenceLexicon)){ throw ('Missing sentence lexicon: {0}' -f $armSentenceLexicon) };" ^
   "New-Item -ItemType Directory -Path (Split-Path -Parent $releaseSentenceLexicon) -Force | Out-Null;" ^
   "Copy-Item -LiteralPath $armSentenceLexicon -Destination $releaseSentenceLexicon -Force;" ^
-  "$items=@('licenses','TigerClaw.Core.exe','TigerClaw.Overlay.exe','Overlay-THIRD-PARTY-NOTICES.txt','TigerClaw.Dialog.exe','TigerClaw.Dialog.exe.config','TigerClaw.exe','TigerClaw.Shared.dll','bime.ico',$changelog,$installBat,$uninstallBat,'x64','Win32','Models','sentence','sounds',$fontDir,$reverseDir,$lexiconDir,$selectionKeys);" ^
+  "$items=@('TigerClaw.Core.exe','TigerClaw.Overlay.exe','Overlay-THIRD-PARTY-NOTICES.txt','TigerClaw.Dialog.exe','TigerClaw.Dialog.exe.config','TigerClaw.exe','TigerClaw.Shared.dll','bime.ico',$changelog,$installBat,$uninstallBat,'x64','Win32','Models','sentence','sounds',$fontDir,$reverseDir,$lexiconDir,$selectionKeys);" ^
+  "if(Test-Path -LiteralPath (Join-Path $release 'licenses')){ $items += 'licenses' };" ^
   "if(Test-Path -LiteralPath (Join-Path $release 'TigerClaw.Overlay.exe.config')){ $items += 'TigerClaw.Overlay.exe.config' };" ^
   "foreach($item in $items){ $src=Join-Path $release $item; if(-not (Test-Path -LiteralPath $src)){ throw ('Missing required item: {0}' -f $src) } };" ^
   "if(-not (Test-Path -LiteralPath (Join-Path $release 'Models\sentence-fivegram-mobile.bin') -PathType Leaf)){ throw 'Missing release shape fivegram; run publish before packing' };" ^

@@ -79,6 +79,18 @@ def main():
         assert not list(release.glob('*missing-model*.7z'))
         assert table.read_text() == 'fixture'
         assert len(list(release.glob('*.7z'))) == 3
+        model.with_suffix('.saved').rename(model)
+        # Isolated output override and absence of obsolete top-level licenses.
+        (release / 'licenses').rename(release / 'licenses.saved')
+        alternate = root / 'custom output'
+        release.rename(alternate)
+        batch = root / 'pack-isolated.bat'
+        batch.write_bytes(('@echo off\r\nset "TIGERCLAW_RELEASE_DIR=' + win(alternate) +
+            '"\r\ncall "' + win(root / 'pack_release.bat') + '" isolated --no-qwen\r\nexit /b %errorlevel%\r\n').encode())
+        result = subprocess.run(['cmd.exe', '/d', '/c', win(batch)], capture_output=True)
+        assert result.returncode == 0, (result.stdout + result.stderr).decode(errors='replace')
+        assert (alternate / '虎爪输入法-isolated-no-qwen.7z').exists()
+        assert not release.exists()
     print('No-Qwen/full packaging, stale models, wrapper failure propagation and CRC checks passed.')
 
 

@@ -8,6 +8,16 @@ namespace TigerClaw.Core.Tests
     {
         private static void SettingsOrderIsIndependentOfConfigurationOrder()
         {
+            foreach (string key in new[] { "全拼纠正学习", "全拼简拼", "全拼拼写兼容", "全拼错拼纠正",
+                "全拼模糊音n-l", "全拼模糊音z-zh", "全拼模糊音c-ch", "全拼模糊音s-sh",
+                "全拼模糊音en-eng", "全拼模糊音in-ing", "全拼模糊音an-ang",
+                "拼音英文候选", "拼音表情候选", "拼音繁体输出" })
+            {
+                True(!ConfigSettingOrder.IsVisible(key, false), "shape_settings.hide:" + key);
+                True(ConfigSettingOrder.IsVisible(key, true), "pinyin_settings.show:" + key);
+            }
+            foreach (string key in new[] { "`键拼音反查", "整句Tab自学习", "自动启用整句模式", "未知扩展设置" })
+                True(ConfigSettingOrder.IsVisible(key, false), "shape_settings.keep:" + key);
             string[][] sections =
             {
                 new[] { "开机自动启动", "默认中文", "主题", "隐藏状态栏", "开启打字音效(娱乐)", "按键音量0~100" },

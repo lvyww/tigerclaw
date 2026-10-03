@@ -151,7 +151,7 @@ namespace TigerClaw.Dialog
             SetupThemeEditor(config);
             SetupSchemaEditor(config);
             RegisterFixedRows();
-            SetupDynamicEditors(config);
+            SetupDynamicEditors(config, CorePipeClient.IsFullPinyin());
             SortSettingRows();
         }
 
@@ -330,7 +330,7 @@ namespace TigerClaw.Dialog
             }
         }
 
-        private void SetupDynamicEditors(Dictionary<string, string> config)
+        private void SetupDynamicEditors(Dictionary<string, string> config, bool fullPinyin)
         {
             if (!config.ContainsKey("开启打字音效(娱乐)")) config["开启打字音效(娱乐)"] = No;
             if (!config.ContainsKey(KeyKeySoundVolume)) config[KeyKeySoundVolume] = "30";
@@ -339,6 +339,7 @@ namespace TigerClaw.Dialog
             if (!config.ContainsKey(KeyResidenceDuration)) config[KeyResidenceDuration] = "0";
             foreach (KeyValuePair<string, string> kv in config)
             {
+                if (!ConfigSettingOrder.IsVisible(kv.Key, fullPinyin)) continue;
                 if (kv.Key == KeyAnimationDuration || kv.Key == "候选窗出现时间(毫秒)" || kv.Key == "候选窗消失时间(毫秒)" || kv.Key == KeyKeySoundVolume) continue;
                 if (string.Equals(kv.Key, KeyFont, StringComparison.OrdinalIgnoreCase) ||
                     string.Equals(kv.Key, KeyPageKey, StringComparison.OrdinalIgnoreCase) ||
@@ -1007,6 +1008,8 @@ namespace TigerClaw.Dialog
                 _original[kv.Key] = kv.Value ?? string.Empty;
             }
 
+            if (changedPairs.Any(kv => string.Equals(kv.Key, KeyCurrentSchema, StringComparison.OrdinalIgnoreCase)))
+                LoadConfig(updateStatus: false);
             UpdateInlineSummaries();
             StatusText.Text = "状态：已保存并重载。";
             return true;

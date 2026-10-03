@@ -24,6 +24,7 @@ namespace TigerClaw.Core.Tests
             {
                 if (args.Length == 1 && args[0] == "--candidate-settings-tests")
                 {
+                    SettingsOrderIsIndependentOfConfigurationOrder();
                     CandidateAnimationSettings();
                     KeyResponsesDeclareExpectedKeyUp();
                     Console.WriteLine("Candidate settings and commit deadline tests passed.");

@@ -42,6 +42,15 @@ namespace TigerClaw.Dialog
             return ranks;
         }
 
+        // Engine-specific presentation only. Hidden values stay in Core configuration.
+        internal static bool IsVisible(string key, bool fullPinyin)
+        {
+            return fullPinyin || !(key.StartsWith("全拼", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(key, "拼音英文候选", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(key, "拼音表情候选", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(key, "拼音繁体输出", StringComparison.OrdinalIgnoreCase));
+        }
+
         internal static int GetRank(string key)
         {
             return Ranks.TryGetValue(key, out int rank) ? rank : int.MaxValue;

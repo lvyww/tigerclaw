@@ -13,6 +13,15 @@ for subsequent full-pinyin changes, tests and releases. This TigerClaw worktree 
 its origin remain preserved for the shared/shape project. Read the new repository
 AGENTS.md first for pinyin work. The installed desktop r3 runtime is unchanged.
 
+## Settings scope (2026-09-27)
+
+The shared Dialog only displays full-pinyin-specific configuration rows when
+Core reports an active full-pinyin engine. Shape schemas retain pinyin reverse
+lookup and sentence learning. Hidden configuration values are preserved; saving
+only sends changed visible values. Saving a schema switch reloads the editors.
+Candidate settings tests and isolated WPF editor/serialization probes cover
+both scopes. Rebuilt x64/Win32 package evidence: `next/_run/SettingsScope-20260927`.
+
 ## Rime same-row key correction (2026-10-01)
 
 **Paused at the user's request due to device temperature.** Holdout evaluation
@@ -52,6 +61,41 @@ stays paused. Verified performance package/evidence:
 or public release.
 
 ## Current Status
+
+Brightmart 70% + Articles 30% mainline-style compression completed (2026-10-03,
+user requested). Raw ARPA union-support materialization, history-weighted KL
+ranking with prefix protection/backoff recomputation, TCSKNM03 Q8. First attempt
+exactly matches mainline order-2..5 counts; 21,302 unigrams. Q8 400,476,487 bytes,
+SHA256 `0cb50e55603eb46779e3676696cbbf2d0c848bbea60483e114c41ab9ab9e6aa8`.
+No size adjustment or accuracy-based selection needed. Frozen old10k/Articles/THUC
+Q8 = 9955/32912/29938 (72805/73129), -17 versus current three-way mainline
+(rescued 69/lost 86), -39 versus previous full dual-Q8 mixture, -69 versus full
+materialized three-way. Pruned float = 9956/32916/29938; Q8 net -5. The previous
+dual-Q8 baseline also differs in raw probabilities/union-UNK/materialization;
+do not attribute all 39 lost correct rows solely to pruning. Toy KL/budget/closure,
+source/mixture/mass/quantization/reader checks and 6 x 666 lifecycle checks pass;
+all 73,129 case/fixture identities match. Work and verified Windows archive:
+`/home/yc/tmp/brightmart-articles-7030-compress-20261003` and
+`C:\Archive\brightmart-articles-7030-compress-20261003` (model-q8.bin).
+See `tools/FullPinyinEval/HigherOrder/BRIGHTMART_ARTICLES_7030_COMPRESSION.md`.
+No deployment, automatic commit/push, or resumption of paused correction holdout.
+
+Brightmart full 70% + Articles 30% offline experiment completed (2026-10-03,
+explicit user request). Original full Brightmart rebuilt from all four source
+collections; training-token and stable KenLM Q8 SHA256 exactly match history.
+Articles Q8 also restored byte-identically. Frozen isolation-prior backup restored
+with historical SHA256 c0063898...bdecc. Fixed probability interpolation, no sweep:
+old10k/Articles/THUC = 9959/32937/29948, total 72844/73129; +52 versus full
+Brightmart, +22 versus current three-way mainline. Reference scores reuse verified
+historical predictions; mixture newly evaluated. Endpoint pools/scores, scalar
+oracle, 5 x 666 lifecycle checks and all input/fixture identities pass. Combined
+models 4,535,760,682 bytes; no materialization, pruning or deployment. Historical
+sets have overlap/selection limitations, not independent generalization evidence.
+Work: `/home/yc/tmp/brightmart-articles-7030-20261003`; archive:
+`C:\Archive\brightmart-articles-7030-20261003`. See
+`tools/FullPinyinEval/HigherOrder/BRIGHTMART_ARTICLES_7030.md`.
+Do not retrain completed stages or resume the separately paused Rime correction
+holdout. No automatic commit/push.
 
 TigerClaw is a Windows input method with a split-process runtime. The C# Core in
 `next/TigerClaw.Core/` is the sole maintained implementation.
@@ -858,6 +902,19 @@ the source release model files are preserved. The normal package is unchanged.
 Users can obtain the model through the Dialog's neural-rerank setting guide.
 WSL packaging regression: `python3 tools/test_publish_no_qwen.py` (Windows 7-Zip
 required, isolated fixtures only).
+
+The x64/Win32 publisher and packer accept `TIGERCLAW_RELEASE_DIR` for an
+isolated release directory; seed its 7-Zip binaries, fonts and code-table assets
+before publishing. `TIGERCLAW_QWEN_MODEL` / `TIGERCLAW_QWEN_LICENSE` may point
+to preserved full-package inputs. Without overrides, missing canonical Qwen
+inputs fall back to `release/sentence/Models/sentence-qwen-q8.gguf` and
+`release/sentence/licenses/Qwen3-LICENSE.txt`; explicit invalid overrides fail.
+Input availability is checked before builds, and normalized same-path copies
+are successful no-ops only when the source exists. Resolver/copy regression:
+`python3 tools/test_publish_inputs.py` (isolated Windows cmd fixtures).
+Shape preflight uses the same canonical Q8 path/override as staging. The obsolete top-level `licenses/` directory is optional;
+Sentence and Overlay notices remain required. Packaging tests cover isolated
+paths containing spaces and absence of that legacy directory.
 
 The main release is `release/`. Windows on ARM development output is
 `release_arm64/`; its default uses an ARM64X wrapper with ARM64 and x64 TSF

@@ -92,14 +92,19 @@ set "OVERLAY_OUT=%ROOT%\next\_run\Release\net48"
 set "DIALOG_OUT=%ROOT%\next\_run\Release\net48"
 set "SENTENCE_OUT=%ROOT%\next\_run\Release\sentence"
 set "SENTENCE_MODEL_ROOT=C:\Archive\tigerclaw_sentence_ml\runtime"
+set "SENTENCE_NGRAM_MODEL=%SENTENCE_MODEL_ROOT%\sentence-fivegram-mobile.bin"
+if defined TIGERCLAW_SHAPE_FIVEGRAM_MODEL set "SENTENCE_NGRAM_MODEL=%TIGERCLAW_SHAPE_FIVEGRAM_MODEL%"
 set "SENTENCE_QWEN_MODEL=C:\Archive\tigerclaw_sentence_ml\qwen3-0.6b-gguf\downloaded\Qwen3-0.6B-Base-Q8_0.gguf"
 set "SENTENCE_QWEN_LICENSE=C:\Archive\tigerclaw_sentence_ml\qwen3-0.6b-base\LICENSE"
+if defined TIGERCLAW_QWEN_MODEL set "SENTENCE_QWEN_MODEL=%TIGERCLAW_QWEN_MODEL%"
+if defined TIGERCLAW_QWEN_LICENSE set "SENTENCE_QWEN_LICENSE=%TIGERCLAW_QWEN_LICENSE%"
 set "HOOK_NATIVE_OUT=%ROOT%\next\_run\Release\native"
 set "TSF_BUILD_ROOT=%ROOT%\next\_run\Release\tsf"
 set "TSF_X64_DLL=%TSF_BUILD_ROOT%\x64\TigerClaw.dll"
 set "TSF_X86_DLL=%TSF_BUILD_ROOT%\Win32\TigerClaw.dll"
 
 set "RELEASE_DIR=%ROOT%\release"
+if defined TIGERCLAW_RELEASE_DIR set "RELEASE_DIR=%TIGERCLAW_RELEASE_DIR%"
 set "RELEASE_TSF_X64=%RELEASE_DIR%\x64"
 set "RELEASE_TSF_X86=%RELEASE_DIR%\Win32"
 set "RELEASE_SENTENCE=%RELEASE_DIR%\sentence"
@@ -149,6 +154,10 @@ if not exist "%DIST_SELECTION_KEYS_TEMPLATE%" (
     echo ERROR: Missing distribution selection-key template: %DIST_SELECTION_KEYS_TEMPLATE%
     exit /b 1
 )
+call :ResolveSentenceInputs || exit /b 1
+call :RequireFile "%RELEASE_DIR%\7z.exe" "7-Zip executable" || exit /b 1
+call :RequireFile "%RELEASE_DIR%\7z.dll" "7-Zip library" || exit /b 1
+call :RequireFile "%ROOT%\dist_config.txt" "distribution config" || exit /b 1
 echo   text_log_enabled=%TEXT_LOG_ENABLED%
 
 echo.
@@ -347,12 +356,27 @@ echo   TSF x64 : %RELEASE_DIR%\x64\TigerClaw.dll
 echo   TSF x86 : %RELEASE_DIR%\Win32\TigerClaw.dll
 exit /b 0
 
+:: Explicit overrides are authoritative: a typo must fail, not select another model.
+:ResolveSentenceInputs
+call :RequireFile "%SENTENCE_NGRAM_MODEL%" "sentence Q8 model" || exit /b 1
+call :RequireFile "%ROOT%\third_party\llama.cpp\LICENSE" "llama.cpp license" || exit /b 1
+if "%PUBLISH_NO_QWEN%"=="1" exit /b 0
+if not defined TIGERCLAW_QWEN_MODEL if not exist "%SENTENCE_QWEN_MODEL%" set "SENTENCE_QWEN_MODEL=%ROOT%\release\sentence\Models\sentence-qwen-q8.gguf"
+if not defined TIGERCLAW_QWEN_LICENSE if not exist "%SENTENCE_QWEN_LICENSE%" set "SENTENCE_QWEN_LICENSE=%ROOT%\release\sentence\licenses\Qwen3-LICENSE.txt"
+call :RequireFile "%SENTENCE_QWEN_MODEL%" "Qwen Q8 model (or set TIGERCLAW_QWEN_MODEL)" || exit /b 1
+call :RequireFile "%SENTENCE_QWEN_LICENSE%" "Qwen license (or set TIGERCLAW_QWEN_LICENSE)" || exit /b 1
+echo   Qwen model: %SENTENCE_QWEN_MODEL%
+echo   Qwen license: %SENTENCE_QWEN_LICENSE%
+exit /b 0
+
 :RequireFile
 if exist "%~1" exit /b 0
 echo ERROR: Missing %~2: %~1
 exit /b 1
 
 :CopyFileStrict
+call :RequireFile "%~1" "copy source" || exit /b 1
+if /I "%~f1"=="%~f2" exit /b 0
 copy /Y "%~1" "%~2" >nul
 if errorlevel 1 (
     echo ERROR: Copy failed: %~1
