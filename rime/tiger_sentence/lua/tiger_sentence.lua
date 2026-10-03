@@ -532,8 +532,9 @@ end
 
 function supplement.build(entries, path)
     local nodes = { { transitions = {}, failure = 1, reward = 0.0 } }
-    local count = 0
+    local count, known = 0, {}
     for text, weight in pairs(entries or {}) do
+        if text ~= "" then known[text] = true end
         local reward = reward_for_weight(weight)
         if text ~= "" and reward > 0.0 then
             local state = 1
@@ -553,7 +554,7 @@ function supplement.build(entries, path)
     end
 
     if count == 0 then
-        return empty_matcher(path, nil)
+        local empty = empty_matcher(path, nil); empty.known = known; return empty
     end
 
     local queue = {}
@@ -582,7 +583,7 @@ function supplement.build(entries, path)
             queue[#queue + 1] = child
         end
     end
-    return { nodes = nodes, path = path, count = count, error = nil }
+    return { nodes = nodes, path = path, count = count, error = nil, known = known }
 end
 
 function supplement.load_file(path)
@@ -3742,7 +3743,8 @@ local function learning_stage(env, state, selected, raw, submitted_first)
         local lock = active_lock(state)
         local floor = math.max(#state.committed_raw, lock and #lock.raw or 0)
         local events = learning.diff(raw, baseline, selected, floor, live.mode)
-        local reinforced = learning.reinforce_existing(live.store and live.store.index, raw, baseline, selected, floor, live.mode)
+        local reinforced = learning.reinforce_existing(live.store and live.store.index, raw, baseline, selected, floor, live.mode,
+            function(text) return (supplement_matcher.known or {})[text] == true end)
         for _, e in ipairs(reinforced) do
             local duplicate = false
             for _, old in ipairs(events) do
@@ -3750,6 +3752,7 @@ local function learning_stage(env, state, selected, raw, submitted_first)
             end
             if not duplicate then events[#events + 1] = e end
         end
+        learning.plan_levels(live.store and live.store.index, events, raw, baseline, selected)
         for _, e in ipairs(events) do if #live.pending < 256 then live.pending[#live.pending + 1] = e end end
     end
     live.baseline = nil
@@ -3781,12 +3784,12 @@ local function prepare_learning(env, attach)
         local ok, value = pcall(function() return schema.config:get_bool("tiger_sentence/tab_learning") end)
         if ok and value == false then enabled = false end
     end
-    local mode = enabled and ("sentence-v2|rules=" .. (lexicon_state.learning_rules or "") ..
-        "|optimal=" .. tostring(lexicon_state.high_freq_limit) .. "|dup=" .. (active_allow_duplicate_single and "1" or "0")) or ""
+    local mode = enabled and ("整句|规则版本=" .. (lexicon_state.learning_rules or "") ..
+        "|最优码限制=" .. tostring(lexicon_state.high_freq_limit) .. "|单字重码=" .. (active_allow_duplicate_single and "1" or "0")) or ""
     local schema_id = schema and schema.schema_id or "tiger_sentence"
     if env._tiger_learning_schema_id ~= schema_id then
         env._tiger_learning_schema_id = schema_id
-        env._tiger_learning_name = "tiger_sentence_learning_" .. learning.hash(schema_id)
+        env._tiger_learning_name = "自学习-" .. schema_id:gsub('[%%/\\:%z%*%?"<>|%c]', function(c) return string.format("%%%02X", c:byte()) end)
     end
     local name = env._tiger_learning_name
     local live = env._tiger_learning

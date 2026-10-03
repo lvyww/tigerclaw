@@ -25,6 +25,24 @@ namespace TigerClaw.Core.Tests
             new SentenceLearningStore(path).Confirm(Enumerable.Range(0, count).Select(i => LearningEvent(id: prefix + "-" + i)));
             return 0;
         }
+        private static int RunPortableLearningTests()
+        {
+            learningChecks = 0;
+            string root = Path.Combine(Path.GetTempPath(), "tigerclaw-learning-portable-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+            try
+            {
+                RunLearningStage("rules", LearningRules);
+                RunLearningStage("storage", () => LearningStorage(root));
+                RunLearningStage("decoder", LearningDecoder);
+                RunLearningStage("performance", LearningPerformance);
+                RunLearningStage("weighted-accumulator-review", ReviewLearningAccumulator);
+                RunLearningStage("readable-journal-review", () => ReviewJournal(root));
+                Console.WriteLine(JsonSerializer.Serialize(new { test = "portable_learning", status = "passed", checks = learningChecks, windowsEngineProtocolTested = false }));
+                return 0;
+            }
+            finally { try { Directory.Delete(root, true); } catch (IOException) { } }
+        }
         private static int RunLearningTests()
         {
             learningChecks = 0;
@@ -55,20 +73,36 @@ namespace TigerClaw.Core.Tests
             LearningCheck(SentenceLearning.StaticText(new string('中', 16)) && !SentenceLearning.StaticText(new string('中', 17)), "16 scalar limit");
             var e = LearningEvent("aabb", "虎娘", "设置"); var s = SentenceLearningSnapshot.Build(new[] { e }, e.Time);
             LearningCheck(s.Score(e.Mode, e.Code, e.Text, e.Context) == 9, "first correction effective");
+            void Plan(List<SentenceLearningEvent> events, SentenceLearningSnapshot snapshot, double gap)
+            {
+                var item = events[0]; string prefix = item.Context;
+                var head = prefix.Length == 0 ? null : new SentencePathBoundary { RawLength = 2, TextLength = prefix.Length };
+                string raw = (head == null ? "" : "zz") + item.Code;
+                SentenceCandidate Candidate(string text, double score, double learned) => new() { Text = prefix + text,
+                    Boundary = new SentencePathBoundary { Previous = head, RawLength = raw.Length, TextLength = prefix.Length + text.Length },
+                    FinalScore = score, LearningScore = learned };
+                SentenceLearning.PlanCorrectionLevels(events, snapshot, raw, Candidate("龙族", gap, 0),
+                    Candidate(item.Text, 0, snapshot.Score(item.Mode, item.Code, item.Text, item.Context)));
+            }
             var seededTwo = new List<SentenceLearningEvent> { LearningEvent("gap", "陲机", "测试") };
-            SentenceLearning.SeedInitialLevels(seededTwo, SentenceLearningSnapshot.Empty, 10.0);
-            LearningCheck(seededTwo.Count == 2 &&
-                SentenceLearningSnapshot.Build(seededTwo).Score("test-v1", "gap", "陲机", "测试") == 11,
-                "first correction seeds level two when same-context gap requires it");
+            Plan(seededTwo, SentenceLearningSnapshot.Empty, 10);
+            LearningCheck(seededTwo.Count == 1 && seededTwo[0].Levels == 2 && SentenceLearningSnapshot.Build(seededTwo).Score("test-v1", "gap", "陲机", "测试") == 11,
+                "one correction can add two levels without manufacturing events");
             var seededThree = new List<SentenceLearningEvent> { LearningEvent("gap3", "陲机", "测试") };
-            SentenceLearning.SeedInitialLevels(seededThree, SentenceLearningSnapshot.Empty, 100.0);
-            LearningCheck(seededThree.Count == 3 &&
-                SentenceLearningSnapshot.Build(seededThree).Score("test-v1", "gap3", "陲机", "测试") == 13,
-                "first correction jump is capped at level three");
-            var alreadyLearned = LearningEvent("known", "陲机", "测试");
-            var subsequent = new List<SentenceLearningEvent> { LearningEvent("known", "陲机", "测试") };
-            SentenceLearning.SeedInitialLevels(subsequent, SentenceLearningSnapshot.Build(new[] { alreadyLearned }), 100.0);
-            LearningCheck(subsequent.Count == 1, "subsequent manual correction still advances one level");
+            Plan(seededThree, SentenceLearningSnapshot.Empty, 100);
+            var three = SentenceLearningSnapshot.Build(seededThree);
+            LearningCheck(seededThree.Count == 1 && seededThree[0].Levels == 3 && three.Score("test-v1", "gap3", "陲机", "测试") == 13 && three.ConfidenceScore("test-v1", "gap3", "陲机", "测试") == 9,
+                "three-level jump is one actual confirmation for confidence");
+            var subsequent = new List<SentenceLearningEvent> { LearningEvent("gap3", "陲机", "测试") };
+            Plan(subsequent, three, 4.5);
+            LearningCheck(subsequent.Count == 1 && subsequent[0].Levels == 3,
+                "subsequent correction may also add three levels");
+            var replayed = SentenceLearningSnapshot.Build(seededThree.Concat(subsequent));
+            LearningCheck(replayed.Score("test-v1", "gap3", "陲机", "测试") == 19 && replayed.ConfidenceScore("test-v1", "gap3", "陲机", "测试") == 11,
+                "six ranking levels retain two real confirmations");
+            var small = new List<SentenceLearningEvent> { LearningEvent("small", "陲机") };
+            Plan(small, SentenceLearningSnapshot.Empty, 0);
+            LearningCheck(small[0].Levels == 1, "small gap uses the smallest sufficient increment");
             LearningCheck(s.Score(e.Mode, e.Code, e.Text, "其他") == 6 && s.Score("other", e.Code, e.Text, e.Context) == 0, "first correction generalizes across context but not mode");
             LearningCheck(s.PrefixScore(e.Mode, "aa", "虎", e.Context) == 9 && s.PrefixScore(e.Mode, "aa", "虎", "其他") == 6 &&
                 s.PrefixScore(e.Mode, "aa", "狼", e.Context) == 0, "prefix retention hint carries exact/general levels");
@@ -113,6 +147,32 @@ namespace TigerClaw.Core.Tests
                 Math.Abs(SentenceInputDecoder.LearningEarlyCommitContribution(11) - 0.4125) < 1e-12 &&
                 SentenceInputDecoder.LearningEarlyCommitContribution(13) == 0.75,
                 "learning confidence contribution follows level maturity");
+            var supplementMatcher = SentenceSupplementMatcher.Build(new[] {
+                SentenceSupplementEntry.Create("陲机", 1000), SentenceSupplementEntry.Create("低权重词", 1), SentenceSupplementEntry.Create("机", 1000) });
+            LearningCheck(supplementMatcher.Contains("陲机") && supplementMatcher.Contains("低权重词") &&
+                !supplementMatcher.Contains("陲") && !supplementMatcher.Contains("前陲机"),
+                "supplement membership is exact and includes zero-reward entries");
+            var weightedHistory = new List<SentenceLearningEvent>();
+            var weightedAccumulator = new SentenceLearningSnapshot.Accumulator();
+            string[] words = { "陲机", "龙族", "𠀀机" }, contexts = { "", "设置", "后文" };
+            for (int i = 0; i < 90; i++)
+            {
+                var item = LearningEvent("aabb", words[i * 7 % 3], contexts[i / 3 % 3]); item.Levels = i % 3 + 1; weightedHistory.Add(item);
+                var fast = weightedAccumulator.Update(weightedHistory, item.Time); var oracle = SentenceLearningSnapshot.Build(weightedHistory);
+                foreach (string word in words) foreach (string context in contexts)
+                {
+                    LearningCheck(fast.Score(item.Mode, item.Code, word, context) == oracle.Score(item.Mode, item.Code, word, context), "weighted accumulator/replay parity");
+                    LearningCheck(fast.ConfidenceScore(item.Mode, item.Code, word, context) == oracle.ConfidenceScore(item.Mode, item.Code, word, context), "confirmed count/replay parity");
+                }
+                for (int delta = 1; delta <= 3; delta++)
+                {
+                    var extra = LearningEvent(item.Code, words[i % 3], contexts[i / 2 % 3]); extra.Levels = delta;
+                    var after = SentenceLearningSnapshot.Build(weightedHistory.Concat(new[] { extra }));
+                    foreach (string word in words) foreach (string context in contexts)
+                        LearningCheck(Math.Abs(fast.ProjectedScore(item.Mode, item.Code, word, context, new[] { extra }, delta) - after.Score(item.Mode, item.Code, word, context)) < 1e-12,
+                            "planned score/replay parity");
+                }
+            }
             string fusionMode = "sentence-v3|test";
             SentenceLearningEvent fusionEvent = SentenceFusionPreference.CreateEvent(
                 fusionMode, "ii", "C", "A", true, 2);
@@ -121,7 +181,7 @@ namespace TigerClaw.Core.Tests
             LearningCheck(
                 SentenceFusionPreference.SignedScore(fusionSnapshot, fusionMode, "ii", "C", "A") > 0,
                 "fusion preference records Direct over Composed without changing table rank");
-            foreach (var name in new[] { ".tigerclaw-learning-v1.log", ".TIGIRL-LEARNING-v1.log.bak.txt", ".tigerclaw-learning-v1.log.tmp.dict.yaml", ".tigirl-learning-v1.log.lock" })
+            foreach (var name in new[] { "自学习-虎爪.txt", ".TIGIRL-LEARNING-v1.log.bak.txt", "自学习-虎爪.txt.tmp.dict.yaml", ".tigirl-learning-v1.log.lock" })
                 LearningCheck(SentenceLearning.IsReservedFile(name), "reserved filename " + name);
             LearningCheck(!SentenceLearning.IsReservedFile("正常码表.txt"), "normal table allowed");
             SentenceCandidate Candidate(string text, params (int raw, int chars)[] bounds)
@@ -144,6 +204,9 @@ namespace TigerClaw.Core.Tests
             var reinforced = SentenceLearning.ReinforceExisting("aabbcc", old, chosen, 0, "test-v1", knownSnapshot);
             LearningCheck(reinforced.Count == 1 && reinforced[0].Code == "bb" && reinforced[0].Text == "八妾" &&
                 reinforced[0].Context == "设置", "whole-candidate diff reinforces an existing aligned inner fragment");
+            var supplemental = SentenceLearning.ReinforceExisting("aabbcc", old, chosen, 0, "test-v1", SentenceLearningSnapshot.Empty, text => text == "八妾");
+            LearningCheck(supplemental.Count == 1 && supplemental[0].Text == "八妾" && supplemental[0].Code == "bb", "supplement-only inner fragment creates a learning record");
+            LearningCheck(SentenceLearning.ReinforceExisting("aabbcc", chosen, chosen, 0, "test-v1", SentenceLearningSnapshot.Empty, text => true).Count == 0, "unchanged ordinary use never reinforces supplements");
             var leveled = SentenceLearningSnapshot.Build(new[] { known, reinforced[0] });
             LearningCheck(leveled.Score("test-v1", "bb", "八妾", "其他") == 8,
                 "implicit confirmation advances cross-context learning exactly one level");
@@ -153,13 +216,20 @@ namespace TigerClaw.Core.Tests
         }
         private static void LearningStorage(string root)
         {
-            string path = Path.Combine(root, ".tigerclaw-learning-v1.log"); var store = new SentenceLearningStore(path);
+            string path = Path.Combine(root, "自学习-虎爪.txt"); var store = new SentenceLearningStore(path);
             store.Refresh(); LearningCheck(!File.Exists(path), "read-only startup does not create a log");
             var a = LearningEvent(); store.Confirm(new[] { a }); store.Confirm(new[] { a, a });
             LearningCheck(store.Entries().Length == 1, "persistent event idempotency");
-            File.AppendAllText(path, "TCL1\tE\tpartial", Encoding.ASCII); var b = LearningEvent("bb", "国", "乙"); store.Confirm(new[] { b });
-            LearningCheck(store.Entries().Length == 2, "torn tail repaired"); File.AppendAllText(path, "bad\tcrc\t1\n", Encoding.ASCII);
-            LearningCheck(store.Entries().Length == 2, "corrupt rows ignored");
+            string original = File.ReadAllText(path, Encoding.UTF8);
+            LearningCheck(original.Contains("学习") && original.Contains("乙") && original.Contains("本次升级"), "readable UTF-8 data and headings");
+            File.WriteAllText(path, "\ufeff# edited\r\n" + original.TrimEnd('\n'), Encoding.UTF8);
+            var b = LearningEvent("bb", "国", "乙"); b.Levels = 3; store.Confirm(new[] { b });
+            LearningCheck(store.Entries().Length == 2 && store.Entries()[1].Levels == 3, "BOM and final line without newline preserved");
+            string valid = File.ReadAllText(path, Encoding.UTF8);
+            File.AppendAllText(path, "invalid row\n", Encoding.UTF8);
+            bool refused = false; try { store.Confirm(new[] { LearningEvent() }); } catch (IOException) { refused = true; }
+            LearningCheck(refused && File.ReadAllText(path, Encoding.UTF8).EndsWith("invalid row\n"), "invalid user data is never silently overwritten");
+            File.WriteAllText(path, valid, Encoding.UTF8);
             LearningCheck(store.UndoLast() && store.Entries().Length == 1, "undo exact event");store.Confirm(new[] { b });
             LearningCheck(store.Entries().Length == 1, "undo cannot replay back");store.Clear();store.Confirm(new[] { a });
             LearningCheck(store.Entries().Length == 0 && store.Snapshot.IsEmpty, "clear without resurrection");
@@ -183,7 +253,7 @@ namespace TigerClaw.Core.Tests
             File.WriteAllText(Path.Combine(directory, ".tigerclaw-learning-v1.tmp.dict.yaml"), "xx\t污染\n");
             var files = CoreRuntimeState.GetOrderedLexiconFiles(directory);
             LearningCheck(files.Length == 1 && Path.GetFileName(files[0]) == "普通.txt", "actual lexicon enumerator excludes backups/temp files");
-            string concurrent = Path.Combine(root, "concurrent", ".tigerclaw-learning-v1.log");Directory.CreateDirectory(Path.GetDirectoryName(concurrent));
+            string concurrent = Path.Combine(root, "concurrent", "自学习-虎爪.txt");Directory.CreateDirectory(Path.GetDirectoryName(concurrent));
             var children = new List<Process>();
             try
             {
@@ -285,7 +355,7 @@ namespace TigerClaw.Core.Tests
             Press(engine, 9);var output = Press(engine, 32);var events = engine.TakeSentenceLearning(output, out var store);
             LearningCheck(output.TextToOutput == directBefore[1] && events.Length == 0 && store != null,
                 "ordinary selection between Direct candidates never creates learning");
-            LearningCheck(store.Path == Path.Combine(scheme, ".tigerclaw-learning-v1.log") && !File.Exists(store.Path), "scheme source folder, not cache, no pre-ack write");
+            LearningCheck(store.Path == Path.Combine(scheme, "自学习-虎爪.txt") && !File.Exists(store.Path), "scheme source folder, not cache, no pre-ack write");
             TypeLetters(engine, "aa");
             LearningCheck(engine.GetUiSnapshot(5).Candidates.Take(2).SequenceEqual(directBefore.Take(2)),
                 "Direct table order survives ordinary manual selection");

@@ -9,7 +9,7 @@ using System.Threading.Tasks;
 
 namespace TigerClaw.Core
 {
-    // ASCII journal with UTF-16 hex fields and CRC32, compatible with Tigirl V1.
+    // Readable UTF-8 correction journal. New format only; old files are not loaded.
     // Product basenames differ deliberately: no implicit cross-product writes.
     internal sealed partial class SentenceLearningStore
     {
@@ -58,7 +58,7 @@ namespace TigerClaw.Core
                     var entries = ReadJournal(data).VisibleEvents;
                     var addition = new StringBuilder();
                     foreach (var entry in entries.Where(e => SentenceLearning.EffectiveMode(e.Mode, e.Text) == SentenceLearning.EffectiveMode(mode, text) && e.Code == code && e.Text == text))
-                        addition.Append(Seal("TCL1\tU\t" + Guid.NewGuid().ToString("N") + "\t" + DateTimeOffset.UtcNow.ToUnixTimeSeconds() + "\t" + entry.Id));
+                        addition.Append(Row("撤销", Guid.NewGuid().ToString("N"), DateTimeOffset.UtcNow.ToUnixTimeSeconds(), target: entry.Id));
                     if (addition.Length != 0) Append(data, addition.ToString());
                     else Publish(entries);
                 }
@@ -89,32 +89,25 @@ namespace TigerClaw.Core
         {
             if (!File.Exists(_path)) return "";
             if (new FileInfo(_path).Length > MaximumBytes) throw new IOException("Learning journal exceeds 16 MiB");
-            return File.ReadAllText(_path, Encoding.ASCII);
+            return File.ReadAllText(_path, new UTF8Encoding(false, true));
         }
-        private static string Hex(string text)
+        private const string Header = "# 虎整句自学习记录（每条学习行代表一次人工纠正；等级上限10）\n" +
+            "# 操作\t时间(UTC)\t片段\t编码\t前文\t本次升级\t模式\t记录编号\t撤销目标\n";
+        private static string Escape(string s) => s.Replace("\\", "\\\\").Replace("\t", "\\t").Replace("\r", "\\r").Replace("\n", "\\n");
+        private static string Unescape(string s)
         {
-            var b = new StringBuilder(text.Length * 4);
-            foreach (char c in text) b.Append(((int)c).ToString("x4", CultureInfo.InvariantCulture));
+            var b = new StringBuilder();
+            for (int i = 0; i < s.Length; i++)
+            {
+                if (s[i] != '\\') { b.Append(s[i]); continue; }
+                if (++i == s.Length) throw new IOException("自学习文件有未完成的转义");
+                b.Append(s[i] switch { 't' => '\t', 'r' => '\r', 'n' => '\n', '\\' => '\\', _ => throw new IOException("自学习文件有未知转义") });
+            }
             return b.ToString();
         }
-        private static bool Unhex(string text, out string value)
-        {
-            value = ""; if (text.Length % 4 != 0 || text.Length > 2048) return false;
-            var b = new StringBuilder(text.Length / 4);
-            for (int i = 0; i < text.Length; i += 4)
-            {
-                if (!ushort.TryParse(text.AsSpan(i, 4), NumberStyles.AllowHexSpecifier, CultureInfo.InvariantCulture, out var c)) return false;
-                b.Append((char)c);
-            }
-            value = b.ToString(); return value.Length == 0 || SentenceLearning.Characters(value) > 0;
-        }
-        private static uint Checksum(string s)
-        {
-            uint crc = 0xffffffff;
-            foreach (char c in s) { crc ^= (byte)c; for (int i = 0; i < 8; i++) crc = (crc >> 1) ^ ((crc & 1) != 0 ? 0xedb88320 : 0); }
-            return ~crc;
-        }
-        private static string Seal(string s) => s + "\t" + Checksum(s).ToString(CultureInfo.InvariantCulture) + "\n";
+        private static string Row(string action, string id, long time, string text = "", string code = "", string context = "", int levels = 0, string mode = "", string target = "") =>
+            string.Join("\t", new[] { action, DateTimeOffset.FromUnixTimeSeconds(time).ToString("yyyy-MM-ddTHH:mm:ss'Z'", CultureInfo.InvariantCulture),
+                Escape(text), Escape(code), Escape(context), levels.ToString(CultureInfo.InvariantCulture), Escape(mode), id, target }) + "\n";
         private sealed class Journal
         {
             internal List<SentenceLearningEvent> Events = new();
@@ -126,29 +119,33 @@ namespace TigerClaw.Core
         }
         private static Journal Parse(string data, Journal journal = null)
         {
-            journal ??= new Journal();
-            var removed = journal.Removed;
-            journal.Visible = null;
-            int start = 0;
-            for (;;)
+            journal ??= new Journal(); journal.Visible = null;
+            foreach (string source in data.TrimStart('\ufeff').Split('\n'))
             {
-                int end = data.IndexOf('\n', start); if (end < 0) break;
-                string line = data.Substring(start, end - start); start = end + 1;
-                if (line.Length > 8192) continue;
-                int crc = line.LastIndexOf('\t');
-                if (crc < 0 || !uint.TryParse(line.AsSpan(crc + 1), NumberStyles.None, CultureInfo.InvariantCulture, out uint expected) ||
-                    expected != Checksum(line.Substring(0, crc))) continue;
-                string[] f = line.Substring(0, crc).Split('\t');
-                if (f.Length < 4 || f[0] != "TCL1" || f[2].Length == 0 || f[2].Length > 128 || journal.Seen.Contains(f[2]) ||
-                    !long.TryParse(f[3], NumberStyles.None, CultureInfo.InvariantCulture, out long time)) continue;
-                if (f[1] == "E" && f.Length == 8)
+                string line = source.TrimEnd('\r');
+                if (line.Length == 0 || line.StartsWith("#", StringComparison.Ordinal)) continue;
+                if (line.Length > 8192) throw new IOException("自学习文件行过长");
+                string[] f = line.Split('\t');
+                if (f.Length != 9 || f[7].Length == 0 || f[7].Length > 128 ||
+                    !DateTimeOffset.TryParseExact(f[1], "yyyy-MM-ddTHH:mm:ss'Z'", CultureInfo.InvariantCulture,
+                    DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var date)) throw new IOException("自学习文件格式错误");
+                long time = date.ToUnixTimeSeconds();
+                if (time < 0) throw new IOException("自学习时间无效");
+                if (journal.Seen.Contains(f[7])) continue;
+                if (f[0] == "学习")
                 {
-                    if (!Unhex(f[4], out string mode) || !Unhex(f[5], out string code) || !Unhex(f[6], out string text) || !Unhex(f[7], out string context) ||
-                        mode.Length == 0 || code.Length == 0 || code.Length > 128 || !SentenceLearning.StaticText(text) || SentenceLearning.Characters(context) > 2) continue;
-                    journal.Seen.Add(f[2]); journal.Events.Add(new SentenceLearningEvent { Id = f[2], Time = time, Mode = mode, Code = code, Text = text, Context = context });
+                    string text = Unescape(f[2]), code = Unescape(f[3]), context = Unescape(f[4]), mode = Unescape(f[6]);
+                    if (!int.TryParse(f[5], NumberStyles.None, CultureInfo.InvariantCulture, out int levels) || levels < 1 || levels > 3 ||
+                        mode.Length == 0 || mode.Length > 512 || SentenceLearning.Characters(mode) == 0 || code.Length == 0 || code.Length > 128 || SentenceLearning.Characters(code) == 0 || !SentenceLearning.StaticText(text) ||
+                        (context.Length > 0 && SentenceLearning.Characters(context) == 0) || SentenceLearning.Characters(context) > 2 || f[8].Length != 0)
+                        throw new IOException("自学习片段、编码、前文或升级值无效");
+                    journal.Seen.Add(f[7]); journal.Events.Add(new SentenceLearningEvent { Id = f[7], Time = time, Mode = mode, Code = code, Text = text, Context = context, Levels = levels });
                 }
-                else if (f[1] == "U" && f.Length == 5 && f[4].Length <= 128) { journal.Seen.Add(f[2]); removed.Add(f[4]); }
-                else if (f[1] == "C" && f.Length == 4) { journal.Seen.Add(f[2]); journal.Events.Clear(); removed.Clear(); }
+                else if (f[0] == "撤销" && f[8].Length > 0 && f[8].Length <= 128)
+                { journal.Seen.Add(f[7]); journal.Removed.Add(f[8]); }
+                else if (f[0] == "清空" && f[8].Length == 0)
+                { journal.Seen.Add(f[7]); journal.Events.Clear(); journal.Removed.Clear(); }
+                else throw new IOException("未知的自学习操作");
             }
             return journal;
         }
@@ -162,7 +159,7 @@ namespace TigerClaw.Core
         {
             if (!File.Exists(_path)) { Publish(Array.Empty<SentenceLearningEvent>()); return; }
             var info = new FileInfo(_path);
-            // Refresh decay even when the file is unchanged (one-minute bound).
+            // Periodically check externally edited data; timestamps never decay scores.
             DateTime now = DateTime.UtcNow;
             if (info.Length == _size && info.LastWriteTimeUtc == _stamp && now >= _lastRead && now - _lastRead < TimeSpan.FromMinutes(1)) return;
             using var guard = Acquire(); Publish(ReadJournal(ReadBytes()).VisibleEvents); _lastRead = DateTime.UtcNow;
@@ -170,16 +167,14 @@ namespace TigerClaw.Core
         private DateTime _lastRead;
         private void Append(string data, string addition)
         {
-            if (data.Length > 0 && data[^1] != '\n')
-            {
-                int end = data.LastIndexOf('\n'); data = end < 0 ? "" : data.Substring(0, end + 1);
-                using var repair = new FileStream(_path, FileMode.Open, FileAccess.Write, FileShare.Read);
-                repair.SetLength(data.Length);
-            }
-            if (data.Length + addition.Length > MaximumBytes) throw new IOException("Learning journal full; normal input remains available");
+            // Validate before writing; never truncate a human-edited file.
+            ReadJournal(data);
+            if (data.Length == 0) addition = Header + addition;
+            else if (data[^1] != '\n') addition = "\n" + addition;
+            if (Encoding.UTF8.GetByteCount(data) + Encoding.UTF8.GetByteCount(addition) > MaximumBytes) throw new IOException("Learning journal full; normal input remains available");
             using (var stream = new FileStream(_path, FileMode.Append, FileAccess.Write, FileShare.Read))
             {
-                byte[] bytes = Encoding.ASCII.GetBytes(addition); stream.Write(bytes); stream.Flush(true);
+                byte[] bytes = Encoding.UTF8.GetBytes(addition); stream.Write(bytes); stream.Flush(true);
             }
             var journal = ReadJournal(data);
             _parsedData = null; _parsedJournal = null; // No half-updated cache survives failure.
@@ -194,10 +189,10 @@ namespace TigerClaw.Core
             foreach (var e in events)
             {
                 if (e.Id.Length == 0 || e.Id.Length > 128 || e.Id.IndexOfAny(new[] { '\t', '\r', '\n' }) >= 0 || journal.Seen.Contains(e.Id) || accepted.Contains(e.Id) ||
-                    e.Time < 0 || e.Mode.Length == 0 || e.Mode.Length > 512 || e.Code.Length == 0 || e.Code.Length > 128 || !SentenceLearning.StaticText(e.Text) ||
-                    (e.Context.Length > 0 && SentenceLearning.Characters(e.Context) == 0) || SentenceLearning.Characters(e.Context) > 2) continue;
+                    e.Time < 0 || e.Mode.Length == 0 || e.Mode.Length > 512 || SentenceLearning.Characters(e.Mode) == 0 || e.Code.Length == 0 || e.Code.Length > 128 || SentenceLearning.Characters(e.Code) == 0 || !SentenceLearning.StaticText(e.Text) ||
+                    (e.Context.Length > 0 && SentenceLearning.Characters(e.Context) == 0) || SentenceLearning.Characters(e.Context) > 2 || e.Levels < 1 || e.Levels > 3) continue;
                 accepted.Add(e.Id);
-                addition.Append(Seal("TCL1\tE\t" + e.Id + "\t" + e.Time.ToString(CultureInfo.InvariantCulture) + "\t" + Hex(e.Mode) + "\t" + Hex(e.Code) + "\t" + Hex(e.Text) + "\t" + Hex(e.Context)));
+                addition.Append(Row("学习", e.Id, e.Time, e.Text, e.Code, e.Context, e.Levels, e.Mode));
             }
             if (addition.Length == 0) Publish(journal.VisibleEvents); else Append(data, addition.ToString());
         }
@@ -206,12 +201,12 @@ namespace TigerClaw.Core
         {
             if (!File.Exists(_path)) return false;
             using var guard = Acquire(); string data = ReadBytes(); var entries = ReadJournal(data).VisibleEvents; if (entries.Length == 0) return false;
-            Append(data, Seal("TCL1\tU\t" + Guid.NewGuid().ToString("N") + "\t" + DateTimeOffset.UtcNow.ToUnixTimeSeconds() + "\t" + entries[^1].Id)); return true;
+            Append(data, Row("撤销", Guid.NewGuid().ToString("N"), DateTimeOffset.UtcNow.ToUnixTimeSeconds(), target: entries[^1].Id)); return true;
         }
         private void ClearCore()
         {
             using var guard = Acquire(); string data = ReadBytes();
-            Append(data, Seal("TCL1\tC\t" + Guid.NewGuid().ToString("N") + "\t" + DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+            Append(data, Row("清空", Guid.NewGuid().ToString("N"), DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
         }
     }
 }

@@ -20,6 +20,13 @@ LevelDb = function(name)
 end
 local sentence = require("tiger_sentence")
 local learning = sentence.learning
+local function fake_storage(name)
+    local data=databases[name] or {};databases[name]=data
+    return {read=function()return data.text or "" end,close=function()end,
+        update=function(_,k,v)if fail_write then return false end;writes=writes+1;data.text=(data.text or "")..v;return true end}
+end
+learning.storage_factory=fake_storage
+
 sentence.set_model_enabled(false)
 sentence.ensure_lexicon(nil)
 local checks = 0
@@ -31,6 +38,28 @@ end
 local index = learning.build({event("ab", "疒")}, now)
 check(learning.score(index,"test","ab","疒","")==9, "first correction equals supplement weight 1000")
 check(learning.score(index,"test","ab","疒","甲")==6, "first correction creates cross-context preference")
+local function plan(index, events, gap)
+    local e=events[1];local prefix=e.context;local offset=prefix=="" and 0 or 2
+    local raw=(offset==0 and "" or "zz")..e.code
+    local head=offset==0 and nil or {raw_length=offset,text_length=#prefix}
+    local function item(text,score,learned)
+        return {text=prefix..text,score=score,learning_score=learned,
+            path={previous=head,raw_length=#raw,text_length=#prefix+#text}}
+    end
+    learning.plan_levels(index,events,raw,item("龙族",gap,0),item(e.text,0,learning.score(index,e.mode,e.code,e.text,e.context)))
+end
+local seeded_two={event("gap","陲机","测试")}
+plan(learning.build({},now),seeded_two,10)
+check(#seeded_two==1 and seeded_two[1].levels==2 and learning.score(learning.build(seeded_two,now),"test","gap","陲机","测试")==11,"two levels remain one correction")
+local seeded_three={event("gap3","陲机","测试")}
+plan(learning.build({},now),seeded_three,100)
+local third=learning.build(seeded_three,now)
+check(#seeded_three==1 and seeded_three[1].levels==3 and learning.score(third,"test","gap3","陲机","测试")==13 and learning.confidence_score(third,"test","gap3","陲机","测试")==9,"three levels retain one actual confirmation")
+local subsequent={event("gap3","陲机","测试")}
+plan(third,subsequent,4.5)
+check(#subsequent==1 and subsequent[1].levels==3,"subsequent correction can also jump three levels")
+local twice=learning.build({seeded_three[1],subsequent[1]},now)
+check(learning.score(twice,"test","gap3","陲机","测试")==19 and learning.confidence_score(twice,"test","gap3","陲机","测试")==11,"six ranking levels retain two real confirmations")
 check(learning.score(index,"other","ab","疒","")==0, "mode isolation")
 check(learning.score(learning.build({event("ab","疒")},now+3650*86400),"test","ab","疒","")==9,"learning has no time decay")
 local repeated={}
@@ -164,12 +193,15 @@ type_ot();press("Down");press("space")
 check(writes==0,"navigation without Tab does not learn")
 type_ot();press("Tab");ctx.transform=true;press("space");ctx.transform=false
 check(writes==0,"transformed commit does not learn")
+local first_learning_writes=writes
 type_ot();press("Tab");press("space")
-check(writes==1 and commits[#commits]=="疒否","host Composed submission learns once")
+local first_learning_records=writes-first_learning_writes
+check(first_learning_records==1 and commits[#commits]=="疒否",
+    "host Composed submission seeds one to three initial levels")
 type_ot();check(sentence.decode("abcd")[1].text=="疒否","next composition uses Composed learning")
-press("space");check(writes==1,"ordinary learned first choice never reinforces")
-type_ot();press("space");check(writes==1,"repeated learned top1 use keeps the same level")
-type_ot();press("space");check(writes==1,"normal top1 use remains write-free")
+press("space");check(writes==first_learning_records,"ordinary learned first choice never reinforces")
+type_ot();press("space");check(writes==first_learning_records,"repeated learned top1 use keeps the same level")
+type_ot();press("space");check(writes==first_learning_records,"normal top1 use remains write-free")
 config.enabled=false;type_ot()
 check(sentence.decode("abcd")[1].text=="交否","schema setting disables scoring")
 press("Escape");config.enabled=true;type_ot()
@@ -183,15 +215,17 @@ other_type();check(sentence.decode("abcd")[1].text=="交否","failed persistence
 other_press("Escape");sentence.processor_component.fini(other)
 local lock_env,lock_ctx,lock_press,lock_type=host("lock-schema",true)
 lock_type();lock_press("Tab");local previous=writes;lock_press("a")
-check(writes==previous+1,"Tab next letter submission learns")
+check(writes==previous+1,"Tab next letter submission seeds bounded initial levels")
 check(lock_ctx.input=="a","Tab learning keeps live raw suffix")
 sentence.processor_component.fini(lock_env)
 local reopened = dofile(repo.."/rime/tiger_sentence/lua/tiger_sentence_learning.lua")
-local persisted = reopened.open("tiger_sentence_learning_"..learning.hash("learning-test"))
-check(persisted.count==1 and #persisted.events==1,"database restart loads only the explicit correction")
+reopened.storage_factory=fake_storage
+local persisted = reopened.open("自学习-learning-test")
+check(persisted.count==first_learning_records and #persisted.events==first_learning_records,
+    "database restart loads exactly the seeded explicit correction records")
 local saved=persisted.events[1]
-check(reopened.score(persisted.index,saved.mode,saved.code,saved.text,saved.context)==9,
-    "length-framed persistence preserves level-one exact score")
+check(reopened.score(persisted.index,saved.mode,saved.code,saved.text,saved.context)==7+2*saved.levels,
+    "length-framed persistence preserves the seeded initial level")
 check(not learning.confirm({db={update=function()error("must not write")end},count=10000}, {event("ab","乙")}),"bounded event history")
 local tap_env,tap_ctx,tap_press,tap_type,_,tap_config=host("tap-schema",false)
 local before_taps=writes
@@ -200,14 +234,15 @@ check(writes==before_taps,"tapping first candidate does not reinforce")
 tap_type();tap_ctx:highlight(1);tap_ctx.transform=true;tap_ctx:confirm_current_selection();tap_ctx.transform=false
 check(writes==before_taps,"transformed tap is not learned")
 tap_type();tap_ctx:highlight(1);tap_ctx.repeat_notification=true;tap_ctx:confirm_current_selection()
-check(writes==before_taps+1,"non-first tap learns exactly once without Tab or space")
+local tap_seeded=writes-before_taps
+check(tap_seeded==1,"non-first tap seeds bounded initial levels without duplicate notification")
 tap_type();check(sentence.decode("abcd")[1].text=="疒否","tap changes next Composed ranking")
 tap_ctx:highlight(0);tap_ctx:confirm_current_selection()
-check(writes==before_taps+1,"tapping learned first candidate does not reinforce")
+check(writes==before_taps+tap_seeded,"tapping learned first candidate does not reinforce")
 tap_config.enabled=false;tap_type();tap_ctx:highlight(1);tap_ctx:confirm_current_selection()
-check(writes==before_taps+1,"disabled learning ignores taps")
-tap_config.enabled=true;tap_type();tap_press("Tab");tap_ctx:confirm_current_selection()
-check(writes==before_taps+2,"Tab followed by tap records one correction")
+check(writes==before_taps+tap_seeded,"disabled learning ignores taps")
+tap_config.enabled=true;tap_type();tap_press("Tab");local before_tab_tap=writes;tap_ctx:confirm_current_selection()
+check(writes==before_tab_tap+1,"Tab followed by tap records bounded manual correction levels")
 sentence.processor_component.fini(tap_env)
 for _, punctuation in ipairs({"comma", "period"}) do
     local p_env,p_ctx,p_press,p_type=host("punct-"..punctuation,false)
@@ -218,10 +253,11 @@ for _, punctuation in ipairs({"comma", "period"}) do
     check(writes==start_writes,"transformed punctuation commit does not learn")
     p_type();p_press("Tab");p_ctx.repeat_notification=true
     check(p_press(punctuation)==2,"punctuation stays with native punctuator")
-    check(writes==start_writes+1,"punctuation confirmation learns exactly once")
+    check(writes==start_writes+1,"punctuation confirmation seeds bounded initial levels")
     check(p_ctx.input=="","sentence submitted before punctuation input")
+    local punctuation_writes=writes
     p_press(punctuation)
-    check(writes==start_writes+1,"idle punctuation cannot replay correction")
+    check(writes==punctuation_writes,"idle punctuation cannot replay correction")
     sentence.processor_component.fini(p_env)
 end
 -- Runtime partitions must match an independent full journal replay, including

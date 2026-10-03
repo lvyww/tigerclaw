@@ -60,6 +60,8 @@ namespace TigerClaw.Core
             });
 
         private readonly Node[] _nodes;
+        private readonly HashSet<string> _known = new(StringComparer.Ordinal);
+        internal bool Contains(string text) => _known.Contains(text);
 
         private SentenceSupplementMatcher(Node[] nodes)
         {
@@ -71,10 +73,12 @@ namespace TigerClaw.Core
         public static SentenceSupplementMatcher Build(IEnumerable<SentenceSupplementEntry> entries)
         {
             var nodes = new List<BuildNode> { new BuildNode() };
+            var known = new HashSet<string>(StringComparer.Ordinal);
             if (entries != null)
             {
                 foreach (SentenceSupplementEntry entry in entries)
                 {
+                    if (entry != null && !string.IsNullOrEmpty(entry.Text)) known.Add(entry.Text);
                     if (entry == null || string.IsNullOrEmpty(entry.Text) || entry.Reward <= 0.0)
                     {
                         continue;
@@ -98,7 +102,7 @@ namespace TigerClaw.Core
                 }
             }
 
-            if (nodes.Count == 1)
+            if (nodes.Count == 1 && known.Count == 0)
             {
                 return Empty;
             }
@@ -148,7 +152,9 @@ namespace TigerClaw.Core
                     Reward = nodes[index].Reward
                 };
             }
-            return new SentenceSupplementMatcher(frozen);
+            var result = new SentenceSupplementMatcher(frozen);
+            result._known.UnionWith(known);
+            return result;
         }
 
         public int Advance(int state, string textElement, out double reward)

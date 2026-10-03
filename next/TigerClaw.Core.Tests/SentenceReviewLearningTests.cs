@@ -26,7 +26,7 @@ namespace TigerClaw.Core.Tests
                 if (events.Count > 4 && step % 29 == 0) events.RemoveAt(0);
                 string code = "aa" + (char)('a' + random.Next(8));
                 events.Add(new SentenceLearningEvent { Id = "event-" + step, Time = start + (step % 23 == 0 ? 1000 : -random.Next(1000)),
-                    Mode = "m" + step % 2, Code = code, Text = texts[random.Next(texts.Length)], Context = contexts[random.Next(contexts.Length)] });
+                    Mode = "m" + step % 2, Code = code, Text = texts[random.Next(texts.Length)], Context = contexts[random.Next(contexts.Length)], Levels = step % 3 + 1 });
                 var actual = accumulator.Update(events, now);
                 var expected = SentenceLearningSnapshot.Build(events, now);
                 foreach (var e in events.Where((_, i) => i % 3 == 0))
@@ -58,16 +58,6 @@ namespace TigerClaw.Core.Tests
                     Review(SentenceLearning.Context(text, end) == SentenceLearning.Context(text[..end]), "offset context preserves UTF-16 semantics");
         }
 
-        private static string ReviewSeal(string record)
-        {
-            uint crc = 0xffffffff;
-            foreach (byte value in Encoding.ASCII.GetBytes(record))
-            {
-                crc ^= value;
-                for (int i = 0; i < 8; i++) crc = (crc >> 1) ^ ((crc & 1) != 0 ? 0xedb88320u : 0);
-            }
-            return record + "\t" + (~crc).ToString(CultureInfo.InvariantCulture) + "\n";
-        }
         private static SentenceLearningEvent ReviewEvent(string id, string code = "aa", string text = "甲乙") =>
             new() { Id = id, Time = DateTimeOffset.UtcNow.ToUnixTimeSeconds(), Mode = "review", Code = code, Text = text };
 
@@ -76,9 +66,9 @@ namespace TigerClaw.Core.Tests
             string path = Path.Combine(folder, "learning.log");
             var store = new SentenceLearningStore(path);
             store.Confirm(new[] { ReviewEvent("first") });
-            long parsed = store.ParsedCharacters, bytes = new FileInfo(path).Length;
+            long parsed = store.ParsedCharacters, characters = File.ReadAllText(path, Encoding.UTF8).Length;
             store.Confirm(new[] { ReviewEvent("second", "bb", "乙国") });
-            Review(store.ParsedCharacters - parsed == new FileInfo(path).Length - bytes, "append parses only added bytes");
+            Review(store.ParsedCharacters - parsed == File.ReadAllText(path, Encoding.UTF8).Length - characters, "append parses only added UTF-8-decoded characters");
             var entries = store.Entries(); entries[0].Text = "corrupted caller copy";
             Review(store.Entries()[0].Text == "甲乙", "caller cannot mutate cached journal");
             var snapshot = store.Snapshot;
@@ -91,11 +81,16 @@ namespace TigerClaw.Core.Tests
             Review(writeFailed && ReferenceEquals(snapshot, store.Snapshot), "failed append does not publish score");
             store.Confirm(new[] { ReviewEvent("retry") });
             Review(store.Entries().Any(e => e.Id == "retry"), "failed append does not consume event ID");
-            File.AppendAllText(path, "TCL1\tE\tbroken-tail", Encoding.ASCII);
+            string intact = File.ReadAllText(path, Encoding.UTF8);
+            File.AppendAllText(path, "broken-tail", Encoding.UTF8);
+            bool rejected = false;
+            try { store.Confirm(new[] { ReviewEvent("after-tear") }); } catch (IOException) { rejected = true; }
+            Review(rejected && File.ReadAllText(path, Encoding.UTF8) == intact + "broken-tail", "malformed edit preserved without truncation");
+            File.WriteAllText(path, intact, Encoding.UTF8);
             store.Confirm(new[] { ReviewEvent("after-tear") });
-            Review(store.Entries().Length == 4, "torn tail recovered");
+            Review(store.Entries().Length == 4, "retry after repaired user data");
             store.Clear();
-            File.AppendAllText(path, ReviewSeal("TCL1\tU\tunknown-undo\t0\tfuture-event"), Encoding.ASCII);
+            File.AppendAllText(path, "撤销\t1970-01-01T00:00:00Z\t\t\t\t0\t\tunknown-undo\tfuture-event\n", Encoding.UTF8);
             var many = Enumerable.Range(0, 10005).Select(i => ReviewEvent("bulk-" + i, "aa" + i)).ToList();
             many.Add(ReviewEvent("future-event"));
             store.Confirm(many);
@@ -118,9 +113,8 @@ namespace TigerClaw.Core.Tests
             var small = new SentenceLearningStore(smallPath);
             small.Confirm(new[] { ReviewEvent("stable") });
             var stamp = File.GetLastWriteTimeUtc(smallPath);
-            string line = File.ReadAllText(smallPath, Encoding.ASCII).TrimEnd('\n');
-            line = line[..line.LastIndexOf('\t')].Replace("75324e59", "4e594e2d", StringComparison.Ordinal);
-            File.WriteAllText(smallPath, ReviewSeal(line), Encoding.ASCII);
+            string line = File.ReadAllText(smallPath, Encoding.UTF8).Replace("甲乙", "乙中", StringComparison.Ordinal);
+            File.WriteAllText(smallPath, line, new UTF8Encoding(false));
             File.SetLastWriteTimeUtc(smallPath, stamp);
             small.Confirm(new[] { ReviewEvent("next", "bb") });
             Review(small.Entries()[0].Text == "乙中" && small.Snapshot.Score("review", "aa", "甲乙", "") == 0,

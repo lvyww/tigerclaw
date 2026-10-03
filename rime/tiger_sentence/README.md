@@ -1,3 +1,7 @@
+## 自学习新版（2026-10-04）
+
+每次人工纠正（包括非首次）按分差增加 1～3 级，累计封顶 10；普通首选和自动提交不强化。用户补充语料也参与合法差异子串识别。学习主文件改为用户目录的 `自学习-<schema_id>.txt`，直接保存中文字段和本次升级；不迁移旧数据库。LevelDb 仅作跨进程锁，不保存学习记录。一次片段纠正写一条记录，跳级不伪造确认次数。请整体更新 Lua，包含 `tiger_sentence_learning_text.lua`。旧文档若提及散列数据库或固定后续 +1，以本节及仓库根目录 `TAB_LEARNING.md` 为准。
+
 # 虎整句（Rime 独立实验版）
 
 方案默认采用 `compact` 内存档，包含暂存后长句尾部回删缓存复用及纯暂存文字回删优化。可在 `tiger_sentence.custom.yaml` 的 `patch` 中设置 `"tiger_sentence/memory_profile": balanced` 切换为较大缓存档。

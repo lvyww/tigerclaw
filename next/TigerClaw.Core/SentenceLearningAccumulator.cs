@@ -14,11 +14,11 @@ namespace TigerClaw.Core
             {
                 internal readonly Dictionary<(string Mode, string Context), Dictionary<string, Choice>> Groups = new();
             }
-            private sealed record EventStamp(string Id, long Time, string Code, string Mode, string Text, string Context)
+            private sealed record EventStamp(string Id, long Time, string Code, string Mode, string Text, string Context, int Levels)
             {
-                internal static EventStamp From(SentenceLearningEvent e) => new(e.Id, e.Time, e.Code, e.Mode, e.Text, e.Context);
+                internal static EventStamp From(SentenceLearningEvent e) => new(e.Id, e.Time, e.Code, e.Mode, e.Text, e.Context, e.Levels);
                 internal bool Matches(SentenceLearningEvent e) => Id == e.Id && Time == e.Time &&
-                    Code == e.Code && Mode == e.Mode && Text == e.Text && Context == e.Context;
+                    Code == e.Code && Mode == e.Mode && Text == e.Text && Context == e.Context && Levels == e.Levels;
             }
             private readonly Dictionary<string, CodeState> _groups = new(StringComparer.Ordinal);
             private readonly List<EventStamp> _events = new();
@@ -82,7 +82,7 @@ namespace TigerClaw.Core
 
             private static bool Valid(SentenceLearningEvent e) => e.Mode.Length > 0 && e.Mode.Length <= 512 &&
                 e.Code.Length > 0 && e.Code.Length <= 128 && SentenceLearning.StaticText(e.Text) &&
-                (e.Context.Length == 0 || SentenceLearning.Characters(e.Context) > 0) && SentenceLearning.Characters(e.Context) <= 2;
+                (e.Context.Length == 0 || SentenceLearning.Characters(e.Context) > 0) && SentenceLearning.Characters(e.Context) <= 2 && e.Levels >= 1 && e.Levels <= 3;
 
             private void Apply(SentenceLearningEvent e)
             {
@@ -91,10 +91,11 @@ namespace TigerClaw.Core
                 if (!code.Groups.TryGetValue(key, out var choices)) code.Groups[key] = choices = new(StringComparer.Ordinal);
 
                 foreach (var entry in choices)
-                    if (entry.Key != e.Text) entry.Value.Weight *= 0.25;
+                    if (entry.Key != e.Text) { entry.Value.Weight *= 0.25; entry.Value.Confirmed *= 0.25; }
 
                 if (!choices.TryGetValue(e.Text, out var target)) choices[e.Text] = target = new Choice();
-                target.Weight = Math.Min(MaximumCorrectionLevel, target.Weight + 1);
+                target.Weight = Math.Min(MaximumCorrectionLevel, target.Weight + e.Levels);
+                target.Confirmed = Math.Min(MaximumCorrectionLevel, target.Confirmed + 1);
             }
 
             private static Dictionary<string, ModeIndex> ScoreCode(CodeState code)
@@ -108,6 +109,9 @@ namespace TigerClaw.Core
                         if (!summaries.TryGetValue(key, out var summary)) summaries[key] = summary = new();
                         summary.Scores.Exact[group.Key.Context] = ExactScore(entry.Value.Weight);
                         summary.Weight += entry.Value.Weight;
+                        summary.Confirmed += entry.Value.Confirmed;
+                        summary.Scores.Weights[group.Key.Context] = entry.Value.Weight;
+                        summary.Scores.ConfidenceExact[group.Key.Context] = ExactScore(entry.Value.Confirmed);
                     }
                 }
 
@@ -116,6 +120,7 @@ namespace TigerClaw.Core
                 {
                     var summary = entry.Value;
                     summary.Scores.General = GeneralScore(summary.Weight);
+                    summary.Scores.ConfidenceGeneral = GeneralScore(summary.Confirmed);
                     if (!modes.TryGetValue(entry.Key.Mode, out var index)) modes[entry.Key.Mode] = index = new();
                     index.Texts.Add(entry.Key.Text, summary.Scores);
                 }
