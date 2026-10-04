@@ -51,6 +51,8 @@ namespace TigerClaw.Core.Tests
             try
             {
                 RunLearningStage("rules", LearningRules);
+                RunLearningStage("seed-boundaries", LearningSeedBoundaries);
+                RunLearningStage("seed-protocol", () => LearningSeedProtocol(root));
                 RunLearningStage("storage", () => LearningStorage(root));
                 RunLearningStage("decoder", LearningDecoder);
                 RunLearningStage("engine-protocol", () => LearningEngineAndProtocol(root));

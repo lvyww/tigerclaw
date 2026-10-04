@@ -1,5 +1,97 @@
 # 原虎整句按字数的 Qwen 配对评测
 
+## 2026-10-04：全量 73,129 行与调参数据保留
+
+用户随后要求全量 A/B/C 对照并保留后续调参数据。入口为
+`python3 tools/qwen_full_eval.py prepare|run|summarize --repo REPO --work WORK`。
+默认以已完成快速实验为冻结资源与 3002 条精确回放参照；完整保留旧集 10000、
+Articles 33129、THUCNews 30000 行，包含 24 行重复目标，不重新抽样或去重。
+实验目录 `C:\Archive\qwen-q4-full-20261004`；日用设置、学习记录和其他暂停任务不动。
+
+`--quick` 离线入口新增 `--resume`：只接受与样本列表完全一致的完整行前缀，
+并核对 Core、工具、模型、样本、码表和配置指纹后追加。任何不匹配直接拒绝。
+WORK/STOP 可让当前阶段完成当前样本、正常关闭自有服务后停止；删除或移走这个文件
+必须遵循用户的恢复指令，不能自动恢复。阶段完成标记与进度逐阶段保存，runner 加锁
+防止误启动两个评测服务。未完成的半行不静默丢弃，应先保留原文件再处理。
+
+长期保留 `case-sources/*.tsv`、cases.json、runtime、models、源码/构建快照、
+所有 manifest、原始 freeze-A/score-B/score-C JSONL、差异 CSV/JSONL 和统计报告。
+完成后 `tuning-cache.jsonl` 按样本合并以下内容：
+
+- 全部基础候选（最多 20 项）的原始顺序、文字、基础分、码表 rank、学习分。
+- 前五项各自的 Q8/Q4 原始神经分，仍按基础候选顺序对齐。
+- 基准首选字数、候选字素簇数、实际融合策略、alpha/加法权重、比较器与 UTF-16 Ordinal 并列规则。
+- 目标文本、来源/原始 ID、输入码、错误标记和当前 A/B/C 首选。
+
+独立 Python 缓存回放核对每条生产融合分与排序；之后可离线重算已有前五项的融合，
+不必重跑神经模型。第五项之后没有神经分，扩大重排范围必须补算。原始记录不被调参
+输出覆盖；本次不调参，历史全量集也不能在调参后继续称为独立测试集。
+
+## 全量结果与后续缓存试算
+
+73,129 条固定权重结果：未重排 72,846，Qwen Q8 72,924，Qwen Q4 72,878；
+评分错误及超时均为零。原始分数、3002 条快速集精确回放、生产排序独立回放、
+生命周期与性能证据见上述实验目录的 REPORT.md 和 verification.json。
+
+用户随后指定单点权重假设，可复用缓存，无需重新调用模型：
+
+```console
+python3 tools/evaluate_qwen_cached_lambda.py WORK --model q8 --long-lambda 0.4
+python3 tools/evaluate_qwen_cached_lambda.py WORK --model q4 --long-lambda 0.4
+```
+
+仅修改基础首选超过六字的加性分支；凸组合 alpha、一字权重、候选池和比较器不变。
+默认模型为 q8；分别读取 score-B/score-C。输出到独立模型/权重目录，保留全部逐条
+预测、变化、输入指纹与配对区间，不覆盖原始评分。Q8 λ=.6/.4/.3 正确数为
+72,936 / 72,938 / 72,933；Q4 λ=.4 为 72,915。纯 Q8 在基础前五候选内排序为
+71,817。这些是同一历史集上的探索，不是独立调参验收，不改变日用配置。
+
+2026-10-04 拉取自适应学习更新后，资源复制排除新的 `自学习-*.txt` 日志。
+历史实验继续以已归档程序集和资源为准，新构建不替代已有实验身份。
+
+## 2026-10-04：固定权重 Q4 替换快速验证
+
+新入口 `--quick REPO WORK MODE LABEL MODEL CASES` 使用当前生产 Core 自己创建的
+五阶解码器（含隔离先验、最优码奖励和词汇先验），并调用生产
+`ApplySentenceNeuralScores`。不修改生产设置或 IPC。旧入口的历史三阶加载引用已
+改为五阶，历史报告仍只描述当时的运行；新的替换评测请使用 `--quick`。
+
+先运行 `../prepare_qwen_quick_eval.py --repo REPO --output WORK --source-plan PLAN`。
+PLAN 的 `cases` 中需有 old10k/articles/thucnews 的 TSV 路径与 SHA256；各行是
+`id<TAB>group<TAB>code<TAB>text`。按种子 20261004 的 SHA256 顺序各抽 1000 条，
+目标全局去重，固定来源优先级 old10k/articles/thucnews，不使用预测结果筛选。
+另加 tlleo/zhhbi 诊断，两条不计准确率。只复制日用配置、五阶模型、虎整句的 txt
+码表/补充文件到 WORK/runtime，不复制任何学习日志；学习和提前上屏在内存中关闭。
+
+构建命令（Windows dotnet；输出必须独立）：
+
+```text
+dotnet build tools/SentenceLengthEval/SentenceLengthEval.csproj -c Release -p:PublishAot=false -o BUILD
+dotnet BUILD/TigerClaw.Core.Tests.dll --quick REPO WORK freeze A Q4_PATH WORK/cases.json
+```
+
+随后用相同 prepare 参数加 `--select-performance` 冻结 100 条性能输入。按前五候选
+平均文字长度分短（≤6）、中（>6 且 ≤14）、长（>14），各 20/40/40 条；分组后再
+按 `SHA256("20261004:perf:" + id)` 排序取样，不使用正确率或模型评分。
+
+WSL 下运行 `../run_qwen_quick_eval.py --repo REPO --work WORK --assembly BUILD/TigerClaw.Core.Tests.dll --q4 Q4_PATH`。
+它顺序执行 score B/C，再按 B1→C1→C2→B2 执行性能轮次，同时只启动一个独立服务。
+准确率模式逐项验证冻结候选文字、基础分、码表 rank、学习分后才应用神经分；验证
+融合公式、比较器和第五项之后的原始顺序。模型用 SHA256 判定，不信任固定 q8 标签。
+评分入口保留生产 BOS＋原文＋EOS 与各模型自身 tokenizer；线程数沿用原生程序默认值。
+兼容性检查含重复、单条/批量、倒序、取消重连、新代拒绝旧响应；误差容差 0.001。
+每请求 120 秒超时，失败单列；不会把回退结果标为成功重排。输出存在即拒绝覆盖，
+中断后应保留失败目录并在新运行标签/目录中重做，不拼接不同模型或构建的结果。
+
+最后执行 `../summarize_qwen_quick_eval.py WORK`（需 NumPy）。生成总表、完整首选
+变化 JSONL/CSV、诊断基础/神经/融合分、配对来源分层 bootstrap 区间和性能结果。
+模型各启动三次，启动测到 hello 成功；文件缓存可能影响启动时间。性能每轮先预热
+10 次，请求末尾采样私有内存和工作集；隔离测试不代表真实打字验收。
+
+当前实验目录：`C:\Archive\qwen-q4-quick-20261004`，运行命令见 commands.json，
+具体结果见 REPORT.md；原始样本、冻结资源和模型身份、实际二进制及源码快照均保留。
+历史数据和未知训练来源不能证明独立泛化；本轮没有部署或调参。
+
 本工具只读日用 `release_arm64` 的虎整句码表、补充语料、白名单和模型；配置临时文件、
 样本与结果写到命令行指定的仓库外目录。不得把输出目录指定为日用发布目录。
 它不连接日用 Core 或 Sentence 管道，而是启动改名、字节相同的独立 ARM64 Sentence

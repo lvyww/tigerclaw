@@ -7,6 +7,12 @@ using System.Text;
 using System.Text.Json;
 using TigerClaw.Core;
 
+if (args.Length > 0 && args[0] == "--quick")
+{
+    await QuickReplacement.Run(args.Skip(1).ToArray());
+    return;
+}
+
 // Diagnostics only: a separate runtime directory, unique scorer pipe per worker,
 // and production Engine.ApplySentenceNeuralScores for the actual ranking policy.
 string repo = Path.GetFullPath(args[0]);
@@ -17,7 +23,7 @@ string replayPrefix = args.Length > 5 ? args[5] : "calibration";
 int maxCases = args.Length > 4 && !replay ? int.Parse(args[4]) : int.MaxValue;
 Directory.CreateDirectory(output);
 string release = Path.Combine(repo, "release_arm64");
-string ngramPath = Path.Combine(release, "Models", "sentence-ngram-v2.bin");
+string ngramPath = Path.Combine(release, "Models", SentenceFivegramModel.FileName);
 string qwenPath = Path.Combine(release, "sentence", "Models", "sentence-qwen-q8.gguf");
 // Use a distinct process name as well as a distinct pipe. Daily runtime launch
 // checks and publish scripts may inspect/terminate TigerClaw.Sentence by name.
@@ -57,7 +63,7 @@ if (source.Count < 1000) throw new Exception("Unexpected lexicon size: " + sourc
 var lexicon = SentenceLexiconIndex.Build(source, SentenceCharacterRanks.TakeTop(1500),
     CoreRuntimeState.ParseCharacterSet(state.GetSentenceFullCodeWhitelistText()));
 var supplement = SentenceSupplementMatcher.Build(state.GetSentenceSupplementSnapshot());
-using var model = SentenceNgramModel.Load(ngramPath);
+using var model = new SentenceFivegramModel(ngramPath);
 var decoder = new SentenceInputDecoder(lexicon, model, emittedCharacterReward: 2,
     wholeInputSingleCharacterReward: 5, supplementMatcher: supplement, allowDuplicateSingleCharacters: true);
 using var engine = new InputMethodEngine(state, decoder);

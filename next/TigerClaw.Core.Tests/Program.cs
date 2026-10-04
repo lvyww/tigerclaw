@@ -47,6 +47,8 @@ namespace TigerClaw.Core.Tests
                 if (args.Length == 2 && args[0] == "--full-pinyin-feedback-tests") return RunPinyinFeedbackTests(args[1]);
                 if (args.Length == 1 && args[0] == "--learning-portable-tests") return RunPortableLearningTests();
                 if (args.Length == 4 && args[0] == "--learning-worker") return RunLearningWorker(args[1], args[2], int.Parse(args[3]));
+                if (args.Length == 6 && args[0] == "--learning-pair-scores") return RunLearningSeedReal(args[1], args[2], args[3], args[4], args[5], true);
+                if (args.Length == 3 && args[0] == "--learning-seed-real") return RunLearningSeedReal(args[1], args[2]);
                 RunStartupContextTests();
                 if (args.Length == 2 && args[0] == "--native-core-config-defaults")
                     return ExportNativeCoreConfigDefaults(args[1]);

@@ -62,6 +62,55 @@ or public release.
 
 ## Current Status
 
+Local work integration after adaptive-learning update (2026-10-04): boundary and
+TSF/Hook receipt probes now use one event with Levels=1..3 rather than duplicating
+events. Windows learning suite passes 29,882 checks; Core tests and Qwen evaluator
+build with zero warnings/errors. Isolated actual-model tlleo probe now overtakes
+the 17.98294948 gap after two confirmations (rewards +13 then +19), rather than
+four under the former policy below. New readable journals are excluded from
+fixture copies. Python maintenance 15 tests and actual Windows batch resource
+helper tests pass. Evidence: C:\Archive\local-push-check-20261004. No deployment
+or physical typing acceptance; historical Qwen resources/results remain frozen.
+
+Full Qwen A/B/C evaluation completed (2026-10-04, user requested): all 73,129
+historical rows retained. A no neural / B daily Qwen3 Q8 / C Qwen2.5-family Q4:
+72846/72924/72878 correct. C vs B rescue 52/loss 98, net -46; paired bootstrap
+95% delta interval -0.0957..-0.0301 pp. No scoring errors/timeouts; lifecycle,
+cached production replay and all 3002 quick-case parity checks pass. B/C P95
+206.19/196.29 ms; sampled working-set maxima 900.00/485.60 MB. Evidence:
+C:\Archive\qwen-q4-full-20261004 (REPORT.md, verification.json, artifact hashes).
+Keep raw pools/scores, ranking metadata, models, builds and tuning-cache.jsonl.
+Subsequent user-requested cached Q8 long-sentence additive lambda .6/.4/.3 gives
+72936/72938/72933 correct; other weights unchanged. Pure Q8 ranking within the
+same base Top5 gives 71817. Cached Q4 lambda .4 gives 72915 (+37 vs original Q4).
+These are historical-set explorations, not independently
+validated tuning; original A/B/C weights remain frozen. Per-row outputs, changes
+and verification are retained in separate analysis directories. No production
+deployment, learning changes or other paused-job resumption.
+
+Qwen Q4 fixed-weight replacement probe completed (2026-10-04). Current production
+fivegram decoder, frozen daily shape settings (high-frequency limit 0), no learning
+or early commit; seeded globally deduplicated old10k/Articles/THUC 1000 each.
+A no neural / B daily Qwen3 Q8 / C downloaded Qwen2.5-family Q4: 2987/2992/2989
+correct of 3000. C vs B rescue 1/loss 4; paired 95% bootstrap delta interval
+-0.267..+0.033 pp: insufficient evidence of difference or equivalence. Q4 file
+284.09 vs 639.45 MB; B/C P95 216.84/209.21 ms, working-set sampled maxima
+899.92/485.52 MB. Compatibility/cancellation/stale-result checks pass, no scoring
+errors/timeouts. Initial harness shutdown acknowledgement bug fixed and lifecycle
+retested; original failure and completed B rows retained transparently. No tuning,
+deployment, learning changes or paused-job resumption. Tool/reproduction guide:
+tools/SentenceLengthEval/README.md; full evidence C:\Archive\qwen-q4-quick-20261004.
+
+First-correction score-gap validation (2026-10-03): 25,831 learning checks pass,
+including seed boundaries and TSF/Hook receipt->journal->next-rank tests. Actual
+mainline Q8 plus daily Tiger sentence table, fresh isolated journal, neural
+reranking/early commit disabled: tlleo 龙族 -> 陲机 has gap 17.98294948. Initial
+L3 cap gives +13, so first correction still ranks 龙族 first. Further explicit
+corrections give +15/+17/+19; only the fourth total correction makes 陲机 top1.
+Receipt and persistence pass; this case is a reward-cap limitation, not absent
+learning. Evidence: next/_run/FirstCorrectionSeed-20261003/real-repeat/result.json.
+No production logic/config/journal changes; no physical typing acceptance claim.
+
 Brightmart 70% + Articles 30% mainline-style compression completed (2026-10-03,
 user requested). Raw ARPA union-support materialization, history-weighted KL
 ranking with prefix protection/backoff recomputation, TCSKNM03 Q8. First attempt
@@ -943,6 +992,19 @@ paths. Before packaging it checks DLL PE architecture and source/copy identity.
 Isolated packaging tests: `tools/test_publish_tsf.ps1`. These checks do not
 replace real 32-bit WPS acceptance (loaded DLL identity, input, candidates,
 commit and reconnect); that acceptance remains pending until tested in WPS.
+
+ARM64 publish resource resolution fixed (2026-10-03): canonical Qwen paths may
+have been cleaned, so validate before building and fall back to existing
+release_arm64 Qwen model/license unless explicit TIGERCLAW_QWEN_MODEL/LICENSE
+overrides are set. Skip self-copy of fallback resources. Stop the target-directory
+Hook before deployment and stage the verified mainline Q8 into release_arm64.
+Full --build-only and scheduler/resource fixture tests pass. Actual deployment
+subsequently reproduced a no-process Stop-Process pipeline exit-code failure;
+explicit successful exit fixes it. Actual ARM64 publish, Hook/Core restart and
+source/destination SHA256 checks pass; config preserved, backup/evidence under
+next/_run/HookPublishVerification-20261003. Native Hook receipt tests and 25,731
+Core learning checks pass; physical typing acceptance remains unverified. An old 2026-09-13 Hook lacks the 2026-09-26
+learning receipts. Tests: tools/test_publish_arm64_resources.py.
 
 `publish_arm64.bat` schedules dependency-aware build tasks with a default limit
 of 2 (`--jobs N`, 1..16; `--serial` selects 1). Embedded metadata is independent

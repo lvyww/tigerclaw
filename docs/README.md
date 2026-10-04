@@ -25,6 +25,7 @@
 | `COMPACT_RANKING_PRIORS.md` | 整句主码、四码生僻字保护与紧凑 Top-5 词先验 |
 | `SENTENCE_EARLY_COMMIT_EVAL.md` | 整句提前上屏准确度与积极性端到端评测 |
 | `../tools/README_sentence_neural.md` | n-gram 训练和离线模型实验 |
+| `../tools/SentenceLengthEval/README.md` | 当前五阶解码器的固定权重 Qwen Q8/Q4 隔离评测与历史按字数实验 |
 | `../tools/FullPinyinEval/README.md` | 独立全拼切分、Top-10 Qwen 融合与离线评测 |
 
 `用户使用说明书.pdf` 是 Markdown 手册的发布版附件；内容变更时应同步重新导出。

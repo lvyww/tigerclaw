@@ -117,6 +117,8 @@ for %%P in ("%CORE_PROJECT%" "%OVERLAY_PROJECT%" "%DIALOG_PROJECT%" "%SENTENCE_N
   exit /b 1
 )
 
+call :ResolveSentenceResources || exit /b 1
+
 echo Using MSBuild: %MSBUILD%
 echo Using dotnet : %DOTNET%
 echo Diagnostic : %ARM64_DIAGNOSTIC%
@@ -151,6 +153,7 @@ if "%BUILD_ONLY%"=="1" (
   exit /b 0
 )
 echo [9/10] Copy artifacts
+powershell -NoProfile -Command "$ErrorActionPreference='Stop';$target=[IO.Path]::GetFullPath('%RELEASE_DIR%\TigerClaw.exe');Get-Process TigerClaw -ErrorAction SilentlyContinue | Where-Object { $_.Path -ieq $target } | Stop-Process -Force;exit 0" || exit /b 1
 taskkill /F /IM TigerClaw.Sentence.exe /T >nul 2>&1
 taskkill /F /IM TigerClaw.Overlay.exe /T >nul 2>&1
 taskkill /F /IM TigerClaw.Dialog.exe /T >nul 2>&1
@@ -179,10 +182,11 @@ copy /Y "%SENTENCE_OUT%\TigerClaw.Sentence.exe" "%RELEASE_DIR%\sentence\TigerCla
 for %%F in (TigerClaw.Sentence.exe.config TigerClaw.Shared.dll TigerClaw.Sentence.Native.dll) do if exist "%RELEASE_DIR%\sentence\%%F" del /q "%RELEASE_DIR%\sentence\%%F"
 for %%F in (Microsoft.ML.OnnxRuntime.dll System.Buffers.dll System.Memory.dll System.Numerics.Tensors.dll System.Numerics.Vectors.dll System.Runtime.CompilerServices.Unsafe.dll onnxruntime.dll onnxruntime_providers_shared.dll) do if exist "%RELEASE_DIR%\sentence\%%F" del /q "%RELEASE_DIR%\sentence\%%F"
 for %%F in (sentence-transformer.onnx sentence-transformer.json sentence-transformer.tcmodel sentence-vocabulary.json sentence-vocabulary.tcmodel) do if exist "%RELEASE_DIR%\sentence\Models\%%F" del /q "%RELEASE_DIR%\sentence\Models\%%F"
-copy /Y "%SENTENCE_QWEN_MODEL%" "%RELEASE_DIR%\sentence\Models\sentence-qwen-q8.gguf" >nul || exit /b 1
+call :CopyUnlessSame "%SENTENCE_QWEN_MODEL%" "%RELEASE_DIR%\sentence\Models\sentence-qwen-q8.gguf" || exit /b 1
 copy /Y "%ROOT%\third_party\llama.cpp\LICENSE" "%RELEASE_DIR%\sentence\licenses\llama.cpp-LICENSE.txt" >nul || exit /b 1
-copy /Y "%SENTENCE_QWEN_LICENSE%" "%RELEASE_DIR%\sentence\licenses\Qwen3-LICENSE.txt" >nul || exit /b 1
+call :CopyUnlessSame "%SENTENCE_QWEN_LICENSE%" "%RELEASE_DIR%\sentence\licenses\Qwen3-LICENSE.txt" || exit /b 1
 if exist "%RELEASE_DIR%\Models\sentence-ngram-mobile.bin" del /q "%RELEASE_DIR%\Models\sentence-ngram-mobile.bin" || exit /b 1
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\next\stage_sentence_fivegram.ps1" -Architecture ARM64 -OutputDirectory "%RELEASE_DIR%" || exit /b 1
 copy /Y "%HOOK_OUT%\TigerClaw.Hook.Native.exe" "%RELEASE_DIR%\TigerClaw.exe" >nul || exit /b 1
 if exist "%ROOT%\next\TigerClaw.Dialog\bime.ico" copy /Y "%ROOT%\next\TigerClaw.Dialog\bime.ico" "%RELEASE_DIR%\bime.ico" >nul || exit /b 1
 copy /Y "%WRAPPER_DLL%" "%RELEASE_DIR%\TigerClaw.dll" >nul || exit /b 1
@@ -206,6 +210,25 @@ echo   LocalServer   : %RELEASE_DIR%\TigerClaw.TsfServer.exe
 echo   x64 TSF       : %RELEASE_DIR%\TigerClawx64.dll
 echo   x86 TSF       : %RELEASE_DIR%\Win32\TigerClaw.dll
 exit /b 0
+
+:ResolveSentenceResources
+if defined TIGERCLAW_QWEN_MODEL set "SENTENCE_QWEN_MODEL=%TIGERCLAW_QWEN_MODEL%"
+if defined TIGERCLAW_QWEN_LICENSE set "SENTENCE_QWEN_LICENSE=%TIGERCLAW_QWEN_LICENSE%"
+if not defined TIGERCLAW_QWEN_MODEL if not exist "%SENTENCE_QWEN_MODEL%" set "SENTENCE_QWEN_MODEL=%RELEASE_DIR%\sentence\Models\sentence-qwen-q8.gguf"
+if not defined TIGERCLAW_QWEN_LICENSE if not exist "%SENTENCE_QWEN_LICENSE%" set "SENTENCE_QWEN_LICENSE=%RELEASE_DIR%\sentence\licenses\Qwen3-LICENSE.txt"
+for %%P in ("%SENTENCE_QWEN_MODEL%" "%SENTENCE_QWEN_LICENSE%") do if not exist "%%~P" (
+  echo ERROR: Missing sentence resource %%~P
+  echo Set TIGERCLAW_QWEN_MODEL and TIGERCLAW_QWEN_LICENSE to existing files.
+  exit /b 1
+)
+echo Qwen model: %SENTENCE_QWEN_MODEL%
+echo Qwen license: %SENTENCE_QWEN_LICENSE%
+exit /b 0
+
+:CopyUnlessSame
+if /I "%~f1"=="%~f2" exit /b 0
+copy /Y "%~1" "%~2" >nul
+exit /b %errorlevel%
 
 :FindMsbuild
 for /f "usebackq delims=" %%I in (`"%~1" -latest -products * -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe`) do if not defined MSBUILD set "MSBUILD=%%~fI"
