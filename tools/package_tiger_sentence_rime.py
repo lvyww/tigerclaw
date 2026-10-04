@@ -29,7 +29,9 @@ def main():
     assert sha(args.model) == expected['sha256'], 'Unexpected default model'
     assert not list(PACK.glob('*.bin')), 'Top-level binary resources are unsafe during Rime deployment'
     assert not (PACK / 'tiger_sentence.options.yaml').exists(), 'Personal options must not be distributed'
+    assert not list(PACK.glob('自学习*')), 'Personal learning files and locks must not be distributed'
     assert (PACK / 'models/tiger_sentence.lexical.bin').is_file()
+    assert (PACK / 'lua/tiger_sentence_learning_text.lua').is_file()
     assert not args.output.exists(), 'Choose a new versioned output; preserve previous releases'
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='tiger-rime-package-') as temporary:

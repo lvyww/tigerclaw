@@ -10,6 +10,7 @@ namespace TigerClaw.Core
         public long Time = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         public string Mode = "", Code = "", Text = "", Context = "";
         public int RawStart, RawEnd, TextStart, TextEnd;
+        public int Levels = 1; // One confirmed correction; ranking may advance 1..3 levels.
         internal SentenceLearningEvent Copy() => (SentenceLearningEvent)MemberwiseClone();
     }
 
@@ -29,6 +30,7 @@ namespace TigerClaw.Core
             return hash.ToString("x16", System.Globalization.CultureInfo.InvariantCulture);
         }
         internal static bool IsReservedFile(string name) =>
+            name.StartsWith("自学习", StringComparison.OrdinalIgnoreCase) ||
             name.StartsWith(".tigerclaw-learning", StringComparison.OrdinalIgnoreCase) ||
             name.StartsWith(".tigirl-learning", StringComparison.OrdinalIgnoreCase);
 
@@ -110,40 +112,56 @@ namespace TigerClaw.Core
             return result;
         }
 
-        internal static void SeedInitialLevels(List<SentenceLearningEvent> events, SentenceLearningSnapshot snapshot, double scoreGap)
+        internal static void PlanCorrectionLevels(List<SentenceLearningEvent> events, SentenceLearningSnapshot snapshot,
+            string raw, SentenceCandidate before, SentenceCandidate selected)
         {
-            if (events == null || events.Count == 0) return;
+            if (events == null || events.Count == 0 || before == null || selected == null) return;
             snapshot ??= SentenceLearningSnapshot.Empty;
-            var fresh = events.Where(e => snapshot.Score(e.Mode, e.Code, e.Text, e.Context) <= 0).ToArray();
-            if (fresh.Length == 0) return;
-
-            // First explicit correction should normally win this same context on
-            // the next attempt. Preserve the event journal format by materializing
-            // the chosen initial level as repeated explicit events. Never jump
-            // beyond L3; later manual corrections still advance exactly one level.
-            double required = Math.Max(0.0, scoreGap) + 1.0;
-            int level = 1;
-            while (level < 3 && fresh.Length * (7 + 2 * level) < required) level++;
-            if (level == 1) return;
-
-            foreach (var e in fresh)
-            {
-                for (int copy = 1; copy < level; copy++)
+            // One event per known fragment/context, even if overlapping diff and
+            // inner-fragment discovery both found it. Never manufacture clicks.
+            var seen = new HashSet<(string, string, string, string)>();
+            events.RemoveAll(e => !seen.Add((e.Mode, e.Code, e.Text, e.Context)));
+            double required = before.FinalScore - before.LearningScore;
+            double chosen = selected.FinalScore - selected.LearningScore;
+            int levels = 1;
+            if (double.IsFinite(required) && double.IsFinite(chosen))
+                for (; levels < 3; levels++)
                 {
-                    events.Add(new SentenceLearningEvent
-                    {
-                        Time = e.Time, Mode = e.Mode, Code = e.Code, Text = e.Text, Context = e.Context,
-                        RawStart = e.RawStart, RawEnd = e.RawEnd, TextStart = e.TextStart, TextEnd = e.TextEnd
-                    });
+                    double left = required + ProjectedReward(raw, before, events, snapshot, levels);
+                    double right = chosen + ProjectedReward(raw, selected, events, snapshot, levels);
+                    if (right >= left + 1.0) break;
+                }
+            foreach (var e in events) e.Levels = levels;
+        }
+
+        private static double ProjectedReward(string raw, SentenceCandidate candidate,
+            List<SentenceLearningEvent> events, SentenceLearningSnapshot snapshot, int levels)
+        {
+            var map = Boundaries(candidate, raw.Length);
+            if (map == null) return candidate.LearningScore;
+            var points = map.ToArray();
+            var best = new double[points.Length];
+            for (int end = 1; end < points.Length; end++)
+            {
+                best[end] = best[end - 1];
+                for (int start = end - 1; start >= 0; start--)
+                {
+                    string text = candidate.Text.Substring(points[start].Value, points[end].Value - points[start].Value);
+                    if (Characters(text) > 16) break;
+                    string code = raw.Substring(points[start].Key, points[end].Key - points[start].Key).ToLowerInvariant();
+                    string context = Context(candidate.Text, points[start].Value);
+                    best[end] = Math.Max(best[end], best[start] + snapshot.ProjectedScore(events[0].Mode, code, text, context, events, levels));
                 }
             }
+            return best[^1];
         }
 
         internal static List<SentenceLearningEvent> ReinforceExisting(string raw, SentenceCandidate before,
-            SentenceCandidate selected, int floor, string mode, SentenceLearningSnapshot snapshot)
+            SentenceCandidate selected, int floor, string mode, SentenceLearningSnapshot snapshot, Func<string, bool> supplemental = null)
         {
             var result = new List<SentenceLearningEvent>();
-            if (snapshot == null || snapshot.IsEmpty || before == null || selected == null ||
+            if ((snapshot == null || snapshot.IsEmpty) && supplemental == null) return result;
+            if (before == null || selected == null ||
                 before.Text == selected.Text || string.IsNullOrEmpty(mode)) return result;
             var a = Boundaries(before, raw.Length); var b = Boundaries(selected, raw.Length);
             if (a == null || b == null) return result;
@@ -165,7 +183,7 @@ namespace TigerClaw.Core
                         if (n == 0 || n > 16 || !StaticText(text) || before.Text.Contains(text, StringComparison.Ordinal)) continue;
                         string code = raw.Substring(start.Key, finish.Key - start.Key).ToLowerInvariant();
                         string context = Context(selected.Text, start.Value);
-                        if (snapshot.Score(mode, code, text, context) > 0)
+                        if ((snapshot?.Score(mode, code, text, context) ?? 0) > 0 || (supplemental?.Invoke(text) ?? false))
                             matches.Add((start.Key,finish.Key,start.Value,finish.Value,n,code,text,context));
                     }
                     if (matches.Count > 0)
@@ -196,13 +214,15 @@ namespace TigerClaw.Core
 
         private sealed class Choice
         {
-            internal double Weight;
+            internal double Weight, Confirmed;
         }
 
         private sealed class Scores
         {
             internal readonly Dictionary<string, double> Exact = new(StringComparer.Ordinal);
-            internal double General;
+            internal double General, ConfidenceGeneral;
+            internal readonly Dictionary<string, double> Weights = new(StringComparer.Ordinal);
+            internal readonly Dictionary<string, double> ConfidenceExact = new(StringComparer.Ordinal);
 
             internal double ForContext(string context) =>
                 Exact.TryGetValue(context, out double exact) ? Math.Max(exact, General) : General;
@@ -223,7 +243,7 @@ namespace TigerClaw.Core
         private sealed class Summary
         {
             internal readonly Scores Scores = new();
-            internal double Weight;
+            internal double Weight, Confirmed;
         }
 
         private sealed class ModeIndex
@@ -263,7 +283,7 @@ namespace TigerClaw.Core
             foreach (var e in events)
             {
                 if (e.Mode.Length == 0 || e.Mode.Length > 512 || e.Code.Length == 0 || e.Code.Length > 128 || !SentenceLearning.StaticText(e.Text) ||
-                    (e.Context.Length > 0 && SentenceLearning.Characters(e.Context) == 0) || SentenceLearning.Characters(e.Context) > 2) continue;
+                    (e.Context.Length > 0 && SentenceLearning.Characters(e.Context) == 0) || SentenceLearning.Characters(e.Context) > 2 || e.Levels < 1 || e.Levels > 3) continue;
                 var key = (e.Code, Mode: SentenceLearning.EffectiveMode(e.Mode, e.Text), e.Context);
                 if (!groups.TryGetValue(key, out var choices))
                     groups[key] = choices = new(StringComparer.Ordinal);
@@ -272,11 +292,12 @@ namespace TigerClaw.Core
                 // manual correction weakens the old choice in the same context;
                 // elapsed wall-clock time never changes learning.
                 foreach (var entry in choices)
-                    if (entry.Key != e.Text) entry.Value.Weight *= 0.25;
+                    if (entry.Key != e.Text) { entry.Value.Weight *= 0.25; entry.Value.Confirmed *= 0.25; }
 
                 if (!choices.TryGetValue(e.Text, out var target))
                     choices[e.Text] = target = new Choice();
-                target.Weight = Math.Min(MaximumCorrectionLevel, target.Weight + 1);
+                target.Weight = Math.Min(MaximumCorrectionLevel, target.Weight + e.Levels);
+                target.Confirmed = Math.Min(MaximumCorrectionLevel, target.Confirmed + 1);
             }
             if (groups.Count == 0) return Empty;
 
@@ -289,6 +310,9 @@ namespace TigerClaw.Core
                     if (!summaries.TryGetValue(key, out var summary)) summaries[key] = summary = new();
                     summary.Scores.Exact[group.Key.Context] = ExactScore(entry.Value.Weight);
                     summary.Weight += entry.Value.Weight;
+                    summary.Confirmed += entry.Value.Confirmed;
+                    summary.Scores.Weights[group.Key.Context] = entry.Value.Weight;
+                    summary.Scores.ConfidenceExact[group.Key.Context] = ExactScore(entry.Value.Confirmed);
                 }
             }
 
@@ -300,6 +324,7 @@ namespace TigerClaw.Core
                 // fragment preference. Further levels require further explicit
                 // corrections; ordinary/automatic top1 commits never add events.
                 summary.Scores.General = GeneralScore(summary.Weight);
+                summary.Scores.ConfidenceGeneral = GeneralScore(summary.Confirmed);
                 if (!snapshot._byCode.TryGetValue(entry.Key.Code, out var modes))
                     snapshot._byCode[entry.Key.Code] = modes = new(StringComparer.Ordinal);
                 if (!modes.TryGetValue(entry.Key.Mode, out var index)) modes[entry.Key.Mode] = index = new();
@@ -365,6 +390,30 @@ namespace TigerClaw.Core
                 return Array.Empty<(string Code, string Text, double Score)>();
             return index.PinyinChoices.Where(p => SentenceLearning.Characters(p.Key) == 1)
                 .Select(p => (raw, p.Key, p.Value.ForContext(""))).ToArray();
+        }
+
+        internal double ConfidenceScore(string mode, string code, string text, string context)
+        {
+            if (!_byCode.TryGetValue(code, out var modes) || !modes.TryGetValue(mode, out var index) || !index.Texts.TryGetValue(text, out var scores)) return 0;
+            return Math.Max(scores.ConfidenceGeneral, scores.ConfidenceExact.GetValueOrDefault(context));
+        }
+
+        internal double ProjectedScore(string mode, string code, string text, string context,
+            IReadOnlyList<SentenceLearningEvent> events, int levels)
+        {
+            mode = SentenceLearning.EffectiveMode(mode, text);
+            if (!events.Any(e => e.Code == code && SentenceLearning.EffectiveMode(e.Mode, e.Text) == mode)) return Score(mode, code, text, context);
+            Scores scores = null;
+            if (_byCode.TryGetValue(code, out var modes) && modes.TryGetValue(mode, out var index)) index.Texts.TryGetValue(text, out scores);
+            var weights = scores == null ? new Dictionary<string, double>(StringComparer.Ordinal) : new Dictionary<string, double>(scores.Weights, StringComparer.Ordinal);
+            foreach (var e in events)
+            {
+                if (e.Code != code || SentenceLearning.EffectiveMode(e.Mode, e.Text) != mode) continue;
+                double weight = weights.GetValueOrDefault(e.Context);
+                if (e.Text == text) weights[e.Context] = Math.Min(MaximumCorrectionLevel, weight + levels);
+                else if (weights.ContainsKey(e.Context)) weights[e.Context] = weight * 0.25;
+            }
+            return Math.Max(GeneralScore(weights.Values.Sum()), ExactScore(weights.GetValueOrDefault(context)));
         }
 
         internal double Score(string mode, string code, string text, string context)

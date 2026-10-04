@@ -256,14 +256,16 @@ int main(int argc, char** argv) {
         api->set_option(session, "tiger_sentence_early_commit_to_preedit", False);
         type("b"); key(' '); check(committed == "刘甲", "option toggle lost pending text");
 
-        reset(); type("ef");
+        // Use segmented candidates: changing the order of two Direct code-table
+        // entries is deliberately not sentence learning.
+        reset(); type("efvp"); check(first() == "丁刘", "learning baseline is not composed");
         const int learned_before = std::stoi(property("review_learning_count"));
-        key(0xff09); type("a"); held("丙");
+        key(0xff09); type("a"); held("丙刘");
         check(property("review_learning_count") == std::to_string(learned_before), "staging learned before host submission");
-        key(0xff08); held("丙"); key(0xff08);
+        key(0xff08); held("丙刘"); key(0xff08); key(0xff08);
         check(property("review_learning_count") == std::to_string(learned_before), "deleted correction learned");
-        reset(); type("ef"); key(0xff09); type("a"); held("丙");
-        type("b"); key(' '); check(committed == "丙甲", "Tab buffered commit failed");
+        reset(); type("efvp"); key(0xff09); type("a"); held("丙刘");
+        type("b"); key(' '); check(committed == "丙刘甲", "Tab buffered commit failed");
         check(property("review_learning_count") == std::to_string(learned_before + 1), "final submission did not learn once");
 
         reset(); type("vpa");

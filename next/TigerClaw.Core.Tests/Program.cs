@@ -45,6 +45,8 @@ namespace TigerClaw.Core.Tests
                 if (args.Length == 2 && args[0] == "--full-pinyin-real-tests") return RunRealPinyinTests(args[1]);
                 if (args.Length == 2 && args[0] == "--fivegram-feedback-tests") return RunPinyinFeedbackTests(args[1], true);
                 if (args.Length == 2 && args[0] == "--full-pinyin-feedback-tests") return RunPinyinFeedbackTests(args[1]);
+                if (args.Length == 1 && args[0] == "--learning-portable-tests") return RunPortableLearningTests();
+                if (args.Length == 4 && args[0] == "--learning-worker") return RunLearningWorker(args[1], args[2], int.Parse(args[3]));
                 RunStartupContextTests();
                 if (args.Length == 2 && args[0] == "--native-core-config-defaults")
                     return ExportNativeCoreConfigDefaults(args[1]);
@@ -74,7 +76,6 @@ namespace TigerClaw.Core.Tests
                 if (args.Length == 7 && args[0] == "--ngram-format-compare") return RunMobileComparison(args[1], args[2], args[3], args[4], args[5], args[6]);
                 if (args.Length >= 1 && args[0] == "--sentence-review-tests") return RunSentenceReviewTests(args.Length > 1 ? args[1] : null);
                 if (args.Length == 1 && args[0] == "--learning-tests") return RunLearningTests();
-                if (args.Length == 4 && args[0] == "--learning-worker") return RunLearningWorker(args[1], args[2], int.Parse(args[3]));
                 if (args.Length == 2 && args[0] == "--ui-publish-stdio")
                     return RunUiPublisherProbe(args[1]);
                 if (args.Length == 1 && args[0] == "--ui-snapshot-tests")

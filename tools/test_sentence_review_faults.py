@@ -54,7 +54,7 @@ def main() -> None:
     parent.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix='faults-', dir=parent))
     try:
-        for directory in ['TigerClaw.Core', 'TigerClaw.Shared']:
+        for directory in ['TigerClaw.Core', 'TigerClaw.Shared', 'TigerClaw.Pinyin']:
             shutil.copytree(ROOT / 'next' / directory, work / 'next' / directory,
                             ignore=shutil.ignore_patterns('obj', 'bin', '.tmpobj'))
         shutil.copy2(ROOT / 'next/app.manifest', work / 'next/app.manifest')
@@ -69,8 +69,11 @@ def main() -> None:
                 source.write_text(text.replace(before, after), encoding='utf-8')
                 build = subprocess.run([dotnet, 'build', compiler_path(project), '-c', 'Release',
                                         '-p:PublishAot=false', '--nologo'], cwd=work,
-                                       capture_output=True, timeout=180, check=True)
+                                       capture_output=True, timeout=180)
                 (parent / f'fault-{name}-build.log').write_bytes(build.stdout + build.stderr)
+                if build.returncode:
+                    print((build.stdout + build.stderr).decode('utf-8', errors='replace'), flush=True)
+                    build.check_returncode()
                 shutil.copy2(work / 'next/_run/Release/net10.0-windows/TigerClaw.Core.dll', work / 'runner/TigerClaw.Core.dll')
                 result = subprocess.run([dotnet, compiler_path(work / 'runner/TigerClaw.Core.Tests.dll'),
                                          '--sentence-review-tests'], cwd=work,

@@ -28,8 +28,8 @@ namespace TigerClaw.Core
                 _learningConfigVersion = _state.ConfigVersion; _learningSchema = schema;
                 string mode = "";
                 if (_state.GetSentenceLearningEnabled() && _state.IsSentenceInputActive())
-                    mode = "sentence-v3|dup=" + (_state.GetSentenceAllowDuplicateSingleCharacters() ? "1" : "0") +
-                          "|optimal=" + _state.GetSentenceOptimalCodeHighFreqLimit().ToString(CultureInfo.InvariantCulture) + "|whitelist=" + SentenceLearning.ConfigurationHash(_state.GetSentenceFullCodeWhitelistText());
+                    mode = "整句|单字重码=" + (_state.GetSentenceAllowDuplicateSingleCharacters() ? "1" : "0") +
+                          "|最优码限制=" + _state.GetSentenceOptimalCodeHighFreqLimit().ToString(CultureInfo.InvariantCulture) + "|全码白名单=" + _state.GetSentenceFullCodeWhitelistText();
                 if (mode != _learningMode || changedScheme) { _pendingLearning.Clear(); _learningBaseline = null; }
                 _learningMode = mode;
                 _fusionMode = SentenceFusionPreference.Mode(mode);
@@ -42,7 +42,7 @@ namespace TigerClaw.Core
                     // No fallback to the root: records belong to ONE input scheme.
                     string path = string.IsNullOrEmpty(directory) || string.IsNullOrEmpty(schema) ||
                         !string.Equals(new DirectoryInfo(directory).Name, schema, StringComparison.OrdinalIgnoreCase)
-                        ? null : Path.Combine(directory, ".tigerclaw-learning-v1.log");
+                        ? null : Path.Combine(directory, "自学习-虎爪.txt");
                     if (path == null) _learningStore = null;
                     else if (_learningStore == null || !string.Equals(_learningStore.Path, path, StringComparison.OrdinalIgnoreCase))
                         _learningStore = new SentenceLearningStore(path);
@@ -71,13 +71,13 @@ namespace TigerClaw.Core
             string raw = _sentenceRawBuffer.ToString();
             var events = SentenceLearning.Diff(raw, _learningBaseline, selected, floor, _sentenceDecodeResult.LearningMode);
             var reinforced = SentenceLearning.ReinforceExisting(
-                raw, _learningBaseline, selected, floor, _sentenceDecodeResult.LearningMode, _learningStore?.Snapshot);
+                raw, _learningBaseline, selected, floor, _sentenceDecodeResult.LearningMode, _learningStore?.Snapshot,
+                text => _sentenceInputDecoder?.IsSupplementalFragment(text) ?? false);
             foreach (var e in reinforced)
             {
                 if (!events.Any(old => old.Mode == e.Mode && old.Code == e.Code && old.Text == e.Text)) events.Add(e);
             }
-            SentenceLearning.SeedInitialLevels(events, _learningStore?.Snapshot,
-                _learningBaseline.FinalScore - selected.FinalScore);
+            SentenceLearning.PlanCorrectionLevels(events, _learningStore?.Snapshot, raw, _learningBaseline, selected);
             _pendingLearning.AddRange(events);
             _learningBaseline = null;
         }

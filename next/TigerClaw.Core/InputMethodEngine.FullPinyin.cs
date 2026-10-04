@@ -44,7 +44,7 @@ namespace TigerClaw.Core
             if (!_pinyinResources.TryGetValue(directory, out _pinyinLoading))
                 _pinyinResources[directory] = _pinyinLoading = Task.Run(() => new PinyinResources(directory));
             if (!_pinyinLearningStores.TryGetValue(directory, out _pinyinLearning))
-                _pinyinLearningStores[directory] = _pinyinLearning = new SentenceLearningStore(Path.Combine(directory, ".tigerclaw-learning-pinyin-v1.log"));
+                _pinyinLearningStores[directory] = _pinyinLearning = new SentenceLearningStore(Path.Combine(directory, "自学习-全拼.txt"));
             _pinyinLearning.RefreshAsync();
         }
         internal bool TryEditFullPinyinWord(string text, string reading, bool delete, out string error)

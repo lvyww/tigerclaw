@@ -499,7 +499,7 @@ namespace TigerClaw.Core
                     double candidate = (start?.LearningScore ?? 0) + reward;
                     double candidateEarlyCommitBonus = Math.Max(
                         previous.LearningEarlyCommitBonus,
-                        LearningEarlyCommitContribution(reward));
+                        LearningEarlyCommitContribution(_learning.ConfidenceScore(_learningMode, code, fragment, context)));
                     if (candidate > best ||
                         (Math.Abs(candidate - best) <= 1e-12 && candidateEarlyCommitBonus > earlyCommitBonus))
                     {
@@ -556,6 +556,7 @@ namespace TigerClaw.Core
         private readonly double _lexicalPriorWeight;
         private readonly int _lexicalCandidateLimit;
         private readonly SentenceSupplementMatcher _supplementMatcher;
+        internal bool IsSupplementalFragment(string text) => _supplementMatcher.Contains(text);
         private readonly bool _hasSupplements;
         private readonly bool _allowDuplicateSingleCharacters;
         private readonly int _maxCodeLength;

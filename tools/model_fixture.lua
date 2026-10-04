@@ -1,12 +1,34 @@
 -- Synthetic Q8 fivegram layout with an independent table/backoff oracle.
+-- Integer-only fixture encoder also runs on LuaJIT without string.pack/utf8.
+local function portable_pack(format,...)
+    assert(format:sub(1,1)=='<')
+    local values,parts,index={...},{},0
+    for kind,width in format:sub(2):gmatch('([BIi])(%d*)')do
+        index=index+1
+        local bytes=kind=='B' and 1 or assert(tonumber(width))
+        local value=assert(values[index]);assert(value==math.floor(value))
+        assert(value>=0 or (kind=='i' and bytes==4))
+        if value<0 then value=value+2^(8*bytes)end
+        for _=1,bytes do parts[#parts+1]=string.char(value%256);value=math.floor(value/256)end
+        assert(value==0,'fixture integer overflow')
+    end
+    assert(index==#values)
+    return table.concat(parts)
+end
+local function utf8_char(cp)
+    if cp<128 then return string.char(cp)end
+    if cp<2048 then return string.char(192+math.floor(cp/64),128+cp%64)end
+    if cp<65536 then return string.char(224+math.floor(cp/4096),128+math.floor(cp/64)%64,128+cp%64)end
+    return string.char(240+math.floor(cp/262144),128+math.floor(cp/4096)%64,128+math.floor(cp/64)%64,128+cp%64)
+end
 return function(path,extra_tokens)
-    local pack=assert(string.pack)
+    local pack=portable_pack
     local cps={0,2,3,65,127,128,2047,2048,0x4e00,0x4e59,0x4eba,0x4f60,0x5929,
         0x597d,0x6211,0x662f,0x7532,0x7684,0x8bdd,0x9fff,0x10000,0x1f600,0x20000,0x10ffff}
     for i=1,(extra_tokens or 0)do cps[#cps+1]=0x30000+i end
     local ids,uni,vocab={},{},{}
     for i,cp in ipairs(cps)do
-        local token=i==1 and '<unk>' or i==2 and '<s>' or i==3 and '</s>' or utf8.char(cp)
+        local token=i==1 and '<unk>' or i==2 and '<s>' or i==3 and '</s>' or utf8_char(cp)
         ids[token]=i-1;uni[i-1]=(i*7)%256
         vocab[#vocab+1]=pack('<I2',#token)..token..pack('<BB',uni[i-1],0)
     end

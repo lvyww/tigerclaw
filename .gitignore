@@ -84,3 +84,7 @@ Desktop.ini
 rust/**/target/
 __pycache__/
 *.pyc
+
+# Local readable learning records and per-process Rime lock directories.
+自学习*.txt*
+自学习锁-*/
