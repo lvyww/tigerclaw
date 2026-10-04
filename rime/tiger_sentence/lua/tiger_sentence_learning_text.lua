@@ -40,8 +40,8 @@ function M.parse(data, valid)
     assert(#data <= M.limit, '自学习文件超过16 MiB')
     data = data:gsub('^\239\187\191','')
     local events, seen, removed, sequence = {}, {}, {}, 0
-    for line in (data .. '\n'):gmatch('(.-)\n') do
-        line = line:gsub('\r$','')
+    for raw_line in (data .. '\n'):gmatch('(.-)\n') do
+        local line = raw_line:gsub('\r$','')
         if line ~= '' and line:sub(1,1) ~= '#' then
             assert(#line <= 8192, '自学习记录行过长')
             local f = {}; for v in (line .. '\t'):gmatch('(.-)\t') do f[#f+1]=v end
