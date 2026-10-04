@@ -50,6 +50,9 @@ local original = tiger_sentence_processor.func
 tiger_sentence_processor.func = function(key, env)
     local result = original(key, env)
     local live = env._tiger_learning
+    if live and live.store and live.store.error then
+        io.stderr:write("learning storage error: " .. tostring(live.store.error) .. "\\n")
+    end
     env.engine.context:set_property("review_learning_count", tostring(live and live.store and live.store.count or 0))
     if tiger.correction.diagnostics_enabled then
         env.engine.context:set_property("review_correction_searches", tostring(tiger.correction.stats.searches))
