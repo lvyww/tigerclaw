@@ -3734,7 +3734,19 @@ local function learning_stage(env, state, selected, raw, submitted_first)
             event = learning.fusion_event(live.mode, raw, ahead.text, selected.text, false,
                 selected.path and selected.path.raw_length or #raw)
         end
-        if event and #live.pending < 256 then live.pending[#live.pending + 1] = event end
+        if event and #live.pending < 256 then
+            -- A processor key can stage the same choice again in the commit
+            -- notifier. Deduplicate only this pending submission; other pairs
+            -- and later confirmed corrections remain independent evidence.
+            local duplicate = false
+            for _, pending in ipairs(live.pending) do
+                if pending.mode == event.mode and pending.code == event.code and
+                    pending.text == event.text and pending.raw_end == event.raw_end then
+                    duplicate = true; break
+                end
+            end
+            if not duplicate then live.pending[#live.pending + 1] = event end
+        end
     end
 
     local baseline = state.tab_pending and live.baseline or
