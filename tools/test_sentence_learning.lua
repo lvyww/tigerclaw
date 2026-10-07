@@ -350,6 +350,47 @@ end
 local bytes=""
 for i=0,255 do bytes=bytes..string.char(i); check(learning.hash(bytes)==legacy_hash(bytes),"hash byte parity") end
 os.time=real_time
+-- The final menu merge preserves both chains and all unrelated metadata.
+do
+    local mode,raw="exact-correction-test","abcd"
+    local e1,e2={text="甲",score=4},{text="乙",score=3}
+    local c1,c2={text="丙",score=20,correction_count=1},{text="丁",score=19,correction_count=1}
+    local marker={}
+    local function menu()return {c1,e1,c2,e2,_confidence_candidates=marker,early_commit_evidence=marker}end
+    local function order(items)local t={};for _,v in ipairs(items)do t[#t+1]=v.text end;return table.concat(t)end
+    local function apply(events,scope,code,items)
+        return learning.apply_exact_correction_ordering(learning.build(events,now),scope or mode,
+            code or raw,items or menu(),sentence.correction.affected)
+    end
+    local event=learning.exact_correction_event(mode,raw,"乙","丙",4)
+    check(event.mode=="exact-correction-v1|"..mode and event.code==learning.exact_correction_pair_code(raw,"乙","丙")
+        and event.text=="E" and event.context=="" and event.raw_end==4,"independent exact-correction event protocol")
+    local unchanged,changed=apply({})
+    check(not changed and order(unchanged)=="丙甲丁乙" and unchanged._confidence_candidates==marker
+        and unchanged.early_commit_evidence==marker,"zero preferences preserve complete menu metadata")
+    check(learning.exact_correction_pair_code("ujkf","捡","轮滑")=="~c73de49eccc9cc576",
+        "Lua exact-correction pair hash remains stable")
+    local limited=sentence.correction.merge({e1,e2},{c1,c2},1,function(items)
+        return learning.apply_exact_correction_ordering(learning.build({event},now),mode,raw,items,sentence.correction.affected)
+    end)
+    check(#limited==1 and limited[1]==e1,"preference ordering runs before display truncation")
+    local result,changed=apply({event})
+    check(changed and order(result)=="甲乙丙丁","later exact preference carries only the required exact prefix")
+    check(result._confidence_candidates==marker and result.early_commit_evidence==marker
+        and c1.score==20 and e2.score==3,"ordering helper preserves evidence references and scores")
+    check(order(apply({learning.exact_correction_event(mode,raw,"乙","丁",4)}))=="丙甲乙丁",
+        "unrelated earlier correction keeps its position")
+    check(order(apply({event},"other"))=="丙甲丁乙" and order(apply({event},mode,"abce"))=="丙甲丁乙",
+        "raw code and mode isolate preferences")
+    check(order(apply({event},""))=="丙甲丁乙","disabled mode cannot apply a preference")
+    local old=learning.fusion_event(mode,raw,"乙","甲",true,4)
+    check(order(apply({old}))=="丙甲丁乙","old fusion records do not become correction preferences")
+    local history={text="乙",score=3,path={correction_history=true}}
+    check(order(apply({event},mode,raw,{c1,e1,c2,history}))=="丙甲丁乙",
+        "history-affected candidates cannot act as exact preference endpoints")
+    check(order(apply({event},mode,raw,{e1,e2,c1,c2}))=="甲乙丙丁",
+        "satisfied preferences never push unrelated candidates further down")
+end
 -- Optional production-model matrix, sharing the processor/notifier adapter above.
 -- Usage: lua test_sentence_learning.lua <source root> <data root with models/>.
 if arg[2] then
@@ -357,7 +398,7 @@ if arg[2] then
     for _, level in ipairs({"off", "on"}) do
         for _, action in ipairs({"tap", "tab"}) do
             local name="fusion-correction-"..level.."-"..action
-            local e,c,p,_,submitted=host(name,false,level)
+            local e,c,p,_,submitted,cfg=host(name,false,level)
             local initial_writes=writes
             local function input()
                 for ch in ("ujkf"):gmatch(".") do p(ch) end
@@ -390,26 +431,71 @@ if arg[2] then
                 choose(input(),"轮滑")
                 check(writes==initial_writes,"selecting a corrected candidate must not learn")
             end
+            c.transform=true;choose(input(),"捡");c.transform=false
+            check(writes==initial_writes,"mismatched actual commit must discard all new pair events")
+            -- Compare every submitted receipt with the actual displayed prefix.
+            -- Different correction strengths expose different corrected items.
+            local function expected_pairs(menu,text)
+                local expected={}
+                local n,chosen=find(menu,text)
+                for i=1,n-1 do
+                    local ahead=menu[i]
+                    local ev
+                    if sentence.correction.affected(ahead) then
+                        ev=learning.exact_correction_event(e._tiger_learning.mode,"ujkf",text,ahead.text,4)
+                    elseif learning.candidate_is_direct(chosen) and learning.candidate_is_composed_only(ahead) then
+                        ev=learning.fusion_event(e._tiger_learning.mode,"ujkf",text,ahead.text,true,4)
+                    elseif learning.candidate_is_composed_only(chosen) and learning.candidate_is_direct(ahead) then
+                        ev=learning.fusion_event(e._tiger_learning.mode,"ujkf",ahead.text,text,false,4)
+                    end
+                    if ev then expected[#expected+1]=ev end
+                end
+                return expected
+            end
+            local expected_total=0
+            local function confirm_pairs(menu,text)
+                local expected=expected_pairs(menu,text)
+                local before=expected_total
+                choose(menu,text)
+                expected_total=expected_total+#expected
+                local events=e._tiger_learning.store.events
+                check(writes==initial_writes+expected_total and #events==expected_total,
+                    "exact/corrected receipts persist once: "..level.."/"..action)
+                for i,ev in ipairs(expected) do
+                    local saved=events[before+i]
+                    check(saved.mode==ev.mode and saved.code==ev.code and saved.text==ev.text and saved.context=="",
+                        "only the displayed exact/corrected or exact fusion pair may persist")
+                end
+            end
             c.repeat_notification=true
-            choose(input(),"捡")
+            confirm_pairs(input(),"捡")
             c.repeat_notification=false
             local store=e._tiger_learning.store
-            local expected=learning.fusion_event(e._tiger_learning.mode,"ujkf","捡","拾滑",true,4)
-            check(writes==initial_writes+1 and #store.events==1,
-                "exact pair must learn once despite earlier correction: "..level.."/"..action)
-            check(store.events[1].mode==expected.mode and store.events[1].code==expected.code and
-                store.events[1].text=="D","corrected candidates must not enter the learned pair")
             menu=input()
-            check(find(menu,"捡")<find(menu,"拾滑"),"learned exact ordering must survive correction merge")
+            check(menu[1].text=="捡" and find(menu,"捡")<find(menu,"拾滑"),
+                "exact choice must become first above correction and retain r2 fusion")
+            if level~="off" then
+                check(menu.learning_affected and menu.exact_correction_affected and
+                    next(menu.early_commit_evidence)==nil,"final reordering clears automatic-commit evidence")
+                local cached=sentence.decode("ujkf",true)
+                check(cached[1].text=="捡" and cached.exact_correction_affected and
+                    next(cached.early_commit_evidence)==nil,"cache hit and evidence upgrade retain learned final order")
+            end
             choose(menu,"捡")
-            check(writes==initial_writes+1,"corrected items ahead must not reinforce learned exact top")
-            choose(input(),"拾滑")
-            check(writes==initial_writes+2 and #store.events==2 and store.events[2].text=="C",
-                "reverse exact choice must remain independent")
+            check(writes==initial_writes+expected_total,"learned first choice must not self-reinforce")
+            cfg.enabled=false
             menu=input()
-            check(find(menu,"拾滑")<find(menu,"捡"),"reverse exact preference must reorder")
+            check(menu[1].text~="捡" and find(menu,"拾滑")<find(menu,"捡"),
+                "disabled learning removes both final and r2 fusion preferences")
             choose(menu,"捡")
-            check(writes==initial_writes+3 and #store.events==3,"later independent exact correction must persist")
+            check(writes==initial_writes+expected_total,"disabled learning also rejects new records")
+            cfg.enabled=true
+            menu=input();check(menu[1].text=="捡","reenabling learning restores stored final preference")
+            confirm_pairs(menu,"拾滑")
+            menu=input()
+            check(menu[1].text=="拾滑" and find(menu,"拾滑")<find(menu,"捡"),
+                "Composed exact selection can also pass correction without breaking the exact chain")
+            confirm_pairs(menu,"捡")
             sentence.processor_component.fini(e)
             sentence.set_model_enabled(false)
             package.loaded["tiger_sentence_learning"]=nil
@@ -417,15 +503,76 @@ if arg[2] then
             learning=sentence.learning
             learning.storage_factory=fake_storage
             sentence.set_model_enabled(true);sentence.ensure_lexicon(nil)
-            e,c,p,_,submitted=host(name,false,level)
+            e,c,p,_,submitted,cfg=host(name,false,level)
             menu=input()
-            check(e._tiger_learning.store~=store and #e._tiger_learning.store.events==3,
+            check(e._tiger_learning.store~=store and #e._tiger_learning.store.events==expected_total,
                 "fresh host must reopen the persisted records")
-            check(find(menu,"捡")<find(menu,"拾滑"),"reopened store must preserve exact relative ordering")
+            check(menu[1].text=="捡" and find(menu,"捡")<find(menu,"拾滑"),
+                "reopened store preserves first place over corrected and exact candidates")
             p("Escape");sentence.processor_component.fini(e)
-            print(string.format('{"correction_learning":"passed","level":"%s","selection":"%s","events":3}',level,action))
+            print(string.format('{"exact_correction_learning":"passed","level":"%s","selection":"%s","events":%d}',level,action,expected_total))
         end
     end
+    -- Upgrade a real r2 journal: no E preference exists initially. New learning
+    -- adds the displayed corrected comparisons, preserving the old D record.
+    for _,action in ipairs({"tap","tab"}) do
+        local name="r2-upgrade-"..action
+        local e,c,p,_,submitted,cfg=host(name,false,"on")
+        local function input(raw)
+            raw=raw or "ujkf"
+            for ch in raw:gmatch(".") do p(ch) end
+            return sentence.decode(raw)
+        end
+        input();p("Escape")
+        local store=e._tiger_learning.store
+        local mode=e._tiger_learning.mode
+        local old=learning.fusion_event(mode,"ujkf","捡","拾滑",true,4)
+        check(learning.confirm(store,{old}),"r2 upgrade fixture persists an actual old-format fusion record")
+        local menu=input()
+        local corrected_targets,direct_position,composed_position={},nil,nil
+        for i,item in ipairs(menu) do
+            if item.text=="捡" then direct_position=i end
+            if item.text=="拾滑" then composed_position=i end
+        end
+        for i=1,direct_position-1 do
+            if sentence.correction.affected(menu[i]) then corrected_targets[#corrected_targets+1]=menu[i].text end
+        end
+        check(menu[1].text=="轮滑" and #corrected_targets>0 and direct_position<composed_position,
+            "r2 upgrade fixture keeps enabled correction above the learned exact first")
+        p("Escape")
+        local other_before=input("yjkf")
+        local raw_texts={};for i,item in ipairs(other_before) do raw_texts[i]=item.text end
+        p("Escape");menu=input()
+        local start=writes
+        c.repeat_notification=true
+        if action=="tap" then c:highlight(direct_position-1);c:confirm_current_selection()
+        else for _=2,direct_position do p("Tab") end;p("space") end
+        c.repeat_notification=false
+        check(writes==start+#corrected_targets and #store.events==1+#corrected_targets and store.events[1].mode==old.mode and store.events[1].code==old.code and store.events[1].text==old.text,
+            "r2 upgrade appends only the observed exact/corrected records")
+        for i,text in ipairs(corrected_targets) do
+            check(store.events[i+1].mode==learning.exact_correction_mode(mode) and
+                store.events[i+1].code==learning.exact_correction_pair_code("ujkf","捡",text) and
+                store.events[i+1].text=="E","upgrade must preserve original raw and output pair identity")
+        end
+        menu=input();check(menu[1].text=="捡","upgraded r2 preference reaches first place")
+        c:highlight(0);c:confirm_current_selection()
+        check(writes==start+#corrected_targets,"upgraded first candidate does not reinforce")
+        local other_after=input("yjkf")
+        check(#other_after==#raw_texts,"other raw candidate count remains unchanged")
+        for i,text in ipairs(raw_texts) do check(other_after[i].text==text,"real different raw order is isolated") end
+        p("Escape")
+        sentence.processor_component.fini(e);sentence.set_model_enabled(false)
+        package.loaded["tiger_sentence_learning"]=nil
+        sentence=dofile(override or repo.."/rime/tiger_sentence/lua/tiger_sentence.lua");learning=sentence.learning
+            learning.storage_factory=fake_storage
+        sentence.set_model_enabled(true);sentence.ensure_lexicon(nil)
+        e,c,p=host(name,false,"on")
+        menu=input()
+        check(menu[1].text=="捡" and e._tiger_learning.store~=store and #e._tiger_learning.store.events==1+#corrected_targets,
+            "r2 upgrade survives reopening the persisted journal")
+        p("Escape");sentence.processor_component.fini(e)
+        print(string.format('{"r2_upgrade":"passed","selection":"%s","old_records":1,"new_records":%d}',action,#corrected_targets))
+    end
 end
-
 print(string.format('{"status":"passed","learning_checks":%d,"real_frontend":false}',checks))

@@ -2743,6 +2743,21 @@ function correction.rank_candidates(candidates, penalty)
     return ranked
 end
 
+-- Reapply the current learning snapshot for both cached and fresh correction results.
+function correction.publish_learning(raw, exact, ranked, incomplete)
+    return correction.result(exact, ranked, candidate_limit, incomplete, function(result)
+        local changed
+        result, changed = learning.apply_exact_correction_ordering(
+            learning_index, learning_mode, raw, result, correction.affected)
+        if changed then
+            result.learning_affected, result.exact_correction_affected = true, true
+            -- Display preferences are not model evidence for automatic submission.
+            result.early_commit_evidence = {}
+        end
+        return result
+    end)
+end
+
 function correction.finish(raw, exact, exact_states, locked, required, full)
     local floor = locked and #locked.raw or 0
     local suffix = raw:sub(floor + 1)
@@ -2754,7 +2769,7 @@ function correction.finish(raw, exact, exact_states, locked, required, full)
     local states, from = nil, floor
     if cache.identity == identity and cache.raw == raw then
         if correction.diagnostics_enabled then correction.stats.cache_hits=correction.stats.cache_hits+1 end
-        return correction.result(exact, cache.candidates, candidate_limit, cache.incomplete)
+        return correction.publish_learning(raw, exact, cache.candidates, cache.incomplete)
     end
     local minimum_end=-1
     if not cache.incomplete and cache.identity == identity and cache.raw and #cache.raw > lexicon_state.max_code_len and
@@ -2813,7 +2828,7 @@ function correction.finish(raw, exact, exact_states, locked, required, full)
     correction.last_work={one=work.used[1],two=work.used[2],limit=work.limit,incomplete=work.exhausted}
     if not full then correction.cache = {raw=raw, identity=identity, states=states,
         candidates=ranked, unranked=candidates, exact=exact,incomplete=work.exhausted} end
-    return correction.result(exact, ranked, candidate_limit,work.exhausted)
+    return correction.publish_learning(raw, exact, ranked, work.exhausted)
 end
 
 do
@@ -3350,7 +3365,7 @@ end
 function correction.before_append(env,state,raw)
     if not correction.enabled or not env.engine.context:get_option("tiger_sentence_early_commit") then return nil end
     local decoded=decode(raw,false,state.committed_text,active_lock(state))
-    local blocked=decoded.correction_incomplete or
+    local blocked=decoded.correction_incomplete or decoded.exact_correction_affected or
         (decoded[1] and (decoded[1].correction_count or 0)>0)
     local pending
     if not blocked then
@@ -3384,7 +3399,7 @@ local function try_empty_code_commit(env, state, full_before, appended_letter, b
         end
         pending=before.pending
         local current=decode(state.committed_raw..live_input(context),false,state.committed_text,active_lock(state))
-        if current.correction_incomplete or (current[1] and (current[1].correction_count or 0)>0) then
+        if current.correction_incomplete or current.exact_correction_affected or (current[1] and (current[1].correction_count or 0)>0) then
             state.empty_code_pending=nil
             save_transient_state(context,state,env)
             return false
@@ -3559,7 +3574,7 @@ local function try_early_commit(env)
 
     local generation = model_generation
     local decoded = decode(full_raw, true, state.committed_text, active_lock(state))
-    if decoded.correction_incomplete or (decoded[1] and (decoded[1].correction_count or 0) > 0) then
+    if decoded.correction_incomplete or decoded.exact_correction_affected or (decoded[1] and (decoded[1].correction_count or 0) > 0) then
         reset_early_evidence(state)
         state.empty_code_pending = nil
         save_transient_state(context, state, env)
@@ -3724,7 +3739,10 @@ local function learning_stage(env, state, selected, raw, submitted_first)
     -- Composed candidate records only Direct > Composed (and vice versa).
     for _, ahead in ipairs(selected._fusion_ahead or {}) do
         local event
-        if not correction.affected(ahead) and learning.candidate_is_direct(selected) and
+        if correction.affected(ahead) then
+            event = learning.exact_correction_event(live.mode, raw, selected.text, ahead.text,
+                selected.path and selected.path.raw_length or #raw)
+        elseif learning.candidate_is_direct(selected) and
             learning.candidate_is_composed_only(ahead) then
             event = learning.fusion_event(live.mode, raw, selected.text, ahead.text, true,
                 selected.path and selected.path.raw_length or #raw)
@@ -3778,9 +3796,10 @@ learning_submit = function(env, selected, actual, expected)
     local events, remaining = {}, {}
     if selected and actual ~= "" and actual == expected and live.mode ~= "" then
         local fusion_mode = learning.fusion_mode(live.mode)
+        local exact_correction_mode = learning.exact_correction_mode(live.mode)
         for _, e in ipairs(live.pending) do
             if e.raw_end > selected.path.raw_length then remaining[#remaining + 1] = e
-            elseif e.mode == fusion_mode then events[#events + 1] = e
+            elseif e.mode == fusion_mode or e.mode == exact_correction_mode then events[#events + 1] = e
             elseif e.mode == live.mode and e.text_start >= #selected.text - #expected and
                 selected.text:sub(e.text_start + 1, e.text_end) == e.text then events[#events + 1] = e end
         end

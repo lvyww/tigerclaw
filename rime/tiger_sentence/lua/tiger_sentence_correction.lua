@@ -35,8 +35,8 @@ function M.reserve(edits,characters,work)
     end
     return true
 end
-function M.result(exact,ranked,limit,incomplete)
-    local result=M.merge(exact,ranked,limit)
+function M.result(exact,ranked,limit,incomplete,reorder)
+    local result=M.merge(exact,ranked,limit,reorder)
     result.correction_incomplete=incomplete or false
     return result
 end
@@ -164,7 +164,7 @@ function M.corrected_raw(raw, path)
     return table.concat(pieces)
 end
 
-function M.merge(exact, corrected, limit)
+function M.merge(exact, corrected, limit, reorder)
     local seen = {}
     for _, item in ipairs(exact._confidence_candidates or exact) do seen[item.text] = true end
     for _, item in ipairs(exact) do seen[item.text] = true end
@@ -195,6 +195,7 @@ function M.merge(exact, corrected, limit)
         result[#result + 1] = exact[i]
     end
     while unique[ci] do result[#result + 1] = unique[ci]; ci = ci + 1 end
+    if reorder then result = reorder(result) end
     while #result > limit do result[#result] = nil end
     return result
 end

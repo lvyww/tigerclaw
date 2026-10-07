@@ -372,6 +372,65 @@ function M.fusion_event(mode, raw, direct, composed, direct_wins, raw_end)
     }
 end
 
+-- Final-menu preferences are isolated from lexical/fragment rewards and the
+-- Direct/Composed fusion namespace. Only an exact submitted choice creates E.
+function M.exact_correction_mode(mode)
+    return mode == "" and "" or ("exact-correction-v1|" .. mode)
+end
+
+function M.exact_correction_pair_code(raw, exact, corrected)
+    return "~c" .. M.hash((raw or "") .. "\0E\0" .. (exact or "") .. "\0C\0" .. (corrected or ""))
+end
+
+function M.exact_correction_score(index, mode, raw, exact, corrected)
+    if not index or mode == "" then return 0 end
+    return M.score(index, M.exact_correction_mode(mode),
+        M.exact_correction_pair_code(raw, exact, corrected), "E", "")
+end
+
+function M.exact_correction_event(mode, raw, exact, corrected, raw_end)
+    if mode == "" then return nil end
+    return {
+        time=os.time(), mode=M.exact_correction_mode(mode),
+        code=M.exact_correction_pair_code(raw, exact, corrected), text="E", context="",
+        raw_start=0, raw_end=math.max(0, raw_end or #raw), text_start=0, text_end=1
+    }
+end
+
+function M.apply_exact_correction_ordering(index, mode, raw, candidates, affected)
+    if not index or mode == "" or #candidates < 2 then return candidates, false end
+    local exact, corrected, position = {}, {}, {}
+    for i, item in ipairs(candidates) do
+        local list = affected(item) and corrected or exact
+        list[#list + 1] = item
+        position[item] = i
+    end
+    if #exact == 0 or #corrected == 0 then return candidates, false end
+    -- Keep both source chains stable. A preference for a later exact candidate
+    -- carries only the necessary exact prefix past the current corrected head.
+    local merged, ei, ci = {}, 1, 1
+    while ei <= #exact and ci <= #corrected do
+        local blocked = false
+        for i = ei, #exact do
+            if M.exact_correction_score(index, mode, raw, exact[i].text, corrected[ci].text) > 0 then
+                blocked = true; break
+            end
+        end
+        if blocked or position[exact[ei]] < position[corrected[ci]] then
+            merged[#merged + 1] = exact[ei]; ei = ei + 1
+        else
+            merged[#merged + 1] = corrected[ci]; ci = ci + 1
+        end
+    end
+    while ei <= #exact do merged[#merged + 1] = exact[ei]; ei = ei + 1 end
+    while ci <= #corrected do merged[#merged + 1] = corrected[ci]; ci = ci + 1 end
+    local changed = false
+    for i, item in ipairs(merged) do if candidates[i] ~= item then changed = true; break end end
+    if not changed then return candidates, false end
+    for i, item in ipairs(merged) do candidates[i] = item end
+    return candidates, true
+end
+
 function M.reward(index, mode, raw, text, finish, previous)
     local best, potential, start = previous.learning_score or 0, 0, previous
     local early_bonus = previous.learning_early_commit_bonus or 0
