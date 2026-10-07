@@ -3717,20 +3717,19 @@ end
 local function learning_stage(env, state, selected, raw, submitted_first)
     local live = env._tiger_learning
     if not live or live.mode == "" or not selected then return end
-    local affected = correction.affected(selected) or correction.affected(submitted_first) or
-        correction.affected(live.baseline)
-    for _, ahead in ipairs(selected._fusion_ahead or {}) do affected = affected or correction.affected(ahead) end
-    if affected then live.pending, live.baseline = {}, nil; return end
+    if correction.affected(selected) then live.pending, live.baseline = {}, nil; return end
 
     -- Cross-source learning is pairwise and never mutates either source's
     -- internal ordering. Selecting a lower Direct candidate over an earlier
     -- Composed candidate records only Direct > Composed (and vice versa).
     for _, ahead in ipairs(selected._fusion_ahead or {}) do
         local event
-        if learning.candidate_is_direct(selected) and learning.candidate_is_composed_only(ahead) then
+        if not correction.affected(ahead) and learning.candidate_is_direct(selected) and
+            learning.candidate_is_composed_only(ahead) then
             event = learning.fusion_event(live.mode, raw, selected.text, ahead.text, true,
                 selected.path and selected.path.raw_length or #raw)
-        elseif learning.candidate_is_composed_only(selected) and learning.candidate_is_direct(ahead) then
+        elseif not correction.affected(ahead) and learning.candidate_is_composed_only(selected) and
+            learning.candidate_is_direct(ahead) then
             event = learning.fusion_event(live.mode, raw, ahead.text, selected.text, false,
                 selected.path and selected.path.raw_length or #raw)
         end
@@ -3751,7 +3750,9 @@ local function learning_stage(env, state, selected, raw, submitted_first)
 
     local baseline = state.tab_pending and live.baseline or
         (not state.tab_pending and submitted_first)
-    if baseline and learning.candidate_is_composed_only(baseline) and learning.candidate_is_composed_only(selected) then
+    -- A corrected baseline blocks fragment learning, not valid exact fusion pairs.
+    if baseline and not correction.affected(baseline) and learning.candidate_is_composed_only(baseline) and
+        learning.candidate_is_composed_only(selected) then
         local lock = active_lock(state)
         local floor = math.max(#state.committed_raw, lock and #lock.raw or 0)
         local events = learning.diff(raw, baseline, selected, floor, live.mode)

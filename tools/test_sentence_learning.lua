@@ -2,7 +2,7 @@
 -- with a small host/LevelDb fake; never touches an installed input method.
 local repo = arg[1] or "."
 package.path = repo .. "/rime/tiger_sentence/lua/?.lua;" .. package.path
-rime_api = {get_user_data_dir=function() return repo end}
+rime_api = {get_user_data_dir=function() return arg[2] or repo end}
 local databases = {}
 local writes, fail_write = 0, false
 LevelDb = function(name)
@@ -18,7 +18,8 @@ LevelDb = function(name)
         update=function(_, k, v) if fail_write then return false end; writes=writes+1; data[k]=v; return true end
     }
 end
-local sentence = require("tiger_sentence")
+local override = os.getenv("TIGER_SENTENCE_MODULE")
+local sentence = override and dofile(override) or require("tiger_sentence")
 local learning = sentence.learning
 local function fake_storage(name)
     local data=databases[name] or {};databases[name]=data
@@ -148,7 +149,7 @@ local function key(repr)
         ctrl=function()return false end,alt=function()return false end,
         super=function()return false end,shift=function()return false end}
 end
-local function host(name, early)
+local function host(name, early, correction_level)
     local properties, listeners, commits = {}, {}, {}
     local context = {input="",caret_pos=0}
     local segment = {selected_index=0}
@@ -157,7 +158,8 @@ local function host(name, early)
     context.composition = {empty=function()return context.input=="" end,back=function()return segment end}
     function context:get_property(k)return properties[k] or ""end
     function context:set_property(k,v)properties[k]=v end
-    function context:get_option(k)return k=="tiger_sentence_allow_duplicate_single" or (k=="tiger_sentence_early_commit" and early)end
+    function context:get_option(k)return k=="tiger_sentence_allow_duplicate_single" or
+        (correction_level=="on" and k==sentence.correction.option) or (k=="tiger_sentence_early_commit" and early)end
     function context:is_composing()return self.input~=""end
     function context:has_menu()return self:is_composing()end
     function context:clear()self.input="";self.caret_pos=0;segment.selected_index=0 end
@@ -348,4 +350,82 @@ end
 local bytes=""
 for i=0,255 do bytes=bytes..string.char(i); check(learning.hash(bytes)==legacy_hash(bytes),"hash byte parity") end
 os.time=real_time
+-- Optional production-model matrix, sharing the processor/notifier adapter above.
+-- Usage: lua test_sentence_learning.lua <source root> <data root with models/>.
+if arg[2] then
+    sentence.set_model_enabled(true)
+    for _, level in ipairs({"off", "on"}) do
+        for _, action in ipairs({"tap", "tab"}) do
+            local name="fusion-correction-"..level.."-"..action
+            local e,c,p,_,submitted=host(name,false,level)
+            local initial_writes=writes
+            local function input()
+                for ch in ("ujkf"):gmatch(".") do p(ch) end
+                check(sentence.model_status().loaded,"correction learning requires the real model")
+                return sentence.decode("ujkf")
+            end
+            local function find(menu,text)
+                for i,item in ipairs(menu) do if item.text==text then return i,item end end
+                error("missing real-model candidate: "..text)
+            end
+            local function choose(menu,text,cancel)
+                local i=find(menu,text)
+                if action=="tab" or cancel then
+                    for _=2,i do p("Tab") end
+                    p(cancel and "Escape" or "space")
+                else c:highlight(i-1);c:confirm_current_selection() end
+            end
+            local menu=input()
+            local direct,d=find(menu,"捡");local composed,co=find(menu,"拾滑")
+            check(composed<direct and not sentence.correction.affected(d) and
+                not sentence.correction.affected(co),"fixture must compare two exact candidates")
+            if level~="off" then
+                local corrected,word=find(menu,"轮滑")
+                check(corrected<direct and sentence.correction.affected(word),
+                    "enabled fixture must include an earlier corrected candidate")
+            end
+            choose(menu,"捡",true)
+            check(writes==initial_writes,"cancelled exact choice under correction must not learn")
+            if level~="off" then
+                choose(input(),"轮滑")
+                check(writes==initial_writes,"selecting a corrected candidate must not learn")
+            end
+            c.repeat_notification=true
+            choose(input(),"捡")
+            c.repeat_notification=false
+            local store=e._tiger_learning.store
+            local expected=learning.fusion_event(e._tiger_learning.mode,"ujkf","捡","拾滑",true,4)
+            check(writes==initial_writes+1 and #store.events==1,
+                "exact pair must learn once despite earlier correction: "..level.."/"..action)
+            check(store.events[1].mode==expected.mode and store.events[1].code==expected.code and
+                store.events[1].text=="D","corrected candidates must not enter the learned pair")
+            menu=input()
+            check(find(menu,"捡")<find(menu,"拾滑"),"learned exact ordering must survive correction merge")
+            choose(menu,"捡")
+            check(writes==initial_writes+1,"corrected items ahead must not reinforce learned exact top")
+            choose(input(),"拾滑")
+            check(writes==initial_writes+2 and #store.events==2 and store.events[2].text=="C",
+                "reverse exact choice must remain independent")
+            menu=input()
+            check(find(menu,"拾滑")<find(menu,"捡"),"reverse exact preference must reorder")
+            choose(menu,"捡")
+            check(writes==initial_writes+3 and #store.events==3,"later independent exact correction must persist")
+            sentence.processor_component.fini(e)
+            sentence.set_model_enabled(false)
+            package.loaded["tiger_sentence_learning"]=nil
+            sentence=dofile(override or repo.."/rime/tiger_sentence/lua/tiger_sentence.lua")
+            learning=sentence.learning
+            learning.storage_factory=fake_storage
+            sentence.set_model_enabled(true);sentence.ensure_lexicon(nil)
+            e,c,p,_,submitted=host(name,false,level)
+            menu=input()
+            check(e._tiger_learning.store~=store and #e._tiger_learning.store.events==3,
+                "fresh host must reopen the persisted records")
+            check(find(menu,"捡")<find(menu,"拾滑"),"reopened store must preserve exact relative ordering")
+            p("Escape");sentence.processor_component.fini(e)
+            print(string.format('{"correction_learning":"passed","level":"%s","selection":"%s","events":3}',level,action))
+        end
+    end
+end
+
 print(string.format('{"status":"passed","learning_checks":%d,"real_frontend":false}',checks))
