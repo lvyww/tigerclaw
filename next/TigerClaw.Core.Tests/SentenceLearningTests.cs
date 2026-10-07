@@ -56,6 +56,7 @@ namespace TigerClaw.Core.Tests
                 RunLearningStage("storage", () => LearningStorage(root));
                 RunLearningStage("decoder", LearningDecoder);
                 RunLearningStage("engine-protocol", () => LearningEngineAndProtocol(root));
+                RunLearningStage("fusion-protocol", () => LearningFusionProtocol(root));
                 RunLearningStage("performance", LearningPerformance);
                 Console.WriteLine(JsonSerializer.Serialize(new { test = "tab_learning", status = "passed", checks = learningChecks, physicalTsfTested = false }));
                 return 0;
