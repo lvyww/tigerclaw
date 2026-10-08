@@ -22,7 +22,7 @@ namespace tiger::core
         constexpr auto duplicate = u"\u5141\u8bb8\u5355\u5b57\u91cd\u7801\u7ec4\u53e5";
         RuntimeSentenceSettings result;
         result.lattice.preserveTruncatedEvidence = true;
-        result.lattice.canonicalReward = 2;
+        result.lattice.canonicalReward = 0;
         result.lattice.protectedIsolationFactor = 0;
         result.lattice.lexicalWeight = .1;
         std::u16string_view whiteText;

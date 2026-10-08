@@ -339,6 +339,8 @@ local function build_lexicon_index(entries, character_ranks, high_freq_limit, wh
                     t = text,
                     r = index,
                     optimal_single = optimal_input[text] == code,
+                    whole_single_reward_eligible = optimal_input[text] == code or
+                        not (common and common[text] and whitelist[text] ~= true),
                     -- A sentence cannot use one-key character edges.  Keep a
                     -- second marker for the strongest legal per-character
                     -- spelling (rank-1 preferred, then shortest).  This is
@@ -681,7 +683,7 @@ local ranking_prior = {
     -- Shape and lexical evidence are excluded from confidence mass.  The word
     -- filter also reranks only Top-5, so neither heuristic can manufacture
     -- early-commit confidence or introduce a candidate that the LM missed.
-    canonical_code_reward = 2.0,
+    canonical_code_reward = 0.0,
     lexical_prior_weight = 0.1,
     lexical_candidate_limit = 5,
     -- A full four-key spelling is strong enough to protect an otherwise
@@ -1818,7 +1820,7 @@ local function expand_range(raw, states, from_pos, length, minimum_consumed_end)
                                             end
                                             local whole_input_single_character_reward_added = 0.0
                                             if whole_input_edge and selected_rank == 0 and
-                                                candidate.optimal_single and candidate_is_single(candidate) then
+                                                candidate.whole_single_reward_eligible and candidate_is_single(candidate) then
                                                 whole_input_single_character_reward_added =
                                                     whole_input_single_character_reward
                                                 score = score + whole_input_single_character_reward_added
@@ -4328,7 +4330,8 @@ M.lexicon_probe = function(code)
             t = candidates[index].t,
             r = candidates[index].r,
             optimal_single = candidates[index].optimal_single or false,
-            primary_single = candidates[index].primary_single or false
+            primary_single = candidates[index].primary_single or false,
+            whole_single_reward_eligible = candidates[index].whole_single_reward_eligible or false
         }
     end
     return copy
@@ -4426,6 +4429,8 @@ M.set_decoder_parameters_for_test = function(values)
     rank_penalty = bounded("rank_penalty", rank_penalty, 0, 10, false)
     emitted_character_reward = bounded(
         "emitted_character_reward", emitted_character_reward, -10, 10, false)
+    whole_input_single_character_reward = bounded(
+        "whole_input_single_character_reward", whole_input_single_character_reward, 0, 20, false)
     ranking_prior.canonical_code_reward = bounded(
         "canonical_code_reward", ranking_prior.canonical_code_reward, 0, 10, false)
     ranking_prior.lexical_prior_weight = bounded(
@@ -4448,6 +4453,7 @@ M.decoder_parameters = function()
         long_input_beam_width = long_input_beam_width,
         rank_penalty = rank_penalty,
         emitted_character_reward = emitted_character_reward,
+        whole_input_single_character_reward = whole_input_single_character_reward,
         canonical_code_reward = ranking_prior.canonical_code_reward,
         lexical_prior_weight = ranking_prior.lexical_prior_weight,
         isolation_threshold = isolation_threshold,

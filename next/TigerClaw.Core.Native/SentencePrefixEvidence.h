@@ -15,7 +15,7 @@ namespace tiger::core
         double baseShare = std::numeric_limits<double>::quiet_NaN();
     };
     // Input must be the already-narrowed evidence pool, not the complete Beam.
-    // logMass excludes ranking-only supplement and optimal-single rewards.
+    // logMass excludes ranking-only supplement and whole-input single-character rewards.
     inline std::vector<SentencePrefixEvidence> BuildSentencePrefixEvidence(std::span<const SentenceBeamState> candidates)
     {
         if (candidates.empty()) return {};

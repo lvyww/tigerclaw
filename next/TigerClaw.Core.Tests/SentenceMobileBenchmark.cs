@@ -51,7 +51,7 @@ namespace TigerClaw.Core.Tests
             var prior = SentenceLexicalPrior.LoadEmbedded();
             SentenceInputDecoder Decoder(SentenceNgramModel model) => new(index, model,
                 emittedCharacterReward: 2, wholeInputSingleCharacterReward: 5, allowDuplicateSingleCharacters: true,
-                canonicalCodeReward: 2, canonicalIsolationFactor: 0, canonicalIsolationMinCodeLength: 4,
+                canonicalCodeReward: 0, canonicalIsolationFactor: 0, canonicalIsolationMinCodeLength: 4,
                 lexicalPrior: prior, lexicalPriorWeight: .1, lexicalCandidateLimit: 5);
             using var writer = new StreamWriter(output + ".tsv");
             writer.WriteLine("case\tpass\toperation\tlength\tlegacy_ms\tmobile_ms");

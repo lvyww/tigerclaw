@@ -40,6 +40,7 @@ namespace TigerClaw.Core
         public string[] TextElements { get; set; }
         public bool IsOptimalSingleCharacterCode { get; set; }
         public bool IsPrimarySingleCharacterCode { get; set; }
+        public bool RequiresOptimalWholeSingleCharacterCode { get; set; }
     }
 
     internal sealed class SentenceLexiconIndex
@@ -180,7 +181,10 @@ namespace TigerClaw.Core
                             IsOptimalSingleCharacterCode =
                                 optimalInputCodeByCharacter.TryGetValue(text, out string optimalCode) &&
                                 string.Equals(optimalCode, pair.Key, StringComparison.OrdinalIgnoreCase),
-                            IsPrimarySingleCharacterCode = isPrimarySingleCharacterCode
+                            IsPrimarySingleCharacterCode = isPrimarySingleCharacterCode,
+                            RequiresOptimalWholeSingleCharacterCode =
+                                IsCommonSingleCharacter(text, common) &&
+                                !IsWhitelistedFullCodeCharacter(text, whitelist)
                         });
                     }
                 }
@@ -1240,8 +1244,9 @@ namespace TigerClaw.Core
                             double wholeInputSingleCharacterRewardAdded = 0.0;
                             if (wholeInputEdge &&
                                 selectedRank == 0 &&
-                                candidate.IsOptimalSingleCharacterCode &&
-                                candidate.TextElements.Length == 1)
+                                candidate.TextElements.Length == 1 &&
+                                (candidate.IsOptimalSingleCharacterCode ||
+                                 !candidate.RequiresOptimalWholeSingleCharacterCode))
                             {
                                 wholeInputSingleCharacterRewardAdded = _wholeInputSingleCharacterReward;
                                 score += wholeInputSingleCharacterRewardAdded;

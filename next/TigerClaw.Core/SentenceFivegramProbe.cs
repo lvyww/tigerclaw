@@ -30,7 +30,7 @@ namespace TigerClaw.Core
                     SentenceLexiconIndex.Build(entries, SentenceCharacterRanks.TakeTop(1500),
                         CoreRuntimeState.ParseCharacterSet(CoreRuntimeState.DefaultSentenceFullCodeWhitelist)),
                     loaded, emittedCharacterReward: 2, wholeInputSingleCharacterReward: 5,
-                    allowDuplicateSingleCharacters: true, canonicalCodeReward: 2,
+                    allowDuplicateSingleCharacters: true, canonicalCodeReward: 0,
                     canonicalIsolationFactor: 0, canonicalIsolationMinCodeLength: 4,
                     lexicalPrior: SentenceLexicalPrior.LoadEmbedded(), lexicalPriorWeight: 0.1);
                 var result = decoder.Decode(code, 20);

@@ -43,6 +43,8 @@ int main()
         const std::u16string duplicates = u"\u5141\u8bb8\u5355\u5b57\u91cd\u7801\u7ec4\u53e5";
         auto decoderDefaults = LoadSentenceSettings({});
         Check(decoderDefaults.optimalCodeHighFrequencyLimit == 1500 && decoderDefaults.lattice.duplicateSingles);
+        Check(decoderDefaults.lattice.canonicalReward == 0 && decoderDefaults.lattice.wholeSingleReward == 5);
+        Check(decoderDefaults.lattice.protectedIsolationFactor == 0 && decoderDefaults.lattice.lexicalWeight == .1);
         Check(decoderDefaults.fullCodeWhitelist.contains(u"\u4fbf") && decoderDefaults.fullCodeWhitelist.contains(u"\u7ed5"));
         for (auto value : {u"", u"-1", u"invalid", u"2147483648"})
             Check(LoadSentenceSettings({{optimal, value}}).optimalCodeHighFrequencyLimit == 0);

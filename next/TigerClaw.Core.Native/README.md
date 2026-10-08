@@ -1,5 +1,9 @@
 # C++ Core — mainline Windows runtime
 
+## 单字编码评分（2026-10-09）
+
+主线取消单字主码加分。整段输入一次匹配单字仍奖励 5 分；只有该字在用户设置的前 N 高频字中且不在全码白名单内时，才要求使用最优码。N=0、白名单或字频范围外的字允许任意合法完整输入编码获得奖励。显式选重、词语与句内片段不获此奖励，原有 primary 过滤及 confidence mass 不变。四码生僻字保护、词汇先验与自学习保留。C# 参考及 bundled Rime 同步，详见 `../../docs/COMPACT_RANKING_PRIORS.md`。
+
 ## 主线切换（2026-10-08）
 
 用户指定 C++ Core 为主线。x64/ARM64 整包发布、`next/build_next.bat` 调试入口

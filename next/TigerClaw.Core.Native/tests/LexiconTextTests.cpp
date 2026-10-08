@@ -1191,6 +1191,40 @@ int main()
         auto selectedBeam = AdvanceSentenceBeam(initialBeam, optimalEdge,
             [](auto, auto, auto) { return -3.0; }, 0.03, 2.0, 5.0);
         Check(selectedBeam.score == -1 && selectedBeam.logMass == -1);
+        // Whole-input reward follows configured frequency membership, independently
+        // of primary-code filtering and of UTF-16 code-unit length.
+        std::vector<CompactLexicon::Entry> rewardEntries{
+            {u"x", {u"\u4e01"}}, {u"efgh", {u"\u4e01"}}, {u"xygh", {u"\u4e01"}},
+            {u"ef", {u"\u620a"}}, {u"gh", {u"\u5df1"}}, {u"ab", {u"\u7532"}},
+            {u"abcd", {u"\u8bcd\u8bed", u"\u4e19"}},
+            {u"z", {u"\U00020000"}}, {u"zzzz", {u"\U00020000"}}};
+        for (int scope = 0; scope < 4; ++scope)
+        {
+            SentenceLexicon::CharacterSet common = scope == 1 || scope == 2
+                ? SentenceLexicon::CharacterSet{u"\u4e01", u"\U00020000"}
+                : scope == 3 ? SentenceLexicon::CharacterSet{u"\u620a"} : SentenceLexicon::CharacterSet{};
+            SentenceLexicon::CharacterSet white = scope == 2 ? common : SentenceLexicon::CharacterSet{};
+            auto index = SentenceLexicon::Build(rewardEntries, common, white);
+            auto checkReward = [&](std::u16string_view raw, std::u16string_view text, double expected, bool whole = true)
+            {
+                auto edges = SentenceEdges(index, raw, 0, true);
+                auto found = std::find_if(edges.begin(), edges.end(), [&](const auto& e) { return e.candidate->text == text; });
+                Check(found != edges.end());
+                auto edge = *found; edge.wholeInput = whole;
+                auto plain = AdvanceSentenceBeam(initialBeam, edge, [](auto, auto, auto) { return -3.0; }, .03, 2, 0);
+                auto changed = AdvanceSentenceBeam(initialBeam, edge, [](auto, auto, auto) { return -3.0; }, .03, 2, 5);
+                Check(std::abs(changed.score - plain.score - expected) < 1e-12);
+                Check(std::abs(changed.logMass - plain.logMass) < 1e-12 && changed.codeScore == 0);
+            };
+            checkReward(u"x", u"\u4e01", 5);
+            checkReward(u"efgh", u"\u4e01", scope == 1 ? 0 : 5);
+            checkReward(u"zzzz", u"\U00020000", scope == 1 ? 0 : 5);
+            checkReward(u"efgh1", u"\u4e01", 0);
+            checkReward(u"abcd", u"\u8bcd\u8bed", 0);
+            checkReward(u"abcd;", u"\u4e19", 0);
+            checkReward(u"efghab", u"\u4e01", 0, false);
+            Check((index.Candidates(u"xygh") == nullptr) == (scope == 1));
+        }
         SentenceBeamBucket beamBucket;
         auto lowRank = scoredBeam; lowRank.text = u"same"; lowRank.maxRank = 1; lowRank.score = -20; lowRank.logMass = -2;
         auto highRank = lowRank; highRank.maxRank = 2; highRank.score = 20; highRank.logMass = -3;

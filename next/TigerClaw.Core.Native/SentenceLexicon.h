@@ -17,6 +17,7 @@ namespace tiger::core
         std::vector<std::u16string> elements;
         bool optimalSingle;
         bool primarySingle = false;
+        bool requiresOptimalWholeSingle = false;
     };
     class SentenceLexicon
     {
@@ -82,7 +83,8 @@ namespace tiger::core
                     }
                     bool optimal = found != characters.end() && FoldOrdinalCode(found->second.optimal) == FoldOrdinalCode(code);
                     bool primary = found != characters.end() && FoldOrdinalCode(found->second.first.empty() ? found->second.any : found->second.first) == FoldOrdinalCode(code);
-                    allowed.push_back({text, index + 1, std::log(index + 1.0), std::move(elements), optimal, primary});
+                    allowed.push_back({text, index + 1, std::log(index + 1.0), std::move(elements), optimal, primary,
+                        single && common.contains(text) && !whitelist.contains(text)});
                 }
                 if (allowed.empty()) continue;
                 auto folded = FoldOrdinalCode(code);

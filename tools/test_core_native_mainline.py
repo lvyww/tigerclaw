@@ -63,7 +63,7 @@ if args.shape_table:
  codes=[c for c in entries if c.isascii() and c.isalpha() and 2<=len(c)<=4]
  raws=['t','tl','tll','tlle','tlleo','tlle','tlleo']+[random.choice(codes)+random.choice(codes) for _ in range(16)]
  for corrections in [0,1,2]:
-  cases.append(dict(op='decode',lexicon=actual,canonical=2,lexical=.1,isolation=True,protectedFactor=0,preserve=True,
+  cases.append(dict(op='decode',lexicon=actual,canonical=0,lexical=.1,isolation=True,protectedFactor=0,preserve=True,
     raws=raws,events=[dict(code='tlleo',text='陲机',levels=3) for _ in range(corrections)],
     supplements=[['陲机',1],['中华',1000],['中国人民',3000]]))
 # Preserve the 64 CODE ROW limit even across wrong modes/equal-code rows.

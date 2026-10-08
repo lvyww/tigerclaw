@@ -65,7 +65,7 @@ namespace TigerClaw.Core
         private const int VK_Z = 0x5A;
         private const double SentenceEmittedCharacterReward = 2.0;
         private const double SentenceWholeInputSingleCharacterReward = 5.0;
-        private const double SentenceCanonicalCodeReward = 2.0;
+        private const double SentenceCanonicalCodeReward = 0.0;
         private const double SentenceCanonicalIsolationFactor = 0.0;
         private const int SentenceCanonicalIsolationMinimumCodeLength = 4;
         private const double SentenceLexicalPriorWeight = 0.1;

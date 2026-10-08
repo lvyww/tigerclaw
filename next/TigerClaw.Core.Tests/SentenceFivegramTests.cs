@@ -68,7 +68,7 @@ namespace TigerClaw.Core.Tests
             SentenceInputDecoder Create(ISentenceLanguageModel m) => new(lexicon, m,
                 emittedCharacterReward: 2, wholeInputSingleCharacterReward: 5,
                 supplementMatcher: matcher, allowDuplicateSingleCharacters: true,
-                canonicalCodeReward: 2, canonicalIsolationFactor: 0, canonicalIsolationMinCodeLength: 4,
+                canonicalCodeReward: 0, canonicalIsolationFactor: 0, canonicalIsolationMinCodeLength: 4,
                 lexicalPrior: SentenceLexicalPrior.LoadEmbedded(), lexicalPriorWeight: 0.1, lexicalCandidateLimit: 5);
             using var b = Create(five);
             using var writer = new StreamWriter(output);

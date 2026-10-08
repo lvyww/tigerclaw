@@ -753,15 +753,17 @@ block Core on a paused reader. Contract: `Protocol/ui_state.md`.
   not replace model files. Beam
   expansion adds `2.0` per emitted Unicode character. Supplemental entries use
   `clamp(9 + 2 * ln(weight / 1000), 0, 16)` and affect sentence ranking only.
-  A whole-input single-character candidate gets a ranking-only `5.0` reward
-  when the unsplit input is that character's shortest available code (source
-  order breaks equal-length ties), regardless of its rank under that code. The
-  reward does not enter confidence mass or apply to an explicitly selected rank.
-- Compact final ranking adds `2.0 × code length` for primary-code single-character
-  edges, removes isolation penalties only for primary/explicit single-character
-  edges of at least four codes, and gives the original Top-5 a bounded 50k-word
-  Bloom-filter vote. None of these enter Beam or confidence mass; without an
-  n-gram model they are disabled. Qwen consumes the resulting base Top-5 and
+  A whole-input single-character candidate gets a ranking-only `5.0` reward.
+  Only characters in the configured top-N frequent set and outside the full-code
+  whitelist require their shortest available code (source order breaks ties).
+  Other characters receive it for any permitted whole-input code. Explicit rank
+  selectors and multi-character/composed paths do not receive this reward; it
+  remains excluded from confidence mass. Existing primary-code filtering is unchanged.
+- Compact final ranking no longer adds a primary-code single-character reward
+  (production coefficient 0, 2026-10-09). It retains isolation protection only
+  for primary/explicit single-character edges of at least four codes and the
+  original Top-5 bounded 50k-word Bloom-filter vote. These do not enter confidence
+  mass; without an n-gram model they are disabled. Qwen consumes the resulting base Top-5 and
   keeps its existing fusion formula. See `docs/COMPACT_RANKING_PRIORS.md`.
 - Qwen3 0.6B Q8 reranks exactly the first five n-gram candidates. If the
   pre-Qwen base winner has 2..6 text elements, score each candidate by

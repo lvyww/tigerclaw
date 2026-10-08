@@ -70,8 +70,9 @@ namespace tiger::core
             result.previous1 = target;
         }
         if (!edge.selectedRank) result.score -= rankPenalty * candidate.logRank;
-        double singleAdded = edge.wholeInput && !edge.selectedRank && candidate.optimalSingle && candidate.elements.size() == 1
-            ? wholeSingleReward : 0;
+        // Only the configured frequent, non-whitelisted characters require their optimal code.
+        double singleAdded = edge.wholeInput && !edge.selectedRank && candidate.elements.size() == 1 &&
+            (candidate.optimalSingle || !candidate.requiresOptimalWholeSingle) ? wholeSingleReward : 0;
         result.score += singleAdded;
         double learned = item.learningScore;
         result.learningPotential = 0;

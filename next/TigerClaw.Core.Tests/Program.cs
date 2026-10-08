@@ -58,6 +58,12 @@ namespace TigerClaw.Core.Tests
                 if (args.Length == 4 && args[0] == "--learning-worker") return RunLearningWorker(args[1], args[2], int.Parse(args[3]));
                 if (args.Length == 6 && args[0] == "--learning-pair-scores") return RunLearningSeedReal(args[1], args[2], args[3], args[4], args[5], true);
                 if (args.Length == 3 && args[0] == "--learning-seed-real") return RunLearningSeedReal(args[1], args[2]);
+                if (args.Length == 1 && args[0] == "--whole-code-reward-tests")
+                {
+                    SentenceDecoderRewardsOptimalWholeInputSingleCharacter();
+                    SentenceWholeCodeRewardUsesConfiguredFrequencyScope();
+                    return 0;
+                }
                 RunStartupContextTests();
                 if (args.Length == 2 && args[0] == "--native-core-config-defaults")
                     return ExportNativeCoreConfigDefaults(args[1]);
@@ -247,6 +253,7 @@ namespace TigerClaw.Core.Tests
                 SentenceDecoderLetsSegmentedSingleDuplicatesCompeteWhenEnabled();
                 SentenceDecoderAppliesCharacterRewardInsideBeam();
                 SentenceDecoderRewardsOptimalWholeInputSingleCharacter();
+                SentenceWholeCodeRewardUsesConfiguredFrequencyScope();
                 SentenceDecoderAppliesCompactRankingPriorsOnlyAtFinalRank();
                 SentenceAutoCommitMatchesFinalRankingTop();
                 SentenceSupplementParsesPerSchemaFile();
@@ -4282,8 +4289,8 @@ namespace TigerClaw.Core.Tests
                 nameof(SentenceDecoderRewardsOptimalWholeInputSingleCharacter) + ".confidence_unchanged");
 
             SentenceDecodeResult nonOptimal = rewarded.DecodeFull("efgh");
-            Equal("戊己", nonOptimal.Candidates[0].Text,
-                nameof(SentenceDecoderRewardsOptimalWholeInputSingleCharacter) + ".non_optimal_not_rewarded");
+            Equal("丁", nonOptimal.Candidates[0].Text,
+                nameof(SentenceDecoderRewardsOptimalWholeInputSingleCharacter) + ".unrestricted_non_optimal_rewarded");
 
             rewarded.Decode("abcd");
             AssertSentenceResultsEqual(
