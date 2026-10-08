@@ -16,6 +16,7 @@ namespace tiger::core
         double logRank;
         std::vector<std::u16string> elements;
         bool optimalSingle;
+        bool primarySingle = false;
     };
     class SentenceLexicon
     {
@@ -80,7 +81,8 @@ namespace tiger::core
                         elements.push_back(text.substr(starts[i], end - starts[i]));
                     }
                     bool optimal = found != characters.end() && FoldOrdinalCode(found->second.optimal) == FoldOrdinalCode(code);
-                    allowed.push_back({text, index + 1, std::log(index + 1.0), std::move(elements), optimal});
+                    bool primary = found != characters.end() && FoldOrdinalCode(found->second.first.empty() ? found->second.any : found->second.first) == FoldOrdinalCode(code);
+                    allowed.push_back({text, index + 1, std::log(index + 1.0), std::move(elements), optimal, primary});
                 }
                 if (allowed.empty()) continue;
                 auto folded = FoldOrdinalCode(code);

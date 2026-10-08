@@ -1,6 +1,11 @@
 # 虎爪输入法（TigerClaw）
 
-面向 Windows 的 TSF 输入法，采用 TSF 前端、C# Core 与独立界面进程的分离架构。
+面向 Windows 的 TSF 输入法，采用 TSF 前端、C++ Core 与独立界面进程的分离架构。
+
+主线 Core 位于 `next/TigerClaw.Core.Native/`，标准产物仍为 `TigerClaw.Core.exe`。
+`publish.bat`、`publish_arm64.bat` 和 `next/build_next.bat` 默认构建 C++ Core；
+`publish_core_arm64.bat` / `publish_arm64_cpp_core.bat` 用于 ARM64 Core 单独更新。
+C# Core 保留作历史实现与差分测试参考；全拼开发在独立 claw_pinyin 仓库。
 
 ## 文档入口
 

@@ -1,12 +1,12 @@
 #include "LexiconOrder.h"
 #include "CodeCase.h"
 #include <algorithm>
-#include <memory>
+#include "WindowsLocale.h"
+#include <system_error>
 #include <stdexcept>
 #include <climits>
 #ifdef _WIN32
 #include <windows.h>
-#include <icu.h>
 #endif
 
 namespace tiger::core
@@ -14,23 +14,8 @@ namespace tiger::core
     std::vector<std::filesystem::path> GetOrderedLexiconFiles(const std::filesystem::path& directory, const std::string* locale)
     {
 #ifdef _WIN32
-        std::string localeName;
-        if (locale) localeName = *locale;
-        else
-        {
-            wchar_t name[LOCALE_NAME_MAX_LENGTH];
-            if (!GetUserDefaultLocaleName(name, LOCALE_NAME_MAX_LENGTH)) throw std::runtime_error("Cannot read Windows locale");
-            // Windows locale names contain ASCII language/script/region tags.
-            for (auto p = name; *p; ++p)
-            {
-                if (*p > 127) throw std::runtime_error("Non-ASCII locale name");
-                localeName.push_back(static_cast<char>(*p));
-            }
-        }
-        UErrorCode status = U_ZERO_ERROR;
-        std::unique_ptr<UCollator, decltype(&ucol_close)> collator(ucol_open(localeName.c_str(), &status), &ucol_close);
-        if (U_FAILURE(status) || !collator) throw std::runtime_error("Cannot open ICU collator");
-        struct File { std::filesystem::path path; std::u16string name; bool preferred; };
+        const auto localeName = WindowsLocaleName(locale);
+        struct File { std::filesystem::path path; std::vector<unsigned char> sortKey; bool preferred; };
         std::vector<File> textFiles, yamlFiles;
         auto absoluteDirectory = std::filesystem::absolute(directory).lexically_normal();
         auto schema = absoluteDirectory.filename().u16string();
@@ -44,25 +29,36 @@ namespace tiger::core
             auto folded = FoldOrdinalCode(name);
             bool yaml = folded.ends_with(u".DICT.YAML");
             if (!yaml && !folded.ends_with(u".TXT")) continue;
-            File file{item.path(), std::move(name), folded == preferredText || folded == preferredYaml};
+            const auto wide = item.path().filename().native();
+            if (wide.size() > INT_MAX) throw std::runtime_error("Filename too long");
+            constexpr DWORD flags = LCMAP_SORTKEY | NORM_LINGUISTIC_CASING;
+            const int length = LCMapStringEx(localeName.c_str(), flags, wide.data(),
+                static_cast<int>(wide.size()), nullptr, 0, nullptr, nullptr, 0);
+            if (!length) throw std::system_error(static_cast<int>(GetLastError()),
+                std::system_category(), "Size lexicon sort key");
+            // Sort-key output is bytes (not wchar_t), even for the W API.
+            std::vector<unsigned char> key(static_cast<std::size_t>(length));
+            if (LCMapStringEx(localeName.c_str(), flags, wide.data(), static_cast<int>(wide.size()),
+                reinterpret_cast<LPWSTR>(key.data()), length, nullptr, nullptr, 0) != length)
+                throw std::system_error(static_cast<int>(GetLastError()),
+                    std::system_category(), "Read lexicon sort key");
+            File file{item.path(), std::move(key), folded == preferredText || folded == preferredYaml};
             (yaml ? yamlFiles : textFiles).push_back(std::move(file));
         }
         textFiles.insert(textFiles.end(), std::make_move_iterator(yamlFiles.begin()), std::make_move_iterator(yamlFiles.end()));
         std::stable_sort(textFiles.begin(), textFiles.end(), [&](const File& a, const File& b)
         {
             if (a.preferred != b.preferred) return a.preferred;
-            if (a.name.size() > INT_MAX || b.name.size() > INT_MAX) throw std::runtime_error("Filename too long");
-            // SDK UChar is wchar_t on Windows; copy to avoid aliasing char16_t.
-            std::vector<UChar> left(a.name.begin(), a.name.end()), right(b.name.begin(), b.name.end());
-            return ucol_strcoll(collator.get(), left.data(), static_cast<int32_t>(left.size()),
-                right.data(), static_cast<int32_t>(right.size())) == UCOL_LESS;
+            // Byte keys give a strict order even for NLS contextual kana cases
+            // where CompareStringEx(a,b) and CompareStringEx(b,a) both return >.
+            return a.sortKey < b.sortKey;
         });
         std::vector<std::filesystem::path> result;
         for (auto& item : textFiles) result.push_back(std::move(item.path));
         return result;
 #else
         (void)directory; (void)locale;
-        throw std::runtime_error("CurrentCulture directory ordering requires Windows system ICU in this build");
+        throw std::runtime_error("CurrentCulture directory ordering requires Windows NLS in this build");
 #endif
     }
 }

@@ -226,7 +226,7 @@ namespace TigerClaw.Overlay
 
             try
             {
-                using (var pipe = new NamedPipeClientStream(".", RuntimeConstants.TsfPipeShortName, PipeDirection.InOut))
+                using (var pipe = new NamedPipeClientStream(".", FrontendEndpoints.Pipe, PipeDirection.InOut))
                 {
                     pipe.Connect(timeoutMs);
                     pipe.ReadMode = PipeTransmissionMode.Message;

@@ -146,8 +146,13 @@ Work: `/home/yc/tmp/brightmart-articles-7030-20261003`; archive:
 Do not retrain completed stages or resume the separately paused Rime correction
 holdout. No automatic commit/push.
 
-TigerClaw is a Windows input method with a split-process runtime. The C# Core in
-`next/TigerClaw.Core/` is the sole maintained implementation.
+TigerClaw is a Windows input method with a split-process runtime. The mainline Core is C++ in
+`next/TigerClaw.Core.Native/` (promoted by explicit user request on 2026-10-08).
+C# `next/TigerClaw.Core/` remains a historical implementation and differential-test
+reference, not the default release backend. Standard executable/IPC names remain unchanged.
+Both release publishers and next/build_next.bat build C++; publish_core_arm64.bat
+delegates to the tested C++ replacement publisher. This source promotion does not
+claim daily runtime deployment or physical typing acceptance.
 
 The experimental Rust Core line was stopped and removed on 2026-08-28. Its useful
 source and handoff notes are stored outside this repository in
@@ -531,13 +536,91 @@ Active components:
   single-character output, never a sentence prefix. Phrase learning is unchanged.
   Forget handles both old and new event identities. See `docs/FULL_PINYIN.md`.
 
-- `next/TigerClaw.Core.Native/`: user-requested parallel C++ Core, **paused at the
-  user's request on 2026-09-09 due to usage cost**. Do not automatically resume;
-  wait for an explicit user request. The README's opening pause/resume section
-  records the latest state, evidence and unfinished work. Compact tables,
-  lexicon/config runtime, mixed/sentence decoding and shared event routing are
-  implemented and tested in isolation. Main IPC/UI publishing and complete
-  frontend hosting/acceptance are not done; it cannot replace the running Core.
+- `next/TigerClaw.Core.Native/`: mainline C++ Core (promoted 2026-10-08), **resumed by
+  explicit user request on 2026-10-08** after the 2026-09-09 usage-cost pause.
+  Current slice adds owned input-state snapshots and host-accepted schema switches
+  before runtime publication; missing-model failures preserve the old schema/raw.
+  ARM64/x64 each pass 11 CTests; Linux passes 8 portable tests. Evidence:
+  `next/_run/CoreNative/resume-20261008/`. No frontend/deployment acceptance.
+  The README's opening section records current evidence and unfinished work.
+  Subsequent user clarification means C++ feature parity with C#, not a Git merge.
+  Mainline-sync slice now ports TCSKNM03 Q8/Q16/full-history Beam, canonical/lexical
+  priors, adaptive learning/indexed hints, direct/composed fusion, journal worker
+  and one-use receipt APIs, locked-prefix continuation and current early evidence.
+  ARM64/x64 each pass 13 CTests; Linux 10. ARM64/x64 actual-model/schema differential each:
+  58 groups, 3510 learning queries, 345 decode generations, zero differences;
+  bidirectional C#/C++ journal compatibility passes. Evidence and final arch results:
+  `next/_run/CoreNative/mainline-sync-20261008/validation.json`.
+  Follow-up adds a serialized in-process RuntimeProtocol adapter (not production
+  transport): keys/replay, state/focus/cancel, learning receipts, config/schema
+  reads and transactional config/table reloads. ARM64/x64 each pass 86 ordinary
+  shape protocol requests against C# with zero differences, excluding version
+  metadata (native still uses one generation for both counters). Windows each
+  pass 14 CTests; Linux 10. Evidence: `next/_run/CoreNative/protocol-20261008/`.
+  Failed config reload intentionally preserves the old native input/snapshot;
+  this differs from C# clearing composition before loading. No deployment.
+  Further host-parity work adds independent version counters, all 68 generated
+  C# defaults (including previously missing learning/UI settings), Dialog data
+  commands, ordinary UI projection, isolated overlapped pipe transport, v1/v2
+  UI maps and heartbeat, model-missing/corrupt fallback and repair-on-reload.
+  Evidence: `next/_run/CoreNative/host-parity-20261008/validation.json`.
+  ARM64/x64 each: 183 protocol/UI/command traces with zero differences (random
+  frame token presence only; experimental identity/path excluded), 14 CTests;
+  Linux 10. Managed-client/native-host pipe/UI/commit/replay/exit probes pass.
+  Early C# fixture probes unintentionally rewrote HKCU Run/TigerClawCore to
+  dotnet.exe. CoreRuntimeState now skips startup side effects for explicit
+  differential roots; startup restored from running daily Core/config evidence,
+  and final probes assert unchanged registry across both startup setting values.
+  See startup-recovery.json; never reuse an old probe assembly for isolation tests.
+  Follow-up frontend-parity slice adds an explicit --serve-isolated-ui host owning
+  current native Overlay (and WPF fallback) plus Dialog, child-only test endpoints,
+  job/handle-based shutdown, matching C# pipe ACLs, frame-identity transition
+  comparison and real-Q8 pipe receipt/reconnect/journal/cancellation probes.
+  Window launch failures cannot discard an already-applied key replay record.
+  Evidence: next/_run/CoreNative/frontend-parity-20261008/validation.json.
+  Latest user-requested drop-in slice adds production TigerClaw.Core.exe (ARM64/x64),
+  standard endpoints/startup guards/arguments, same-directory frontend/Hook ownership,
+  autorun config sync and stdin-independent lifetime. Protocol field coercions, hello
+  identity and failed-reload composition clearing now follow C# (superseding the old
+  intentional raw-retention difference above). Resource reload stays transactional.
+  Root publish_arm64_cpp_core.bat builds/tests then backs up and atomically replaces
+  only release_arm64/TigerClaw.Core.exe, preserves prior running state, verifies hello
+  and rolls back on startup failure. -BuildOnly never deploys; -Destination supports
+  fixture publication. Process stops require the exact target path, not global /IM.
+  Evidence: next/_run/CoreNative/drop-in-20261008/validation.json. Windows each pass
+  15 CTests and 273 zero-difference protocol/UI/command traces; Linux 10 tests.
+  Standard ARM64 binary passes detached stdin, actual-Q8 receipts and frontend probes;
+  actual batch fixture publish preserves other files, fault-injected rollback passes.
+  Follow-up user-reported tuja UI bug: early output 我 left candidate 我们 while
+  space committed only 们. Reproduced with the prior standard ARM64 binary and real
+  Q8/table. PublishedCandidates now strips committed prefixes for fresh/pending UI
+  lists without mutating decoder/learning candidates, matching C# projection.
+  Pending/current unit checks and actual-pipe tuja display/commit regression added.
+  Evidence: next/_run/CoreNative/prefix-ui-20261008/. Build-only; no daily replacement.
+  Performance follow-up: identical UI JSON no longer rewrites MMF/signals Changed.
+  Contended v2 publication retains latest payload and retries with the original
+  v1 sequence/tick; heartbeat and decoder polling are unchanged. Windows 16 CTests.
+  Added isolated fixed-case performance probe (startup/CPU/memory/UI revisions and
+  key/space IPC latency). Three alternating before/after runs and output identities:
+  next/_run/CoreNative/performance-20261008/validation.json. No decoder speed,
+  long-sentence/Qwen, power or physical-typing improvement claim; no deployment.
+  User-requested ICU removal: use Windows NLS weekday data and stable NLS sort keys,
+  referencing Tigirl Desktop/ime native LexiconOrder.cpp / DynamicText.cpp. No ICU
+  includes/import libs/dynamic fallback. CompareStringEx had a bidirectional > case
+  with mixed kana long marks, so LCMapStringEx sort keys enforce a strict order.
+  Windows 17 CTests include production import-table ICU exclusion; 240 directory
+  cases use a C# NLS sort-key oracle, 210 weekdays use C# NLS; protocol oracle's
+  --globalization nls is explicit and child-local. ICU semantics are no longer the
+  native cultural baseline. Read-only daily 8-schema order check: current 虎整句B
+  unchanged; 虎码单字/虎码字词 Latin-vs-Han filenames reorder (may affect merge order).
+  Evidence: next/_run/CoreNative/no-icu-20261008/validation.json. Removing the ICU
+  Windows 10 1903 dependency does not certify older Windows compatibility. No deploy.
+  Daily release_arm64 was not replaced/restarted. Production application typing,
+  cross-integrity and long-duration acceptance remain; this is not exhaustive parity
+  or a port of the separate full-pinyin engine. The Rime holdout stays paused.
+  Compact tables, lexicon/config runtime, mixed/sentence decoding and shared event routing are
+  implemented and tested in isolation, including UI publishing and owned frontend
+  hosting. The drop-in publisher is available; physical application acceptance is still pending.
   C# remains production default and behavioral authority. Build/output/commands
   are isolated; no production IPC or release deployment. Full completion gates
   and current evidence are in that directory's README; do not equate this initial
@@ -974,11 +1057,9 @@ The main release is `release/`. Windows on ARM development output is
 `release_arm64/`; its default uses an ARM64X wrapper with ARM64 and x64 TSF
 sidecars. `--diagnostic` enables embedded TSF logging.
 
-`publish_core_arm64.bat` publishes only `next/TigerClaw.Core/` as a
-self-contained ARM64 Native AOT executable and replaces `TigerClaw.Core.exe` in
-an existing `release_arm64/`, skipping Overlay, Dialog, Sentence, Hook.Native,
-Shared.dll and both TSF DLLs for faster Core-only iteration. It does not touch
-`EmbeddedBuildInfo.h` or rebuild the TSF DLL. Current TSF and Native Hook do
+`publish_core_arm64.bat` delegates to `publish_arm64_cpp_core.bat`, building and testing
+the ARM64 C++ Core and backing up/replacing only the existing Core executable.
+It leaves models, settings, frontends and TSF unchanged. Current TSF and Native Hook do
 not bind connections to a Core executable hash or require querying its path.
 Trial expiry checks and metadata have been removed; protocol handshakes remain
 enforced. Legacy publish configuration keys for hash verification and expiry

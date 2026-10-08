@@ -81,7 +81,7 @@ if not defined MSBUILD (
   exit /b 1
 )
 
-set "CORE_PROJECT=%ROOT%\next\TigerClaw.Core\TigerClaw.Core.csproj"
+set "CORE_PROJECT=%ROOT%\next\TigerClaw.Core.Native\CMakeLists.txt"
 set "OVERLAY_PROJECT=%ROOT%\next\build_overlay.bat"
 set "DIALOG_PROJECT=%ROOT%\next\TigerClaw.Dialog\TigerClaw.Dialog.csproj"
 set "SENTENCE_NATIVE_BUILD=%ROOT%\next\build_sentence_native.bat"
@@ -257,7 +257,7 @@ if /I "%~2"=="Wrapper" goto :WorkerWrapper
 exit /b 2
 
 :WorkerCore
-"%DOTNET%" publish "%CORE_PROJECT%" -c Release -r win-arm64 --self-contained true -o "%CORE_OUT%" /p:PublishAot=true /m:%BUILD_WORKER_JOBS%
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\tools\publish_cpp_core.ps1" -BuildOnly -Architecture ARM64 -OutputDirectory "%CORE_OUT%" -Jobs %BUILD_WORKER_JOBS%
 if errorlevel 1 exit /b 1
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\next\stage_sentence_fivegram.ps1" -Architecture ARM64 -OutputDirectory "%CORE_OUT%"
 exit /b %errorlevel%

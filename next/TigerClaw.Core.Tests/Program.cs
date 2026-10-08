@@ -22,6 +22,13 @@ namespace TigerClaw.Core.Tests
         {
             try
             {
+                if (args.Length == 4 && args[0] == "--native-performance-probe") return RunNativeCorePerformanceProbe(args[1], args[2], args[3]);
+                if (args.Length == 4 && args[0] == "--native-runtime-probe") return RunNativeCoreProtocolProbe(args[1], args[2], args[3]);
+                if (args.Length == 3 && args[0] == "--native-host-probe") return RunNativeCoreHostProbe(args[1], args[2]);
+                if (args.Length == 3 && args[0] == "--native-detached-host-probe") return RunNativeCoreHostProbe(args[1], args[2], detached:true);
+                if (args.Length == 4 && args[0] == "--native-frontend-probe") return RunNativeCoreHostProbe(args[1], args[2], args[3]);
+                if (args.Length == 5 && args[0] == "--native-frontend-probe") return RunNativeCoreHostProbe(args[1], args[2], args[3], args[4]);
+                if (args.Length == 5 && args[0] == "--native-sentence-host-probe") return RunNativeCoreSentenceHostProbe(args[1], args[2], args[3], args[4]);
                 if (args.Length == 1 && args[0] == "--candidate-settings-tests")
                 {
                     SettingsOrderIsIndependentOfConfigurationOrder();
@@ -39,6 +46,8 @@ namespace TigerClaw.Core.Tests
                     return RunShapeFivegramEvaluation(args[1], args[2], args[3], args[4]);
                 if (args.Length == 4 && args[0] == "--shape-fivegram-scores")
                     return RunShapeFivegramScores(args[1], args[2], args[3]);
+                if (args.Length == 3 && args[0] == "--native-core-mainline-probe")
+                    return RunNativeCoreMainlineProbe(args[1], args[2]);
                 if (args.Length >= 1 && args[0] == "--shape-fivegram-tests")
                     return RunShapeFivegramTests(args.Length > 1 ? args[1] : null);
                 if (args.Length == 1 && args[0] == "--full-pinyin-tests") return RunFullPinyinTests();

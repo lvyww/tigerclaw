@@ -925,6 +925,26 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
                 throw std::runtime_error("Test executable requires --test-session and a bounded alphanumeric ID; production IPC is forbidden.");
         }
         Endpoints endpoints;
+        // Explicit C++ Core integration session. Default production endpoints and
+        // the existing --test-session harness remain unchanged.
+        wchar_t corePipeBuffer[181]{};
+        DWORD corePipeLength=GetEnvironmentVariableW(L"TIGERCLAW_TEST_PIPE",corePipeBuffer,181);
+        bool coreTest=corePipeLength!=0 || GetLastError()!=ERROR_ENVVAR_NOT_FOUND;
+        std::wstring corePipe;
+        if (coreTest)
+        {
+            if (!corePipeLength || corePipeLength>=181 || testBinary || demo)
+                throw std::runtime_error("Invalid isolated Core frontend session");
+            corePipe.assign(corePipeBuffer,corePipeLength);
+            if (corePipe.rfind(L"TigerClaw.Core.Native.Test.",0)!=0 ||
+                corePipe.find_first_not_of(L"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")!=std::wstring::npos)
+                throw std::runtime_error("Invalid isolated Core pipe");
+            endpoints.pipe=L"\\\\.\\pipe\\"+corePipe;
+            endpoints.ui=L"Local\\"+corePipe+L".UiState.v1";
+            endpoints.coreHeartbeat=L"Local\\"+corePipe+L".Heartbeat.v1";
+            endpoints.overlayHeartbeat=L"Local\\"+corePipe+L".OverlayHeartbeat.v1";
+            endpoints.menu=L"Local\\"+corePipe+L".ShowMenu.v1";
+        }
         if (testBinary)
         {
             std::wstring root = L"TigerClaw.Overlay.Test." + testSession;
@@ -936,17 +956,17 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
         }
         if (demo && !_wcsicmp(executable.c_str(), L"TigerClaw.Overlay.exe"))
             throw std::runtime_error("Use TigerClaw.Overlay.Native.Preview.exe --demo for isolation from Core process discovery.");
-        std::wstring mutexName = testBinary ? L"Local\\TigerClaw.Overlay.Test." + testSession + L".Instance" :
+        std::wstring mutexName = coreTest ? L"Local\\"+corePipe+L".Overlay.Instance" : testBinary ? L"Local\\TigerClaw.Overlay.Test." + testSession + L".Instance" :
             demo ? L"Local\\TigerClaw.Overlay.Native.Preview" : L"Local\\TigerClaw.Overlay.Native.SingleInstance";
         Handle instance(CreateMutexW(nullptr, FALSE, mutexName.c_str()));
         if (!instance || GetLastError() == ERROR_ALREADY_EXISTS) result = 0;
-        else if (!demo && !testBinary && FindWindowW(nullptr, L"TigerClawCandidate"))
+        else if (!demo && !testBinary && !coreTest && FindWindowW(nullptr, L"TigerClawCandidate"))
         {
             MessageBoxW(nullptr, L"An Overlay is already running. Close it before starting the native replacement, or use --demo.",
                 L"TigerClaw Native Overlay", MB_OK | MB_ICONINFORMATION);
             result = 0;
         }
-        else { Application app(demo, endpoints, testBinary); result = app.Run(); }
+        else { Application app(demo, endpoints, testBinary || coreTest); result = app.Run(); }
     }
     catch (const std::exception& error)
     {

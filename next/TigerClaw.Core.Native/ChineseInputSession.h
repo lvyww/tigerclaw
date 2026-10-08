@@ -85,6 +85,13 @@ namespace tiger::core
             if (_isChinese && Mode() == ChineseMode::Idle && vk == 0xa3) _isChinese = false;
             return KeyDown(vk, event.shift, schema, pinyin, settings, backQuery, selection, providers);
         }
+        bool ExpectKeyUp(const InputKeyEvent& event, bool ctrlSpaceEnabled) const
+        {
+            auto vk = ResolveSelectionVirtualKey(event.vk, event.scan, event.extended);
+            return ShiftToggleState::IsShift(vk) || vk == 0xde || vk == 0x14 ||
+                (ctrlSpaceEnabled && (vk == 0x11 || vk == 0xa2 || vk == 0xa3 || vk == 0x20)) ||
+                _selectedModifiers.contains(vk) || _actions.IsHeldAction(vk);
+        }
         ChineseMode Mode() const { return _composition.Mode(); }
         bool IsChinese() const { return _isChinese; }
         const std::u16string& Raw() const { return _composition.Raw(); }

@@ -1,12 +1,356 @@
-# Parallel C++ Core — experimental, incomplete
+# C++ Core — mainline Windows runtime
 
-## 暂停记录与恢复入口（2026-09-09）
+## 主线切换（2026-10-08）
 
-**状态：按用户要求暂时挂起，原因是额度消耗超出预期。**
-保留现有源码和测试，不继续自动推进、构建或部署；只有用户明确要求恢复时才继续。
+用户指定 C++ Core 为主线。x64/ARM64 整包发布、`next/build_next.bat` 调试入口
+和 `publish_core_arm64.bat` 均已默认使用本实现。C# 保留为历史及差分测试参考。
+发布仍使用标准 `TigerClaw.Core.exe` 与原协议；全拼独立仓库不受此次切换影响。
+此次为源码主线切换，未替换日用目录。
+共用构建入口 `tools/publish_cpp_core.ps1 -BuildOnly -Architecture x64|ARM64`
+支持 `-Configuration Release|Debug` 与 `-OutputDirectory`，整包脚本继续独立暂存并校验
+五阶模型。每次 Core 构建均运行 CTest、PE 架构与生产身份检查后才复制产物。
+
+## 移除系统 ICU 依赖（2026-10-08，用户要求）
+
+参考本机 `C:\Users\yc\Desktop\ime\native\LexiconOrder.cpp` 和 `DynamicText.cpp`
+（虎娘/Tigirl）的 Windows NLS 路线。Core 不再包含 `icu.h` 或链接 `icu.lib`，也不通过
+动态加载保留 ICU 后备路径。星期名称改用 GetLocaleInfoEx；空 locale 保持 invariant
+英文全称，省略 locale 使用当前用户区域，星期索引按 Sunday=0 正确换算。
+
+文件排序改为 LCMapStringEx(LCMAP_SORTKEY | NORM_LINGUISTIC_CASING) 生成一次排序键，
+再按字节稳定排序，保留方案同名文件优先及相等项 TXT/YAML 原枚举顺序。最初参考实现
+直接调用 CompareStringEx，但在本机发现 `ä甲ーcσäác.txt` 与 `a甲甲cＡＡＡb.txt` 正反
+比较都返回“大于”，违反排序要求。因此采用 NLS 排序键，C# 测试端用 NLS GetSortKey /
+SortKey.Compare 独立验证。不能把这一结果描述为任意文件名下与 .NET CompareString
+或旧 ICU 完全同序。
+
+文化语义现明确为 **Windows NLS**：240 个真实目录用例对照 C# NLS 排序键，210 个
+星期名称对照 C# NLS 数据。测试先核实实际 UseNls；不会修改 C# 主线生产配置。
+`tools/test_core_native_order.py`、`test_core_native_weekdays.py` 默认 `--globalization nls`；
+保留 `--globalization icu` 供历史差异检查。协议工具需显式加 `--globalization nls`，
+通过临时 runtimeconfig 设置测试子进程，避免 WSL 环境传递的不确定性。
+
+本机日用 8 个方案只读核对：当前“虎整句B”等 6 个方案文件顺序不变；“虎码单字”与
+“虎码字词”的 Latin 文件名相对中文符号文件顺序改变，详细前后名单保留在证据中。
+多文件方案的同码合并次序可能受此影响。旧 ICU 基线的 273 条协议轨迹有 7 处 UI 注释
+差异；改用明确的 NLS 基线后两架构均零差异。此文化后端变化是移除 ICU 的行为边界。
+
+证据：`../_run/CoreNative/no-icu-20261008/validation.json`。Windows CTest 现为 17 项，
+其中 `core_native_no_icu` 检查实际生产 exe 导入表；根发布脚本在此检查失败时停止，
+防止重新带入 ICU。保留中间排序调查和失败日志。新 ARM64/x64 构建无需系统 ICU，
+但移除这项 Windows 10 1903 限制不代表已完成 Win7/8.1 或旧 Win10 的整包兼容验收。
+既有现代工具链/API、TSF、Overlay/Dialog 的要求仍需分别核对。本轮未替换日用目录。
+
+## UI 重复发布优化与性能探针（2026-10-08）
+
+隔离 ARM64 真实三源 Q8/虎整句表测量发现：空闲和停留候选的稳定状态，原宿主每 3 秒
+仍发布约 96 次相同 UI。RuntimeUiPublisher 现在对完整 JSON 去重；有变化才更新 v1/v2
+及 Changed 事件。20ms 异步结果轮询、JSON 构建和独立 5 秒心跳保持原样，不修改 Beam、
+排序、学习或提前上屏阈值。收益是减少共享内存写入和前端重复解析/刷新，不能据此声称
+解码更快或整机功耗降低。
+
+v2 读锁忙时仍更新 v1，并保留最新 payload 等待下一次轮询补发；补发沿用原始序号和
+时间戳，使 native Overlay 的 v1/v2 身份检查保持一致。新增测试覆盖重复去重、锁争用、
+连续状态覆盖、同一 payload 重试与无效消息。原锁争用回归改为使用真实变化的状态，
+不再要求相同状态每次递增序号。Windows CTest 现为 16 项。
+
+性能探针（已有专用隔离 root，神经重排/学习/提前上屏关闭）：
+
+```text
+dotnet TigerClaw.Core.Tests.dll --native-performance-probe <native-exe> <isolated-root> <output.json>
+```
+
+记录启动、空闲和候选停留时的 Core CPU/内存/UI 发布次数，以及 10 次预热后的 60 组
+固定 tuja/tlleo/tujatuja 管道按键/空格往返。空格同步等待当前解码，但这些重复短句不代表
+冷模型、长句、神经重排或物理应用输入。3 秒 CPU 采样受 Windows 时间粒度限制，不能
+把 0ms 解读为无 CPU 开销。按键时延包括托管客户端、调度和 IPC，不是纯算法耗时。
+
+前后各 3 次交替运行，保留每次结果和全部提交输出，见
+`../_run/CoreNative/performance-20261008/validation.json`。前端恢复、真实学习回执、tuja
+前缀显示及协议差分回归另行通过；性能采样期间不同时运行构建或其他回归。
+本轮仅构建，没有替换日用目录。仍可进一步测量长句热点，以及用事件驱动替代空闲时
+重复 JSON 构建，但需先覆盖异步结果、光标延时和动态候选的失效边界。
+
+## 已上屏前缀的候选显示修复（2026-10-08）
+
+用户报告 `tuja` 提前上屏“我”后，候选仍显示“我们”，空格却只提交“们”。
+旧 ARM64 标准产物配真实三源 Q8/虎整句表已复现：剩余编码 `ja`，候选仍为完整文本。
+原因是 RuntimeInput 的候选页直接使用解码候选，遗漏 C# GetPublishedSentenceCandidates
+对已提交前缀的裁剪。现在发布当前或等待中候选时均只显示未上屏后缀，跳过不匹配/空
+后缀；解码候选、选择和学习仍保留完整句子。页数按投影结果计算。
+
+新增 pending/current 投影回归及真实管道 `tuja` 回归：提前输出“我”、候选显示“们”、
+空格只输出“们”。证据位于 `../_run/CoreNative/prefix-ui-20261008/`，含修复前失败日志。
+修复产物通过根目录 `publish_arm64_cpp_core.bat` 部署；本轮只构建验证，不替换日用目录。
+
+## ARM64 平替入口与发布（2026-10-08）
+
+新增生产目标 `core_native_runtime`，生成 **`TigerClaw.Core.exe`**，使用 Windows GUI
+子系统和共享 BuildInfo 的版本资源。原 `TigerClaw.Core.Native.Experimental.exe` 保留
+作为隔离测试目标。以下内容取代旧阶段“只有测试入口”的限制。
+
+在仓库根目录运行：
+
+```bat
+publish_arm64_cpp_core.bat -BuildOnly
+publish_arm64_cpp_core.bat
+```
+
+第一条只构建 ARM64、运行 17 项 CTest 并检查产物身份；第二条在同样检查通过后，
+平替 `release_arm64\TigerClaw.Core.exe`。需要已安装的 Visual Studio C++ ARM64 工具链
+和可运行 ARM64 程序的 Windows。已有 release_arm64 资源必须完整；脚本不重新打包模型。
+`-Jobs 2` 为默认编译并发；`-Destination "其他完整运行目录"` 可指定目标；`-NoRestart`
+替换后保持停止。正常发布保留先前的运行/停止状态和 `--without-overlay` 选择。
+
+发布先创建 `backup-before-cpp-core-时间-唯一后缀`，核对旧 Core 的 SHA256，再停止
+**目标完整路径**的进程、原子替换单个 exe。管道退出命令发送前核对 hello 的 core_path；
+不按进程名批量杀进程。配置、码表、学习日志、模型、TSF、Hook、Overlay、Dialog 和
+共享 BuildInfo 均不由脚本改写。重启失败自动恢复备份；`publish.json` 记录状态和新旧
+哈希。备份可用于手工恢复。发布 C++ Core 不等于迁移其他组件。
+
+兼容入口及行为：
+
+- 默认启动、`--autorun`、`--silent`、`--with-overlay`、`--without-overlay` 与 C# 一致，
+  忽略未知启动参数；诊断入口单独处理。无标准输入或 stdin EOF 不会退出生产宿主。
+- 生产管道 `BimeIPC`，UI `Local\TigerClaw.UiState.v1`（含既有 v2 派生通道）、Core/
+  Overlay 心跳、菜单事件、Sentence 管道和 Core 单实例互斥锁均沿用主线名称。
+- 在交互式 WinSta0/Default 桌面才允许启动；资源从自身 exe 目录加载。无 TSF 注册时
+  使用已有 `TigerClaw.exe` Hook；二者都缺失则提示安装。自动启动注册随配置同步。
+  Overlay、Dialog 和 Sentence 使用原发布文件名，生产子进程不继承测试端点变量。
+- 同目录同会话 Core 可重启，已有 Overlay 可接管。为避免影响另一安装，进程接管/停止
+  额外核对完整路径和会话；不同安装占用主单实例锁时退出。这一进程范围有意比 C# 的
+  按名称清理更窄。生产管道占用检测先于 UI MMF 写入。
+- hello 使用主线构建字段；字段名大小写、数值/布尔转换、按键别名、形码拼音管理响应、
+  候选背景清理与重载失败时清除组合行为已对齐。底层失败重载仍保留旧的完整资源快照，
+  不发布半加载状态。
+
+证据：`../_run/CoreNative/drop-in-20261008/validation.json`。ARM64/x64 各 15 项 CTest、
+273 条协议/UI/命令轨迹差分为零；Linux 10 项测试通过。标准 ARM64 产物通过断开 stdin
+后的管道/UI/重放/退出、真实 Q8 学习回执/重连/取消、实际 Dialog/native Overlay 启动与
+异常恢复。批处理在含中文/空格的临时目录完成备份替换，其他文件哈希不变；启动失败
+回滚用隔离故障注入验证（模拟进程 API，不占用生产管道）。初次 PowerShell 空参数失败
+及修复后的日志均保留。
+
+本轮未执行日用 `release_arm64` 替换或重启。真实 TSF/Hook 应用输入、跨完整性窗口及
+长时间资源/延迟尚待实际使用验收；这些定向回归不是穷尽行为证明，也不包含另仓全拼
+引擎迁移。`--capabilities` 保留 `production_ready=false` 表示上述验收尚未完成，
+`production_entrypoint=true` 表示标准平替入口已实现。Rime 暂停任务保持暂停。
+
+## 前端宿主、候选帧和真实整句回执（2026-10-08，补齐后续差异）
+
+- 新增 `--serve-isolated-ui <root> <TigerClaw.Core.Native.Test.*>`。明确目录中需放入
+  **本轮重新构建**的 `TigerClaw.Dialog.exe`、`TigerClaw.Shared.dll` 和
+  `TigerClaw.Overlay.exe` 及它们的运行资源。默认 C++ Overlay 和 WPF 回退版均可用。
+  宿主启动 Overlay，处理设置/加词/菜单命令；重复设置命令复用窗口，切换到加词时
+  只替换自己持有的 Dialog。Windows Job 和保留进程句柄保证宿主退出/崩溃不会遗留
+  自己的前端，也不会按进程名接管或终止日用进程。
+  Overlay 心跳监护同步 3 秒检查、6 秒存活窗及 10～120 秒递增重试；异常退出后只
+  重启自己的 Overlay，回归会终止测试子进程验证此路径。
+- 子进程专用 `TIGERCLAW_TEST_PIPE` 同时指定管道、UI、心跳和菜单事件；格式错误
+  拒绝启动，不回退到日用管道。Dialog/WPF 的测试实例跳过生产注册检查和按名称杀
+  进程的单实例逻辑；C++ Overlay 使用独立实例互斥锁和测试窗口名。没有环境变量时
+  保持原有生产入口。不要混入不支持该变量的旧前端文件。
+- 有界管道增加与 C# `BuildPipeSecurity` 对齐的当前用户、System、Authenticated
+  Users、Builtin Users 和两个 AppPackage SID 的读写/建实例 ACL，仍拒绝远程客户端。
+  回归实际读取 DACL 核对权限；这不是低完整性/AppContainer 实际输入验收。
+- 候选帧差分由随机标识“是否存在”改为比较完整轨迹中的标识相等关系；补齐退格、
+  取消、语言/方案切换、配置重载、Hook 禁用、大小写/反查模式与新整句/混输的失效边界。
+  加词窗口启动失败仍保留已执行按键的缓存响应，避免重试再次处理按键；独立窗口命令
+  在无界面模式明确返回失败。有界面宿主也接入官方链接/导出文件的 Shell 打开回调。
+- 新增 `--native-sentence-host-probe <native-exe> <new-root> <model> <shape-table>`：
+  真实三源 Q8 + 虎整句表，异步宿主经实际管道输入、Tab 选重、空格提交、断线重试、
+  确认回执和隔离日志落盘；错误客户端、失败确认、重复确认、焦点取消均不能多学。
+  验证取消后的异步结果不会复活旧组合，并采样 200 次重连的句柄/私有内存增量。
+  `--native-frontend-probe <native-exe> <new-root> <next-dir> [native-overlay-exe]`
+  验证真实窗口启动/切换、Overlay 独立心跳、MMF、提交重放及子进程退出；省略末参数
+  使用 WPF 回退版。`--native-host-probe` 保留无界面路径。
+
+最终结果和原始轨迹：`../_run/CoreNative/frontend-parity-20261008/validation.json`。
+ARM64/x64 各 263 条协议/UI/命令差分零差异；Core 各 14 项 CTest、Linux 10 项、
+Native Overlay 各 4 项通过。两架构实际 Q8 回执/200 次重连通过，句柄净增长均为 0，
+私有内存增量分别为 36/44 KiB（短时定向采样，不是长期压力指标）。默认 native Overlay
+及 WPF 的实际进程启动、切换、异常退出恢复和宿主退出有独立证据。早期前端探针使用
+Process.MainModule 查询并行跨架构进程时发生 Win32 读取错误，已改用
+QueryFullProcessImageNameW 并保留失败日志；这不是输入法部署或物理打字验收。
+本阶段仍只启动测试命名空间；没有替换日用 Core、注册 TSF 或部署 Hook。
+**尚不能宣称完整生产替代：**生产宿主接管、实际 TSF/Hook 应用编辑与跨完整性上下文、
+长时间资源/延迟验收仍未完成。263 条小表差分和真实模型的定向回执测试也不等于穷尽
+所有异步输入序列。历史失败轨迹保留，暂停中的 Rime holdout 未恢复。
+
+## 独立宿主、Dialog 协议和 UI 通道（2026-10-08，继续追平）
+
+本阶段把已移植的输入内核接入独立 Windows 宿主。仍是实验实现，尚不能宣称完整替代
+C# Core；以下完成项与剩余验收分开记录。
+
+- `RuntimeProtocol` 接入配置读写、独立配置/词库版本、选重键读写、造词编码、历史查询、
+  加词、导出、方案目录查询、语言切换、UI 命令回调和形码下的拼音管理响应。配置默认表
+  从 C# 生成，补齐此前遗漏的 18 项（共 68 项），包括实际控制学习的 `整句Tab自学习`。
+  `tools/generate_core_native_config.py --check` 可检查生成表是否过期。
+- UI 投影覆盖光标、候选/注释/拆分、编码伪装、语言、前端开关、音效和动效设置；新
+  组合等待新光标最多 30ms。支持 v1 MMF 和带互斥锁/Changed 事件的 v2 快照；v2 读者
+  占锁时仍更新 v1，不阻塞 Core。独立 5 秒心跳不依赖按键或 UI 刷新。
+- `RuntimePipeServer` 使用 Windows 重叠 I/O、换行 UTF-8 帧、有界请求/连接数和可取消
+  读写。响应先于 UI 发布；通知不产生响应。分段 UTF-8、连续帧、重连、并发去重、
+  客户端空闲时关闭、快照读锁竞争和导出再导入有原生回归。
+- `--serve-isolated <root> <TigerClaw.Core.Native.Test.*>` 提供无界面宿主：配置/模型
+  只从明确目录读取；管道、UI MMF 和心跳使用测试命名空间。支持 `exit_core` 或标准
+  输入 `quit` 关闭；宿主负责定时器、可选的独占 Qwen 子进程和异步解码 UI 刷新。
+  可选资源为 `<root>/sentence/TigerClaw.Sentence.exe` 与其 `Models/sentence-qwen-q8.gguf`，
+  也接受根目录 exe / Models 路径。没有资源时不寻找或接管日用 Sentence 进程。
+- 宿主模型缺失/损坏时使用普通输入；新增/修复 TCSKNM03 后重载可以恢复整句并保留编码。
+  底层 `RuntimeInput` 默认仍保留严格拒绝策略，宿主显式启用降级。已有有效映射继续持有。
+
+证据：`../_run/CoreNative/host-parity-20261008/validation.json`。ARM64/x64 各 183 个
+协议响应、UI 快照和命令回调零差异；缺失与损坏模型路径均覆盖。版本字段、68 项配置
+全文均参与比较；实验程序身份/目录路径除外，随机候选帧标识仅比较是否存在。
+Windows 各 14 项、Linux 10 项 CTest；两架构均有实际 C# 客户端→C++ 管道→v2 UI→
+提交/重放→协议退出验证。实际三源 Q8/虎整句码表的 58 组差分、3,510 次学习查询、
+345 个解码状态和双向日志回归通过；实际 Qwen 预加载/重复评分/正常退出 smoke 通过。
+
+隔离问题及修复：C# `CoreRuntimeState(differentialRoot)` 原先仍会执行开机启动项同步，
+早期探针将 `TigerClawCore` 写成 `dotnet.exe --with-overlay`。已增加明确测试根目录的
+系统副作用隔离；按正在运行的 `release_arm64/TigerClaw.Core.exe` 和日用配置“开机
+自动启动=是”恢复启动命令（并非事前注册表备份恢复）。恢复依据保存在
+`startup-recovery.json`。最终探针覆盖开关启动选项及重载，逐次保存启动项前后身份并
+断言不变。旧失败输出和一次重复构建导致的对象文件占用错误保留；最后构建干净通过。
+
+**仍未完成的完整追平门槛：**真实 Dialog/Overlay 进程启动协调（当前无界面宿主只
+输出窗口命令）、生产 TSF/Hook 的权限/重连/真实应用输入联调、完整异步候选帧连续性
+及性能/长期资源验收。现有协议/UI 差分主要是小型普通形码和无模型降级；不能据此推断
+真实前端或整句回执协议已经完成端到端验收。独立宿主未连接日用命名空间，未部署、
+未提交/push；暂停中的 Rime holdout 保持原状。
+
+## 宿主协议与重载追平（2026-10-08，后续）
+
+新增 `RuntimeProtocol` 串行请求适配器和隔离文件探针 `--runtime-probe`，接通现有
+输入宿主。它处理 `key`、`query_state`、`focus`、`composition_canceled`、
+`learning_commit`、`get_config`、`get_schema_list`、`reload_config`、`reload_mb`。
+按客户端/事件去重，重试保留原提交与学习回执，仅重写请求序号；按键释放提示同步 C#。
+16 个并发重复请求只执行一次。未移植命令返回失败；`hello` 明确标识实验适配器。
+
+配置重载同时准备码表、拼音表和选重键，宿主接受后再发布。失败保留原快照和输入；
+这是刻意保留的事务保证，和 C# 在配置读取前清空组合的失败行为不同。
+`reload_mb` 使用已生效配置更新码表/选重键并保留普通模式输入；`reload_config`
+读取磁盘配置、清空组合、恢复默认语言，并在下一次新按键响应通知前端取消旧组合。
+该取消标记随按键响应重放，不会重复处理输入。
+
+验证：ARM64/x64 的文件协议差分各 **86 个请求、零差异**，涵盖普通形码输入、
+选重、退格、语言切换、焦点/取消、重试、查询及两类重载。Windows 两架构各
+14 项 CTest、Linux 10 项通过。构建和原始响应证据保存在
+`../_run/CoreNative/protocol-20261008/validation.json`；早期多带响应字段与取消
+时机差异的失败输出也保留。复现：
+
+```bash
+python3 tools/test_core_native_protocol.py \
+  --native next/_run/CoreNative/ARM64/Release/TigerClaw.Core.Native.Experimental.exe \
+  --output next/_run/CoreNative/protocol-local
+```
+
+差分不含版本计数元数据：当前适配器仍以快照 generation 同时报告配置/词库版本，
+尚未同步 C# 两种独立版本计数。86 请求使用小型普通形码表，不代表整句协议或
+真实前端验收。学习协议已接现有回执 API，其整句落盘链路沿用上一阶段直接 API 测试。
+生产主管道、完整 hello/Hook 配置、UI 发布/光标通知、Dialog 全量命令和真实应用
+输入仍待完成。本轮未部署或提交，C# 继续作为生产默认。
+
+## 追平 C# 主线的算法与学习功能（2026-10-08）
+
+用户已明确“同步到主线”指 **C++ 功能追平当前 C#**，不是 Git 分支合并。
+本轮同步了形码整句的模型、排序、自学习和选重后续输路径。C# 仍是生产行为基准。
+
+- `SentenceFivegramModel` 直接映射 TCSKNM03 Q8/Q16，严格校验 UTF-8、索引和边界，
+  查询会话持有映射生命周期，缓存有界。Beam、EOS 和提前上屏证据使用完整四字历史。
+  显式提供的 TCSKNM01 历史测试文件仍可读取；五阶加载失败不会寻找旧模型回退。
+- 同步主码奖励、主码/显式选重的孤字保护、嵌入式 TCSLEX01 词汇先验、直出候选来源
+  与原词表顺序、直出/组句配对偏好。Qwen 混合评分把学习奖励放在混合之后，并重新
+  应用融合顺序。模型置信度独立于这些排序奖励。
+- 自适应学习每次确认只记录一个事件、等级 1..3；排名等级和实际确认次数分别累计。
+  组句修正仅学习双方共有合法边界之间的变化片段；保留已有学习/补充词的强化规则。
+  学习前缀采用索引查询，保留 C# 的 64 编码行扫描上限；Beam 最多额外保留 4 个提示路径。
+- 学习日志使用方案目录下的 `自学习-虎爪.txt`、主线 `整句Tab自学习` 开关和模式标识。
+  I/O 进入有界工作队列，解码读取不可变快照。撤销、按词遗忘、清空、重复事件、损坏日志
+  和跨进程排他锁有回归覆盖。C# 与 C++ 可双向读取本轮隔离日志。
+- `RuntimeInput::IssueLearningReceipt` / `AcknowledgeLearningReceipt` 提供宿主回执接口：
+  只有返回输出完全一致的候选确认才签发；客户端必须匹配，30 秒过期，一次性消费。
+  失败、重复、过期回执不会学习，成功配置/方案切换取消旧回执。生产协议尚未接线。
+- Tab/方向键选中后继续输入字母，锁定所选前缀；启用提前上屏时提交该前缀，否则留在
+  组合中。新搜索重新播种五阶历史，退格按边界解除锁定；锁定对象进入异步结果身份。
+  键入选择后缀仍编辑当前分段。取消令牌传入 Beam，取消结果不发布。
+- 提前上屏使用所有保留的完整候选和适用的未完成尾部，不以菜单 TopK 构造置信度。
+  阈值同步为 .99；成熟个性化贡献有界，强证据使用基础模型份额。学习影响过的截断池
+  不得自动提交；提交还需匹配当前显示首选并通过竞争分段的保留长度检查。
+
+验证与复现：
+
+- 当前三源 Q8 的 2,006 条独立评分查询与 C# **逐值完全一致**。
+- `tools/test_core_native_mainline.py` 的 ARM64/x64 差分：各 58 组 / 3,510 次学习查询 /
+  345 个解码状态，零差异。包含冻结实际虎整句码表、增删输入、锁前缀、窄 Beam、
+  孤字保护、词汇/补充奖励、学习置信度、直出/组句偏好反转和双向日志。两种架构均零差异。
+- Windows ARM64/x64 Release 各 13 项 CTest、Linux Debug 10 项通过；新增测试包含完整
+  `RuntimeInput` 选重→回执→日志链路。C# 主线学习套件 29,930 项通过，构建零警告/错误。
+- 本轮证据：`../_run/CoreNative/mainline-sync-20261008/`。`validation.json` 记录最终文件
+  身份和结果。早期失败日志保留；其中 Windows 换行断言、旧版提前上屏/可达性断言已
+  按当前 C# 修正。x64 一轮生成的 JSON 输入出现非 JSON 字节，原文件保留，复现脚本
+  新增 flush/fsync 和写后字节校验，再以独立目录重跑。
+
+```bash
+python3 tools/test_core_native_mainline.py \
+  --native next/_run/CoreNative/ARM64/Release/TigerClaw.Core.Native.Experimental.exe \
+  --model next/_run/ThreeWayMainline/stage-ARM64/Models/sentence-fivegram-mobile.bin \
+  --shape-table next/_run/FirstCorrectionSeed-20261003/real-repeat/码表/虎整句/虎整句.txt \
+  --output next/_run/CoreNative/mainline-sync-local
+```
+
+这仍不是完整 Core 功能验收：生产主管道/完整 UI 投影与通知、Dialog 全量命令、
+TSF/Hook 真实输入联调、无模型运行策略和长期资源/延迟验收尚未完成；本轮也没有
+重新运行所有暂停前的差分脚本或真实 Qwen 进程 smoke。不得替换日用 Core。
+未部署、未提交/push；独立的 Rime 纠错 holdout 继续保持暂停。
+
+学习辅助代码的来源：GPL-3.0 项目 `lvyww/tigirl`（本机 `C:/Users/yc/Desktop/ime`），
+提交 `cc9a0d8cccc4584a86c9bcd373575568d1852404`。以其 `native/SentenceLearning.h`、
+`SentenceLearningStore.h`、`EditableText.h` 为起点，适配 TigerClaw 命名空间、Unicode、
+方案文件名、Windows 文件共享锁、工作线程和当前 C# 前缀索引/回执语义。
+原文件 SHA256 见证据目录 `learning-source-hashes.json`，同仓 GPL-3.0 许可适用。
+
+## 恢复开发的前一阶段（2026-10-08）
+
+用户已明确要求继续推进 C++ Core，解除本项目 2026-09-09 的开发暂停。
+本轮先完成宿主状态投影和方案切换失败恢复；C# 仍是生产默认和行为基准。
+独立的 Rime 邻键纠错 holdout 暂停不受此授权影响。
+
+- `RuntimeInput::CaptureSnapshot()` 在一次同步、最多一次异步结果 Pump 后，
+  返回拥有数据的 `RuntimeInputSnapshot`：方案/运行时代际、输入模式、原码、
+  活动编码、显示码、候选页、页大小、选中项、整句代际及解码/错误状态。
+  普通混输保留已解析前缀，整句使用 `DisplayCode()`；返回对象不会随下一次
+  按键、异步评分或方案切换而改变。调用方仍须串行访问宿主。
+- 宿主新增 `SwitchSchema()` / `SwitchRecentSchema()`，最近方案快捷键也走
+  同一路径。目标码表准备完成后、运行时发布之前，先让输入宿主加载模型并迁移。
+  模型缺失或迁移准备失败时抛出错误，原方案、配置、最近方案历史、代际及原码保留；
+  修复资源后可直接重试。此接线不自动写配置文件。
+- `RuntimeLexicons` 的低层直接发布接口仍为数据层调用者保留；绕过宿主调用
+  `SwitchSchema()` 或直接 `Reload()` 不具有上述宿主事务保障。
+  完整配置重载的宿主事务和主协议错误响应仍待接入。
+- 仍只有离线实验宿主，无生产主管道、完整 UI 协议、TSF/Hook 联调或日用部署。
+  候选注释/拆分/反查和异步通知尚未完成。该阶段尚未移植五阶及自学习；
+  同日后续同步已完成上述算法路径，见顶部当前记录。
+- Windows x64 / ARM64 Release 各 11 项 CTest 全部通过；Linux Debug 8 项通过。
+  新增宿主回归覆盖普通/混输/拼音/大写/英文/整句快照、快照数据保留、异步解码、
+  手动选重、取消、模式迁移、显式/快捷键切换失败及修复资源后的重试。
+  首轮 x64 新测试漏发 Ctrl 按下事件，已补齐物理事件序列后通过完整测试。
+  Linux 不执行 Windows 宿主集成测试。本轮未重跑 36 个历史 C# 差分脚本、
+  真实 Qwen smoke 或真实前端验收，不能据此声称已经追平当前 C#。
+  验证清单和 CTest 日志副本：`../_run/CoreNative/resume-20261008/`。
+  构建目录：`../_run/CoreNative/{x64,ARM64}/` 和
+  `/tmp/tiger-core-native-resume-20261008`。
+
+源码已于 2026-09-13 的 `6625fc1` 纳入 Git。下方暂停时“未跟踪”的说明仅为历史记录。
+
+## 暂停时历史快照（2026-09-09；已于 2026-10-08 恢复）
+
+**当时状态：按用户要求暂时挂起，原因是额度消耗超出预期。**
+当时保留源码和测试，停止推进、构建及部署；现在已按明确指令恢复隔离开发。
 这不是完成、废弃或回退。C# Core 仍是生产默认和行为基准，C++ Core 不能替换日用版本。
 
-本节是暂停时的最新快照；下方早期 gate 说明及追加记录包含历史状态，不能用其中
+本节是暂停时的历史快照；当前进度以上方恢复记录为准。下方早期 gate 说明及追加记录包含历史状态，不能用其中
 “尚未实现”的旧描述否定后续已落地的代码，也不能把局部测试通过视为完整 Core 验收。
 
 ### 已落地的主要内容
@@ -45,7 +389,7 @@
 
 1. 暂停前刚开始检查统一状态快照：目前编码、候选与选中项还是分开读取，`Page()`
    会 Pump 异步结果。需要提供一次同步/一次 Pump 后的拥有数据的快照，供后续 IPC/UI
-   使用，避免跨调用取得不同代状态。**这一项只读过代码，尚未实现。**
+   使用，避免跨调用取得不同代状态。**已于 2026-10-08 实现，见顶部恢复记录。**
 2. 完善 UI 投影：普通混输前缀、整句显示码、候选注释/拆分/反查、待解码状态、
    页大小与选中项，以及异步候选变化的通知。现有 `CandidatePage` 不是完整 UI 协议。
 3. 继续真实方案/设置/特殊模式切换、提前上屏后迁移、生命周期失败与恢复的端到端
@@ -347,7 +691,7 @@ This does not yet establish permissions/race-error parity or bounded load memory
 edit files are fully decoded and their lines buffered before applying. Runtime
 snapshot publication and user-data writes remain unimplemented.
 
-## Windows directory order
+## Windows directory order（历史 ICU 路线，已由顶部 NLS 实现取代）
 
 `GetOrderedLexiconFiles` enumerates top-level TXT and `.dict.yaml` files, placing
 TXT enumeration before YAML for stable ties. Schema-named files take priority;

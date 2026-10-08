@@ -25,6 +25,7 @@ namespace tiger::core
         if (!count) return {};
         bool scoreFirst = duplicateSingles && std::any_of(candidates.begin(), candidates.begin() + count,
             [](const auto& c) { return c.boundary && c.boundary->previous; });
+        scoreFirst |= std::any_of(candidates.begin(), candidates.begin() + count, [](const auto& c) { return c.learningScore > 0; });
         auto better = [&](std::size_t a, double sa, std::size_t b, double sb)
         {
             if (!scoreFirst && candidates[a].maxRank != candidates[b].maxRank) return candidates[a].maxRank < candidates[b].maxRank;
@@ -34,12 +35,12 @@ namespace tiger::core
         };
         std::size_t baseTop = 0;
         for (std::size_t i = 1; i < count; ++i)
-            if (better(i, candidates[i].score, baseTop, candidates[baseTop].score)) baseTop = i;
+            if (better(i, candidates[i].score - candidates[i].learningScore, baseTop, candidates[baseTop].score - candidates[baseTop].learningScore)) baseTop = i;
         auto baseLength = TextElementStarts(candidates[baseTop].text).size();
         std::vector<SentenceNeuralRank> ranks;
         for (std::size_t i = 0; i < count; ++i)
-            ranks.push_back({i, CombineSentenceNeuralScore(candidates[i].score, scores[i], baseLength,
-                TextElementStarts(candidates[i].text).size())});
+            ranks.push_back({i, CombineSentenceNeuralScore(candidates[i].score - candidates[i].learningScore, scores[i], baseLength,
+                TextElementStarts(candidates[i].text).size()) + candidates[i].learningScore});
         std::sort(ranks.begin(), ranks.end(), [&](auto a, auto b) { return better(a.index, a.finalScore, b.index, b.finalScore); });
         return ranks;
     }

@@ -191,7 +191,7 @@ namespace TigerClaw.Shared
 
             try
             {
-                _mmf = MemoryMappedFile.OpenExisting(RuntimeConstants.UiStateMmfName);
+                _mmf = MemoryMappedFile.OpenExisting(FrontendEndpoints.UiState);
                 _view = _mmf.CreateViewAccessor();
                 return true;
             }

@@ -52,7 +52,7 @@ if not defined MSBUILD (
     exit /b 1
 )
 
-set "CORE_PROJECT=%ROOT%\next\TigerClaw.Core\TigerClaw.Core.csproj"
+set "CORE_PROJECT=%ROOT%\next\TigerClaw.Core.Native\CMakeLists.txt"
 set "OVERLAY_PROJECT=%ROOT%\next\build_overlay.bat"
 set "DIALOG_PROJECT=%ROOT%\next\TigerClaw.Dialog\TigerClaw.Dialog.csproj"
 set "HOOK_NATIVE_PROJECT=%ROOT%\next\TigerClaw.Hook.Native\TigerClaw.Hook.Native.vcxproj"
@@ -193,8 +193,8 @@ if errorlevel 1 (
 )
 
 echo.
-echo [3/13] Publish TigerClaw.Core Native AOT Release
-"%DOTNET%" publish "%CORE_PROJECT%" -c Release -r win-x64 --self-contained true -o "%CORE_OUT%" /p:PublishAot=true
+echo [3/13] Build TigerClaw.Core C++ Release
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\tools\publish_cpp_core.ps1" -BuildOnly -Architecture x64 -OutputDirectory "%CORE_OUT%"
 if errorlevel 1 (
     echo ERROR: TigerClaw.Core Release build failed.
     exit /b 1

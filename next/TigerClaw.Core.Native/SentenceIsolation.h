@@ -1,5 +1,6 @@
 #pragma once
 #include "TextElements.h"
+#include "SentenceBeam.h"
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -18,7 +19,8 @@ namespace tiger::core
     using SentenceObservedBigram = std::function<bool(std::u16string_view, std::u16string_view)>;
     inline double SentenceIsolationPenalty(std::u16string_view text,
         const SentenceCharacterRank& rank, const SentenceObservedBigram& observed,
-        const SentenceIsolationSettings& settings = {})
+        const SentenceIsolationSettings& settings = {},
+        const SentenceBoundary* boundary = nullptr, double protectedFactor = 1, std::size_t minimumCode = 4)
     {
         if (!settings.Enabled() || !observed || text.empty()) return 0;
         if (!rank) throw std::invalid_argument("Sentence character rank provider is required");
@@ -40,6 +42,15 @@ namespace tiger::core
             double weight = settings.lambda;
             if (settings.useLogRank)
                 weight *= std::log(std::max(double(currentRank), double(settings.rankThreshold) + 1) / settings.rankThreshold);
+            for (auto b = boundary; b; b = b->previous.get())
+            {
+                auto begin = b->previous ? b->previous->textLength : 0;
+                if (starts[i] >= begin && starts[i] < b->textLength)
+                {
+                    if (b->protectsRareCharacter && b->codeLength >= minimumCode) weight *= protectedFactor;
+                    break;
+                }
+            }
             penalty += weight;
         }
         return penalty;

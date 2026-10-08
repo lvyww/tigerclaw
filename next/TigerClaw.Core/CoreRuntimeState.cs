@@ -323,6 +323,7 @@ namespace TigerClaw.Core
         private readonly string _exeDir;
 
         private readonly string _baseDir;
+        private readonly bool _isolatedRuntime;
 
         private readonly string _configPath;
 
@@ -380,6 +381,8 @@ namespace TigerClaw.Core
             _baseDir = string.IsNullOrWhiteSpace(differentialRoot)
                 ? Path.GetFullPath(AppDomain.CurrentDomain.BaseDirectory)
                 : _exeDir;
+
+            _isolatedRuntime = !string.IsNullOrWhiteSpace(differentialRoot);
 
             _configPath = Path.Combine(_exeDir, "config.txt");
 
@@ -4093,6 +4096,8 @@ namespace TigerClaw.Core
         private void SyncAutoStartNoThrow()
 
         {
+            // Explicit fixture roots must never change the desktop startup registry.
+            if (_isolatedRuntime) return;
 
             try
 

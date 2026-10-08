@@ -27,6 +27,7 @@ namespace tiger::core
             return result;
         }
     }
-    std::u16string NormalizeCode(std::u16string_view code) { return Map(TrimText(code), LowerCaseTable); }
+    std::u16string LowerInvariant(std::u16string_view text) { return Map(text, LowerCaseTable); }
+    std::u16string NormalizeCode(std::u16string_view code) { return LowerInvariant(TrimText(code)); }
     std::u16string FoldOrdinalCode(std::u16string_view code) { return Map(code, OrdinalCaseTable); }
 }

@@ -729,7 +729,19 @@ int main()
         };
         Check(hostKey(65).composing && hostKey(65).composing);
         Check(host.Page().entries.front() == u"alpha");
-        Check(hostRuntime.SwitchSchema(u"B"));
+        auto alphaView = host.CaptureSnapshot();
+        Check(alphaView.schemaName == u"A" && alphaView.lexiconGeneration == hostRuntime.Read()->generation);
+        Check(alphaView.mode == RuntimeInputMode::Ordinary && alphaView.isChinese && alphaView.composing);
+        Check(alphaView.raw == u"aa" && alphaView.activeCode == u"aa" && alphaView.displayCode == u"aa");
+        Check(alphaView.page.entries == std::vector<std::u16string>{u"alpha"});
+        Check(alphaView.candidatesCurrent && !alphaView.decodePending && !alphaView.decodeFailed && !alphaView.neuralFailed);
+        Check(!alphaView.sentenceGeneration && alphaView.selectedCandidateIndex == 0);
+        Check(host.SwitchSchema(u"B"));
+        auto betaView = host.CaptureSnapshot();
+        Check(betaView.schemaName == u"B" && betaView.lexiconGeneration > alphaView.lexiconGeneration);
+        Check(betaView.page.entries == std::vector<std::u16string>{u"beta"});
+        Check(alphaView.schemaName == u"A" && alphaView.page.entries.front() == u"alpha");
+        Check(!host.SwitchSchema(u"B") && !host.SwitchSchema(u"missing"));
         Check(host.Page().entries.front() == u"beta" && host.Session().Raw() == u"aa");
         Check(hostKey(32).text == u"beta");
         hostKey(65); hostKey(65);
@@ -740,6 +752,28 @@ int main()
         host.ImportRaw(u"AA");
         Check(host.Page().entries.front() == u"beta" && host.Session().Raw() == u"AA");
         Check(hostKey(13).text == u"AA");
+        {
+            RuntimeInput viewHost(hostRuntime, MakeUpperCaseServices([](std::u16string_view) {}));
+            auto viewKey = [&](int vk, bool shift = false, bool ctrl = false)
+            {
+                InputKeyEvent key; key.vk = vk; key.shift = shift; key.ctrl = ctrl;
+                return viewHost.Process(key, CtrlSpaceState::Time{});
+            };
+            auto idle = viewHost.CaptureSnapshot();
+            Check(idle.mode == RuntimeInputMode::Idle && !idle.composing && idle.page.entries.empty());
+            viewKey(0xc0); viewKey(65); viewKey(65);
+            auto pinyinView = viewHost.CaptureSnapshot();
+            Check(pinyinView.mode == RuntimeInputMode::Pinyin && pinyinView.composing);
+            Check(pinyinView.page.entries.front() == u"original" && !pinyinView.sentenceGeneration);
+            viewHost.Cancel(); viewKey(65, true);
+            auto upperView = viewHost.CaptureSnapshot();
+            Check(upperView.mode == RuntimeInputMode::UpperCase && upperView.raw == u"A");
+            Check(upperView.displayCode == u"A" && upperView.page.entries.empty());
+            viewHost.Cancel(); viewKey(0xa2, false, true); viewKey(32, false, true);
+            auto englishView = viewHost.CaptureSnapshot();
+            Check(englishView.mode == RuntimeInputMode::English && !englishView.isChinese && !englishView.composing);
+            Check(pinyinView.page.entries.front() == u"original" && upperView.raw == u"A");
+        }
         auto callbackRoot = root / "callback-tables";
         {
             auto integratedRoot = root / "integrated-tables";
@@ -771,24 +805,97 @@ int main()
             Check(integrated.Session().Raw().empty());
             Check(event(0x28).handled && integrated.SelectedCandidateIndex() == 1);
             Check(integrated.Page().entries.size() == 2 && integrated.Page().entries[1] == u"b");
+            auto sentenceView = integrated.CaptureSnapshot();
+            Check(sentenceView.mode == RuntimeInputMode::Sentence && sentenceView.sentenceGeneration.has_value());
+            Check(sentenceView.raw == u"AA" && sentenceView.activeCode == u"AA" && sentenceView.displayCode == u"AA");
+            Check(sentenceView.selectedCandidateIndex == 1 && sentenceView.page.entries[1] == u"b");
+            Check(sentenceView.candidatesCurrent && !sentenceView.decodePending && !sentenceView.decodeFailed);
             integrated.FocusChanged(); Check(integrated.Raw() == u"AA" && integrated.SelectedCandidateIndex() == 1);
             auto intoPlain = switchMode();
             Check(intoPlain.handled && intoPlain.composing && integrated.Raw() == u"AA");
             Check(integrated.SelectedCandidateIndex() == 0 && integrated.Page().entries.front() == u"plain");
+            auto plainView = integrated.CaptureSnapshot();
+            Check(plainView.mode == RuntimeInputMode::Ordinary && !plainView.sentenceGeneration);
+            Check(plainView.selectedCandidateIndex == 0 && plainView.schemaName == u"Plain");
+            Check(sentenceView.selectedCandidateIndex == 1 && sentenceView.page.entries[1] == u"b");
             Check(event(0x20).text == u"plain");
             switchMode(); event(0x41); event(0x41);
             Check(event(0x20).text == u"a" && integrated.Raw().empty());
+            integrated.ImportRaw(u"aabb");
+            Check(event(0x09).handled && integrated.SelectedCandidateIndex() == 1);
+            auto correction = event(0x20);
+            Check(correction.text == u"bb");
+            auto receipt = integrated.IssueLearningReceipt(u"isolated-TSF", correction);
+            Check(!receipt.empty());
+            Check(!integrated.AcknowledgeLearningReceipt(u"wrong-client", receipt, true));
+            Check(integrated.AcknowledgeLearningReceipt(u"isolated-TSF", receipt, true));
+            Check(!integrated.AcknowledgeLearningReceipt(u"isolated-TSF", receipt, true));
+            Check(integrated.WaitLearningIdle(std::chrono::seconds(5)));
+            SentenceLearningStore journal(integratedRoot / u"test整句" / u"自学习-虎爪.txt");
+            auto learned = journal.entries();
+            Check(learned.size() == 1 && learned[0].text == u"b" && learned[0].code == u"aa");
+            bool learningChanged = false; std::u16string learningError;
+            Check(integrated.SetConfig(u"整句Tab自学习",u"否",learningChanged,learningError) && learningChanged);
+            integrated.ImportRaw(u"aabb"); event(0x09);
+            auto unlearned = event(0x20);
+            Check(integrated.IssueLearningReceipt(u"isolated-TSF",unlearned).empty());
+            Check(integrated.SetConfig(u"整句Tab自学习",u"是",learningChanged,learningError) && learningChanged);
             integrated.ImportRaw(u"AA"); integrated.Cancel();
             Check(integrated.Raw().empty() && integrated.Page().entries.empty());
+            auto emptyView = integrated.CaptureSnapshot();
+            Check(!emptyView.composing && emptyView.candidatesCurrent && !emptyView.decodePending);
+            Check(emptyView.raw.empty() && emptyView.displayCode.empty() && emptyView.page.entries.empty());
+            // Poll only the owned snapshot, never a second Page/Raw read. Results
+            // arriving on worker threads must not mutate a previously returned view.
+            integrated.ImportRaw(u"AA");
+            auto awaitCurrentView = [&]
+            {
+                auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+                for (;;)
+                {
+                    auto view = integrated.CaptureSnapshot();
+                    Check(!view.decodeFailed);
+                    if (view.candidatesCurrent) return view;
+                    Check(view.decodePending && std::chrono::steady_clock::now() < deadline);
+                    std::this_thread::yield();
+                }
+            };
+            auto asyncFirst = awaitCurrentView();
+            integrated.ImportRaw(u"bb");
+            auto asyncSecond = awaitCurrentView();
+            Check(asyncFirst.raw == u"AA" && asyncFirst.page.entries.front() == u"a");
+            Check(asyncSecond.raw == u"bb" && asyncSecond.page.entries.front() == u"b");
+            Check(asyncSecond.sentenceGeneration > asyncFirst.sentenceGeneration);
+            integrated.Cancel();
             Check(integratedTables.SwitchSchema(u"Plain")); integrated.Page();
             RuntimeInput missingModel(integratedTables, MakeUpperCaseServices([](std::u16string_view) {}), root / "missing-model.bin");
             missingModel.ImportRaw(u"AA");
-            Check(integratedTables.SwitchSchema(u"test\u6574\u53e5"));
+            auto beforeFailure = integratedTables.Read();
             bool rejected = false;
-            try { missingModel.Page(); } catch (const std::exception&) { rejected = true; }
+            try { missingModel.SwitchSchema(u"test\u6574\u53e5"); } catch (const std::exception&) { rejected = true; }
             Check(rejected && missingModel.Raw() == u"AA" && missingModel.Session().Raw() == u"AA");
-            Check(integratedTables.SwitchSchema(u"Plain"));
+            Check(integratedTables.Read() == beforeFailure); // config/history/cache publication is rejected
             Check(missingModel.Page().entries.front() == u"plain");
+            auto failureView = missingModel.CaptureSnapshot();
+            Check(failureView.schemaName == u"Plain" && failureView.raw == u"AA" && failureView.page.entries.front() == u"plain");
+            InputKeyEvent shortcut; shortcut.vk = 0x4d; shortcut.ctrl = true;
+            rejected = false;
+            try { missingModel.Process(shortcut, CtrlSpaceState::Time{}); } catch (const std::exception&) { rejected = true; }
+            Check(rejected && integratedTables.Read() == beforeFailure);
+            shortcut.action = u"up"; missingModel.Process(shortcut, CtrlSpaceState::Time{});
+            // Repairing the absent resource permits retry without manually
+            // restoring the schema or losing the old raw composition.
+            Write(root / "missing-model.bin", modelImage);
+            Check(missingModel.SwitchRecentSchema());
+            Check(missingModel.CaptureSnapshot().schemaName == u"test\u6574\u53e5" && missingModel.Raw() == u"AA");
+            Check(missingModel.SwitchSchema(u"Plain"));
+            Check(missingModel.CaptureSnapshot().page.entries.front() == u"plain");
+            RuntimeInput noModelPath(integratedTables, MakeUpperCaseServices([](std::u16string_view) {}));
+            noModelPath.ImportRaw(u"AA"); beforeFailure = integratedTables.Read();
+            rejected = false;
+            try { noModelPath.SwitchRecentSchema(); } catch (const std::logic_error&) { rejected = true; }
+            Check(rejected && integratedTables.Read() == beforeFailure);
+            Check(noModelPath.CaptureSnapshot().raw == u"AA");
         }
         std::filesystem::create_directories(callbackRoot / "Old");
         std::filesystem::create_directories(callbackRoot / "New");
@@ -809,6 +916,10 @@ int main()
         };
         for (int i = 0; i < 4; ++i) callbackKey(65);
         Check(callbackHost.Session().Surface() == u"oldaa");
+        auto mixedView = callbackHost.CaptureSnapshot();
+        Check(mixedView.mode == RuntimeInputMode::Ordinary && mixedView.raw == u"aaaa");
+        Check(mixedView.activeCode == u"aa" && mixedView.displayCode == u"oldaa");
+        Check(mixedView.page.entries.front() == u"old");
         auto switched = callbackKey(77, true);
         Check(switched.handled && switched.inputBuffer == u"aa" && switched.action == OutputAction::Text);
         Check(callbackRuntime.Read()->schemaName == u"New" && callbackHost.Session().Raw() == u"aaaa");

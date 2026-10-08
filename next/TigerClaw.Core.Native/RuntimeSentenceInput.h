@@ -4,6 +4,7 @@
 #include "SentenceDecodeWorker.h"
 #include "SentenceServiceLifecycle.h"
 #include "RuntimeSentenceInputSettings.h"
+#include "SentenceLearningWorker.h"
 
 namespace tiger::core
 {
@@ -17,6 +18,19 @@ namespace tiger::core
         using CancellableNeuralScorer = std::function<std::vector<double>(const SentenceNeuralRequest&, std::stop_token)>;
     private:
         RuntimeSentenceDecoder& _decoder;
+        std::shared_ptr<SentenceLearningWorker> _learningStore;
+        std::shared_ptr<const SentenceLearningSnapshot> _learningSnapshot;
+        std::u16string _learningMode;
+        void RefreshLearning()
+        {
+            if (!_learningStore) return;
+            _learningStore->Refresh();
+            auto snapshot = _learningStore->Snapshot();
+            if (snapshot == _learningSnapshot) return;
+            _learningSnapshot = snapshot;
+            _decoder.SetLearning(snapshot, _learningMode);
+            _session.ConfigureLearning(snapshot, _learningMode);
+        }
         const RuntimeSentenceInputSettings _settings;
         SentenceCompositionSession _session;
         std::exception_ptr _lastError;
@@ -56,6 +70,7 @@ namespace tiger::core
         }
         void Schedule()
         {
+            RefreshLearning();
             CancelNeural();
             if (_session.Context().Raw().empty()) _worker.Cancel();
             else _worker.Submit(_session.Request());
@@ -65,7 +80,7 @@ namespace tiger::core
             Pump();
             if (_session.DecodeCurrent()) return;
             auto request = _session.Request();
-            auto result = _decoder.DecodeResult(request.raw, _settings.autoCommit, request.requiredPrefix);
+            auto result = _decoder.DecodeResult(request.raw, _settings.autoCommit, request.requiredPrefix, request.lockedPrefix);
             if (_session.Apply(request, *result->lattice, result->evidence)) ScheduleNeural();
             _lastError = {};
         }
@@ -73,9 +88,12 @@ namespace tiger::core
         explicit RuntimeSentenceInput(RuntimeSentenceDecoder& decoder, RuntimeSentenceInputSettings settings = {}, NeuralScorer scorer = {})
             : RuntimeSentenceInput(decoder, settings, AdaptScorer(std::move(scorer))) {}
         RuntimeSentenceInput(RuntimeSentenceDecoder& decoder, RuntimeSentenceInputSettings settings, CancellableNeuralScorer scorer)
-            : _decoder(decoder), _settings(settings), _worker([this](const SentenceCompositionRequest& request)
-            { return _decoder.DecodeResult(request.raw, _settings.autoCommit, request.requiredPrefix); })
+            : _decoder(decoder), _settings(settings), _worker([this](const SentenceCompositionRequest& request, std::stop_token stop)
+            { return _decoder.DecodeResult(request.raw, _settings.autoCommit, request.requiredPrefix, request.lockedPrefix, stop); })
         {
+            _session.SetSupplementalQuery([this](auto text) { return _decoder.IsSupplementalFragment(text); });
+            _session.SetCompetingBoundaryQuery([this](auto raw, auto committed, auto proposed, auto elements)
+                { return _decoder.CompetingBoundaryEnd(raw, committed, proposed, elements); });
             if (scorer)
                 _neuralWorker = std::make_unique<BasicSentenceDecodeWorker<std::vector<double>, SentenceNeuralRequest>>(
                     [score = std::move(scorer)](const SentenceNeuralRequest& request, std::stop_token stop)
@@ -94,6 +112,14 @@ namespace tiger::core
             if (_neuralWorker || _neuralService) throw std::logic_error("Sentence scorer already attached");
             _neuralService = &service;
         }
+        void ConfigureLearning(std::shared_ptr<SentenceLearningWorker> store, std::u16string mode)
+        {
+            _learningStore = std::move(store); _learningMode = std::move(mode); _learningSnapshot.reset();
+            _decoder.SetLearning({}, _learningMode); _session.ConfigureLearning({}, _learningMode);
+            RefreshLearning();
+        }
+        std::shared_ptr<SentenceLearningWorker> LearningStore() const { return _learningStore; }
+        std::vector<SentenceLearningEvent> TakeLearning(std::u16string_view output) { return _session.TakeLearning(output); }
         const SentenceCompositionSession& Session() const { return _session; }
         std::exception_ptr LastDecodeError() const { return _lastError; }
         std::exception_ptr LastNeuralError() const { return _lastNeuralError; }
@@ -177,7 +203,7 @@ namespace tiger::core
             if (!key) return {};
             auto commit = _session.AppendWithAutoCommit(key, _settings.autoCommit, _settings.minimumRetained,
                 [&](auto raw, auto required, std::optional<std::u16string_view> excluded, bool group)
-                { return _decoder.HasCompleteCandidate(raw, required, excluded, group); },
+                { return _decoder.HasCompleteCandidate(raw, required, excluded, group, _session.Request().lockedPrefix.get()); },
                 [&](auto raw) { return _decoder.IsProperCodePrefix(raw); });
             if (_session.Request().generation != generation) Schedule();
             return {true, false, std::move(commit)};

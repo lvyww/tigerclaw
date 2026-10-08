@@ -38,8 +38,8 @@ for %%P in (TigerClaw.Core.exe TigerClaw.Overlay.exe TigerClaw.Dialog.exe TigerC
 echo [1/6] Build TigerClaw.Shared
 "%DOTNET%" msbuild "%~dp0TigerClaw.Shared\TigerClaw.Shared.csproj" /restore /p:Configuration=Debug /m || exit /b 1
 
-echo [2/6] Publish TigerClaw.Core Native AOT (win-x64)
-"%DOTNET%" publish "%~dp0TigerClaw.Core\TigerClaw.Core.csproj" -c Debug -r win-x64 --self-contained true -o "%UNIFIED_OUT%" /p:PublishAot=true || exit /b 1
+echo [2/6] Build TigerClaw.Core C++ (x64)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0..\tools\publish_cpp_core.ps1" -BuildOnly -Architecture x64 -Configuration Debug -OutputDirectory "%UNIFIED_OUT%" || exit /b 1
 
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0stage_sentence_fivegram.ps1" -Architecture x64 -OutputDirectory "%UNIFIED_OUT%" -Configuration Debug || exit /b 1
 

@@ -15,7 +15,7 @@
 | `../更新日志.txt` | 面向用户的版本变化 |
 | `../BimeTSF2/SampleIME/BRIDGE_ONLY_NOTES.md` | TSF bridge-only 边界 |
 | `../next/TigerClaw.Overlay.Native/README.md` | 主线 C++ Overlay、构建、WPF 回退与验收记录 |
-| `../next/TigerClaw.Core.Native/README.md` | 平行 C++ Core（已暂停）：顶部为 2026-09-09 进度快照、恢复入口及剩余工作 |
+| `../next/TigerClaw.Core.Native/README.md` | 主线 C++ Core：默认构建与发布、标准平替入口、ARM64 发布脚本、五阶/学习、前端与协议差分、隔离测试和剩余验收 |
 | `../rime/tiger_sentence/README.md` | 独立 Rime 方案部署与开发 |
 | `../rime/tiger_sentence/RIME_CORRECTNESS.md` | Rime 提交边界、邻键纠错校准与性能验证 |
 | `FCITX5_ANDROID_PORTING_PLAN.md` | Fcitx5 Android 当前完成度和剩余验收 |

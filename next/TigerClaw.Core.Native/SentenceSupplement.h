@@ -9,6 +9,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <set>
 
 namespace tiger::core
 {
@@ -32,7 +33,9 @@ namespace tiger::core
             double reward = 0;
         };
         std::vector<Node> _nodes{1};
+        std::set<std::u16string, std::less<>> _fragments;
     public:
+        bool Contains(std::u16string_view text) const { return _fragments.contains(text); }
         bool IsEmpty() const { return _nodes.size() <= 1; }
         static SentenceSupplementMatcher Build(std::span<const SentenceSupplementEntry> entries)
         {
@@ -40,6 +43,7 @@ namespace tiger::core
             auto& nodes = result._nodes;
             for (const auto& entry : entries)
             {
+                if (!entry.text.empty()) result._fragments.insert(entry.text);
                 if (entry.text.empty() || entry.reward <= 0) continue;
                 int state = 0;
                 auto starts = TextElementStarts(entry.text);

@@ -21,6 +21,10 @@ namespace tiger::core
         constexpr auto whitelist = u"\u6574\u53e5\u5141\u8bb8\u5168\u7801\u7ec4\u53e5\u767d\u540d\u5355";
         constexpr auto duplicate = u"\u5141\u8bb8\u5355\u5b57\u91cd\u7801\u7ec4\u53e5";
         RuntimeSentenceSettings result;
+        result.lattice.preserveTruncatedEvidence = true;
+        result.lattice.canonicalReward = 2;
+        result.lattice.protectedIsolationFactor = 0;
+        result.lattice.lexicalWeight = .1;
         std::u16string_view whiteText;
         for (const auto& [key, value] : ConfigDefaults) if (key == whitelist) whiteText = value;
         for (const auto& [key, value] : config)

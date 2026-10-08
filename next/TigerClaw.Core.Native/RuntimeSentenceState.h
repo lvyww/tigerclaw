@@ -17,7 +17,28 @@ namespace tiger::core
             RuntimeSentenceInput input; // destroyed before its borrowed decoder
             State(std::shared_ptr<const RuntimeLexiconSnapshot> source, const std::filesystem::path& model)
                 : snapshot(std::move(source)), decoder(*snapshot->schema, model, LoadSentenceSettings(snapshot->config)),
-                  input(decoder, LoadSentenceInputSettings(snapshot->config)) {}
+                  input(decoder, LoadSentenceInputSettings(snapshot->config)) { ConfigureLearning(); }
+            void ConfigureLearning()
+            {
+                bool enabled = true;
+                std::u16string whitelist;
+                for (const auto& [key, value] : ConfigDefaults) if (key == u"整句允许全码组句白名单") whitelist = value;
+                for (const auto& [key, value] : snapshot->config)
+                {
+                    if (key == u"整句Tab自学习") enabled = ParseConfigBool(value, true);
+                    if (key == u"整句允许全码组句白名单") whitelist = value;
+                }
+                if (!enabled || snapshot->schemaName.empty()) { input.ConfigureLearning({}, {}); return; }
+                auto settings = LoadSentenceSettings(snapshot->config);
+                auto mode = std::u16string(u"整句|单字重码=") + (settings.lattice.duplicateSingles ? u"1" : u"0") +
+                    u"|最优码限制=" + learningUtf16(std::to_string(settings.optimalCodeHighFrequencyLimit)) + u"|全码白名单=" + whitelist;
+                auto directory = snapshot->root / std::filesystem::path(snapshot->schemaName);
+                if (directory.filename().u16string() != snapshot->schemaName) { input.ConfigureLearning({}, {}); return; }
+                auto path = directory / std::filesystem::path(u"自学习-虎爪.txt");
+                auto store = input.LearningStore();
+                if (!store || store->Path() != path) store = std::make_shared<SentenceLearningWorker>(path);
+                input.ConfigureLearning(std::move(store), std::move(mode));
+            }
         };
         std::unique_ptr<State> _state;
         std::filesystem::path _model;
@@ -37,6 +58,7 @@ namespace tiger::core
                 _state->input.AttachNeuralService(*_service);
             }
         }
+    public:
         std::u16string ToggleLanguage(ChineseInputSession& outer)
         {
             if (!_state || _state->input.Session().Context().UncommittedRaw().empty()) return outer.ToggleChinese();
@@ -67,6 +89,7 @@ namespace tiger::core
                 {
                     if (_service) _service->SetEnabled(GetSentenceEligibility(snapshot->config, snapshot->schemaName).Resident());
                     _state->snapshot = std::move(snapshot);
+                    _state->ConfigureLearning();
                     return; // preserve decoder identity, manual selection and committed context
                 }
             }

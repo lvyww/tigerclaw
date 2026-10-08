@@ -14,7 +14,7 @@ namespace TigerClaw.Overlay
 
         public OverlayHeartbeatBroadcaster()
         {
-            _mmf = MemoryMappedFile.CreateOrOpen(RuntimeConstants.OverlayHeartbeatMmfName, sizeof(long) * 2);
+            _mmf = MemoryMappedFile.CreateOrOpen(FrontendEndpoints.OverlayHeartbeat, sizeof(long) * 2);
             _view = _mmf.CreateViewAccessor();
             _timer = new Timer(OnTick);
         }

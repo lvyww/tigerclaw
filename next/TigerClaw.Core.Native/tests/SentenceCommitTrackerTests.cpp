@@ -87,7 +87,13 @@ int main()
         Check(!observe(5)); Check(!observe(7)); // skipped generation restarts evidence
         Check(observe(8).has_value());
         tracker.Reset(); context.acceptedNeuralTop = u"other";
-        Check(!observe(5)); Check(!observe(6)); Check(!observe(7));
+        Check(!observe(5)); Check(observe(6).has_value()); // current displayed top supersedes stale neural text
+        tracker.Reset(); lattice.candidates[0].text = u"other";
+        Check(!observe(5)); Check(!observe(6)); Check(!observe(7)); // confidence cannot commit a different displayed path
+        lattice.candidates[0].text = u"XYZ"; context.acceptedNeuralTop.reset();
+        tracker.Reset(); evidence.prefixes[0].baseShare = .8;
+        Check(!observe(5)); Check(!observe(6)); Check(observe(7).has_value()); // personalized certainty is not model-strong evidence
+        evidence.prefixes[0].baseShare = std::numeric_limits<double>::quiet_NaN();
         std::cout << "Sentence commit tracker evidence/gap/reset/constraint tests passed\n";
         SentenceCompositionContext composition;
         for (auto key : std::u16string_view(u"AaBbCc")) composition.Append(key);
@@ -117,6 +123,7 @@ int main()
         auto request5 = session.Request();
         lattice.raw = u"aaaaa"; evidence.prefixes = {{u"XY", 2, 1, 1, true}};
         Check(session.Apply(request5, lattice, evidence));
+        Check(session.PublishedCandidates() == std::vector<std::u16string>{u"XYZ"});
         Check(!session.TryAutoCommit(true));
         Check(!session.Apply(request5, lattice, evidence));
         session.Append(u'A'); auto request6 = session.Request();
@@ -124,10 +131,14 @@ int main()
         lattice.raw = u"aaaaaa"; Check(session.Apply(request6, lattice, evidence));
         auto committed = session.TryAutoCommit(true);
         Check(committed && *committed == u"XY" && session.Context().UncommittedRaw() == u"AAAA");
+        Check(session.Candidates().front().text == u"XYZ"); // decoder context remains whole
+        Check(!session.DecodeCurrent());
+        Check(session.PublishedCandidates() == std::vector<std::u16string>{u"Z"}); // pending result
         Check(!session.Apply(request6, lattice, evidence));
         auto filteredRequest = session.Request();
         SentenceBeamState wrong; wrong.text = u"Q"; lattice.candidates.push_back(wrong);
         Check(session.Apply(filteredRequest, lattice, evidence) && session.Candidates().size() == 1);
+        Check(session.PublishedCandidates() == std::vector<std::u16string>{u"Z"}); // fresh result
         Check(session.Select(0)); Check(!session.Apply(filteredRequest, lattice, evidence));
         Check(!session.TryAutoCommit(true));
         session.InvalidateLexicon(1); Check(!session.Apply(filteredRequest, lattice, evidence));

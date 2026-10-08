@@ -165,7 +165,9 @@ int main()
         Check(!ParseConfigBool(u"yes", false) && ParseConfigBool(u"yes", true));
         std::vector<std::u16string> configLines{u"\u5f53\u524d\u7801\u8868\tfirst", u"\u5f53\u524d\u7801\u8868 ", u"unknown\tignored"};
         auto settings = ParseConfigLines(configLines);
-        Check(settings.size() == 50);
+        Check(settings.size() == 68);
+        auto disabledLearning=ParseConfigLines(std::vector<std::u16string>{u"整句Tab自学习\t否"});
+        Check(std::find(disabledLearning.begin(),disabledLearning.end(),std::pair<std::u16string,std::u16string>{u"整句Tab自学习",u"否"})!=disabledLearning.end());
         auto history = SeedRecentSchemas(u" A |a| B |C");
         Check(SerializeRecentSchemas(history) == u"A|B");
         RecordRecentSchema(history, history.back());
@@ -1256,7 +1258,8 @@ int main()
         Check(!HasCompleteSentenceCandidate(exactPaths, u"aaaa", true, u"XXZ"));
         Check(!HasCompleteSentenceCandidate(exactPaths, u";", true));
         Check(HasCompleteSentenceCandidate(extracted, u"aa", true, {}, u"X"));
-        Check(!HasCompleteSentenceCandidate(extracted, u"aa", true, {}, u"X", true));
+        Check(HasCompleteSentenceCandidate(extracted, u"aa", true, {}, u"X", true)); // mainline permits duplicate singles in exact reachability
+        Check(!HasCompleteSentenceCandidate(extracted, u"aa", false, {}, u"X", true));
         Check(HasCompleteSentenceCandidate(extracted, u"aa2", true, u"Y", {}, true));
         SentenceBeamState confidenceA, confidenceB;
         confidenceA.text = u"ab"; confidenceB.text = u"cd";

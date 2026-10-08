@@ -18,7 +18,7 @@ namespace TigerClaw.Overlay
 
             try
             {
-                _showMenuEvent = new EventWaitHandle(false, EventResetMode.AutoReset, RuntimeConstants.ShowMenuEventName);
+                _showMenuEvent = new EventWaitHandle(false, EventResetMode.AutoReset, FrontendEndpoints.ShowMenu);
             }
             catch
             {

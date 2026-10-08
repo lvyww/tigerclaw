@@ -78,7 +78,7 @@ namespace TigerClaw.Overlay
 
             try
             {
-                using (var mmf = MemoryMappedFile.OpenExisting(RuntimeConstants.HeartbeatMmfName))
+                using (var mmf = MemoryMappedFile.OpenExisting(FrontendEndpoints.Heartbeat))
                 using (var view = mmf.CreateViewAccessor())
                 {
                     view.Read(0, out seq);

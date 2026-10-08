@@ -3,6 +3,7 @@
 #include "ChineseInputSession.h"
 #include "SentenceEligibility.h"
 #include "RuntimeSentenceState.h"
+#include "RuntimeInputSnapshot.h"
 #include <limits>
 
 namespace tiger::core
@@ -13,8 +14,8 @@ namespace tiger::core
     {
     public:
         RuntimeInput(RuntimeLexicons& runtime, UpperCaseServices upper,
-            std::filesystem::path sentenceModel = {}, SentenceServiceLifecycle* service = nullptr)
-            : _runtime(runtime), _session(std::move(upper), FixedLengthMixedDecoder(
+            std::filesystem::path sentenceModel = {}, SentenceServiceLifecycle* service = nullptr, bool allowNoModel = false)
+            : _runtime(runtime), _allowNoModel(allowNoModel), _modelPath(std::move(sentenceModel)), _service(service), _session(std::move(upper), FixedLengthMixedDecoder(
                 [this](std::u16string_view code)
                 {
                     auto index = _snapshot->schema->table.Find(code);
@@ -27,7 +28,7 @@ namespace tiger::core
                     return result.action == OutputAction::Text ? std::move(result.text) : std::u16string(text);
                 }))
         {
-            if (!sentenceModel.empty()) _sentence = std::make_unique<RuntimeSentenceState>(std::move(sentenceModel), service);
+            if (!_allowNoModel && !_modelPath.empty()) _sentence = std::make_unique<RuntimeSentenceState>(_modelPath, service);
             Synchronize();
             _session.SetChinese(Boolean(u"\u9ed8\u8ba4\u4e2d\u6587", true));
         }
@@ -42,7 +43,7 @@ namespace tiger::core
             // the event's original tables/bindings alive until dispatch returns.
             auto eventSnapshot = _snapshot;
             auto eventSettings = _settings;
-            auto switchRecent = [this] { if (!_runtime.SwitchRecentSchema()) return false; Synchronize(); return true; };
+            auto switchRecent = [this] { return SwitchRecentSchema(); };
             auto adjust = [this](CandidateAdjustment op, std::u16string_view code, std::u16string_view text)
                 { return _runtime.AdjustCandidate(op, code, text); };
             auto result = _sentence ? _sentence->ProcessKey(event, _session, *eventSnapshot->schema, *eventSnapshot->pinyin, eventSettings,
@@ -60,22 +61,114 @@ namespace tiger::core
             Synchronize();
             return result;
         }
+        // Frontends issue a token only for the exact output returned by Process,
+        // and acknowledge it after their document edit. Replay must reuse the
+        // original response/token. Failure and duplicate receipts cannot learn.
+        std::string IssueLearningReceipt(std::u16string client, const PostProcessResult& result)
+        {
+            if (!_sentence || !UsesSentenceComposition()) return {};
+            auto& input = _sentence->Input();
+            return _learningReceipts.Issue(std::move(client), input.LearningStore(), input.TakeLearning(result.text));
+        }
+        bool AcknowledgeLearningReceipt(std::u16string_view client, const std::string& token, bool success)
+        {
+            Synchronize();
+            if (!Boolean(u"整句Tab自学习", true)) { _learningReceipts.Cancel(); return false; }
+            return _learningReceipts.Acknowledge(client, token, success);
+        }
+        // Test/controlled shutdown only; never called by key dispatch.
+        bool WaitLearningIdle(std::chrono::milliseconds timeout)
+        {
+            if (!_sentence || !_sentence->Snapshot()) return true;
+            auto store = _sentence->Input().LearningStore();
+            return !store || store->WaitIdle(timeout);
+        }
         CandidatePage Page()
         {
             RefreshOutputContext(); Synchronize();
+            return ReadPage();
+        }
+        RuntimeInputSnapshot CaptureSnapshot()
+        {
+            RefreshOutputContext(); Synchronize();
+            RuntimeInputSnapshot result;
+            result.page = ReadPage(); // the only Pump; copy all remaining fields afterwards
+            result.lexiconGeneration = _snapshot->generation;
+            result.schemaName = _snapshot->schemaName;
+            result.pageSize = std::clamp(_settings.pageSize, 1, 10);
+            result.isChinese = _session.IsChinese();
+            result.raw = Raw();
+            result.composing = !result.raw.empty();
+            result.selectedCandidateIndex = SelectedCandidateIndex();
+            if (UsesSentenceComposition())
+            {
+                const auto& input = _sentence->Input();
+                const auto& session = input.Session();
+                result.mode = RuntimeInputMode::Sentence;
+                result.sentenceGeneration = session.Request().generation;
+                result.activeCode = result.raw;
+                result.displayCode = session.DisplayCode();
+                result.candidatesCurrent = !result.composing || session.DecodeCurrent();
+                result.decodeFailed = input.LastDecodeError() != nullptr;
+                result.neuralFailed = input.LastNeuralError() != nullptr;
+                result.decodePending = !result.candidatesCurrent && !result.decodeFailed;
+            }
+            else
+            {
+                result.activeCode = _session.ActiveCode();
+                result.displayCode = _session.Surface();
+                if (!result.isChinese) result.mode = RuntimeInputMode::English;
+                else switch (_session.Mode())
+                {
+                case ChineseMode::Idle: result.mode = RuntimeInputMode::Idle; break;
+                case ChineseMode::Ordinary: result.mode = RuntimeInputMode::Ordinary; break;
+                case ChineseMode::Pinyin: result.mode = RuntimeInputMode::Pinyin; break;
+                case ChineseMode::UpperCase: result.mode = RuntimeInputMode::UpperCase; break;
+                }
+            }
+            return result;
+        }
+        // Host callers use these entry points instead of publishing a table
+        // switch first: model/migration failures leave the runtime unchanged.
+        void Reload(const std::filesystem::path& configFile)
+        { _runtime.Reload(configFile, [this](auto next) { AcceptSnapshot(std::move(next)); }, true); }
+        void ReloadTables()
+        { _runtime.ReloadTables([this](auto next) { AcceptSnapshot(std::move(next)); }); }
+        bool SetConfig(std::u16string_view key, std::u16string_view value, bool& changed, std::u16string& error)
+        { return _runtime.SetConfig(key, value, changed, error, [this](auto next) { AcceptSnapshot(std::move(next)); }); }
+        std::u16string ToggleLanguage()
+        { Synchronize(); return _sentence ? _sentence->ToggleLanguage(_session) : _session.ToggleChinese(); }
+        void ApplyDefaultLanguage() { _session.SetChinese(Boolean(u"默认中文", true)); }
+        void CancelLearningReceipts() { _learningReceipts.Cancel(); }
+        bool ExpectKeyUp(const InputKeyEvent& event) const
+        { return _session.ExpectKeyUp(event, Boolean(u"Ctrl+空格切换中英文", true)); }
+        bool SwitchSchema(std::u16string_view name)
+        {
+            RefreshOutputContext(); Synchronize();
+            return _runtime.SwitchSchema(name, [this](auto next) { AcceptSnapshot(std::move(next)); });
+        }
+        bool SwitchRecentSchema()
+        {
+            RefreshOutputContext(); Synchronize();
+            return _runtime.SwitchRecentSchema([this](auto next) { AcceptSnapshot(std::move(next)); });
+        }
+    private:
+        CandidatePage ReadPage()
+        {
             if (UsesSentenceComposition())
             {
                 _sentence->Input().Pump();
                 CandidatePage page;
-                const auto& candidates = _sentence->Input().Session().Candidates();
+                const auto candidates = _sentence->Input().Session().PublishedCandidates();
                 auto count = std::min(candidates.size(), static_cast<std::size_t>(std::clamp(_settings.pageSize, 1, 10)));
-                for (std::size_t i = 0; i < count; ++i) page.entries.push_back(candidates[i].text);
+                for (std::size_t i = 0; i < count; ++i) page.entries.push_back(candidates[i]);
                 page.total = static_cast<std::uint32_t>(candidates.size());
                 page.found = page.total != 0;
                 return page;
             }
             return _session.Page(*_snapshot->schema, *_snapshot->pinyin, _settings);
         }
+    public:
         std::u16string Raw() const
         {
             return UsesSentenceComposition() ? _sentence->Input().ExportUncommittedRaw() : _session.Raw();
@@ -85,6 +178,13 @@ namespace tiger::core
             return UsesSentenceComposition() ? _sentence->Input().Session().SelectedIndex() : 0;
         }
         const ChineseInputSession& Session() const { return _session; }
+        std::u16string CandidateDisplay(std::u16string_view candidate)
+        {
+            if (CandidateCommitText(candidate)!=candidate) return std::u16string(CandidateDisplayText(candidate));
+            RefreshOutputContext();
+            auto value=NormalizeOutputAction(candidate,_context);
+            return value.action==OutputAction::Text ? std::move(value.text) : std::u16string(candidate);
+        }
         void FocusChanged() { if (_sentence) _sentence->FocusChanged(_session); else _session.OnFocusChanged(); }
         void Cancel() { if (_sentence) _sentence->CancelComposition(_session); else _session.OnExternalCompositionCanceled(); }
         void ImportRaw(std::u16string_view raw)
@@ -115,12 +215,29 @@ namespace tiger::core
         }
         void Synchronize()
         {
-            auto next = _runtime.Read();
+            AcceptSnapshot(_runtime.Read());
+        }
+        void AcceptSnapshot(std::shared_ptr<const RuntimeLexiconSnapshot> next)
+        {
             if (!next || !next->schema || !next->pinyin) throw std::logic_error("Runtime tables must be initialized first");
             if (next == _snapshot) return;
+            bool adoptedModel = false;
+            if (_allowNoModel && !_sentence && !_modelPath.empty())
+            {
+                // Retry when a new runtime snapshot arrives, never on every
+                // key. A repaired/added model can reactivate sentence input.
+                try
+                {
+                    SentenceFivegramModel checked(_modelPath);
+                    _sentence=std::make_unique<RuntimeSentenceState>(_modelPath,_service);
+                    adoptedModel=true;
+                }
+                catch (const std::exception&) {} // ordinary fallback until resources become available
+            }
             bool sentenceEnabled = GetSentenceEligibility(next->config, next->schemaName).input;
-            if (sentenceEnabled && !_sentence)
+            if (sentenceEnabled && !_sentence && !_allowNoModel)
                 throw std::logic_error("Sentence schemas require an explicit n-gram model path");
+            sentenceEnabled = sentenceEnabled && static_cast<bool>(_sentence);
             bool migrated = _snapshot && (next->root != _snapshot->root || next->schemaName != _snapshot->schemaName);
             auto previousSnapshot = _snapshot;
             auto previousSettings = _settings;
@@ -154,10 +271,16 @@ namespace tiger::core
                 _settings = std::move(previousSettings);
                 _version = previousVersion;
                 _session = std::move(previousSession);
+                if (adoptedModel) _sentence.reset();
                 throw;
             }
+            _learningReceipts.Cancel(); // successful configuration/schema publication invalidates old capabilities
         }
+        SentenceLearningReceipts _learningReceipts;
         RuntimeLexicons& _runtime;
+        bool _allowNoModel;
+        std::filesystem::path _modelPath;
+        SentenceServiceLifecycle* _service;
         std::shared_ptr<const RuntimeLexiconSnapshot> _snapshot;
         OrdinarySettings _settings;
         int _version = 0;

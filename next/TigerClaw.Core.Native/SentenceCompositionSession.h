@@ -2,6 +2,7 @@
 #include "SentenceCompositionContext.h"
 #include "SentenceEmptyCodeTracker.h"
 #include "SentenceNeuralRanking.h"
+#include "SentenceLearningSelection.h"
 #include <limits>
 
 namespace tiger::core
@@ -10,6 +11,7 @@ namespace tiger::core
     {
         std::uint64_t generation, lexiconVersion;
         std::u16string raw, requiredPrefix;
+        std::shared_ptr<const SentenceLockedPrefix> lockedPrefix{};
     };
     struct SentenceControlResult
     {
@@ -26,6 +28,12 @@ namespace tiger::core
     class SentenceCompositionSession
     {
         SentenceCompositionContext _context;
+        SentenceLearningSelection _learning;
+        std::function<bool(std::u16string_view)> _supplemental;
+        std::vector<std::shared_ptr<const SentenceLockedPrefix>> _locked;
+        std::function<std::size_t(std::u16string_view, std::size_t, std::size_t, std::size_t)> _competingBoundary;
+        std::shared_ptr<const SentenceLearningSnapshot> _learningSnapshot;
+        std::u16string _learningMode;
         SentenceCommitTracker _tracker;
         SentenceEmptyCodeTracker _emptyTracker;
         SentenceLatticeResult _visible;
@@ -42,8 +50,24 @@ namespace tiger::core
                 throw std::overflow_error("Sentence composition generation exhausted");
         }
     public:
+        void SetSupplementalQuery(decltype(_supplemental) query) { _supplemental = std::move(query); }
+        void SetCompetingBoundaryQuery(decltype(_competingBoundary) query) { _competingBoundary = std::move(query); }
+        void ConfigureLearning(std::shared_ptr<const SentenceLearningSnapshot> snapshot, std::u16string mode)
+        { _learningSnapshot = snapshot; _learningMode = mode; _learning.Configure(std::move(snapshot), std::move(mode)); }
+        std::vector<SentenceLearningEvent> TakeLearning(std::u16string_view output) { return _learning.Take(output); }
         const SentenceCompositionContext& Context() const { return _context; }
         const std::vector<SentenceBeamState>& Candidates() const { return _visible.candidates; }
+        std::vector<std::u16string> PublishedCandidates() const
+        {
+            // Retain full text for decoding/learning/selection. Both fresh and
+            // pending UI lists show only text that has not already been output.
+            std::vector<std::u16string> result;
+            auto prefix = _context.CommittedText();
+            for (const auto& candidate : _visible.candidates)
+                if (candidate.text.starts_with(prefix) && candidate.text.size() > prefix.size())
+                    result.push_back(candidate.text.substr(prefix.size()));
+            return result;
+        }
         std::size_t SelectedIndex() const { return _selected; }
         bool DecodeCurrent() const { return _applied == _generation && _visible.raw == _context.Raw(); }
         std::u16string DisplayCode() const
@@ -86,7 +110,7 @@ namespace tiger::core
         }
         SentenceCompositionRequest Request() const
         {
-            return {_generation, _lexiconVersion, std::u16string(_context.Raw()), std::u16string(_context.CommittedText())};
+            return {_generation, _lexiconVersion, std::u16string(_context.Raw()), std::u16string(_context.CommittedText()), _locked.empty() ? nullptr : _locked.back()};
         }
         std::optional<SentenceNeuralRequest> NeuralRequest() const
         {
@@ -100,12 +124,13 @@ namespace tiger::core
         {
             auto current = NeuralRequest();
             if (!current || request.composition.generation != _generation || request.composition.lexiconVersion != _lexiconVersion ||
-                request.composition.raw != _context.Raw() || request.composition.requiredPrefix != _context.CommittedText() ||
+                request.composition.lockedPrefix != Request().lockedPrefix || request.composition.raw != _context.Raw() || request.composition.requiredPrefix != _context.CommittedText() ||
                 request.candidates != current->candidates || scores.size() != request.candidates.size() ||
                 std::any_of(scores.begin(), scores.end(), [](double score) { return !std::isfinite(score); })) return false;
             auto ranks = RankSentenceNeural(_visible.candidates, scores, duplicateSingles);
             auto reordered = _visible.candidates;
             for (std::size_t i = 0; i < ranks.size(); ++i) reordered[i] = _visible.candidates[ranks[i].index];
+            ApplySentenceFusionOrdering(reordered, _context.Raw(), _learningSnapshot, _learningMode);
             std::u16string raw(_context.Raw()), top(reordered[0].text);
             _visible.candidates.swap(reordered); _neuralRaw.swap(raw); _neuralTop.swap(top);
             _neuralApplied = _generation; _selected = 0;
@@ -122,6 +147,27 @@ namespace tiger::core
         {
             if (_context.UncommittedRaw().size() >= 128) return {};
             CheckGeneration();
+            if (_manual && key >= u'a' && key <= u'z' && DecodeCurrent() && _selected < _visible.candidates.size())
+            {
+                const auto selected = _visible.candidates[_selected];
+                auto floor = _context.Raw().size() - _context.UncommittedRaw().size();
+                if (selected.boundary && selected.boundary->rawLength > floor)
+                {
+                    _learning.Capture(_context.Raw(), _visible.candidates, _selected, std::max(floor, _locked.empty() ? 0 : _locked.back()->raw.size()), _supplemental);
+                    auto prefix = std::make_shared<SentenceLockedPrefix>(SentenceLockedPrefix{
+                        std::u16string(_context.Raw().substr(0, selected.boundary->rawLength)), selected.text, selected.boundary});
+                    std::optional<std::u16string> output;
+                    if (enabled)
+                    {
+                        output = _context.ApplyPrefix({selected.text, selected.boundary->rawLength, 1});
+                        _learning.Release(selected.text, selected.boundary->rawLength, *output);
+                    }
+                    _locked.push_back(std::move(prefix)); _context.Append(key); ++_generation;
+                    _visible.candidates = {selected}; _evidence = {}; _selected = 0; _manual = false;
+                    _continuation = false; _tracker.Reset(); _emptyTracker.Reset();
+                    return output;
+                }
+            }
             auto nextContext = _context;
             nextContext.Append(key);
             auto nextEmpty = _emptyTracker;
@@ -147,7 +193,10 @@ namespace tiger::core
         }
         void Backspace()
         {
-            CheckGeneration(); _context.Backspace(); ++_generation; _manual = false; _tracker.Reset(); _emptyTracker.Reset();
+            CheckGeneration(); _context.Backspace(); _learning.Edited(_context.Raw().size());
+            auto committed = _context.Raw().size() - _context.UncommittedRaw().size();
+            while (!_locked.empty() && _locked.back()->raw.size() > committed && _context.Raw().size() <= _locked.back()->raw.size()) _locked.pop_back();
+            ++_generation; _manual = false; _tracker.Reset(); _emptyTracker.Reset();
             if (_context.Raw().empty())
             {
                 _visible = {}; _evidence = {}; _selected = 0; _continuation = false;
@@ -156,7 +205,7 @@ namespace tiger::core
         }
         void InvalidateLexicon(std::uint64_t version)
         {
-            CheckGeneration(); _lexiconVersion = version; ++_generation;
+            CheckGeneration(); _learning.Clear(); _lexiconVersion = version; ++_generation;
             _tracker.Reset(); _visible = {}; _evidence = {}; _selected = 0; _manual = false;
             _emptyTracker.Reset(); _neuralRaw.clear(); _neuralTop.clear();
         }
@@ -164,10 +213,11 @@ namespace tiger::core
             const SentenceEarlyEvidence& evidence)
         {
             if (request.generation != _generation || request.lexiconVersion != _lexiconVersion ||
-                request.raw != _context.Raw() || request.requiredPrefix != _context.CommittedText() ||
+                request.lockedPrefix != Request().lockedPrefix || request.raw != _context.Raw() || request.requiredPrefix != _context.CommittedText() ||
                 _applied == _generation || lattice.raw != NormalizeSentenceRaw(request.raw)) return false;
             SentenceLatticeResult visible;
             visible.raw = request.raw; // restore original casing for engine identity/evidence
+            visible.learningAffected = lattice.learningAffected;
             visible.expanded = lattice.expanded; visible.confidenceTruncated = lattice.confidenceTruncated;
             bool firstOnly = _continuation && !std::any_of(request.raw.begin(), request.raw.end(),
                 [](char16_t c) { return SentenceDigit(c) || c == u';' || c == u'\''; });
@@ -181,11 +231,12 @@ namespace tiger::core
         bool Select(std::size_t index)
         {
             if (index >= _visible.candidates.size()) return false;
+            if (DecodeCurrent() && !_visible.candidates.empty()) _learning.Begin(_visible.candidates[0]);
             _selected = index; _manual = true; _tracker.Reset(); _emptyTracker.Reset(); return true;
         }
         void Cancel()
         {
-            CheckGeneration(); _context.Clear(); ++_generation;
+            CheckGeneration(); _locked.clear(); _learning.Clear(); _context.Clear(); ++_generation;
             _tracker.Reset(); _visible = {}; _evidence = {}; _selected = 0; _manual = false;
             _emptyTracker.Reset(); _continuation = false; _neuralRaw.clear(); _neuralTop.clear();
         }
@@ -227,6 +278,7 @@ namespace tiger::core
                 if (tabClear) Cancel();
                 return {true, false, {}};
             }
+            if (!_visible.candidates.empty()) _learning.Begin(_visible.candidates[0]);
             _manual = true; _tracker.Reset();
             auto count = std::min(_visible.candidates.size(), static_cast<std::size_t>(std::clamp(pageSize, 1, 10)));
             if (count)
@@ -240,6 +292,8 @@ namespace tiger::core
         {
             CheckGeneration();
             auto context = _context.CommitContext(enabled, _manual, true, minimumRetained);
+            context.competingBoundary = _competingBoundary;
+            context.allowTruncatedStrong = true;
             if (_neuralRaw == _visible.raw && !_neuralRaw.empty()) context.acceptedNeuralTop = _neuralTop;
             auto proposal = _tracker.Observe(_visible, _evidence, context);
             if (!proposal) return {};
@@ -253,7 +307,7 @@ namespace tiger::core
         }
         std::u16string FinishLiteral()
         {
-            CheckGeneration(); auto output = _context.FinishLiteral();
+            CheckGeneration(); _locked.clear(); _learning.Clear(); auto output = _context.FinishLiteral();
             _neuralRaw.clear(); _neuralTop.clear();
             ++_generation; _tracker.Reset(); _visible = {}; _evidence = {}; _selected = 0; _manual = false;
             _emptyTracker.Reset(); _continuation = false;
@@ -267,7 +321,14 @@ namespace tiger::core
             CheckGeneration();
             std::optional<std::u16string_view> candidate;
             if (_selected < _visible.candidates.size()) candidate = _visible.candidates[_selected].text;
+            if (candidate)
+                _learning.Capture(_context.Raw(), _visible.candidates, _selected,
+                    std::max(_context.Raw().size() - _context.UncommittedRaw().size(), _locked.empty() ? 0 : _locked.back()->raw.size()), _supplemental);
+            auto rawEnd = _context.Raw().size();
+            std::u16string selectedText = candidate ? std::u16string(*candidate) : std::u16string{};
             auto output = _context.Finish(candidate, punctuation);
+            _learning.Release(selectedText, rawEnd, output);
+            _locked.clear();
             _neuralRaw.clear(); _neuralTop.clear();
             ++_generation; _tracker.Reset(); _visible = {}; _evidence = {}; _selected = 0; _manual = false;
             _emptyTracker.Reset(); _continuation = false;

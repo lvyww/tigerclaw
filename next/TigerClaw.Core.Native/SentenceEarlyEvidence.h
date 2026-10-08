@@ -16,11 +16,13 @@ namespace tiger::core
     inline SentenceEarlyEvidence BuildSentenceEarlyEvidence(const SentenceLexicon& lexicon,
         SentenceLatticeResult& lattice, const SentenceTransition& transition,
         const SentenceLatticeSettings& settings = {},
-        const std::function<double(std::u16string_view)>& isolation = {}, std::u16string_view required = {})
+        const std::function<double(std::u16string_view)>& isolation = {}, std::u16string_view required = {},
+        const SentenceHistoryTransition* history = nullptr)
     {
         SentenceEarlyEvidence result;
         if (lattice.raw.empty() || lattice.states.empty()) return result;
         result.confidenceTruncated = lattice.confidenceTruncated;
+        if (result.confidenceTruncated && !settings.preserveTruncatedEvidence) return result;
         std::vector<SentenceBeamState> visible, pool;
         std::map<std::pair<std::u16string, std::size_t>, std::size_t> indices;
         auto add = [&](const SentenceBeamState& candidate)
@@ -32,10 +34,14 @@ namespace tiger::core
             auto& previous = pool[found->second];
             double maximum = std::max(previous.logMass, candidate.logMass);
             double combined = maximum + std::log(std::exp(previous.logMass - maximum) + std::exp(candidate.logMass - maximum));
-            if (candidate.logMass > previous.logMass) previous = candidate;
+            auto early = [](const auto& c) { return std::isnan(c.earlyLogMass) ? c.logMass : c.earlyLogMass; };
+            double earlyMaximum = std::max(early(previous), early(candidate));
+            double earlyCombined = earlyMaximum + std::log(std::exp(early(previous) - earlyMaximum) + std::exp(early(candidate) - earlyMaximum));
+            if (early(candidate) > early(previous)) previous = candidate;
+            previous.earlyLogMass = earlyCombined;
             previous.logMass = combined;
         };
-        for (const auto& candidate : lattice.candidates)
+        for (const auto& candidate : lattice.confidencePool.empty() ? lattice.candidates : lattice.confidencePool)
             if (candidate.text.starts_with(required)) { visible.push_back(candidate); add(candidate); }
         auto maximumCode = lexicon.CodeLengths().empty() ? 1 : lexicon.CodeLengths().back();
         auto maximumTail = std::min(maximumCode - 1, lattice.raw.size() - 1);
@@ -46,12 +52,22 @@ namespace tiger::core
             bool letters = std::all_of(tail.begin(), tail.end(), [](char16_t unit) { return HasSentenceLetter(std::u16string_view(&unit, 1)); });
             if (!letters || !lexicon.IsProperPrefix(tail) || (tail.size() >= 2 && lexicon.Candidates(tail))) continue;
             const auto& partial = lattice.states[consumed].Limit(settings.beamWidth, settings.duplicateSingles);
+            if (!settings.preserveTruncatedEvidence && (result.confidenceTruncated || lattice.states[consumed].Truncated()))
+            {
+                if (std::any_of(partial.begin(), partial.end(), [&](const auto& c) { return c.text.starts_with(required); }))
+                { result.mergedIncompleteTail = true; result.confidenceTruncated |= lattice.states[consumed].Truncated(); }
+                continue;
+            }
             bool added = false;
             for (auto item : partial)
             {
-                double ending = transition(item.previous2, item.previous1, u"\x03") - (isolation ? isolation(item.text) : 0);
+                auto endingHistory = item.history;
+                double ending = (history ? history->step(endingHistory, u"\x03") : transition(item.previous2, item.previous1, u"\x03"))
+                    - (isolation ? isolation(item.text) : 0);
                 item.score += ending;
                 item.logMass += ending;
+                item.earlyLogMass = item.logMass + std::min(.8, std::min(.75, item.supplementScore * .05) +
+                    ((item.source & 1) ? 0 : item.learningEarlyBonus));
                 if (!item.text.starts_with(required)) continue;
                 add(item);
                 added = true;
@@ -68,9 +84,9 @@ namespace tiger::core
             double maximum = visible[0].logMass, total = 0;
             for (const auto& candidate : visible) maximum = std::max(maximum, candidate.logMass);
             for (const auto& candidate : visible) total += std::exp(candidate.logMass - maximum);
-            result.neutralLowConfidence = total > 0 && 1.0 / total < 0.995;
+            result.neutralLowConfidence = total > 0 && 1.0 / total < 0.99;
         }
-        result.prefixes = BuildSentencePrefixEvidence(pool);
+        if (!result.confidenceTruncated || settings.preserveTruncatedEvidence) result.prefixes = BuildSentencePrefixEvidence(pool);
         const SentencePrefixEvidence* best = nullptr;
         std::size_t bestLength = 0;
         std::map<std::u16string, double> shares;
@@ -81,7 +97,7 @@ namespace tiger::core
             if (found == shares.end() || prefix.share > found->second ||
                 (prefix.share == found->second && prefix.rawLength < result.rawLengths[prefix.text]))
             { shares[prefix.text] = prefix.share; result.rawLengths[prefix.text] = prefix.rawLength; }
-            if (prefix.share < 0.995) continue;
+            if (prefix.share < 0.99) continue;
             auto length = TextElementStarts(prefix.text).size();
             if (!best || length > bestLength || (length == bestLength && (prefix.share > best->share ||
                 (prefix.share == best->share && prefix.rawLength < best->rawLength))))

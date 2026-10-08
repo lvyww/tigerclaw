@@ -11,8 +11,20 @@ concurrency:
   group: tab-learning-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  cpp-core:
+    name: Mainline C++ Core
+    runs-on: windows-2025
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+          submodules: recursive
+      - name: Build and test the production x64 Core
+        shell: powershell
+        run: ./tools/publish_cpp_core.ps1 -BuildOnly -Architecture x64 -Jobs 2
   core:
-    name: Core learning and existing regressions
+    name: C# reference learning and existing regressions
     runs-on: windows-2025
     timeout-minutes: 20
     steps:

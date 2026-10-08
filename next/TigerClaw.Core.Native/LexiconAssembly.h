@@ -3,7 +3,7 @@
 #include "LexiconText.h"
 namespace tiger::core
 {
-    enum class CandidateAdjustment { Advance, Top, Delete };
+    enum class CandidateAdjustment { Advance, Top, Delete, Add };
     // Input order must already be file/source order. Uncoded entries must be
     // inferred before this stage; they are skipped here as in the C# map loop.
     std::vector<CompactLexicon::Entry> AssembleCodedRows(std::span<const LexiconRow> rows);

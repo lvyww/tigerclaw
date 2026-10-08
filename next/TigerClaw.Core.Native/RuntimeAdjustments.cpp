@@ -2,14 +2,59 @@
 #include "CodeCase.h"
 #include <algorithm>
 #include <fstream>
+#include "OutputServices.h"
+#include <sstream>
+#include <iomanip>
 
 namespace tiger::core
 {
+    std::filesystem::path RuntimeLexicons::ExportLexicon() const
+    {
+        auto snapshot=Read();
+        if (!snapshot || snapshot->schemaName.empty()) throw std::runtime_error("current schema is empty");
+        std::u16string name;
+        for (auto c:snapshot->schemaName)
+            if (c>=32 && std::u16string_view(u"<>:\"/\\|?*").find(c)==std::u16string_view::npos) name+=c;
+        if (TrimText(name).empty()) name=u"export";
+        auto clock=ReadLocalOutputClock(); std::ostringstream stamp;
+        stamp << ' ' << std::setfill('0') << std::setw(4) << clock.year << std::setw(2) << clock.month << std::setw(2) << clock.day
+            << '-' << std::setw(2) << clock.hour << std::setw(2) << clock.minute << ".txt";
+        auto suffix=stamp.str(); name.append(suffix.begin(),suffix.end());
+        auto directory=_executableDirectory / u"码表导出"; std::filesystem::create_directories(directory);
+        auto path=directory / name; std::ofstream file(path,std::ios::binary|std::ios::trunc);
+        file.write("\xef\xbb\xbf",3);
+        const auto& table=snapshot->schema->table;
+        for (std::uint32_t i=0;i<table.Count();++i)
+        {
+            if (!table.CandidateCount(i)) continue;
+            auto line=table.Code(i); line+=u' ';
+            for (std::uint32_t j=0;j<table.CandidateCount(i);++j)
+            {
+                if(j) line+=u' ';
+                auto entry=table.Candidate(i,j);
+                auto display=CandidateDisplayText(entry),commit=CandidateCommitText(entry);
+                auto value=display==commit ? std::u16string(commit) : std::u16string(display)+u"=>"+std::u16string(commit);
+                for (std::size_t k=0;k<value.size();++k)
+                {
+                    auto c=value[k];
+                    if(c==u'\\') line+=u"\\\\";
+                    else if(c==u' ') line+=u"\\s";
+                    else if(c==u'\t') line+=u"\\t";
+                    else if(c==u'\n') line+=u"\\n";
+                    else if(c==u'\r' && k+1<value.size() && value[k+1]==u'\n') { line+=u"\\n"; ++k; }
+                    else line+=c;
+                }
+            }
+            auto bytes=EncodeUtf8Text(line+u"\r\n"); file.write(reinterpret_cast<const char*>(bytes.data()),static_cast<std::streamsize>(bytes.size()));
+        }
+        file.close(); if(!file) throw std::runtime_error("Cannot export lexicon");
+        return path;
+    }
     bool RuntimeLexicons::AdjustCandidate(CandidateAdjustment operation, std::u16string_view code,
         std::u16string_view candidate)
     {
         auto normalized = NormalizeCode(code);
-        auto text = std::u16string(CandidateCommitText(candidate));
+        auto text = operation == CandidateAdjustment::Add ? ParseLexiconEntryToken(candidate) : std::u16string(CandidateCommitText(candidate));
         if (normalized.empty() || text.empty()) return false;
         std::lock_guard guard(_writer);
         auto previous = Read();
@@ -20,7 +65,12 @@ namespace tiger::core
         if (found)
             for (std::uint32_t i = 0; i < table.CandidateCount(*found); ++i) candidates.push_back(table.Candidate(*found, i));
         auto match = std::find_if(candidates.begin(), candidates.end(), [&](const auto& entry) { return CandidateCommitText(entry) == text; });
-        if (operation == CandidateAdjustment::Delete)
+        if (operation == CandidateAdjustment::Add)
+        {
+            std::erase_if(candidates, [&](const auto& entry) { return CandidateCommitText(entry) == CandidateCommitText(text); });
+            candidates.push_back(text);
+        }
+        else if (operation == CandidateAdjustment::Delete)
         {
             if (match == candidates.end()) return false;
             std::erase_if(candidates, [&](const auto& entry) { return CandidateCommitText(entry) == text; });
@@ -63,6 +113,7 @@ namespace tiger::core
         auto next = std::make_shared<RuntimeLexiconSnapshot>(*previous);
         next->schema = std::move(schema);
         next->generation = previous->generation + 1;
+        next->lexiconVersion = previous->lexiconVersion + 1;
         _current.store(next);
         try
         {
@@ -80,7 +131,7 @@ namespace tiger::core
                 else if (c == u'\r' && i + 1 < text.size() && text[i + 1] == u'\n') { escaped += u"\\n"; ++i; }
                 else escaped += c;
             }
-            auto prefix = operation == CandidateAdjustment::Delete ? u"{\u5220\u9664}" : operation == CandidateAdjustment::Top ? u"{\u7f6e\u9876}" : u"{\u524d\u79fb}";
+            auto prefix = operation == CandidateAdjustment::Add ? u"{添加}" : operation == CandidateAdjustment::Delete ? u"{\u5220\u9664}" : operation == CandidateAdjustment::Top ? u"{\u7f6e\u9876}" : u"{\u524d\u79fb}";
             auto bytes = EncodeUtf8Text(prefix + normalized + u"\t" + escaped + u"\r\n");
             std::ofstream file(directory / u"\u7528\u6237\u8c03\u6574.txt", std::ios::binary | std::ios::app);
             file.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));

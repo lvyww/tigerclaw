@@ -1,0 +1,13 @@
+execute_process(COMMAND "${DUMPBIN}" /imports "${BINARY}"
+    RESULT_VARIABLE status OUTPUT_VARIABLE imports ERROR_VARIABLE error)
+if(NOT status EQUAL 0)
+    message(FATAL_ERROR "Cannot inspect Core imports: ${error}")
+endif()
+string(TOLOWER "${imports}" imports_lower)
+if(imports_lower MATCHES "icu(uc|in)?\\.dll")
+    message(FATAL_ERROR "Core must not import Windows ICU DLLs")
+endif()
+if(NOT imports_lower MATCHES "kernel32\\.dll")
+    message(FATAL_ERROR "Unexpected or empty Core import report")
+endif()
+message(STATUS "Core regular/delay import report contains no ICU DLL")

@@ -2,6 +2,7 @@
 #include "RuntimePaths.h"
 #include "PinyinLexicon.h"
 #include "CodeCase.h"
+#include "ConfigDefaults.h"
 #include <stdexcept>
 
 namespace tiger::core
@@ -73,10 +74,18 @@ namespace tiger::core
         return ReadCandidatePage(pinyin ? *current->pinyin : current->schema->table, code, page, size);
     }
 
-    void RuntimeLexicons::Reload(const std::filesystem::path& configFile)
+    void RuntimeLexicons::Reload(const std::filesystem::path& configFile, const AcceptSnapshot& accept, bool reloadBindings)
     {
         std::lock_guard guard(_writer);
-        ReloadNoLock(configFile);
+        ReloadNoLock(configFile, accept, reloadBindings);
+    }
+
+    void RuntimeLexicons::ReloadTables(const AcceptSnapshot& accept)
+    {
+        std::lock_guard guard(_writer);
+        auto previous = Read();
+        if (!previous) throw std::logic_error("Runtime configuration is not loaded");
+        LoadSnapshotNoLock(previous->config, accept, true, false);
     }
 
     void RuntimeLexicons::Initialize(const std::filesystem::path& configFile)
@@ -86,10 +95,45 @@ namespace tiger::core
         ReloadNoLock(configFile);
     }
 
-    void RuntimeLexicons::ReloadNoLock(const std::filesystem::path& configFile)
+    bool RuntimeLexicons::SetConfig(std::u16string_view key, std::u16string_view value,
+        bool& changed, std::u16string& error, const AcceptSnapshot& accept)
+    {
+        changed = false; error.clear(); key = TrimText(key); value = TrimText(value);
+        if (key.empty()) { error = u"key is empty"; return false; }
+        std::u16string canonical;
+        for (const auto& [known, unused] : ConfigDefaults)
+            if (FoldOrdinalCode(known) == FoldOrdinalCode(key)) { canonical = known; break; }
+        if (canonical.empty()) { error = u"unknown key"; return false; }
+        auto normalized = canonical == RootKey ? NormalizeCodeRoot(value) : std::u16string(value);
+        std::lock_guard guard(_writer);
+        auto previous = Read();
+        if (!previous) throw std::logic_error("Runtime configuration is not loaded");
+        auto next = std::make_shared<RuntimeLexiconSnapshot>(*previous);
+        auto& old = Value(next->config, canonical);
+        if (old == normalized) return true;
+        old = std::move(normalized);
+        if (canonical == RootKey || canonical == CurrentKey)
+            LoadSnapshotNoLock(std::move(next->config), accept, false);
+        else
+        {
+            next->actionBindings = LoadActionBindings(next->config);
+            next->generation++; next->configVersion++;
+            if (accept) accept(next);
+            _current.store(std::move(next));
+        }
+        changed = true;
+        return true;
+    }
+
+    void RuntimeLexicons::ReloadNoLock(const std::filesystem::path& configFile, const AcceptSnapshot& accept, bool reloadBindings)
+    {
+        LoadSnapshotNoLock(ReadConfigFile(configFile), accept, reloadBindings);
+    }
+
+    void RuntimeLexicons::LoadSnapshotNoLock(ConfigValues config, const AcceptSnapshot& accept, bool reloadBindings, bool configChanged)
     {
         auto next = std::make_shared<RuntimeLexiconSnapshot>();
-        next->config = ReadConfigFile(configFile);
+        next->config = std::move(config);
         next->actionBindings = LoadActionBindings(next->config);
         next->root = ResolveCodeRoot(_executableDirectory, Value(next->config, RootKey));
         auto selection = SelectSchemaDirectory(next->root, Value(next->config, CurrentKey));
@@ -104,37 +148,44 @@ namespace tiger::core
         next->schema = std::make_shared<const SchemaLexicon>(LoadSchemaLexicon(selection.directory));
         next->pinyin = std::make_shared<const CompactLexicon>(LoadPinyinLexicon(_executableDirectory));
         auto previous = Read();
-        // Full table reload does not itself reload the engine-owned bindings.
-        // The future host invokes ReloadSelectionBindings at engine startup and
-        // explicit selection-setting changes, matching the C# ownership boundary.
-        if (previous)
+        // Config reload prepares engine bindings in the same transaction.
+        // Low-level table loads may retain the already accepted bindings.
+        if (reloadBindings)
+        {
+            next->selectionBindings = ReadSelectionBindingsFile(_executableDirectory / u"自定义选重键.txt");
+            next->selectionKeys = SelectionKeys(next->selectionBindings);
+        }
+        else if (previous)
         {
             next->selectionBindings = previous->selectionBindings;
             next->selectionKeys = previous->selectionKeys;
         }
         next->generation = previous ? previous->generation + 1 : 1;
+        next->configVersion = (previous ? previous->configVersion : 0) + (configChanged ? 1 : 0) + (selection.usedFallback ? 1 : 0);
+        next->lexiconVersion = (previous ? previous->lexiconVersion : 0) + 1;
         // No partial config/main/pinyin publication when any disk work fails.
+        if (accept) accept(next);
         _cachedName.clear();
         _cachedSchema.reset();
         _current.store(std::move(next));
     }
 
-    bool RuntimeLexicons::SwitchSchema(std::u16string_view name)
+    bool RuntimeLexicons::SwitchSchema(std::u16string_view name, const AcceptSnapshot& accept)
     {
         std::lock_guard guard(_writer);
-        return SwitchSchemaNoLock(name);
+        return SwitchSchemaNoLock(name, accept);
     }
 
-    bool RuntimeLexicons::SwitchRecentSchema()
+    bool RuntimeLexicons::SwitchRecentSchema(const AcceptSnapshot& accept)
     {
         std::lock_guard guard(_writer);
         auto current = Read();
         if (!current) return false;
         auto target = ChooseRecentSchema(GetSchemaNames(current->root), current->schemaName, current->recentSchemas);
-        return !target.empty() && SwitchSchemaNoLock(target);
+        return !target.empty() && SwitchSchemaNoLock(target, accept);
     }
 
-    bool RuntimeLexicons::SwitchSchemaNoLock(std::u16string_view name)
+    bool RuntimeLexicons::SwitchSchemaNoLock(std::u16string_view name, const AcceptSnapshot& accept)
     {
         auto previous = Read();
         if (!previous || name.empty() || FoldOrdinalCode(name) == FoldOrdinalCode(previous->schemaName)) return false;
@@ -149,9 +200,15 @@ namespace tiger::core
         next->schema = _cachedSchema && FoldOrdinalCode(_cachedName) == FoldOrdinalCode(selection.name)
             ? _cachedSchema : std::make_shared<const SchemaLexicon>(LoadSchemaLexicon(selection.directory));
         next->generation = previous->generation + 1;
+        next->configVersion = previous->configVersion + 1;
+        next->lexiconVersion = previous->lexiconVersion + 1;
         // Capacity one: only the schema just left survives. Pinyin belongs to
         // the runtime snapshot and is shared across all schema switches.
         auto leavingName = previous->schemaName;
+        // All allocation/loading precedes host acceptance; after acceptance only
+        // non-throwing ownership transfers remain. Rejection preserves config,
+        // recent-schema history, generation and the one-entry table cache.
+        if (accept) accept(next);
         _cachedName.swap(leavingName);
         _cachedSchema = previous->schema;
         _current.store(std::move(next));

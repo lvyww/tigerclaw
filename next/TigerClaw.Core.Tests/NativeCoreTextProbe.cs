@@ -29,6 +29,13 @@ namespace TigerClaw.Core.Tests
             while ((line = Console.ReadLine()) != null)
             {
                 using var document = JsonDocument.Parse(line);
+                if (document.RootElement.TryGetProperty("globalization_probe", out _))
+                {
+                    var mode=typeof(CultureInfo).Assembly.GetType("System.Globalization.GlobalizationMode");
+                    var useNls=(bool)mode.GetProperty("UseNls",BindingFlags.Static|BindingFlags.NonPublic|BindingFlags.Public).GetValue(null);
+                    Console.WriteLine(JsonSerializer.Serialize(new {useNls}));
+                    continue;
+                }
                 if (document.RootElement.TryGetProperty("neural_candidates", out var neuralInput))
                 {
                     var candidates = neuralInput.EnumerateArray().Select(value => new SentenceCandidate
@@ -529,8 +536,20 @@ namespace TigerClaw.Core.Tests
                 {
                     CultureInfo.CurrentCulture = document.RootElement.TryGetProperty("locale", out var locale)
                         ? CultureInfo.GetCultureInfo(locale.GetString()) : defaultCulture;
-                    Console.WriteLine(JsonSerializer.Serialize(CoreRuntimeState.GetOrderedLexiconFiles(directory.GetString())
-                        .Select(path => Units(Path.GetFileName(path)))));
+                    string[] files;
+                    if (document.RootElement.TryGetProperty("nls_sort_keys",out var sortKeys) && sortKeys.GetBoolean())
+                    {
+                        var root=directory.GetString(); var orderSchema=new DirectoryInfo(root).Name;
+                        var culture=CultureInfo.CurrentCulture;
+                        var comparer=Comparer<string>.Create((a,b)=>SortKey.Compare(culture.CompareInfo.GetSortKey(a),culture.CompareInfo.GetSortKey(b)));
+                        files=Directory.GetFiles(root,"*.txt").Concat(Directory.GetFiles(root,"*.dict.yaml"))
+                            .Where(path=>!SentenceLearning.IsReservedFile(Path.GetFileName(path)))
+                            .OrderBy(path=>string.Equals(Path.GetFileName(path),orderSchema+".txt",StringComparison.OrdinalIgnoreCase) ||
+                                string.Equals(Path.GetFileName(path),orderSchema+".dict.yaml",StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+                            .ThenBy(Path.GetFileName,comparer).ToArray();
+                    }
+                    else files=CoreRuntimeState.GetOrderedLexiconFiles(directory.GetString());
+                    Console.WriteLine(JsonSerializer.Serialize(files.Select(path=>Units(Path.GetFileName(path)))));
                     continue;
                 }
                 if (document.RootElement.TryGetProperty("normalize", out var normalizeText))

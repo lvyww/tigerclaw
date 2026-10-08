@@ -9,7 +9,7 @@ namespace TigerClaw.Overlay
     {
         protected override void OnStartup(StartupEventArgs e)
         {
-            bool bypassRegistrationCheck = TsfRegistrationGuard.ShouldBypassRegistrationCheck(AppDomain.CurrentDomain.BaseDirectory);
+            bool bypassRegistrationCheck = FrontendEndpoints.IsIsolated || TsfRegistrationGuard.ShouldBypassRegistrationCheck(AppDomain.CurrentDomain.BaseDirectory);
             if (!bypassRegistrationCheck && !TsfRegistrationGuard.IsTsfRegistered(out _))
             {
                 string installScript = TsfRegistrationGuard.FindInstallScriptPath(AppDomain.CurrentDomain.BaseDirectory);
@@ -26,7 +26,7 @@ namespace TigerClaw.Overlay
             }
 
             int currentPid = Process.GetCurrentProcess().Id;
-            if (!ProcessInstanceGuard.EnsureNoOtherInstances(RuntimeConstants.OverlayProcessName, currentPid))
+            if (!FrontendEndpoints.IsIsolated && !ProcessInstanceGuard.EnsureNoOtherInstances(RuntimeConstants.OverlayProcessName, currentPid))
             {
                 Shutdown();
                 return;

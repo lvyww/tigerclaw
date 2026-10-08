@@ -16,7 +16,7 @@ namespace TigerClaw.Dialog
 
         protected override void OnStartup(StartupEventArgs e)
         {
-            bool bypassRegistrationCheck = TsfRegistrationGuard.ShouldBypassRegistrationCheck(AppDomain.CurrentDomain.BaseDirectory);
+            bool bypassRegistrationCheck = FrontendEndpoints.IsIsolated || TsfRegistrationGuard.ShouldBypassRegistrationCheck(AppDomain.CurrentDomain.BaseDirectory);
             if (!bypassRegistrationCheck && !TsfRegistrationGuard.IsTsfRegistered(out _))
             {
                 string installScript = TsfRegistrationGuard.FindInstallScriptPath(AppDomain.CurrentDomain.BaseDirectory);
@@ -33,7 +33,7 @@ namespace TigerClaw.Dialog
             }
 
             int currentPid = Process.GetCurrentProcess().Id;
-            if (!ProcessInstanceGuard.EnsureNoOtherInstances(RuntimeConstants.DialogProcessName, currentPid))
+            if (!FrontendEndpoints.IsIsolated && !ProcessInstanceGuard.EnsureNoOtherInstances(RuntimeConstants.DialogProcessName, currentPid))
             {
                 Shutdown();
                 return;
@@ -76,7 +76,7 @@ namespace TigerClaw.Dialog
 
             try
             {
-                using (MemoryMappedFile mmf = MemoryMappedFile.OpenExisting(RuntimeConstants.HeartbeatMmfName))
+                using (MemoryMappedFile mmf = MemoryMappedFile.OpenExisting(FrontendEndpoints.Heartbeat))
                 using (MemoryMappedViewAccessor view = mmf.CreateViewAccessor())
                 {
                     view.Read(0, out seq);

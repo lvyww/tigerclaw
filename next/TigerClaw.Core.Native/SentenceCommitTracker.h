@@ -6,9 +6,10 @@ namespace tiger::core
 {
     struct SentenceCommitContext
     {
-        bool enabled = false, suspended = false, lexiconCurrent = true;
+        bool enabled = false, suspended = false, lexiconCurrent = true, allowTruncatedStrong = false;
         std::u16string_view fullRaw, committedText;
         std::size_t committedRaw = 0, lastCommitRaw = 0, minimumRetained = 3;
+        std::function<std::size_t(std::u16string_view, std::size_t, std::size_t, std::size_t)> competingBoundary;
         std::optional<std::u16string_view> acceptedNeuralTop; // only if accepted for this exact evidence raw
     };
     struct SentenceCommitProposal
@@ -34,18 +35,19 @@ namespace tiger::core
             bool current = context.fullRaw == raw;
             bool preceding = context.fullRaw.size() == raw.size() + 1 && context.fullRaw.starts_with(raw);
             if (!context.enabled || context.suspended || !context.lexiconCurrent || (!current && !preceding) ||
-                raw.size() <= 4 || evidence.confidenceTruncated) { Reset(); return {}; }
+                raw.size() <= 4 || (evidence.confidenceTruncated && (!context.allowTruncatedStrong || !current || lattice.learningAffected))) { Reset(); return {}; }
             if (_lastRaw != raw)
             {
                 if (!_lastRaw.empty() && (raw.size() != _lastRaw.size() + 1 || !raw.starts_with(_lastRaw))) _trackers.clear();
                 _lastRaw = raw;
                 auto accepted = context.acceptedNeuralTop;
-                if (!lattice.candidates.empty() && lattice.candidates[0].supplementScore > 0)
+                if (!lattice.candidates.empty())
                     accepted = lattice.candidates[0].text;
                 std::map<Key, SentencePrefixEvidence> qualifying;
                 for (const auto& prefix : evidence.prefixes)
                 {
-                    if (prefix.text.empty() || !prefix.boundaryClosed || prefix.share < 0.995 || prefix.rawLength <= context.committedRaw ||
+                    if (prefix.text.empty() || !prefix.boundaryClosed || prefix.share < 0.99 ||
+                        (evidence.confidenceTruncated && (std::isnan(prefix.baseShare) ? prefix.share : prefix.baseShare) < .99999) || prefix.rawLength <= context.committedRaw ||
                         prefix.text.size() <= context.committedText.size() || !prefix.text.starts_with(context.committedText) ||
                         (accepted && !accepted->starts_with(prefix.text))) continue;
                     bool visible = evidence.mergedIncompleteTail;
@@ -86,7 +88,7 @@ namespace tiger::core
                         auto found = _trackers.find(key);
                         Tracker tracker = found == _trackers.end() ? Tracker{prefix.text, prefix.rawLength} : found->second;
                         tracker.count = std::min(3, tracker.count + 1);
-                        tracker.strong = prefix.share >= 0.99999 ? std::min(2, tracker.strong + 1) : 0;
+                        tracker.strong = (std::isnan(prefix.baseShare) ? prefix.share : prefix.baseShare) >= 0.99999 ? std::min(2, tracker.strong + 1) : 0;
                         tracker.gaps = 0; tracker.share = prefix.share;
                         next.emplace(key, std::move(tracker));
                     }
@@ -100,6 +102,13 @@ namespace tiger::core
                 if ((tracker.count < 3 && tracker.strong < 2) || tracker.raw <= context.committedRaw || tracker.raw > raw.size() ||
                     raw.size() - tracker.raw < std::max(std::size_t{3}, context.minimumRetained) ||
                     tracker.text.size() <= context.committedText.size() || !tracker.text.starts_with(context.committedText)) continue;
+                if (!lattice.candidates.empty() && !lattice.candidates[0].text.starts_with(tracker.text)) continue;
+                if (context.competingBoundary)
+                {
+                    auto target = TextElementStarts(std::u16string_view(tracker.text).substr(context.committedText.size())).size();
+                    auto end = context.competingBoundary(raw, context.committedRaw, tracker.raw, target);
+                    if (end > raw.size() || raw.size() - end < std::max(std::size_t{3}, context.minimumRetained)) continue;
+                }
                 auto length = TextElementStarts(tracker.text).size();
                 if (!best || length > bestLength || (length == bestLength && (tracker.share > best->share ||
                     (tracker.share == best->share && tracker.raw < best->raw)))) { best = &tracker; bestLength = length; }

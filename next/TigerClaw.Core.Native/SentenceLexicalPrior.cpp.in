@@ -1,0 +1,10 @@
+#include "SentenceLexicalPrior.h"
+namespace tiger::core
+{
+    const SentenceLexicalPrior& SentenceLexicalPrior::Embedded()
+    {
+        static constexpr unsigned char data[] = {@SENTENCE_LEXICAL_BYTES@};
+        static const SentenceLexicalPrior value(data);
+        return value;
+    }
+}
