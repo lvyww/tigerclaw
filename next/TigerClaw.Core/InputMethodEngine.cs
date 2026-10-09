@@ -129,7 +129,7 @@ namespace TigerClaw.Core
         private int _sentenceDecodedLexiconVersion = -1;
         private int _sentenceDecodedOptimalCodeLimit = int.MinValue;
         private string _sentenceDecodedFullCodeWhitelist;
-        private bool _sentenceDecodedAllowDuplicateSingleCharacters;
+        private int _sentenceDecodedAutoSelectMinCodeLength;
         private int _sentenceResultLexiconVersion = -1;
         private int _sentenceSelectedIndex;
         private string _sentenceCommittedText = string.Empty;
@@ -311,13 +311,13 @@ namespace TigerClaw.Core
                     _sentenceDecodedLexiconVersion = -1;
                     _sentenceDecodedOptimalCodeLimit = int.MinValue;
                     _sentenceDecodedFullCodeWhitelist = null;
-                    _sentenceDecodedAllowDuplicateSingleCharacters = false;
+                    _sentenceDecodedAutoSelectMinCodeLength = -1;
                     return;
                 }
 
                 int optimalCodeLimit = _state.GetSentenceOptimalCodeHighFreqLimit();
                 string fullCodeWhitelistText = _state.GetSentenceFullCodeWhitelistText();
-                bool allowDuplicateSingleCharacters = _state.GetSentenceAllowDuplicateSingleCharacters();
+                int autoSelectMinCodeLength = _state.GetSentenceAutoSelectMinCodeLength();
                 if (_sentenceLanguageModel == null)
                 {
                     _sentenceLanguageModel = SentenceFivegramModel.LoadAvailable(_state.GetRuntimeBaseDirectory());
@@ -328,7 +328,7 @@ namespace TigerClaw.Core
                     _sentenceDecodedLexiconVersion = _state.LexiconVersion;
                     _sentenceDecodedOptimalCodeLimit = optimalCodeLimit;
                     _sentenceDecodedFullCodeWhitelist = fullCodeWhitelistText;
-                    _sentenceDecodedAllowDuplicateSingleCharacters = allowDuplicateSingleCharacters;
+                    _sentenceDecodedAutoSelectMinCodeLength = autoSelectMinCodeLength;
                     return;
                 }
 
@@ -344,7 +344,8 @@ namespace TigerClaw.Core
                     emittedCharacterReward: SentenceEmittedCharacterReward,
                     wholeInputSingleCharacterReward: SentenceWholeInputSingleCharacterReward,
                     supplementMatcher: supplementMatcher,
-                    allowDuplicateSingleCharacters: allowDuplicateSingleCharacters,
+                    allowDuplicateSingleCharacters: autoSelectMinCodeLength > 0,
+                    autoSelectMinCodeLength: autoSelectMinCodeLength,
                     canonicalCodeReward: SentenceCanonicalCodeReward,
                     canonicalIsolationFactor: SentenceCanonicalIsolationFactor,
                     canonicalIsolationMinCodeLength: SentenceCanonicalIsolationMinimumCodeLength,
@@ -355,7 +356,7 @@ namespace TigerClaw.Core
                 _sentenceDecodedLexiconVersion = _state.LexiconVersion;
                 _sentenceDecodedOptimalCodeLimit = optimalCodeLimit;
                 _sentenceDecodedFullCodeWhitelist = fullCodeWhitelistText;
-                _sentenceDecodedAllowDuplicateSingleCharacters = allowDuplicateSingleCharacters;
+                _sentenceDecodedAutoSelectMinCodeLength = autoSelectMinCodeLength;
             }
         }
 
@@ -3134,7 +3135,7 @@ namespace TigerClaw.Core
                      _sentenceDecodedFullCodeWhitelist,
                      _state.GetSentenceFullCodeWhitelistText(),
                      StringComparison.Ordinal) &&
-                 _sentenceDecodedAllowDuplicateSingleCharacters == _state.GetSentenceAllowDuplicateSingleCharacters()))
+                 _sentenceDecodedAutoSelectMinCodeLength == _state.GetSentenceAutoSelectMinCodeLength()))
             {
                 return;
             }

@@ -48,7 +48,7 @@ namespace tiger::core
     // be normalized by the decoder; ordering is code length then lexicon rank.
     inline std::vector<SentenceEdge> SentenceEdges(const SentenceLexicon& lexicon,
         std::u16string_view raw, std::size_t position, bool duplicateSingles,
-        std::ptrdiff_t minimumConsumedEndExclusive = -1)
+        std::ptrdiff_t minimumConsumedEndExclusive = -1, int autoSelectMinCodeLength = 3)
     {
         std::vector<SentenceEdge> result;
         if (position >= raw.size()) return result;
@@ -65,7 +65,9 @@ namespace tiger::core
             for (const auto& candidate : *candidates)
             {
                 bool allowed = suffix.rank > 0 ? candidate.rank == static_cast<std::size_t>(suffix.rank)
-                    : candidate.rank == 1 || whole || (duplicateSingles && candidate.elements.size() == 1);
+                    : candidate.rank == 1 || whole || (duplicateSingles && autoSelectMinCodeLength > 0 &&
+                      length >= static_cast<std::size_t>(std::clamp(autoSelectMinCodeLength, 0, 128)) &&
+                      candidate.elements.size() == 1);
                 if (allowed) result.push_back({&candidate, suffix.end, suffix.rank, whole, length});
             }
         }

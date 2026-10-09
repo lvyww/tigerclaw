@@ -719,23 +719,20 @@ block Core on a paused reader. Contract: `Protocol/ui_state.md`.
   boundaries in a length-framed context property shared by the separate processor
   and translator environments; confidence trackers remain processor-local.
 - A one-key sentence segment is legal only when the whole input is one key.
-  Other segments consume at least two keys. `;`, `'` and digits select explicit
-  lexicon ranks. An implicit non-first rank is legal only when the whole input is
-  consumed by one lexicon edge; segmented paths use first ranks unless selection
-  is explicit. Empty-code automatic-commit continuations hide whole-input
-  non-first edges, but retain decoder-approved segmented duplicate-single paths
-  when `允许单字重码组句` is on (for example `xrxbj` must retain `反刍` after
-  committing `反`); non-first multi-character words still need a selector.
-  Probabilistic early commit must preserve the already-ranked full-sentence paths,
-  including eligible non-first single-character segments.
-  Multi-character lexicon entries are legal edges. `允许单字重码组句` (default
-  on) additionally allows non-first single characters without a selector on
-  segmented paths and ranks those paths by language-model score so they can
-  become the visible first candidate. A whole-input single lexicon edge still
-  keeps first-rank characters ahead of later ranks. It does not bypass
-  `高频字仅使用最优码组句` or the full-code whitelist, and explicit digit/`;`/`'`
-  rank selection still works when it is on. Multi-character words still need an
-  explicit selector on segmented paths.
+  Other segments consume at least two keys. The sole user setting
+  `自动选重最低码数` defaults to 3 (range 0..128); 0 disables implicit rank
+  selection. A non-first single-character segment may omit its selector only
+  when that entry's code length meets the positive threshold. Count only code
+  units, never preceding entries or explicit rank suffixes. Whole-input menus
+  still expose all ranks for manual choice; first-ranked entries and explicit
+  digit/`;`/`'` selectors remain valid. Non-first multi-character words still
+  need explicit selection on segmented paths. Optimal-code/whitelist filtering
+  still applies. The retired boolean setting is ignored, without migration.
+  Exact reachability, automatic-commit eligibility and decoder/cache refresh use
+  the same threshold. Learning keeps its previous enabled/disabled namespace;
+  scores cannot restore a path rejected by the new gate. Existing manual locks
+  stay valid. Tests: `--auto-select-min-code-tests`, native CTests and
+  `tools/test_core_native_mainline.py`.
 - Sentence mode is controlled only by `自动启用整句模式` (default on). It
   activates when the current schema name contains `整句`.
 - Sentence decoding is latest-generation-only and asynchronous. A stale Beam or

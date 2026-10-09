@@ -98,11 +98,12 @@ namespace
         }};
         SentenceTransition truncated = [](auto, auto, auto) -> double { throw std::runtime_error("History lost"); };
         SentenceLatticeResult previous;
+        SentenceLatticeSettings historySettings; historySettings.autoSelectMinCodeLength = 2; // four-history ambiguity fixture
         std::u16string raw = u"aabbccddee";
         auto compare = [&](auto input)
         {
-            auto incremental = DecodeSentenceLattice(lexicon, input, truncated, {}, {}, {}, &previous, &history);
-            auto full = DecodeSentenceLattice(lexicon, input, truncated, {}, {}, {}, nullptr, &history);
+            auto incremental = DecodeSentenceLattice(lexicon, input, truncated, historySettings, {}, {}, &previous, &history);
+            auto full = DecodeSentenceLattice(lexicon, input, truncated, historySettings, {}, {}, nullptr, &history);
             Check(incremental.candidates.size() == full.candidates.size());
             for (std::size_t i = 0; i < full.candidates.size(); ++i)
             {
@@ -110,7 +111,7 @@ namespace
                 Near(incremental.candidates[i].score, full.candidates[i].score);
                 Check(incremental.candidates[i].history == full.candidates[i].history);
             }
-            BuildSentenceEarlyEvidence(lexicon, incremental, truncated, {}, {}, {}, &history);
+            BuildSentenceEarlyEvidence(lexicon, incremental, truncated, historySettings, {}, {}, &history);
             previous = std::move(incremental);
         };
         for (std::size_t i = 1; i <= raw.size(); ++i) compare(std::u16string_view(raw).substr(0, i));

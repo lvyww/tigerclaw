@@ -85,6 +85,7 @@ namespace tiger::core
                 // isolation and boundary settings are fixed by the loader.
                 if (before.optimalCodeHighFrequencyLimit == after.optimalCodeHighFrequencyLimit &&
                     before.lattice.duplicateSingles == after.lattice.duplicateSingles &&
+                    before.lattice.autoSelectMinCodeLength == after.lattice.autoSelectMinCodeLength &&
                     before.fullCodeWhitelist == after.fullCodeWhitelist)
                 {
                     if (_service) _service->SetEnabled(GetSentenceEligibility(snapshot->config, snapshot->schemaName).Resident());

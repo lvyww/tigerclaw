@@ -54,6 +54,8 @@ end
 
 local sentence = dofile(os.getenv("TIGER_SENTENCE_MODULE") or
     repo .. "/rime/tiger_sentence/lua/rime/tiger_sentence/tiger_sentence.lua")
+-- Keep the historical Top-5 ambiguity fixture at its legal two-key threshold.
+sentence.apply_auto_select_min_code_length(2)
 local status = sentence.lexical_status()
 check(status.loaded and status.entries == 50000 and status.bytes == 150032,
     "decoder did not expose the loaded lexical model")

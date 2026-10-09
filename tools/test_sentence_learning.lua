@@ -30,6 +30,9 @@ learning.storage_factory=fake_storage
 
 sentence.set_model_enabled(false)
 sentence.ensure_lexicon(nil)
+-- Historical learning ambiguity uses legal two-key duplicate segments.
+-- The production default 3 and disabled 0 are covered by the numeric-setting suite.
+sentence.apply_auto_select_min_code_length(2)
 local checks = 0
 local function check(ok, name) checks=checks+1; assert(ok, name) end
 local now = os.time()
@@ -178,7 +181,9 @@ local function host(name, early, correction_level)
         listeners[#listeners+1]=f;local i=#listeners
         return {disconnect=function()listeners[i]=nil end}
     end}
-    local config={enabled=true,get_int=function()return nil end}
+    local config={enabled=true,get_int=function(_,name)
+        if name=="tiger_sentence/auto_select_min_code_length" then return 2 end
+    end}
     function config:get_bool()return self.enabled end
     local env={engine={context=context,schema={schema_id=name,config=config},
         commit_text=function(_,text)commits[#commits+1]=text end}}

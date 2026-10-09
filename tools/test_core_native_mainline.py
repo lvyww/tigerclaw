@@ -41,6 +41,15 @@ for canonical in [0,2]:
   cases.append(dict(op='decode',lexicon=lex,canonical=canonical,lexical=.1,lockRaw='aabb',lockIndex=1,
     raws=['aabb','aabbcc','aabbccaabb','aabbcc','aab','aabb','aabbcc'],
     events=[dict(code='aabb',text='乙华',levels=3) for _ in range(levels)]))
+# Local threshold gates remain effective even with maximal learned short paths.
+minimum_lex = [['aa',['甲','乙','多字','𠀀']],['bbb',['甲','乙','多字','𠀀']],
+               ['cccc',['甲','乙','多字','𠀀']],['zz',['终']]]
+for minimum in [0,1,2,3,4,128]:
+ for learned in [False,True]:
+  cases.append(dict(op='decode',lexicon=minimum_lex,auto_select_min_code_length=minimum,
+    raws=['aa','aazz','bbbzz','cccczz','zzaazz','aa2zz','aa;zz',"aa'zz",
+          'aazzzz','aazz','aa','bbbzz'],
+    events=[dict(code='aazz',text='乙终',levels=3) for _ in range(9)] if learned else []))
 # Pair preferences reorder Direct/Composed subsequences without changing scores.
 def configuration_hash(text):
  value=14695981039346656037

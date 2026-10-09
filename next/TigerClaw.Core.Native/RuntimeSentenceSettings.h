@@ -19,7 +19,7 @@ namespace tiger::core
     {
         constexpr auto optimal = u"\u9ad8\u9891\u5b57\u4ec5\u4f7f\u7528\u6700\u4f18\u7801\u7ec4\u53e5";
         constexpr auto whitelist = u"\u6574\u53e5\u5141\u8bb8\u5168\u7801\u7ec4\u53e5\u767d\u540d\u5355";
-        constexpr auto duplicate = u"\u5141\u8bb8\u5355\u5b57\u91cd\u7801\u7ec4\u53e5";
+        constexpr auto minimum = u"\u81ea\u52a8\u9009\u91cd\u6700\u4f4e\u7801\u6570";
         RuntimeSentenceSettings result;
         result.lattice.preserveTruncatedEvidence = true;
         result.lattice.canonicalReward = 0;
@@ -36,7 +36,13 @@ namespace tiger::core
                 result.optimalCodeHighFrequencyLimit = ParseIntegerToken(TrimText(value), number) && number >= 0 ? number : 0;
             }
             else if (key == whitelist) whiteText = value;
-            else if (key == duplicate) result.lattice.duplicateSingles = ParseConfigBool(value, true);
+            else if (key == minimum)
+            {
+                std::int32_t number;
+                result.lattice.autoSelectMinCodeLength = ParseIntegerToken(TrimText(value), number)
+                    ? std::clamp(number, 0, 128) : 3;
+                result.lattice.duplicateSingles = result.lattice.autoSelectMinCodeLength > 0;
+            }
         }
         whiteText = TrimText(whiteText);
         auto starts = TextElementStarts(whiteText);

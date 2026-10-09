@@ -108,7 +108,7 @@ namespace tiger::core
         bool HasCompleteCandidate(std::u16string_view raw, std::u16string_view required = {},
             std::optional<std::u16string_view> excluded = {}, bool groupEligibleOnly = false, const SentenceLockedPrefix* locked = nullptr) const
         {
-            return HasCompleteSentenceCandidate(_lexicon, raw, _settings.lattice.duplicateSingles, required, excluded, groupEligibleOnly, locked);
+            return HasCompleteSentenceCandidate(_lexicon, raw, _settings.lattice.duplicateSingles, required, excluded, groupEligibleOnly, locked, _settings.lattice.autoSelectMinCodeLength);
         }
         std::size_t CompetingBoundaryEnd(std::u16string_view raw, std::size_t committed, std::size_t proposed, std::size_t elements) const
         { return CompetingSentenceBoundaryEnd(_lexicon, raw, committed, proposed, elements); }

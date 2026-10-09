@@ -64,6 +64,8 @@ int RunMainlineProbe(const std::filesystem::path& input, const std::filesystem::
                 schema.supplements = supplementValues;
             }
             RuntimeSentenceSettings settings; settings.optimalCodeHighFrequencyLimit = 0; if (!root.value("isolation", false)) settings.isolation = {0, 0, false};
+            settings.lattice.autoSelectMinCodeLength = std::clamp(root.value("auto_select_min_code_length", 3), 0, 128);
+            settings.lattice.duplicateSingles = settings.lattice.autoSelectMinCodeLength > 0;
             settings.lattice.beamWidth = root.value("beam", 2000); settings.lattice.candidateLimit = root.value("limit", 5);
             settings.lattice.preserveTruncatedEvidence = root.value("preserve", false);
             settings.lattice.protectedIsolationFactor = root.value("protectedFactor", 1.0);

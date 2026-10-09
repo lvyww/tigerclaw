@@ -15,7 +15,7 @@ io.open=function(path,mode)
     return original_open(path,mode)
 end
 sentence.apply_high_freq_limit(0)
-sentence.set_allow_duplicate_single({get_option=function()return true end})
+sentence.apply_auto_select_min_code_length(3)
 -- An old published snapshot survives later decode/trim/reset generations.
 local function signature(result)
     local out={}

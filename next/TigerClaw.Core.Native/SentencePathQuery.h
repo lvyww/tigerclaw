@@ -11,7 +11,7 @@ namespace tiger::core
     inline bool HasCompleteSentenceCandidate(const SentenceLexicon& lexicon,
         std::u16string_view raw, bool duplicateSingles,
         std::u16string_view required = {}, std::optional<std::u16string_view> excluded = {},
-        bool groupEligibleOnly = false, const SentenceLockedPrefix* locked = nullptr)
+        bool groupEligibleOnly = false, const SentenceLockedPrefix* locked = nullptr, int autoSelectMinCodeLength = 3)
     {
         auto normalized = NormalizeSentenceRaw(raw);
         if (!HasSentenceLetter(normalized)) return false;
@@ -35,9 +35,11 @@ namespace tiger::core
         for (std::size_t position = begin; position < normalized.size(); ++position)
         {
             if (states[position].empty()) continue;
-            for (const auto& edge : SentenceEdges(lexicon, normalized, position, duplicateSingles))
+            for (const auto& edge : SentenceEdges(lexicon, normalized, position, duplicateSingles, -1, autoSelectMinCodeLength))
             {
-                if (firstOnly && edge.candidate->rank > 1 && !(duplicateSingles && edge.candidate->elements.size() == 1)) continue;
+                if (firstOnly && edge.candidate->rank > 1 && !(duplicateSingles && autoSelectMinCodeLength > 0 &&
+                    edge.codeLength >= static_cast<std::size_t>(std::clamp(autoSelectMinCodeLength, 0, 128)) &&
+                    edge.candidate->elements.size() == 1)) continue;
                 std::u16string_view text = edge.candidate->text;
                 for (auto [matchedRequired, matchedExcluded] : states[position])
                 {

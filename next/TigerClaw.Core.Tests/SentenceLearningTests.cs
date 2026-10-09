@@ -277,7 +277,7 @@ namespace TigerClaw.Core.Tests
         private static void LearningDecoder()
         {
             var lexicon = SentenceLexiconIndex.Build(new Dictionary<string, List<string>> { ["aa"] = new() { "甲", "乙", "重庆" }, ["bb"] = new() { "中" }, ["cc"] = new() { "国" } });
-            var decoder = new SentenceInputDecoder(lexicon, NeutralSentenceLanguageModel.Instance, beamWidth: 1, isolationPenalty: SentenceIsolationPenalty.None, allowDuplicateSingleCharacters: true);
+            var decoder = new SentenceInputDecoder(lexicon, NeutralSentenceLanguageModel.Instance, beamWidth: 1, isolationPenalty: SentenceIsolationPenalty.None, allowDuplicateSingleCharacters: true, autoSelectMinCodeLength: 1);
             var plain = decoder.Decode("aabb", 20, true);LearningCheck(plain.Candidates[0].Text == "甲中" && !plain.Candidates.Any(c => c.Text == "乙中"), "baseline prunes second path");
             var e = LearningEvent("aabb", "乙中");decoder.SetLearning(SentenceLearningSnapshot.Build(new[] { e }), e.Mode);
             var learned = decoder.Decode("aabb", 20, true);
@@ -287,7 +287,7 @@ namespace TigerClaw.Core.Tests
 
             var confidenceDecoder = new SentenceInputDecoder(
                 lexicon, NeutralSentenceLanguageModel.Instance, beamWidth: 100,
-                isolationPenalty: SentenceIsolationPenalty.None, allowDuplicateSingleCharacters: true);
+                isolationPenalty: SentenceIsolationPenalty.None, allowDuplicateSingleCharacters: true, autoSelectMinCodeLength: 1);
             SentenceDecodeResult confidencePlain = confidenceDecoder.Decode("aabb", 20, true);
             SentenceCandidate plainTarget = confidencePlain.Candidates.Single(c => c.Text == "乙中");
             confidenceDecoder.SetLearning(SentenceLearningSnapshot.Build(new[] { e }, e.Time), e.Mode);
@@ -322,7 +322,7 @@ namespace TigerClaw.Core.Tests
 
             var fusionDecoder = new SentenceInputDecoder(
                 lexicon, NeutralSentenceLanguageModel.Instance, beamWidth: 100,
-                isolationPenalty: SentenceIsolationPenalty.None, allowDuplicateSingleCharacters: true);
+                isolationPenalty: SentenceIsolationPenalty.None, allowDuplicateSingleCharacters: true, autoSelectMinCodeLength: 1);
             var directB = new SentenceCandidate { Text = "B", Source = SentenceCandidateSource.Direct, DirectRank = 1 };
             var directC = new SentenceCandidate { Text = "C", Source = SentenceCandidateSource.Direct, DirectRank = 2 };
             var composedA = new SentenceCandidate { Text = "A", Source = SentenceCandidateSource.Composed };
@@ -349,7 +349,7 @@ namespace TigerClaw.Core.Tests
             File.WriteAllText(Path.Combine(scheme, "fixture.txt"), "aa\t甲\t乙\nbb\t中\t国\ncc\t人\n", new UTF8Encoding(false));
             var state = new CoreRuntimeState(Path.Combine(root, "engine"));EnableSentenceMode(state);
             state.TrySetConfigValue("整句Tab自学习", "是", out _, out _);state.TrySetConfigValue("整句自动提前上屏", "否", out _, out _);
-            state.TrySetConfigValue("允许单字重码组句", "是", out _, out _);state.TrySetConfigValue("整句神经重排", "否", out _, out _);
+            state.TrySetConfigValue("自动选重最低码数", "1", out _, out _);state.TrySetConfigValue("整句神经重排", "否", out _, out _);
             var decoder = CreateSentenceDecoder(new Dictionary<string, List<string>> { ["aa"] = new() { "甲", "乙" }, ["bb"] = new() { "中", "国" }, ["cc"] = new() { "人" } }, true);
             using var engine = new InputMethodEngine(state, decoder);
             Console.WriteLine("learning-engine phase: direct-order");
@@ -393,7 +393,7 @@ namespace TigerClaw.Core.Tests
                 var protocolState = new CoreRuntimeState(separate);EnableSentenceMode(protocolState);
                 protocolState.TrySetConfigValue("整句Tab自学习", "是", out _, out _);protocolState.TrySetConfigValue("整句自动提前上屏", "否", out _, out _);
                 protocolState.TrySetConfigValue("整句神经重排", "否", out _, out _);
-                protocolState.TrySetConfigValue("允许单字重码组句", "是", out _, out _);
+                protocolState.TrySetConfigValue("自动选重最低码数", "1", out _, out _);
                 using var handler = new ProtocolHandler(_ => { }, protocolState, null, CreateSentenceDecoder(
                     new Dictionary<string, List<string>> { ["aa"] = new() { "甲", "乙" }, ["bb"] = new() { "中" } }, true), true);
                 var actual = (InputMethodEngine)typeof(ProtocolHandler).GetField("_engine", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(handler);

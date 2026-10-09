@@ -9,7 +9,9 @@ namespace TigerClaw.Core
         private bool GroupEligible(string text, int rank, SentencePathBoundary boundary, bool explicitRank)
         {
             return explicitRank || rank <= 1 || (_state.GetSentenceAllowDuplicateSingleCharacters() &&
-                (boundary?.Previous != null || new StringInfo(text ?? string.Empty).LengthInTextElements == 1));
+                (boundary?.Previous != null ||
+                 (new StringInfo(text ?? string.Empty).LengthInTextElements == 1 &&
+                  boundary?.CodeLength >= _state.GetSentenceAutoSelectMinCodeLength())));
         }
 
         private SentenceCandidate GetEmptyCodeAutoCommitCandidate(out bool requiresUniquenessCheck)

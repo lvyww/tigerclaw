@@ -20,7 +20,7 @@ check(defaults.whole_input_single_character_reward==5,"whole single reward must 
 check(defaults.canonical_isolation_factor==0 and defaults.canonical_isolation_min_code_length==4,
     "full-code rare-character protection changed")
 check(sentence.model_status().loaded,"scoring gate requires the deterministic model fixture")
-sentence.set_allow_duplicate_single(nil)
+sentence.apply_auto_select_min_code_length(3)
 local function find(raw,text,incremental)
     sentence.reset_decode_cache()
     local menu=incremental and sentence.decode(raw,true) or sentence.decode_full(raw,true)

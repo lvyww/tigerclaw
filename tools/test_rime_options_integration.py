@@ -17,7 +17,7 @@ def main():
             if args.negative_control:
                 schema = root / 'tiger_sentence.schema.yaml'
                 text = schema.read_text()
-                for name, value in (('early_commit', 1), ('allow_duplicate_single', 1), ('early_commit_to_preedit', 0)):
+                for name, value in (('early_commit', 1), ('early_commit_to_preedit', 0)):
                     text = text.replace('  - name: tiger_sentence_' + name + '\n',
                                         '  - name: tiger_sentence_' + name + '\n    reset: ' + str(value) + '\n')
                 schema.write_text(text)

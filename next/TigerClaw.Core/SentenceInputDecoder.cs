@@ -563,6 +563,7 @@ namespace TigerClaw.Core
         internal bool IsSupplementalFragment(string text) => _supplementMatcher.Contains(text);
         private readonly bool _hasSupplements;
         private readonly bool _allowDuplicateSingleCharacters;
+        private readonly int _autoSelectMinCodeLength;
         private readonly int _maxCodeLength;
         private readonly object _decodeLock = new object();
         private string _cachedRaw;
@@ -766,7 +767,8 @@ namespace TigerClaw.Core
             int canonicalIsolationMinCodeLength = 4,
             SentenceLexicalPrior lexicalPrior = null,
             double lexicalPriorWeight = 0.0,
-            int lexicalCandidateLimit = 5)
+            int lexicalCandidateLimit = 5,
+            int autoSelectMinCodeLength = 3)
         {
             _lexicon = lexicon ?? throw new ArgumentNullException(nameof(lexicon));
             if (!scoreSentenceBoundaries && (languageModel is SentenceFivegramModel || languageModel is ISentenceHistoryLanguageModel))
@@ -782,7 +784,8 @@ namespace TigerClaw.Core
             _beamWidth = Math.Max(1, beamWidth);
             _rankPenalty = Math.Max(0.0, rankPenalty);
             _isolationPenalty = isolationPenalty ?? SentenceIsolationPenalty.CreateDefault();
-            _allowDuplicateSingleCharacters = allowDuplicateSingleCharacters;
+            _autoSelectMinCodeLength = Math.Clamp(autoSelectMinCodeLength, 0, 128);
+            _allowDuplicateSingleCharacters = allowDuplicateSingleCharacters && _autoSelectMinCodeLength > 0;
             if (_isolationPenalty.Enabled)
             {
                 _isolationPenaltyCache = new Dictionary<string, double>(
@@ -903,8 +906,8 @@ namespace TigerClaw.Core
                         foreach (SentenceLexiconCandidate candidate in candidates)
                         {
                             if ((firstRanksOnly && candidate.Rank > 1 &&
-                                 !(_allowDuplicateSingleCharacters && candidate.TextElements.Length == 1)) ||
-                                !RankMatches(candidate, selectedRank, wholeInputEdge) || !TryAdvanceRequiredPrefix(
+                                 !(_allowDuplicateSingleCharacters && codeLength >= _autoSelectMinCodeLength && candidate.TextElements.Length == 1)) ||
+                                !RankMatches(candidate, selectedRank, wholeInputEdge, codeLength) || !TryAdvanceRequiredPrefix(
                                 required,
                                 matched.Required,
                                 candidate.Text,
@@ -1006,7 +1009,7 @@ namespace TigerClaw.Core
             return furthest;
         }
 
-        private bool RankMatches(SentenceLexiconCandidate candidate, int selectedRank, bool wholeInputEdge)
+        private bool RankMatches(SentenceLexiconCandidate candidate, int selectedRank, bool wholeInputEdge, int codeLength)
         {
             if (selectedRank > 0)
             {
@@ -1018,7 +1021,7 @@ namespace TigerClaw.Core
                 return true;
             }
 
-            return _allowDuplicateSingleCharacters &&
+            return _allowDuplicateSingleCharacters && codeLength >= _autoSelectMinCodeLength &&
                    candidate.TextElements != null &&
                    candidate.TextElements.Length == 1;
         }
@@ -1205,7 +1208,7 @@ namespace TigerClaw.Core
                     {
                         foreach (SentenceLexiconCandidate candidate in candidates)
                         {
-                            if (!RankMatches(candidate, selectedRank, wholeInputEdge))
+                            if (!RankMatches(candidate, selectedRank, wholeInputEdge, codeLength))
                             {
                                 continue;
                             }

@@ -39,7 +39,7 @@ def temporary_tree():
 def isolated_sources(destination):
     shutil.copytree(PACK / "lua", destination / "lua")
     (destination / "tools").mkdir()
-    for name in ("test_tiger_sentence_incremental.lua", "test_rime_contract.lua", "test_sentence_safety.lua", "test_sentence_learning.lua", "test_adaptive_learning.lua", "test_review_regressions.lua", "test_ngram_reader.lua", "test_memory.lua", "test_lexical_prior.lua", "test_allocation.lua", "test_whole_single_reward.lua"):
+    for name in ("test_tiger_sentence_incremental.lua", "test_rime_contract.lua", "test_sentence_safety.lua", "test_sentence_learning.lua", "test_adaptive_learning.lua", "test_review_regressions.lua", "test_ngram_reader.lua", "test_memory.lua", "test_lexical_prior.lua", "test_allocation.lua", "test_whole_single_reward.lua", "test_auto_select_min_code_length.lua"):
         source = (ROOT / "tools" / name).read_text(encoding="utf-8")
         # Run the shared suite in the public mirror layout, without copying
         # unrelated TigerClaw tools or any live configuration/model files.
@@ -71,6 +71,12 @@ def execute(lua, root, script, override=None):
 def negative_controls(lua, root):
     source = (root / "lua/tiger_sentence.lua").read_text(encoding="utf-8")
     variants = [
+        ('auto-min-filter', 'test_auto_select_min_code_length.lua', '    allow_duplicate_single = allow_duplicate_single and\n        code_length >= lexicon_state.auto_select_min_code_length', '    allow_duplicate_single = allow_duplicate_single', 'implicit eligibility abxy / 乙戊'),
+        ('auto-min-off', 'test_auto_select_min_code_length.lua', '        active_allow_duplicate_single = value > 0', '        active_allow_duplicate_single = true', 'implicit eligibility abxy / 乙戊'),
+        ('auto-min-cache', 'test_auto_select_min_code_length.lua', '        if reset_decode_cache then reset_decode_cache() end', '        -- negative control: cache survives threshold change', 'changed setting did not invalidate correction cache'),
+        ('auto-min-reachability', 'test_auto_select_min_code_length.lua', '                                         code_length >= lexicon_state.auto_select_min_code_length and', '                                         code_length >= 0 and', 'group eligibility bypassed threshold'),
+        ('auto-min-empty-pool', 'test_auto_select_min_code_length.lua', '               #normalize(full_before) >= lexicon_state.auto_select_min_code_length', '               #normalize(full_before) >= 0', 'below-threshold duplicate polluted empty-code confidence'),
+        ('auto-min-evidence', 'test_auto_select_min_code_length.lua', 'state.auto_selection_generation == lexicon_state.auto_selection_generation then return false end', 'true then return false end', 'threshold change retained stale auto-commit evidence'),
         ("partial-ranking-work", "test_allocation.lua",
          'local function evaluate_evidence_state(item)\n',
          'local function evaluate_evidence_state(item)\n    path_isolation_penalty(item)\n',
@@ -188,7 +194,7 @@ def main():
     lua = str(Path(lua).resolve())
     with temporary_tree() as root:
         isolated_sources(root)
-        for script in ("test_tiger_sentence_incremental.lua", "test_rime_contract.lua", "test_sentence_safety.lua", "test_sentence_learning.lua", "test_adaptive_learning.lua", "test_review_regressions.lua", "test_ngram_reader.lua", "test_memory.lua", "test_lexical_prior.lua", "test_allocation.lua", "test_whole_single_reward.lua"):
+        for script in ("test_tiger_sentence_incremental.lua", "test_rime_contract.lua", "test_sentence_safety.lua", "test_sentence_learning.lua", "test_adaptive_learning.lua", "test_review_regressions.lua", "test_ngram_reader.lua", "test_memory.lua", "test_lexical_prior.lua", "test_allocation.lua", "test_whole_single_reward.lua", "test_auto_select_min_code_length.lua"):
             result = execute(lua, root, script)
             print(result.stdout, end="", flush=True)
             result.check_returncode()

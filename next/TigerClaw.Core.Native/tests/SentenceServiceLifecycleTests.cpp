@@ -40,15 +40,31 @@ int main()
         Check(LoadSentenceInputSettings({{retained, u"plus7"}}, u"plus", u"minus").minimumRetained == 7);
         const std::u16string optimal = u"\u9ad8\u9891\u5b57\u4ec5\u4f7f\u7528\u6700\u4f18\u7801\u7ec4\u53e5";
         const std::u16string white = u"\u6574\u53e5\u5141\u8bb8\u5168\u7801\u7ec4\u53e5\u767d\u540d\u5355";
-        const std::u16string duplicates = u"\u5141\u8bb8\u5355\u5b57\u91cd\u7801\u7ec4\u53e5";
+        const std::u16string minimum = u"\u81ea\u52a8\u9009\u91cd\u6700\u4f4e\u7801\u6570";
         auto decoderDefaults = LoadSentenceSettings({});
         Check(decoderDefaults.optimalCodeHighFrequencyLimit == 1500 && decoderDefaults.lattice.duplicateSingles);
+        Check(decoderDefaults.lattice.autoSelectMinCodeLength == 3);
+        for (auto value : {u"", u"invalid", u"1.5", u"2147483648"})
+            Check(LoadSentenceSettings({{minimum, value}}).lattice.autoSelectMinCodeLength == 3);
+        for (auto [value, expected] : {std::pair{u"-2", 0}, {u"0", 0}, {u"1", 1}, {u"2", 2},
+            {u"3", 3}, {u"4", 4}, {u"128", 128}, {u"129", 128}})
+        {
+            auto configuredMinimum = LoadSentenceSettings({{minimum, value}});
+            Check(configuredMinimum.lattice.autoSelectMinCodeLength == expected);
+            Check(configuredMinimum.lattice.duplicateSingles == (expected > 0));
+        }
+        auto parsedMinimum = ParseConfigLines(std::vector<std::u16string>{minimum + u"\t0"});
+        Check(LoadSentenceSettings(parsedMinimum).lattice.autoSelectMinCodeLength == 0);
+        const std::u16string retired = u"\u5141\u8bb8\u5355\u5b57\u91cd\u7801\u7ec4\u53e5";
+        auto ignoredOld = ParseConfigLines(std::vector<std::u16string>{retired + u"\tfalse"});
+        Check(LoadSentenceSettings(ignoredOld).lattice.autoSelectMinCodeLength == 3);
+        Check(std::none_of(ignoredOld.begin(), ignoredOld.end(), [&](const auto& item) { return item.first == retired; }));
         Check(decoderDefaults.lattice.canonicalReward == 0 && decoderDefaults.lattice.wholeSingleReward == 5);
         Check(decoderDefaults.lattice.protectedIsolationFactor == 0 && decoderDefaults.lattice.lexicalWeight == .1);
         Check(decoderDefaults.fullCodeWhitelist.contains(u"\u4fbf") && decoderDefaults.fullCodeWhitelist.contains(u"\u7ed5"));
         for (auto value : {u"", u"-1", u"invalid", u"2147483648"})
             Check(LoadSentenceSettings({{optimal, value}}).optimalCodeHighFrequencyLimit == 0);
-        auto decoderConfigured = LoadSentenceSettings({{optimal, u"\u3000+42\u3000"}, {duplicates, u"false"},
+        auto decoderConfigured = LoadSentenceSettings({{optimal, u"\u3000+42\u3000"}, {minimum, u"0"},
             {white, u" A\u0301 \U00020000\r\nA\u0301 "}});
         Check(decoderConfigured.optimalCodeHighFrequencyLimit == 42 && !decoderConfigured.lattice.duplicateSingles);
         Check(decoderConfigured.fullCodeWhitelist.size() == 2 && decoderConfigured.fullCodeWhitelist.contains(u"A\u0301") &&

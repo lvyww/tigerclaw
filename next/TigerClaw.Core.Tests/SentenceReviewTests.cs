@@ -25,7 +25,8 @@ namespace TigerClaw.Core.Tests
             ISentenceLanguageModel model = null, int beam = 2000, bool duplicates = true) =>
             new(SentenceLexiconIndex.Build(lexicon), model ?? NeutralSentenceLanguageModel.Instance,
                 beamWidth: beam, isolationPenalty: SentenceIsolationPenalty.None,
-                emittedCharacterReward: 2, wholeInputSingleCharacterReward: 5, allowDuplicateSingleCharacters: duplicates);
+                emittedCharacterReward: 2, wholeInputSingleCharacterReward: 5, allowDuplicateSingleCharacters: duplicates,
+                autoSelectMinCodeLength: 1); // Dense review fixtures intentionally exercise short-code ambiguity.
 
         private static void ReviewBoundary(SentencePathBoundary a, SentencePathBoundary b)
         {
@@ -123,7 +124,7 @@ namespace TigerClaw.Core.Tests
             var lexicon = SentenceLexiconIndex.Build(new Dictionary<string, List<string>> { ["aa"] = new() { "甲", "乙" }, ["bb"] = words });
             var model = new ReviewCountingModel { Score = (_, _, c) => c == "甲" ? 0.1 : 0 };
             using var decoder = new SentenceInputDecoder(lexicon, model, rankPenalty: 0, isolationPenalty: SentenceIsolationPenalty.None,
-                allowDuplicateSingleCharacters: true);
+                allowDuplicateSingleCharacters: true, autoSelectMinCodeLength: 2);
             var small = decoder.Decode("aabb", 20, true);
             var all = decoder.Decode("aabb", 40, true);
             Review(small.Candidates.Length == 20 && small.ConfidenceCandidates.Count == 40, "menu is not confidence pool");

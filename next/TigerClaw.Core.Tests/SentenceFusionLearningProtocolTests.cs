@@ -39,7 +39,7 @@ namespace TigerClaw.Core.Tests
                 state.TrySetConfigValue("整句Tab自学习", "是", out _, out _);
                 state.TrySetConfigValue("整句自动提前上屏", "否", out _, out _);
                 state.TrySetConfigValue("整句神经重排", "否", out _, out _);
-                state.TrySetConfigValue("允许单字重码组句", "是", out _, out _);
+                state.TrySetConfigValue("自动选重最低码数", "1", out _, out _);
                 state.TrySetConfigValue("高频字仅使用最优码组句", "0", out _, out _);
                 SentenceInputDecoder Decoder() => new(
                     SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
@@ -50,7 +50,7 @@ namespace TigerClaw.Core.Tests
                     // persisted cross-source preference reaches fusion ordering.
                     new ReviewCountingModel { Score = (_, _, target) => target == "捡" ? -100 : 0 },
                     rankPenalty: 0, beamWidth: 100, isolationPenalty: SentenceIsolationPenalty.None,
-                    allowDuplicateSingleCharacters: true);
+                    allowDuplicateSingleCharacters: true, autoSelectMinCodeLength: 1);
                 using var handler = new ProtocolHandler(_ => { }, state, null, Decoder(), true);
                 var engine = (InputMethodEngine)typeof(ProtocolHandler).GetField("_engine", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(handler);
                 SentenceLearningStore Store() => (SentenceLearningStore)typeof(InputMethodEngine)

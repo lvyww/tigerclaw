@@ -58,6 +58,8 @@ namespace TigerClaw.Core.Tests
                 if (args.Length == 4 && args[0] == "--learning-worker") return RunLearningWorker(args[1], args[2], int.Parse(args[3]));
                 if (args.Length == 6 && args[0] == "--learning-pair-scores") return RunLearningSeedReal(args[1], args[2], args[3], args[4], args[5], true);
                 if (args.Length == 3 && args[0] == "--learning-seed-real") return RunLearningSeedReal(args[1], args[2]);
+                if (args.Length == 1 && args[0] == "--auto-select-min-code-tests")
+                    return RunAutoSelectMinCodeTests();
                 if (args.Length == 1 && args[0] == "--whole-code-reward-tests")
                 {
                     SentenceDecoderRewardsOptimalWholeInputSingleCharacter();
@@ -249,6 +251,7 @@ namespace TigerClaw.Core.Tests
                 SentenceDecoderAllowsImplicitNonFirstOnlyForWholeInputEdge();
                 SentenceDecoderKeepsFirstChoiceAheadForWholeInputEdge();
                 SentenceAllowDuplicateSingleCharactersDefaultsOn();
+                RunAutoSelectMinCodeTests();
                 SentenceDecoderAllowsSegmentedSingleDuplicatesWhenEnabled();
                 SentenceDecoderLetsSegmentedSingleDuplicatesCompeteWhenEnabled();
                 SentenceDecoderAppliesCharacterRewardInsideBeam();
@@ -3592,7 +3595,7 @@ namespace TigerClaw.Core.Tests
                 SentenceLexiconIndex.Build(source, top1),
                 NeutralSentenceLanguageModel.Instance,
                 beamWidth: 100,
-                allowDuplicateSingleCharacters: true);
+                allowDuplicateSingleCharacters: true, autoSelectMinCodeLength: 1);
             True(
                 Array.TrueForAll(
                     duplicatesStillFiltered.Decode("ac").Candidates,
@@ -3871,14 +3874,14 @@ namespace TigerClaw.Core.Tests
                 var state = new CoreRuntimeState();
                 EnableSentenceEarlyCommit(state);
                 state.TrySetConfigValue("高频字仅使用最优码组句", "0", out _, out _);
-                state.TrySetConfigValue("允许单字重码组句", duplicates ? "是" : "否", out _, out _);
+                state.TrySetConfigValue("自动选重最低码数", duplicates ? "1" : "0", out _, out _);
                 var decoder = new SentenceInputDecoder(SentenceLexiconIndex.Build(
                     new Dictionary<string, List<string>>
                     {
                         ["ot"] = new List<string> { "是", "题", "多字词" },
                         ["qm"] = new List<string> { "目" }
                     }), new PrefersCharactersLanguageModel("题", "目"), beamWidth: beam,
-                    allowDuplicateSingleCharacters: duplicates);
+                    allowDuplicateSingleCharacters: duplicates, autoSelectMinCodeLength: 1);
                 True(decoder.HasCompleteCandidate("ot", excludedText: "是", groupEligibleOnly: true) == duplicates,
                     "empty_code.duplicate_exact_ambiguity");
                 using (var engine = new InputMethodEngine(state, decoder))
@@ -4150,14 +4153,14 @@ namespace TigerClaw.Core.Tests
             };
             var state = new CoreRuntimeState();
             EnableSentenceMode(state);
-            True(state.TrySetConfigValue("允许单字重码组句", "是", out _, out _),
+            True(state.TrySetConfigValue("自动选重最低码数", "1", out _, out _),
                 nameof(SentenceNeuralRerankLetsSegmentedSingleDuplicatesCompete) + ".setting");
             var decoder = new SentenceInputDecoder(
                 SentenceLexiconIndex.Build(lexicon),
                 NeutralSentenceLanguageModel.Instance,
                 beamWidth: 20,
                 isolationPenalty: SentenceIsolationPenalty.None,
-                allowDuplicateSingleCharacters: true);
+                allowDuplicateSingleCharacters: true, autoSelectMinCodeLength: 1);
             var engine = new InputMethodEngine(state, decoder);
             var reranker = new RecordingSentenceRerankService();
             engine.SetSentenceRerankService(reranker);
@@ -4264,14 +4267,14 @@ namespace TigerClaw.Core.Tests
                 NeutralSentenceLanguageModel.Instance,
                 emittedCharacterReward: 2.0,
                 isolationPenalty: SentenceIsolationPenalty.None,
-                allowDuplicateSingleCharacters: true);
+                allowDuplicateSingleCharacters: true, autoSelectMinCodeLength: 1);
             var rewarded = new SentenceInputDecoder(
                 lexicon,
                 NeutralSentenceLanguageModel.Instance,
                 emittedCharacterReward: 2.0,
                 wholeInputSingleCharacterReward: 5.0,
                 isolationPenalty: SentenceIsolationPenalty.None,
-                allowDuplicateSingleCharacters: true);
+                allowDuplicateSingleCharacters: true, autoSelectMinCodeLength: 1);
 
             SentenceDecodeResult baselineResult = baseline.DecodeFull("abcd");
             SentenceDecodeResult rewardedResult = rewarded.DecodeFull("abcd");
@@ -4313,11 +4316,11 @@ namespace TigerClaw.Core.Tests
             var baseline = new SentenceInputDecoder(
                 codeLexicon, model, beamWidth: 100,
                 isolationPenalty: SentenceIsolationPenalty.None,
-                allowDuplicateSingleCharacters: true);
+                allowDuplicateSingleCharacters: true, autoSelectMinCodeLength: 1);
             var shaped = new SentenceInputDecoder(
                 codeLexicon, model, beamWidth: 100,
                 isolationPenalty: SentenceIsolationPenalty.None,
-                allowDuplicateSingleCharacters: true,
+                allowDuplicateSingleCharacters: true, autoSelectMinCodeLength: 1,
                 canonicalCodeReward: 2.0);
             SentenceDecodeResult plain = baseline.DecodeFull("abcd");
             SentenceDecodeResult ranked = shaped.DecodeFull("abcd");
@@ -4373,10 +4376,10 @@ namespace TigerClaw.Core.Tests
                 });
             var lexicalBaseline = new SentenceInputDecoder(
                 lexicalLexicon, model, isolationPenalty: SentenceIsolationPenalty.None,
-                allowDuplicateSingleCharacters: true);
+                allowDuplicateSingleCharacters: true, autoSelectMinCodeLength: 1);
             var lexicalRanked = new SentenceInputDecoder(
                 lexicalLexicon, model, isolationPenalty: SentenceIsolationPenalty.None,
-                allowDuplicateSingleCharacters: true,
+                allowDuplicateSingleCharacters: true, autoSelectMinCodeLength: 1,
                 lexicalPrior: lexical, lexicalPriorWeight: 0.1);
             SentenceDecodeResult lexicalPlain = lexicalBaseline.DecodeFull("abcd");
             SentenceDecodeResult lexicalResult = lexicalRanked.DecodeFull("abcd");
@@ -4394,7 +4397,7 @@ namespace TigerClaw.Core.Tests
             var neutral = new SentenceInputDecoder(
                 codeLexicon, NeutralSentenceLanguageModel.Instance,
                 isolationPenalty: SentenceIsolationPenalty.None,
-                allowDuplicateSingleCharacters: true,
+                allowDuplicateSingleCharacters: true, autoSelectMinCodeLength: 1,
                 canonicalCodeReward: 2.0,
                 lexicalPrior: lexical,
                 lexicalPriorWeight: 0.1);
@@ -4414,7 +4417,7 @@ namespace TigerClaw.Core.Tests
                 });
             var lockedDecoder = new SentenceInputDecoder(
                 lockedLexicon, model, isolationPenalty: SentenceIsolationPenalty.None,
-                allowDuplicateSingleCharacters: true,
+                allowDuplicateSingleCharacters: true, autoSelectMinCodeLength: 1,
                 canonicalCodeReward: 2.0);
             var lockedPrefix = new SentenceLockedPrefix("abcd", "鼎", lockedCandidate.Boundary);
             SentenceCandidate lockedResult = lockedDecoder.Decode(
@@ -4442,7 +4445,7 @@ namespace TigerClaw.Core.Tests
                 beamWidth: 100,
                 rankPenalty: 0.0,
                 isolationPenalty: SentenceIsolationPenalty.None,
-                allowDuplicateSingleCharacters: true,
+                allowDuplicateSingleCharacters: true, autoSelectMinCodeLength: 1,
                 canonicalCodeReward: 2.0);
         }
 
@@ -4931,11 +4934,11 @@ namespace TigerClaw.Core.Tests
             var state = new CoreRuntimeState();
             True(state.GetSentenceAllowDuplicateSingleCharacters(),
                 nameof(SentenceAllowDuplicateSingleCharactersDefaultsOn) + ".default");
-            True(state.TrySetConfigValue("允许单字重码组句", "否", out _, out _),
+            True(state.TrySetConfigValue("自动选重最低码数", "0", out _, out _),
                 nameof(SentenceAllowDuplicateSingleCharactersDefaultsOn) + ".off");
             True(!state.GetSentenceAllowDuplicateSingleCharacters(),
                 nameof(SentenceAllowDuplicateSingleCharactersDefaultsOn) + ".off_value");
-            True(state.TrySetConfigValue("允许单字重码组句", "是", out _, out _),
+            True(state.TrySetConfigValue("自动选重最低码数", "1", out _, out _),
                 nameof(SentenceAllowDuplicateSingleCharactersDefaultsOn) + ".on");
             True(state.GetSentenceAllowDuplicateSingleCharacters(),
                 nameof(SentenceAllowDuplicateSingleCharactersDefaultsOn) + ".on_value");
@@ -4951,7 +4954,7 @@ namespace TigerClaw.Core.Tests
                 ["rl"] = new List<string> { "了", "对方" }
             };
             SentenceInputDecoder off = CreateSentenceDecoder(lexicon);
-            SentenceInputDecoder on = CreateSentenceDecoder(lexicon, allowDuplicateSingleCharacters: true);
+            SentenceInputDecoder on = CreateSentenceDecoder(lexicon, allowDuplicateSingleCharacters: true, autoSelectMinCodeLength: 1);
 
             True(
                 Array.TrueForAll(off.Decode("abot").Candidates, candidate => candidate.Text != "乙是"),
@@ -4991,7 +4994,7 @@ namespace TigerClaw.Core.Tests
                 prefersLamb,
                 beamWidth: 20,
                 isolationPenalty: SentenceIsolationPenalty.None,
-                allowDuplicateSingleCharacters: true);
+                allowDuplicateSingleCharacters: true, autoSelectMinCodeLength: 1);
 
             SentenceDecodeResult offDecoded = off.Decode("gyygch");
             Equal("羊赤", offDecoded.Candidates[0].Text,
@@ -5128,7 +5131,7 @@ namespace TigerClaw.Core.Tests
         {
             var state = new CoreRuntimeState();
             EnableSentenceEarlyCommit(state);
-            True(state.TrySetConfigValue("允许单字重码组句", "是", out _, out _),
+            True(state.TrySetConfigValue("自动选重最低码数", "1", out _, out _),
                 nameof(SentenceProbabilisticAutoCommitRetainsDuplicateSingleContinuation) + ".setting");
             var decoder = new SentenceInputDecoder(
                 SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
@@ -5141,7 +5144,7 @@ namespace TigerClaw.Core.Tests
                 new PrefersCharactersLanguageModel("椟"),
                 beamWidth: 100,
                 isolationPenalty: SentenceIsolationPenalty.None,
-                allowDuplicateSingleCharacters: true);
+                allowDuplicateSingleCharacters: true, autoSelectMinCodeLength: 1);
             var engine = new InputMethodEngine(state, decoder);
             engine.SentenceEmptyCodeAutoCommitOverride = false;
 
@@ -5816,13 +5819,14 @@ namespace TigerClaw.Core.Tests
 
         private static SentenceInputDecoder CreateSentenceDecoder(
             Dictionary<string, List<string>> lexicon,
-            bool allowDuplicateSingleCharacters = false)
+            bool allowDuplicateSingleCharacters = false, int autoSelectMinCodeLength = 1)
         {
             return new SentenceInputDecoder(
                 SentenceLexiconIndex.Build(lexicon),
                 NeutralSentenceLanguageModel.Instance,
                 beamWidth: 100,
-                allowDuplicateSingleCharacters: allowDuplicateSingleCharacters);
+                allowDuplicateSingleCharacters: allowDuplicateSingleCharacters,
+                autoSelectMinCodeLength: autoSelectMinCodeLength); // legacy neutral fixtures deliberately allow short duplicates
         }
 
         private static SentenceInputDecoder CreateWeakEvidenceSentenceDecoder()
@@ -5926,7 +5930,7 @@ namespace TigerClaw.Core.Tests
 
             var multipleState = new CoreRuntimeState();
             EnableSentenceEarlyCommit(multipleState);
-            multipleState.TrySetConfigValue("允许单字重码组句", "否", out _, out _);
+            multipleState.TrySetConfigValue("自动选重最低码数", "0", out _, out _);
             var multiple = new InputMethodEngine(multipleState, CreateSentenceDecoder(
                 new Dictionary<string, List<string>>
                 {
@@ -6057,7 +6061,7 @@ namespace TigerClaw.Core.Tests
                 var state = new CoreRuntimeState();
                 EnableSentenceMode(state);
                 state.TrySetConfigValue("整句自动提前上屏", autoCommit ? "是" : "否", out _, out _);
-                state.TrySetConfigValue("允许单字重码组句", duplicates ? "是" : "否", out _, out _);
+                state.TrySetConfigValue("自动选重最低码数", duplicates ? "1" : "0", out _, out _);
                 var decoder = new SentenceInputDecoder(
                     SentenceLexiconIndex.Build(new Dictionary<string, List<string>>
                     {
@@ -6065,7 +6069,7 @@ namespace TigerClaw.Core.Tests
                         ["xry"] = new List<string> { "反" },
                         ["xbj"] = new List<string> { "秉", "刍", "多字词" }
                     }), new PrefersCharactersLanguageModel("刍", "多", "字", "词"),
-                    beamWidth: 100, allowDuplicateSingleCharacters: duplicates);
+                    beamWidth: 100, allowDuplicateSingleCharacters: duplicates, autoSelectMinCodeLength: 1);
                 var engine = new InputMethodEngine(state, decoder);
                 TypeLetters(engine, prefixCode);
                 string prefix = Press(engine, 0x58).TextToOutput ?? string.Empty;

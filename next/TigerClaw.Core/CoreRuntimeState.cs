@@ -60,7 +60,8 @@ namespace TigerClaw.Core
         private const string KeySentenceFullCodeWhitelist = "\u6574\u53e5\u5141\u8bb8\u5168\u7801\u7ec4\u53e5\u767d\u540d\u5355"; // 整句允许全码组句白名单
         internal const string DefaultSentenceFullCodeWhitelist =
             "便深候整调脸照病增响剑哪微营修愿密脑续假值弹您球激游模静源副座喝富宣呼检救嘴税探脱误释跳睡减蒙镇域洞湾卖暴输缓熟庭俄韩混词授摆诺稳塔潜硬萧侵懂蒋赞赛胸偷烧墙爆操挑撤筑戴植援凭聚凌梁箭圈惨飘旗牌废缩碎挺晓桥赫凝潮掩拔播艘滚兽隆薄愤漫爹撒佩绕";
-        private const string KeySentenceAllowDuplicateSingleCharacters = "\u5141\u8bb8\u5355\u5b57\u91cd\u7801\u7ec4\u53e5"; // 允许单字重码组句
+        private const string KeySentenceAutoSelectMinCodeLength = "\u81ea\u52a8\u9009\u91cd\u6700\u4f4e\u7801\u6570"; // 自动选重最低码数
+        internal const int DefaultSentenceAutoSelectMinCodeLength = 3;
         private const string KeyCnUseEnPunc = "\u4e2d\u6587\u72b6\u6001\u4e0b\u4f7f\u7528\u82f1\u6587\u6807\u70b9"; // unicode: 涓枃鐘舵€佷笅浣跨敤鑻辨枃鏍囩偣
 
         private const string KeyVerticalCandidates = "\u7ad6\u6392\u5019\u9009"; // unicode: 绔栨帓鍊欓€?
@@ -235,7 +236,7 @@ namespace TigerClaw.Core
 
             new KeyValuePair<string, string>(KeySentenceFullCodeWhitelist, DefaultSentenceFullCodeWhitelist),
 
-            new KeyValuePair<string, string>(KeySentenceAllowDuplicateSingleCharacters, Yes),
+            new KeyValuePair<string, string>(KeySentenceAutoSelectMinCodeLength, "3"),
 
             new KeyValuePair<string, string>(KeyMaxAuto, Yes),
 
@@ -1464,8 +1465,19 @@ namespace TigerClaw.Core
             return ParseCharacterSet(GetSentenceFullCodeWhitelistText());
         }
 
+        public int GetSentenceAutoSelectMinCodeLength()
+        {
+            lock (_lock)
+            {
+                if (_config.TryGetValue(KeySentenceAutoSelectMinCodeLength, out string raw) &&
+                    int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out int value))
+                    return Math.Clamp(value, 0, 128);
+            }
+            return DefaultSentenceAutoSelectMinCodeLength;
+        }
+
         public bool GetSentenceAllowDuplicateSingleCharacters() =>
-            GetBool(KeySentenceAllowDuplicateSingleCharacters, true);
+            GetSentenceAutoSelectMinCodeLength() > 0;
 
         internal static ISet<string> ParseCharacterSet(string raw)
         {

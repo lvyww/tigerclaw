@@ -64,12 +64,12 @@ namespace TigerClaw.Core.Tests
                 state.TrySetConfigValue("整句Tab自学习", "是", out _, out _);
                 state.TrySetConfigValue("整句自动提前上屏", "否", out _, out _);
                 state.TrySetConfigValue("整句神经重排", "否", out _, out _);
-                state.TrySetConfigValue("允许单字重码组句", "是", out _, out _);
+                state.TrySetConfigValue("自动选重最低码数", "1", out _, out _);
                 var lexicon = SentenceLexiconIndex.Build(new Dictionary<string, List<string>> {
                     ["aa"] = new() { "甲", "乙" }, ["bb"] = new() { "中" } });
                 var model = new ReviewCountingModel { Score = (_, _, target) => target == "乙" ? -penalty : 0 };
                 var decoder = new SentenceInputDecoder(lexicon, model, rankPenalty: 0, beamWidth: 100,
-                    isolationPenalty: SentenceIsolationPenalty.None, allowDuplicateSingleCharacters: true);
+                    isolationPenalty: SentenceIsolationPenalty.None, allowDuplicateSingleCharacters: true, autoSelectMinCodeLength: 1);
                 using var handler = new ProtocolHandler(_ => { }, state, null, decoder, true);
                 var engine = (InputMethodEngine)typeof(ProtocolHandler).GetField("_engine", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(handler);
                 int serial = 0; string last = "";

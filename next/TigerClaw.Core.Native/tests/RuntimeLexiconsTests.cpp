@@ -95,6 +95,7 @@ int main()
             std::vector<SentenceSupplementEntry>{SentenceSupplementEntry::Create(u"ab", 1000)});
         RuntimeSentenceSettings sentenceSettings;
         sentenceSettings.optimalCodeHighFrequencyLimit = 0;
+        sentenceSettings.lattice.autoSelectMinCodeLength = 2; // concurrency/learning fixtures need two-code alternatives
         sentenceSettings.isolation = {0, 0, false};
         {
             auto initial = std::make_shared<RuntimeLexiconSnapshot>();
@@ -387,11 +388,45 @@ int main()
             Check(send(0x41).composing && runtime.Input().ExportUncommittedRaw().empty());
             runtime.CancelComposition(outer);
         }
+
         {
-            auto settings = LoadSentenceSettings({{u"\u5141\u8bb8\u5355\u5b57\u91cd\u7801\u7ec4\u53e5", u"false"}});
+            const std::u16string minimum = u"\u81ea\u52a8\u9009\u91cd\u6700\u4f4e\u7801\u6570";
+            auto snapshot = std::make_shared<RuntimeLexiconSnapshot>();
+            snapshot->schemaName = u"test\u6574\u53e5";
+            snapshot->schema = std::make_shared<const SchemaLexicon>(sentenceSchema);
+            RuntimeSentenceState runtime(modelFile);
+            runtime.Refresh(snapshot);
+            runtime.Input().ImportRaw(u"aabb", 1);
+            auto count = [&]
+            {
+                Check(runtime.Input().WaitIdle(std::chrono::seconds(2))); runtime.Input().Pump();
+                return runtime.Input().Session().Candidates().size();
+            };
+            Check(count() == 1);
+            auto oldInput = &runtime.Input();
+            auto lower = std::make_shared<RuntimeLexiconSnapshot>(*snapshot);
+            lower->config.emplace_back(minimum, u"2"); lower->generation = 2;
+            runtime.Refresh(lower);
+            Check(&runtime.Input() != oldInput && runtime.Input().ExportUncommittedRaw() == u"aabb");
+            Check(count() == 2);
+            auto raised = std::make_shared<RuntimeLexiconSnapshot>(*lower);
+            raised->config.back().second = u"3"; raised->generation = 3;
+            runtime.Refresh(raised); Check(count() == 1);
+            auto disabled = std::make_shared<RuntimeLexiconSnapshot>(*raised);
+            disabled->config.back().second = u"0"; disabled->generation = 4;
+            runtime.Refresh(disabled); Check(count() == 1);
+            runtime.Input().ImportRaw(u"aa2bb", 5);
+            Check(count() == 1 && runtime.Input().Session().Candidates()[0].text == u"bb");
+        }
+
+        {
+            auto settings = LoadSentenceSettings({{u"\u81ea\u52a8\u9009\u91cd\u6700\u4f4e\u7801\u6570", u"0"}});
             RuntimeSentenceDecoder firstRanks(sentenceSchema, modelFile, settings);
             Check(!firstRanks.HasCompleteCandidate(u"aabb", {}, std::u16string_view(u"ab"), false));
-            RuntimeSentenceDecoder duplicates(sentenceSchema, modelFile, LoadSentenceSettings({}));
+            RuntimeSentenceDecoder defaults(sentenceSchema, modelFile, LoadSentenceSettings({}));
+            Check(!defaults.HasCompleteCandidate(u"aabb", {}, std::u16string_view(u"ab"), false));
+            RuntimeSentenceDecoder duplicates(sentenceSchema, modelFile,
+                LoadSentenceSettings({{u"\u81ea\u52a8\u9009\u91cd\u6700\u4f4e\u7801\u6570", u"2"}}));
             Check(duplicates.HasCompleteCandidate(u"aabb", {}, std::u16string_view(u"ab"), false));
         }
         {
@@ -784,7 +819,8 @@ int main()
             auto integratedConfig = root / "integrated-config.txt";
             Write(integratedConfig, u8"\u7801\u8868\u5b58\u50a8\u4f4d\u7f6e\tintegrated-tables\n"
                 u8"\u5f53\u524d\u7801\u8868\tPlain\n\u6700\u8fd1\u7801\u8868\u5bf9\tPlain|test\u6574\u53e5\n"
-                u8"Ctrl+m\u5207\u6362\u6700\u8fd1\u7801\u8868\ttrue\n");
+                u8"Ctrl+m\u5207\u6362\u6700\u8fd1\u7801\u8868\ttrue\n"
+                u8"\u81ea\u52a8\u9009\u91cd\u6700\u4f4e\u7801\u6570\t2\n");
             RuntimeLexicons integratedTables(root); integratedTables.Reload(integratedConfig);
             RuntimeInput integrated(integratedTables, MakeUpperCaseServices([](std::u16string_view) {}), modelFile);
             auto event = [&](int vk, bool ctrl = false, bool up = false)

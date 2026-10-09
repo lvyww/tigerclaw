@@ -116,7 +116,8 @@ namespace TigerClaw.Core.Tests
                         emittedCharacterReward: root.GetProperty("reward").GetDouble(),
                         wholeInputSingleCharacterReward: root.GetProperty("single_reward").GetDouble(),
                         supplementMatcher: supplements,
-                        allowDuplicateSingleCharacters: root.GetProperty("duplicates").GetBoolean());
+                        allowDuplicateSingleCharacters: root.GetProperty("duplicates").GetBoolean(),
+                        autoSelectMinCodeLength: root.TryGetProperty("auto_select_min_code_length", out var minimumCode) ? minimumCode.GetInt32() : 3);
                     if (root.TryGetProperty("path_queries", out var pathQueries))
                     {
                         Console.WriteLine(JsonSerializer.Serialize(pathQueries.EnumerateArray().Select(query => decoder.HasCompleteCandidate(

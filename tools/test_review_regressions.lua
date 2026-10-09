@@ -33,7 +33,7 @@ for _,code in ipairs({"abcde","abcdef","abcdefgh"}) do
     with_codes("甲\t"..code.."\n乙丙\t"..code.."\n丁\txy\n",function()
         local raw=code.."xy"
         for _,allow in ipairs({true,false}) do
-            sentence.set_allow_duplicate_single({get_option=function()return allow end})
+            sentence.apply_auto_select_min_code_length(allow and 3 or 0)
             for _,sample in ipairs({raw, code.."2xy", code.."12xy", code.."'xy"}) do
                 sentence.reset_decode_cache()
                 for i=1,#sample do
@@ -50,7 +50,7 @@ for _,code in ipairs({"abcde","abcdef","abcdefgh"}) do
         end
     end)
 end
-sentence.set_allow_duplicate_single({get_option=function()return true end})
+sentence.apply_auto_select_min_code_length(3)
 -- Multi-digit selectors can make even a two-letter whole-input edge >4 bytes.
 with_codes("甲\tab\n乙\tab\n",function()
     sentence.decode("ab00002",true,"")

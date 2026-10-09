@@ -23,6 +23,7 @@ namespace tiger::core
         double rankPenalty = 0.03, emittedReward = 2.0, wholeSingleReward = 5.0;
         bool duplicateSingles = true, preserveTruncatedEvidence = false;
         double canonicalReward = 0, protectedIsolationFactor = 1, lexicalWeight = 0;
+        int autoSelectMinCodeLength = 3; // 0 disables implicit non-first entries
     };
     inline std::u16string NormalizeSentenceRaw(std::u16string_view raw)
     {
@@ -151,7 +152,7 @@ namespace tiger::core
         {
             const auto& current = result.states[position].Limit(settings.beamWidth, settings.duplicateSingles || (learning && learning->affected));
             if (current.empty()) continue;
-            auto edges = SentenceEdges(lexicon, result.raw, position, settings.duplicateSingles, minimumEnd);
+            auto edges = SentenceEdges(lexicon, result.raw, position, settings.duplicateSingles, minimumEnd, settings.autoSelectMinCodeLength);
             for (std::size_t start = 0; start < edges.size();)
             {
                 auto end = start + 1;

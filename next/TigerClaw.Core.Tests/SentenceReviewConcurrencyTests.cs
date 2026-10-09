@@ -62,6 +62,7 @@ namespace TigerClaw.Core.Tests
             var lex = new Dictionary<string, List<string>> { ["aa"] = new() { "甲", "乙" }, ["bb"] = new() { "国" } };
             var state = new CoreRuntimeState(Path.Combine(folder, "engine"));
             EnableSentenceMode(state);
+            state.TrySetConfigValue("自动选重最低码数", "1", out _, out _);
             state.TrySetConfigValue("整句Tab自学习", "否", out _, out _);
             state.TrySetConfigValue("整句神经重排", "是", out _, out _);
             using var decoder = ReviewDecoder(lex);
@@ -77,9 +78,10 @@ namespace TigerClaw.Core.Tests
             var all = SentenceLexiconIndex.Build(new Dictionary<string, List<string>> { ["aa"] = many });
             var biased = new ReviewCountingModel { Score = (_, _, c) => c == many[0] ? 16 : 0 };
             using var largeDecoder = new SentenceInputDecoder(all, biased, rankPenalty: 0,
-                isolationPenalty: SentenceIsolationPenalty.None, allowDuplicateSingleCharacters: true);
+                isolationPenalty: SentenceIsolationPenalty.None, allowDuplicateSingleCharacters: true, autoSelectMinCodeLength: 2);
             var largeState = new CoreRuntimeState(Path.Combine(folder, "confidence-engine"));
             EnableSentenceMode(largeState);
+            largeState.TrySetConfigValue("自动选重最低码数", "2", out _, out _);
             largeState.TrySetConfigValue("整句自动提前上屏", "是", out _, out _);
             largeState.TrySetConfigValue("整句Tab自学习", "否", out _, out _);
             using var largeEngine = new InputMethodEngine(largeState, largeDecoder);

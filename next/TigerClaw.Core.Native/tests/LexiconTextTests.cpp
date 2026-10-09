@@ -1158,7 +1158,8 @@ int main()
             {u"a", {u"X", u"Y"}}, {u"aa", {u"X", u"Y", u"word"}}, {u"/a", {u"symbol"}}});
         Check(SentenceEdges(edgeIndex, u"a", 0, false).size() == 2);
         Check(SentenceEdges(edgeIndex, u"aaa", 0, false).size() == 1); // no unselected single-key edge
-        Check(SentenceEdges(edgeIndex, u"aaa", 0, true).size() == 2); // implicit non-first single only
+        Check(SentenceEdges(edgeIndex, u"aaa", 0, true).size() == 1); // default excludes two-code duplicates
+        Check(SentenceEdges(edgeIndex, u"aaa", 0, true, -1, 2).size() == 2); // explicit threshold restores them
         Check(SentenceEdges(edgeIndex, u"aa", 0, false).size() == 3); // whole edge allows later word ranks
         auto explicitEdge = SentenceEdges(edgeIndex, u"aa'aa", 0, false);
         Check(explicitEdge.size() == 1 && explicitEdge[0].candidate->text == u"word" && explicitEdge[0].end == 3);
@@ -1173,6 +1174,55 @@ int main()
         try { ReadSentenceCodeSuffix(u"aa2147483648", 2); } catch (const std::overflow_error&) { rankOverflow = true; }
         try { ReadSentenceCodeSuffix(u"aa\uff12", 2); } catch (const std::invalid_argument&) { rankUnicode = true; }
         Check(rankOverflow && rankUnicode);
+
+        // Auto selection counts each segment's code letters, not preceding text
+        // or explicit selectors. Whole menus remain available for manual choice.
+        auto minimumIndex = SentenceLexicon::Build(std::vector<CompactLexicon::Entry>{
+            {u"aa", {u"X", u"Y", u"word", u"\U00020000"}},
+            {u"bbb", {u"X", u"Y", u"word", u"\U00020000"}},
+            {u"cccc", {u"X", u"Y", u"word", u"\U00020000"}}, {u"zz", {u"Z"}}});
+        for (int minimum : {0, 1, 2, 3, 4, 128})
+        {
+            SentenceLatticeSettings minimumSettings;
+            minimumSettings.autoSelectMinCodeLength = minimum;
+            minimumSettings.duplicateSingles = minimum > 0;
+            minimumSettings.candidateLimit = 20;
+            for (std::u16string code : {u"aa", u"bbb", u"cccc"})
+            {
+                bool allowed = minimum > 0 && code.size() >= static_cast<std::size_t>(minimum);
+                auto has = [&](std::u16string raw, std::u16string_view text)
+                {
+                    auto result = DecodeSentenceLattice(minimumIndex, raw, [](auto, auto, auto) { return 0.0; }, minimumSettings);
+                    return std::any_of(result.candidates.begin(), result.candidates.end(),
+                        [&](const auto& candidate) { return candidate.text == text; });
+                };
+                Check(has(code, u"Y") && has(code, u"word"));
+                Check(has(code + u"zz", u"XZ"));
+                Check(has(code + u"zz", u"YZ") == allowed);
+                Check(has(u"zz" + code + u"zz", u"ZYZ") == allowed);
+                Check(has(code + u"zz", u"\U00020000Z") == allowed);
+                Check(!has(code + u"zz", u"wordZ"));
+                Check(has(code + u"2zz", u"YZ") && has(code + u";zz", u"YZ"));
+                Check(has(code + u"'zz", u"wordZ"));
+                Check(HasCompleteSentenceCandidate(minimumIndex, code, true, u"Y", {}, false, nullptr, minimum));
+                Check(HasCompleteSentenceCandidate(minimumIndex, code, true, u"Y", {}, true, nullptr, minimum) == allowed);
+                Check(HasCompleteSentenceCandidate(minimumIndex, code + u"zz", true, u"YZ", {}, false, nullptr, minimum) == allowed);
+                SentenceLatticeResult previous;
+                for (const auto& raw : {code, code + u"z", code + u"zz", code + u"zzzz", code + u"zz", code, code + u";zz"})
+                {
+                    auto cached = DecodeSentenceLattice(minimumIndex, raw, [](auto, auto, auto) { return 0.0; }, minimumSettings, {}, {},
+                        previous.states.empty() ? nullptr : &previous);
+                    auto full = DecodeSentenceLattice(minimumIndex, raw, [](auto, auto, auto) { return 0.0; }, minimumSettings);
+                    Check(cached.candidates.size() == full.candidates.size());
+                    for (std::size_t i = 0; i < full.candidates.size(); ++i)
+                        Check(cached.candidates[i].text == full.candidates[i].text &&
+                            cached.candidates[i].score == full.candidates[i].score &&
+                            cached.candidates[i].logMass == full.candidates[i].logMass);
+                    previous = std::move(cached);
+                }
+            }
+        }
+
         auto singleEdges = SentenceEdges(edgeIndex, u"aa", 0, true);
         SentenceBeamState initialBeam;
         initialBeam.previous2 = initialBeam.previous1 = u"\x02";
@@ -1292,7 +1342,8 @@ int main()
         Check(!HasCompleteSentenceCandidate(exactPaths, u"aaaa", true, u"XXZ"));
         Check(!HasCompleteSentenceCandidate(exactPaths, u";", true));
         Check(HasCompleteSentenceCandidate(extracted, u"aa", true, {}, u"X"));
-        Check(HasCompleteSentenceCandidate(extracted, u"aa", true, {}, u"X", true)); // mainline permits duplicate singles in exact reachability
+        Check(!HasCompleteSentenceCandidate(extracted, u"aa", true, {}, u"X", true)); // default three-code threshold
+        Check(HasCompleteSentenceCandidate(extracted, u"aa", true, {}, u"X", true, nullptr, 2));
         Check(!HasCompleteSentenceCandidate(extracted, u"aa", false, {}, u"X", true));
         Check(HasCompleteSentenceCandidate(extracted, u"aa2", true, u"Y", {}, true));
         SentenceBeamState confidenceA, confidenceB;

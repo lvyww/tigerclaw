@@ -28,7 +28,7 @@ check(not sentence.set_memory_profile('unknown') and sentence.memory_status().pr
 sentence.configure_memory({engine={schema={config={get_string=function()return nil end}}}})
 check(sentence.memory_status().profile=='balanced','missing schema profile inherited previous value')
 for _,duplicate in ipairs({false,true}) do
- sentence.set_allow_duplicate_single({get_option=function()return duplicate end})
+ sentence.apply_auto_select_min_code_length(duplicate and 3 or 0)
  for _,raw in ipairs({'ot','ueot','awmenamcunta','jeumbauefaalhngyoehiyfbmvmxfzbflrl',string.rep('ot',64)}) do
   sentence.set_memory_profile('balanced')
   local expected=sentence.decode_full(raw,true,'')

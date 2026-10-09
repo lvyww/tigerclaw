@@ -24,40 +24,38 @@ int main(int argc, char** argv) {
             check(id && api->select_schema(id,"tiger_sentence"),"cannot create sentence session");
             return id;
         };
-        auto expect = [&](RimeSessionId id, bool early, bool duplicate, bool buffer) {
+        auto expect = [&](RimeSessionId id, bool early, bool buffer) {
             check(!!api->get_option(id,"tiger_sentence_early_commit")==early,"early-commit preference lost");
-            check(!!api->get_option(id,"tiger_sentence_allow_duplicate_single")==duplicate,"duplicate preference lost");
             check(!!api->get_option(id,"tiger_sentence_early_commit_to_preedit")==buffer,"preedit preference lost");
         };
         auto a=create();
         const std::string mode=argv[4];
         check(!!api->get_option(a,"tiger_sentence_key_correction")== (mode=="read"),"correction preference/default lost");
         if (mode=="read" || mode=="legacy") {
-            expect(a,false,false,true);
-            api->process_key(a,'a',0); expect(a,false,false,true);
+            expect(a,false,true);
+            api->process_key(a,'a',0); expect(a,false,true);
             api->clear_composition(a);
         } else if (mode=="defaults") {
-            expect(a,false,true,true); // custom first-use defaults
+            expect(a,false,true); // custom first-use defaults
         } else {
-            expect(a,true,true,false);
-            auto b=create(); expect(b,true,true,false);
+            expect(a,true,false);
+            auto b=create(); expect(b,true,false);
             api->set_option(a,"tiger_sentence_key_correction",True);
             api->set_option(a,"tiger_sentence_early_commit",False);
-            api->set_option(a,"tiger_sentence_allow_duplicate_single",False);
             api->set_option(a,"tiger_sentence_early_commit_to_preedit",True);
             // Existing application catches up before its next input is decoded.
-            api->process_key(b,'a',0); expect(b,false,false,true); api->clear_composition(b);
+            api->process_key(b,'a',0); expect(b,false,true); api->clear_composition(b);
             check(api->get_option(b,"tiger_sentence_key_correction"),"correction cross-session sync lost");
-            // A stale session changes one flag: do not overwrite the other two.
+            // A stale session changes one flag: do not overwrite the other preferences.
             api->set_option(b,"tiger_sentence_early_commit",True);
-            api->process_key(a,'a',0); expect(a,true,false,true); api->clear_composition(a);
+            api->process_key(a,'a',0); expect(a,true,true); api->clear_composition(a);
             api->set_option(a,"tiger_sentence_early_commit",False);
-            auto c=create(); expect(c,false,false,true);
+            auto c=create(); expect(c,false,true);
             check(api->select_schema(c,"other"),"cannot change schema");
             check(api->select_schema(c,"tiger_sentence"),"cannot return to schema");
-            expect(c,false,false,true);
+            expect(c,false,true);
             // Application restart creates a new session in the same host.
-            api->destroy_session(b); b=create(); expect(b,false,false,true);
+            api->destroy_session(b); b=create(); expect(b,false,true);
             // A key sequence must not cause a preference write (checked outside).
             api->destroy_session(b); api->destroy_session(c);
         }

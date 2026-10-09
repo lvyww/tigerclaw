@@ -167,7 +167,7 @@ int RunLexiconTextProbe()
                     auto excluded = query["excluded"].is_null() ? std::optional<std::u16string>{} : read(query["excluded"]);
                     output.push_back(tiger::core::HasCompleteSentenceCandidate(lexicon, read(input["sentence_raw"]),
                         input["duplicates"].get<bool>(), read(query["required"]),
-                        excluded ? std::optional<std::u16string_view>(*excluded) : std::nullopt, query["group"].get<bool>()));
+                        excluded ? std::optional<std::u16string_view>(*excluded) : std::nullopt, query["group"].get<bool>(), nullptr, input.value("auto_select_min_code_length", 3)));
                 }
                 std::cout << output.dump() << '\n';
                 continue;
@@ -178,7 +178,8 @@ int RunLexiconTextProbe()
             settings.rankPenalty = input["rank_penalty"].get<double>();
             settings.emittedReward = input["reward"].get<double>();
             settings.wholeSingleReward = input["single_reward"].get<double>();
-            settings.duplicateSingles = input["duplicates"].get<bool>();
+            settings.autoSelectMinCodeLength = std::clamp(input.value("auto_select_min_code_length", 3), 0, 128);
+            settings.duplicateSingles = input["duplicates"].get<bool>() && settings.autoSelectMinCodeLength > 0;
             tiger::core::SentenceIsolationSettings isolationSettings{0, 0, false};
             std::vector<tiger::core::SentenceSupplementEntry> supplementEntries;
             if (input.contains("supplements"))

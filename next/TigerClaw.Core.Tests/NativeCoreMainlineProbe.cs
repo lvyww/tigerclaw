@@ -55,7 +55,8 @@ namespace TigerClaw.Core.Tests
                     canonicalIsolationFactor: root.TryGetProperty("protectedFactor", out var factor) ? factor.GetDouble() : 1,
                     canonicalCodeReward: root.TryGetProperty("canonical", out var canonical) ? canonical.GetDouble() : 0,
                     lexicalPrior: SentenceLexicalPrior.LoadEmbedded(),
-                    lexicalPriorWeight: root.TryGetProperty("lexical", out var lexical) ? lexical.GetDouble() : 0);
+                    lexicalPriorWeight: root.TryGetProperty("lexical", out var lexical) ? lexical.GetDouble() : 0,
+                    autoSelectMinCodeLength: Number(root, "auto_select_min_code_length", 3));
                 decoder.PreserveTruncatedEarlyCommitEvidence = root.TryGetProperty("preserve", out var preserve) && preserve.GetBoolean();
                 decoder.SetLearning(snapshot, Text(root, "mode", "test-v1"));
                 SentenceLockedPrefix locked = null;

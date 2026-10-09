@@ -226,10 +226,13 @@ local function parse_whitelist_content(content)
 end
 
 local default_high_freq_limit = 1500
+local active_allow_duplicate_single = true
 
 local lexicon_state = {
     built = false,
     high_freq_limit = nil,
+    auto_select_min_code_length = 3,
+    auto_selection_generation = 0,
     codes = {},
     lengths = {},
     max_code_len = 1,
@@ -459,6 +462,29 @@ local function configured_high_freq_limit(env)
     return math.floor(value)
 end
 
+-- This controls implicit selection on composed edges, not menu visibility.
+-- A schema-less decoder borrows the active setting just like high_freq_limit.
+function lexicon_state.apply_auto_select_min_code_length(value)
+    if type(value) ~= "number" or value ~= value then value = 3 end
+    value = math.max(0, math.min(128, math.floor(value)))
+    if value ~= lexicon_state.auto_select_min_code_length then
+        lexicon_state.auto_select_min_code_length = value
+        active_allow_duplicate_single = value > 0
+        lexicon_state.auto_selection_generation = lexicon_state.auto_selection_generation + 1
+        if reset_decode_cache then reset_decode_cache() end
+    end
+    return value
+end
+
+function lexicon_state.configure_auto_select_min_code_length(env)
+    local schema = env and env.engine and env.engine.schema
+    local config = schema and schema.config
+    local ok, value = pcall(function()
+        return config:get_int("tiger_sentence/auto_select_min_code_length")
+    end)
+    return lexicon_state.apply_auto_select_min_code_length(ok and value or nil)
+end
+
 local function ensure_lexicon(env)
     local schema = env and env.engine and env.engine.schema
     -- Decoder/diagnostic calls have no schema: they borrow the active index,
@@ -470,6 +496,8 @@ local function ensure_lexicon(env)
         end
         return lexicon_state
     end
+
+    lexicon_state.configure_auto_select_min_code_length(env)
 
     -- Only an actual schema-bearing entry point resolves configuration.
     -- Missing/unreadable keys use this schema's default, not the previous
@@ -487,6 +515,7 @@ local function data_status()
     return {
         built = lexicon_state.built,
         high_freq_limit = lexicon_state.high_freq_limit,
+        auto_select_min_code_length = lexicon_state.auto_select_min_code_length,
         codes_path = lexicon_state.codes_path,
         codes_entries = lexicon_state.codes_entries,
         codes_count = lexicon_state.codes_count,
@@ -712,9 +741,6 @@ end
 function ranking_prior.early_confidence(candidate)
     return candidate.early_commit_confidence_score or candidate.confidence_score or candidate.score
 end
--- 允许单字重码组句 defaults to on; the Rime switch only turns it off.
-local allow_duplicate_single_option = "tiger_sentence_allow_duplicate_single"
-local active_allow_duplicate_single = true
 local BOS = kn_reader.BOS
 local EOS = kn_reader.EOS
 local kn_model = false
@@ -855,7 +881,8 @@ local function fresh_transient_state()
         suspended = false,
         empty_code_pending = nil,
         continuation_after_auto_commit = false,
-        model_generation = model_generation
+        model_generation = model_generation,
+        auto_selection_generation = lexicon_state.auto_selection_generation
     }
 end
 
@@ -930,8 +957,10 @@ local function active_lock(state)
 end
 
 local function synchronize_model_state(state)
-    if state.model_generation == model_generation then return false end
+    if state.model_generation == model_generation and
+        state.auto_selection_generation == lexicon_state.auto_selection_generation then return false end
     state.model_generation = model_generation
+    state.auto_selection_generation = lexicon_state.auto_selection_generation
     state.trackers = {}
     state.last_seen_raw = ""
     state.empty_code_pending = nil
@@ -1119,7 +1148,9 @@ local function candidate_is_single(candidate)
     return candidate._single
 end
 
-local function eligible_candidates(candidates, selected_rank, whole_input_edge, allow_duplicate_single)
+local function eligible_candidates(candidates, selected_rank, whole_input_edge, allow_duplicate_single, code_length)
+    allow_duplicate_single = allow_duplicate_single and
+        code_length >= lexicon_state.auto_select_min_code_length
     -- Most code lists contain one entry. Reuse that immutable list instead of
     -- storing an identical one-element _duplicate/_rank_N table on every code.
     if #candidates == 1 then
@@ -1359,7 +1390,8 @@ local function has_complete_candidate(raw_code, required_text_prefix, excluded_t
                             local whole_input_edge = position == 0 and consumed_end == #raw
                             if not (#raw > 1 and consumed_end - position < 2) and
                                 #eligible_candidates(candidates, selected_rank,
-                                    whole_input_edge, active_allow_duplicate_single) > 0 then
+                                    whole_input_edge, active_allow_duplicate_single,
+                                    code_end - position) > 0 then
                                 reachable[consumed_end] = true
                             end
                         end
@@ -1397,7 +1429,7 @@ local function has_complete_candidate(raw_code, required_text_prefix, excluded_t
                         if not (#raw > 1 and consumed_end - position < 2) then
                             local selected = eligible_candidates(
                                 candidates, selected_rank, whole_input_edge,
-                                active_allow_duplicate_single)
+                                active_allow_duplicate_single, code_length)
                             for packed in pairs(states[position]) do
                                 local matched_length = math.floor(packed / stride)
                                 for candidate_index = 1, #selected do
@@ -1407,7 +1439,9 @@ local function has_complete_candidate(raw_code, required_text_prefix, excluded_t
                                         matched_length,
                                         candidate.t)
                                     if next_matched and (not first_ranks_only or candidate.r == 1 or
-                                        (active_allow_duplicate_single and candidate_is_single(candidate))) then
+                                        (active_allow_duplicate_single and
+                                         code_length >= lexicon_state.auto_select_min_code_length and
+                                         candidate_is_single(candidate))) then
                                         local next_excluded = packed % stride
                                         if excluded_text and next_excluded <= #excluded_text then
                                             if excluded_text:sub(next_excluded + 1,
@@ -1765,7 +1799,7 @@ local function expand_range(raw, states, from_pos, length, minimum_consumed_end)
                                 not (length > 1 and consumed_end - position < 2) then
                                 local selected_candidates = eligible_candidates(
                                     candidates, selected_rank, whole_input_edge,
-                                    active_allow_duplicate_single)
+                                    active_allow_duplicate_single, code_length)
                                 -- A descendant cannot recover probability mass
                                 -- already discarded at an earlier lattice boundary.
                                 if #selected_candidates > 0 and current._truncated then
@@ -3123,7 +3157,9 @@ local function capture_empty_code_candidate(full_before, committed_text, locked)
         local previous = candidate.path and candidate.path.previous
         return not restrict or (candidate.max_rank or 1) <= 1 or
             (active_allow_duplicate_single and
-             ((previous and (previous.text or "") ~= "") or utf_length(candidate.text) == 1))
+             ((previous and (previous.text or "") ~= "") or
+              (utf_length(candidate.text) == 1 and
+               #normalize(full_before) >= lexicon_state.auto_select_min_code_length)))
     end
     -- Preserve the displayed choice, but assess its confidence against all
     -- group-eligible beam outputs rather than just the visible twenty.
@@ -3211,18 +3247,9 @@ end
 
 local function set_allow_duplicate_single(context)
     correction.sync(context)
-    local allowed = true
-    if context and type(context.get_option) == "function" then
-        local ok, value = pcall(context.get_option, context, allow_duplicate_single_option)
-        if ok and value == false then
-            allowed = false
-        end
-    end
-    if allowed ~= active_allow_duplicate_single then
-        active_allow_duplicate_single = allowed
-        reset_decode_cache()
-    end
-    return allowed
+    -- The numeric setting is the single source of truth. Keep the derived
+    -- boolean in the historical learning mode identity without a new namespace.
+    return active_allow_duplicate_single
 end
 
 -- Replace the live composition with one atomic input mutation. clear() plus
@@ -4357,7 +4384,7 @@ M.reference_isolation_penalty = isolation_penalty
 M.reference_path_isolation_penalty = ranking_prior.reference_path_isolation_penalty
 M.path_isolation_penalty = path_isolation_penalty
 M.has_complete_candidate = has_complete_candidate
-M.set_allow_duplicate_single = set_allow_duplicate_single
+M.apply_auto_select_min_code_length = lexicon_state.apply_auto_select_min_code_length
 M.build_prefix_evidence = build_prefix_evidence
 M.find_prefix_evidence = find_prefix_evidence
 M.common_text_prefix = common_text_prefix
@@ -4513,7 +4540,6 @@ M.options = {}
 do
     local defaults = {
         tiger_sentence_early_commit = true,
-        tiger_sentence_allow_duplicate_single = true,
         tiger_sentence_early_commit_to_preedit = false,
         tiger_sentence_key_correction = false
     }

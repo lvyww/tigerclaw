@@ -924,7 +924,7 @@ print("OK  raw input cap applies to the live tail only")
 -- 允许单字重码组句: segmented paths compete non-first single characters by
 -- language-model score; whole-input single edges keep lexicon-rank order.
 sentence.reset_decode_cache()
-sentence.set_allow_duplicate_single(nil)
+sentence.apply_auto_select_min_code_length(3)
 local duplicate_on = sentence.decode("gyygch")
 local has_yanggao = false
 for i = 1, #duplicate_on do
@@ -937,12 +937,7 @@ sentence.reset_decode_cache()
 if sentence.decode("gch")[1].text ~= "赤" then
     fail("whole-input single edge gch did not keep rank-first order")
 end
-sentence.set_allow_duplicate_single({
-    get_option = function(_, name)
-        if name == "tiger_sentence_allow_duplicate_single" then return false end
-        return true
-    end
-})
+sentence.apply_auto_select_min_code_length(0)
 sentence.reset_decode_cache()
 local duplicate_off = sentence.decode("gyygch")
 for i = 1, #duplicate_off do
@@ -950,7 +945,7 @@ for i = 1, #duplicate_off do
         fail("duplicate-single switch off still exposed 羊羔 implicitly")
     end
 end
-sentence.set_allow_duplicate_single(nil)
+sentence.apply_auto_select_min_code_length(3)
 sentence.reset_decode_cache()
 print("OK  duplicate single characters compete only while the switch is on")
 
@@ -1154,19 +1149,20 @@ local ja = sentence.decode("ja")
 if not ja[1] or ja[1].text ~= "甲" or not ja[2] or ja[2].text ~= "乙" then
     fail("imported table lost line-order ranks for shared code ja")
 end
-sentence.set_allow_duplicate_single(nil)
+-- This historical ambiguity fixture deliberately admits two-key duplicates.
+sentence.apply_auto_select_min_code_length(2)
 if sentence.capture_empty_code_candidate("ja", "") then
     fail("duplicate single was excluded from empty-code confidence")
 end
 if not sentence.has_complete_candidate("ja", "", "甲", true) then
     fail("exact empty-code query lost the duplicate single")
 end
-sentence.set_allow_duplicate_single({ get_option = function() return false end })
+sentence.apply_auto_select_min_code_length(0)
 if not sentence.capture_empty_code_candidate("ja", "") or
     sentence.has_complete_candidate("ja", "", "甲", true) then
     fail("disabled duplicate-single switch did not restore first-rank grouping")
 end
-sentence.set_allow_duplicate_single(nil)
+sentence.apply_auto_select_min_code_length(3)
 for _, automatic in ipairs({false, true}) do
     local env, context, properties, commits, menu = fake_environment(automatic)
     context.input = "ja"
