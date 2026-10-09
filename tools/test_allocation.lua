@@ -68,21 +68,13 @@ for _,p in ipairs(old.early_commit_evidence.prefixes) do
     local _,count=p.text:gsub("[^\128-\191]","")
     check(p.text_char_count==count,"prefix character count confused bytes with codepoints")
 end
--- One pair is evaluated no more than once during a source-stable merge.
-local learning=sentence.learning
-local original_score=learning.fusion_score
-local calls={}
-learning.fusion_score=function(_,_,_,d,s)
-    local key=d..":"..s;calls[key]=(calls[key] or 0)+1
-    return d=="C" and s=="A" and 10 or 0
-end
-sentence.set_learning_for_test({codes={}},"allocation-test")
-local list={{text="A",source_mask=2},{text="B",source_mask=1,direct_rank=1},
-    {text="C",source_mask=1,direct_rank=2},{text="D",source_mask=1,direct_rank=3},
-    {text="E",source_mask=1,direct_rank=4}}
-sentence.apply_fusion_ordering_for_test("ii",list)
+-- Numerical source merge uses a Direct suffix maximum, preserving the rank
+-- prefix while leaving the remaining lower Direct candidates behind.
+local list={{text="A",source_mask=2,score=10},{text="B",source_mask=1,direct_rank=1,score=1},
+    {text="C",source_mask=1,direct_rank=2,score=20,learning_score=9},
+    {text="D",source_mask=1,direct_rank=3,score=0},{text="E",source_mask=1,direct_rank=4,score=-1}}
+sentence.apply_source_ordering_for_test("ii",list)
 check(list[1].text=="B" and list[2].text=="C" and list[3].text=="A" and list[4].text=="D",
-    "Fusion prefix promotion no longer produces B,C,A,D")
-for _,n in pairs(calls) do check(n==1,"Fusion recalculated an identical pair in one merge") end
-learning.fusion_score=original_score;sentence.set_learning_for_test(nil,"");io.open=original_open
+    "Numerical source merge did not preserve the necessary Direct prefix")
+sentence.set_learning_for_test(nil,"");io.open=original_open
 print(string.format('{"status":"passed","allocation_checks":%d,"real_frontend":false}',checks))

@@ -36,7 +36,7 @@ function M.encode(e)
     return table.concat({'学习',os.date('!%Y-%m-%dT%H:%M:%SZ',e.time),escape(e.text),escape(e.code),escape(e.context),
         tostring(e.levels or 1),escape(e.mode),e.id,''}, '\t') .. '\n'
 end
-function M.parse(data, valid)
+function M.parse(data, valid, include)
     assert(#data <= M.limit, '自学习文件超过16 MiB')
     data = data:gsub('^\239\187\191','')
     local events, seen, removed, sequence = {}, {}, {}, 0
@@ -52,7 +52,7 @@ function M.parse(data, valid)
                 if f[1] == '学习' then
                     local e = {time=time,text=unescape(f[3]),code=unescape(f[4]),context=unescape(f[5]),levels=tonumber(f[6]),mode=unescape(f[7]),id=f[8]}
                     assert(e.levels and valid(e) and f[9] == '', '自学习片段或升级值无效')
-                    events[#events+1] = e
+                    if not include or include(e) then events[#events+1] = e end
                 elseif f[1] == '撤销' then
                     assert(#f[9] > 0 and #f[9] <= 128, '撤销目标无效'); removed[f[9]]=true
                 elseif f[1] == '清空' then

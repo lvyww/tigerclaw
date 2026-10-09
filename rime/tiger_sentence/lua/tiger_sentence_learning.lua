@@ -43,6 +43,12 @@ function M.hash(text)
     end
     return string.format("%08x%08x", a, b)
 end
+-- Retired whole-candidate pairs are ignored without rewriting journal bytes.
+function M.is_legacy_mode(mode)
+    return type(mode) == "string" and
+        (mode:sub(1, #"fusion-v1|") == "fusion-v1|" or
+         mode:sub(1, #"exact-correction-v1|") == "exact-correction-v1|")
+end
 local MAX_LEVEL = 10
 local function correction_level(weight)
     return math.max(0, math.min(MAX_LEVEL, math.floor((weight or 0) + 1e-12)))
@@ -65,7 +71,7 @@ function M.build(events, now)
     -- Timestamps remain persisted metadata only. Learning never decays by time.
     local groups = {}
     for _, e in ipairs(events) do
-        if e.mode and #e.mode > 0 and #e.mode <= 512 and e.code and #e.code > 0 and #e.code <= 128 and
+        if e.mode and not M.is_legacy_mode(e.mode) and #e.mode > 0 and #e.mode <= 512 and e.code and #e.code > 0 and #e.code <= 128 and
             e.text and static(e.text) and e.context and (e.context == "" or #chars(e.context) > 0) and #chars(e.context) <= 2 and
             type(e.time) == "number" and e.time >= 0 and valid_levels(e) then
             local k = key(e.code, e.mode, e.context)
@@ -147,7 +153,7 @@ end
 function M.runtime_index(events, now)
     local index = {codes={}, partitions={}, cache={}, now=now or os.time(), future=0}
     for _, e in ipairs(events) do
-        if valid_event(e) then
+        if valid_event(e) and not M.is_legacy_mode(e.mode) then
             local p = index.partitions[e.code]
             if not p then p = {}; index.partitions[e.code] = p; index.codes[#index.codes + 1] = e.code end
             append_group(p, e, index.now)
@@ -205,7 +211,7 @@ local function update_index(index, accepted, events, now)
     local next_index = {codes=index.codes, partitions=copy(index.partitions), cache={}, now=now, future=index.future}
     local changed, new_codes = {}, {}
     for _, e in ipairs(accepted) do
-        if valid_event(e) then
+        if valid_event(e) and not M.is_legacy_mode(e.mode) then
             if not changed[e.code] then
                 local old = next_index.partitions[e.code]
                 next_index.partitions[e.code] = old and copy(old) or {}
@@ -229,11 +235,13 @@ local function update_index(index, accepted, events, now)
     return next_index
 end
 function M.confidence_score(index, mode, code, text, ctx)
+    if M.is_legacy_mode(mode) then return 0 end
     local values = index and materialize(index, code)
     local s = values and values.exact[key(code, mode, text)]
     return s and math.max(s.confidence_general or 0, (s.confidence_exact or {})[ctx] or 0) or 0
 end
 function M.projected_score(index, mode, code, text, ctx, events, levels)
+    if M.is_legacy_mode(mode) then return 0 end
     local touched = false
     for _, e in ipairs(events) do if e.mode == mode and e.code == code then touched = true; break end end
     if not touched then return index and M.score(index, mode, code, text, ctx) or 0 end
@@ -251,6 +259,7 @@ function M.projected_score(index, mode, code, text, ctx, events, levels)
     return math.max(general_score(total), exact_score(weights[ctx] or 0))
 end
 function M.score(index, mode, code, text, ctx)
+    if M.is_legacy_mode(mode) then return 0 end
     local values = materialize(index, code)
     return values and score(values.exact[key(code, mode, text)], ctx) or 0
 end
@@ -346,91 +355,6 @@ function M.early_commit_contribution(score)
     return math.min(0.75, math.max(0, score or 0) * M.early_commit_maturity(score) * 0.075)
 end
 
-function M.fusion_mode(mode)
-    return mode == "" and "" or ("fusion-v1|" .. mode)
-end
-
-function M.fusion_pair_code(raw, direct, composed)
-    return "~f" .. M.hash((raw or "") .. "\0D\0" .. (direct or "") .. "\0C\0" .. (composed or ""))
-end
-
-function M.fusion_score(index, mode, raw, direct, composed)
-    if not index or mode == "" then return 0 end
-    local fusion = M.fusion_mode(mode)
-    local code = M.fusion_pair_code(raw, direct, composed)
-    return M.score(index, fusion, code, "D", "") - M.score(index, fusion, code, "C", "")
-end
-
-function M.fusion_event(mode, raw, direct, composed, direct_wins, raw_end)
-    if mode == "" then return nil end
-    return {
-        time=os.time(), mode=M.fusion_mode(mode),
-        code=M.fusion_pair_code(raw, direct, composed),
-        text=direct_wins and "D" or "C", context="",
-        raw_start=0, raw_end=math.max(0, raw_end or #raw),
-        text_start=0, text_end=1
-    }
-end
-
--- Final-menu preferences are isolated from lexical/fragment rewards and the
--- Direct/Composed fusion namespace. Only an exact submitted choice creates E.
-function M.exact_correction_mode(mode)
-    return mode == "" and "" or ("exact-correction-v1|" .. mode)
-end
-
-function M.exact_correction_pair_code(raw, exact, corrected)
-    return "~c" .. M.hash((raw or "") .. "\0E\0" .. (exact or "") .. "\0C\0" .. (corrected or ""))
-end
-
-function M.exact_correction_score(index, mode, raw, exact, corrected)
-    if not index or mode == "" then return 0 end
-    return M.score(index, M.exact_correction_mode(mode),
-        M.exact_correction_pair_code(raw, exact, corrected), "E", "")
-end
-
-function M.exact_correction_event(mode, raw, exact, corrected, raw_end)
-    if mode == "" then return nil end
-    return {
-        time=os.time(), mode=M.exact_correction_mode(mode),
-        code=M.exact_correction_pair_code(raw, exact, corrected), text="E", context="",
-        raw_start=0, raw_end=math.max(0, raw_end or #raw), text_start=0, text_end=1
-    }
-end
-
-function M.apply_exact_correction_ordering(index, mode, raw, candidates, affected)
-    if not index or mode == "" or #candidates < 2 then return candidates, false end
-    local exact, corrected, position = {}, {}, {}
-    for i, item in ipairs(candidates) do
-        local list = affected(item) and corrected or exact
-        list[#list + 1] = item
-        position[item] = i
-    end
-    if #exact == 0 or #corrected == 0 then return candidates, false end
-    -- Keep both source chains stable. A preference for a later exact candidate
-    -- carries only the necessary exact prefix past the current corrected head.
-    local merged, ei, ci = {}, 1, 1
-    while ei <= #exact and ci <= #corrected do
-        local blocked = false
-        for i = ei, #exact do
-            if M.exact_correction_score(index, mode, raw, exact[i].text, corrected[ci].text) > 0 then
-                blocked = true; break
-            end
-        end
-        if blocked or position[exact[ei]] < position[corrected[ci]] then
-            merged[#merged + 1] = exact[ei]; ei = ei + 1
-        else
-            merged[#merged + 1] = corrected[ci]; ci = ci + 1
-        end
-    end
-    while ei <= #exact do merged[#merged + 1] = exact[ei]; ei = ei + 1 end
-    while ci <= #corrected do merged[#merged + 1] = corrected[ci]; ci = ci + 1 end
-    local changed = false
-    for i, item in ipairs(merged) do if candidates[i] ~= item then changed = true; break end end
-    if not changed then return candidates, false end
-    for i, item in ipairs(merged) do candidates[i] = item end
-    return candidates, true
-end
-
 function M.reward(index, mode, raw, text, finish, previous)
     local best, potential, start = previous.learning_score or 0, 0, previous
     local early_bonus = previous.learning_early_commit_bonus or 0
@@ -455,26 +379,32 @@ function M.reward(index, mode, raw, text, finish, previous)
     return best, potential, early_bonus
 end
 
-function M.diff(raw, before, selected, floor, mode)
-    local function boundaries(item)
-        local map, ends, node = {[0]=0}, {}, item.path
-        while node and (node.raw_length or 0) > 0 do
-            map[node.raw_length] = node.text_length
-            ends[#ends + 1] = node.raw_length
-            node = node.previous
-        end
-        table.sort(ends)
-        local r, t = 0, 0
-        for _, last in ipairs(ends) do
-            if last <= r or map[last] <= t or map[last] > #item.text then return nil end
-            r, t = last, map[last]
-        end
-        if r ~= #raw or t ~= #item.text then return nil end
-        return map, ends
+local function path_boundaries(item, raw)
+    if not item or type(item.text) ~= "string" or #chars(item.text) == 0 then return nil end
+    local map, ends, node = {[0]=0}, {}, item.path
+    while node and (node.raw_length or 0) > 0 do
+        local r, t = node.raw_length, node.text_length
+        if type(t) ~= "number" or r ~= math.floor(r) or t ~= math.floor(t) or
+            r > #raw or t <= 0 or t > #item.text or
+            (t < #item.text and item.text:byte(t + 1) >= 128 and item.text:byte(t + 1) < 192) then return nil end
+        map[r] = t
+        ends[#ends + 1] = r
+        node = node.previous
     end
+    table.sort(ends)
+    local r, t = 0, 0
+    for _, last in ipairs(ends) do
+        if last <= r or map[last] <= t then return nil end
+        r, t = last, map[last]
+    end
+    if r ~= #raw or t ~= #item.text then return nil end
+    return map, ends
+end
+
+function M.diff(raw, before, selected, floor, mode)
     if not before or not selected or before.text == selected.text then return {} end
-    local a, ends = boundaries(before)
-    local b = boundaries(selected)
+    local a, ends = path_boundaries(before, raw)
+    local b = path_boundaries(selected, raw)
     if not a or not b then return {} end
     local result, first = {}, 0
     for _, last in ipairs(ends) do
@@ -514,7 +444,7 @@ local function projected_reward(index, raw, item, events, levels)
     end
     return best[#points]
 end
-function M.plan_levels(index, events, raw, before, selected)
+function M.plan_levels(index, events, raw, before, selected, before_is_corrected)
     if not events or #events == 0 or not before or not selected then return end
     local seen = {}
     for i = #events, 1, -1 do
@@ -522,13 +452,13 @@ function M.plan_levels(index, events, raw, before, selected)
         local k = key(e.mode,e.code,e.text,e.context)
         if seen[k] then table.remove(events,i) else seen[k] = true end
     end
-    local left = (before.score or 0) - (before.learning_score or 0)
+    local left = (before.score or 0) - (before_is_corrected and 0 or (before.learning_score or 0))
     local right = (selected.score or 0) - (selected.learning_score or 0)
     local levels = 1
     if left == left and right == right and math.abs(left) < math.huge and math.abs(right) < math.huge then
         while levels < 3 do
             if right + projected_reward(index,raw,selected,events,levels) >=
-                left + projected_reward(index,raw,before,events,levels) + 1 then break end
+                left + (before_is_corrected and 0 or projected_reward(index,raw,before,events,levels)) + 1 then break end
             levels = levels + 1
         end
     end
@@ -599,6 +529,85 @@ function M.reinforce_existing(index, raw, before, selected, floor, mode, supplem
     return #result == 1 and result or {}
 end
 
+-- Learn typed raw against the selected exact path. A two-character standalone
+-- selection confirms the whole phrase; longer input can reuse one unambiguous
+-- known fragment across a shared-boundary diff, without guessing its prefix.
+function M.selection_events(raw, before, selected, floor, mode, index, supplemental)
+    if mode == "" or M.is_legacy_mode(mode) then return {} end
+    local result = M.diff(raw, before, selected, floor, mode)
+    if #result == 0 then return result end
+    local function make(rs, re, ts, te)
+        return {time=os.time(), mode=mode, code=raw:sub(rs + 1, re):lower(),
+            text=selected.text:sub(ts + 1, te), context=context(selected.text:sub(1, ts)),
+            raw_start=rs, raw_end=re, text_start=ts, text_end=te}
+    end
+    if floor == 0 and #raw <= 128 and #chars(selected.text) == 2 and static(selected.text) then
+        return {make(0, #raw, 0, #selected.text)}
+    end
+    local b, ends = path_boundaries(selected, raw)
+    local points = {0}
+    for _, last in ipairs(ends) do points[#points + 1] = last end
+    local function overlaps(rs, re)
+        for _, e in ipairs(result) do
+            if rs < e.raw_end and re > e.raw_start then return true end
+        end
+        return false
+    end
+    local matches = {}
+    if (index and index.codes and #index.codes > 0) or supplemental then
+        for first = 1, #points - 1 do
+            local rs, nearby = points[first], false
+            if rs >= floor then
+                for _, e in ipairs(result) do
+                    if rs < e.raw_end and e.raw_start - rs < 128 and
+                        (b[rs] >= e.text_start or #chars(selected.text:sub(b[rs] + 1, e.text_start)) < 16) then
+                        nearby = true; break
+                    end
+                end
+            end
+            if nearby then
+                for last = first + 1, #points do
+                    local re = points[last]
+                    local text = selected.text:sub(b[rs] + 1, b[re])
+                    local n = #chars(text)
+                    if n == 0 or n > 16 or re - rs > 128 then break end
+                    if overlaps(rs, re) and static(text) and not before.text:find(text, 1, true) then
+                        local e = make(rs, re, b[rs], b[re])
+                        if (index and M.score(index, mode, e.code, e.text, e.context) > 0) or
+                            (supplemental and supplemental(e.text)) then
+                            matches[#matches + 1] = {n=n, event=e}
+                        end
+                    end
+                end
+            end
+        end
+    end
+    local best, count
+    for _, m in ipairs(matches) do
+        if not best or m.n > best.n then best, count = m, 1
+        elseif m.n == best.n then count = count + 1 end
+    end
+    if best and count == 1 then
+        local winner, contains = best.event, true
+        for _, m in ipairs(matches) do
+            if m.event.raw_start < winner.raw_start or m.event.raw_end > winner.raw_end then
+                contains = false; break
+            end
+        end
+        if contains then
+            for i = #result, 1, -1 do
+                if result[i].raw_start < winner.raw_end and result[i].raw_end > winner.raw_start then table.remove(result, i) end
+            end
+            result[#result + 1] = winner
+        end
+    end
+    for i = #result, 1, -1 do
+        if #result[i].code == 0 or #result[i].code > 128 then table.remove(result, i) end
+    end
+    table.sort(result, function(a,b) return a.raw_start < b.raw_start end)
+    return result
+end
+
 local text_store = require("tiger_sentence_learning_text")
 local stores = {}
 -- Injectable storage boundary for isolated tests. Production is the readable
@@ -611,7 +620,7 @@ function M.open(name)
     local ok, err = pcall(function()
         store.db = M.storage_factory(name)
         local data = store.db:read()
-        store.events, store.seen, store.sequence = text_store.parse(data, valid_event)
+        store.events, store.seen, store.sequence = text_store.parse(data, valid_event, function(e) return not M.is_legacy_mode(e.mode) end)
         store.count, store.bytes = #store.events, math.max(#data, #text_store.header)
         store.index = M.runtime_index(store.events)
     end)
@@ -627,7 +636,7 @@ function M.confirm(store, events)
     store.seen = store.seen or {}
     for _, original in ipairs(events) do
         if store.count >= 10000 then break end
-        if valid_event(original) then
+        if valid_event(original) and not M.is_legacy_mode(original.mode) then
             local e = copy(original)
             local k = string.format("记录%06d", store.sequence + 1)
             e.id, e.levels = e.id or k, e.levels or 1

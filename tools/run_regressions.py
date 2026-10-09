@@ -39,7 +39,7 @@ def temporary_tree():
 def isolated_sources(destination):
     shutil.copytree(PACK / "lua", destination / "lua")
     (destination / "tools").mkdir()
-    for name in ("test_tiger_sentence_incremental.lua", "test_rime_contract.lua", "test_sentence_safety.lua", "test_sentence_learning.lua", "test_adaptive_learning.lua", "test_review_regressions.lua", "test_ngram_reader.lua", "test_memory.lua", "test_lexical_prior.lua", "test_allocation.lua", "test_whole_single_reward.lua", "test_auto_select_min_code_length.lua"):
+    for name in ("test_tiger_sentence_incremental.lua", "test_rime_contract.lua", "test_sentence_safety.lua", "test_sentence_learning.lua", "test_fragment_selection.lua", "test_adaptive_learning.lua", "test_review_regressions.lua", "test_ngram_reader.lua", "test_memory.lua", "test_lexical_prior.lua", "test_allocation.lua", "test_whole_single_reward.lua", "test_auto_select_min_code_length.lua"):
         source = (ROOT / "tools" / name).read_text(encoding="utf-8")
         # Run the shared suite in the public mirror layout, without copying
         # unrelated TigerClaw tools or any live configuration/model files.
@@ -81,9 +81,13 @@ def negative_controls(lua, root):
          'local function evaluate_evidence_state(item)\n',
          'local function evaluate_evidence_state(item)\n    path_isolation_penalty(item)\n',
          "Partial evidence evaluated ranking-only isolation"),
-        ("fusion-pair-cache", "test_allocation.lua",
-         'local score = pair_scores[key]', 'local score = nil',
-         "Fusion recalculated an identical pair in one merge"),
+        ("learned-direct-beam", "test_sentence_learning.lua",
+         'local preserve_direct = learned and has_direct', 'local preserve_direct = false',
+         "learned Direct rank prefix must survive beam truncation"),
+        ("learned-direct-prefix", "test_allocation.lua",
+         'suffix_max[i] = math.max(direct[i].score or -math.huge, suffix_max[i + 1] or -math.huge)',
+         'suffix_max[i] = direct[i].score or -math.huge',
+         "Numerical source merge did not preserve the necessary Direct prefix"),
         ("memory-schema-less", "test_memory.lua",
          'if not env or not schema then return end',
          'if not env or not schema then set_memory_profile("balanced"); return end',
@@ -154,6 +158,19 @@ def negative_controls(lua, root):
         print(json.dumps({"negative_control": name, "status": "detected"}), flush=True)
     # Helper-module mutants run in this owned copy only and are always restored.
     helpers = [
+        ("fragment-whole-pair", "tiger_sentence_learning.lua", "test_fragment_selection.lua",
+         'if floor == 0 and #raw <= 128 and #chars(selected.text) == 2 and static(selected.text) then',
+         'if false and floor == 0 and #raw <= 128 and #chars(selected.text) == 2 and static(selected.text) then',
+         "standalone two-character choice records whole phrase only"),
+        ("corrected-planner", "tiger_sentence_learning.lua", "test_fragment_selection.lua",
+         '(before_is_corrected and 0 or projected_reward(index,raw,before,events,levels))',
+         '(false and 0 or projected_reward(index,raw,before,events,levels))',
+         "corrected planner must use actual final score without projected reward"),
+        ("retired-pair-window", "tiger_sentence_learning.lua", "test_fragment_selection.lua",
+         'text_store.parse(data, valid_event, function(e) return not M.is_legacy_mode(e.mode) end)',
+         'text_store.parse(data, valid_event)',
+         "legacy rows do not evict ordinary history from the 10000-event window"),
+
         ("memory-learning-cap", "tiger_sentence_learning.lua", "test_memory.lua",
          'local MATERIALIZED_CODE_LIMIT = 256', 'local MATERIALIZED_CODE_LIMIT = 10000',
          "materialized learning cache is unbounded"),
@@ -194,7 +211,7 @@ def main():
     lua = str(Path(lua).resolve())
     with temporary_tree() as root:
         isolated_sources(root)
-        for script in ("test_tiger_sentence_incremental.lua", "test_rime_contract.lua", "test_sentence_safety.lua", "test_sentence_learning.lua", "test_adaptive_learning.lua", "test_review_regressions.lua", "test_ngram_reader.lua", "test_memory.lua", "test_lexical_prior.lua", "test_allocation.lua", "test_whole_single_reward.lua", "test_auto_select_min_code_length.lua"):
+        for script in ("test_tiger_sentence_incremental.lua", "test_rime_contract.lua", "test_sentence_safety.lua", "test_sentence_learning.lua", "test_fragment_selection.lua", "test_adaptive_learning.lua", "test_review_regressions.lua", "test_ngram_reader.lua", "test_memory.lua", "test_lexical_prior.lua", "test_allocation.lua", "test_whole_single_reward.lua", "test_auto_select_min_code_length.lua"):
             result = execute(lua, root, script)
             print(result.stdout, end="", flush=True)
             result.check_returncode()

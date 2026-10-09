@@ -1707,8 +1707,16 @@ local function dedup_limit(bucket, limit)
     local truncated_now = #result > limit
     local truncated = (bucket._truncated or false) or truncated_now
     local better = current_state_comparator()
+    local learned, has_direct = false, false
     for _, item in ipairs(result) do
-        if (item.learning_score or 0) > 0 then better = state_better_score_first; break end
+        learned = learned or (item.learning_score or 0) > 0
+        has_direct = has_direct or learning.candidate_is_direct(item)
+    end
+    if learned then better = state_better_score_first end
+    local preserve_direct = learned and has_direct
+    if preserve_direct then
+        table.sort(result, better)
+        learning.apply_source_ordering("", result)
     end
     if truncated_now then
         local reserved
@@ -1720,7 +1728,11 @@ local function dedup_limit(bucket, limit)
         if reserved then
             table.sort(reserved, function(a, b) return a.score + a.learning_potential > b.score + b.learning_potential end)
         end
-        result = select_exact_top(result, limit, better)
+        if preserve_direct then
+            for i = #result, limit + 1, -1 do result[i] = nil end
+        else
+            result = select_exact_top(result, limit, better)
+        end
         if reserved then
             local kept, added = {}, 0
             for _, item in ipairs(result) do kept[item] = true end
@@ -1729,7 +1741,7 @@ local function dedup_limit(bucket, limit)
                 if not kept[item] then result[#result + 1] = item; added = added + 1 end
             end
         end
-    else
+    elseif not preserve_direct then
         table.sort(result, better)
     end
     -- result is private to this invocation; publishing it directly avoids
@@ -1864,11 +1876,12 @@ local function expand_range(raw, states, from_pos, length, minimum_consumed_end)
                                             local learned = item.learning_score or 0
                                             local potential = 0
                                             local learning_early_bonus = item.learning_early_commit_bonus or 0
-                                            if not direct_edge and not correction.searching and not item.correction_history then
+                                            if not correction.searching and not item.correction_history then
                                                 learned, potential, learning_early_bonus = learning.reward(
                                                     learning_index, learning_mode, raw, text, consumed_end, item)
                                                 if learned > 0 or potential > 0 then learning_affected = true end
                                             end
+                                            if direct_edge then learning_early_bonus = 0 end
                                             if correction.searching then learned, potential, learning_early_bonus = 0, 0, 0 end
                                             add_state(states[consumed_end], {
                                                 score = score + learned - (item.learning_score or 0) -
@@ -1969,7 +1982,7 @@ local function evaluate_state(item)
         ranking_prior.supplement_early_commit_contribution(item.supplement_score or 0) +
         (direct and 0 or (item.learning_early_commit_bonus or 0)))
     return {
-        score = item.score + ending_adjustment - (direct and (item.learning_score or 0) or 0),
+        score = item.score + ending_adjustment,
         confidence_score = confidence_score,
         early_commit_confidence_score = confidence_score + personalization,
         text = item.text,
@@ -1978,7 +1991,7 @@ local function evaluate_state(item)
         max_rank = math.max(1, item.max_rank or 1),
         supplement_score = item.supplement_score or 0.0,
         code_score = item.code_score or 0.0,
-        learning_score = direct and 0 or (item.learning_score or 0),
+        learning_score = item.learning_score or 0,
         source_mask = item.source_mask or 0,
         direct_rank = item.direct_rank or math.huge,
         edge_count = item.edge_count or 0,
@@ -2236,7 +2249,7 @@ local function prefer_score_over_lexicon_rank(values)
     return false
 end
 
-function learning.apply_fusion_ordering(raw, candidates)
+function learning.apply_source_ordering(raw, candidates)
     if #candidates < 2 then return candidates end
     local has_direct = false
     for i = 1, #candidates do
@@ -2261,39 +2274,24 @@ function learning.apply_fusion_ordering(raw, candidates)
         end
         return candidates
     end
-    -- Private to this merge: no preference can survive a learning/schema epoch.
-    -- Zero is a cached score, not a miss. Avoid constructing/hashing each pair
-    -- repeatedly while its source prefix is promoted.
-    local pair_scores = {}
-    local function pair_score(d, c)
-        if not learning_index or learning_mode == "" then return 0 end
-        local key = (d - 1) * #composed + c
-        local score = pair_scores[key]
-        if score == nil then
-            score = learning.fusion_score(learning_index, learning_mode, raw, direct[d].text, composed[c].text)
-            pair_scores[key] = score
+    -- Ordinary learning changes final scores. Preserve the Direct rank chain:
+    -- the strongest remaining Direct score carries only its necessary prefix.
+    -- Empty/unrelated history retains the previous source-stable baseline.
+    local learned, suffix_max = false, {}
+    for _, item in ipairs(candidates) do
+        if (item.learning_score or 0) > 0 then learned = true; break end
+    end
+    if learned then
+        for i = #direct, 1, -1 do
+            suffix_max[i] = math.max(direct[i].score or -math.huge, suffix_max[i + 1] or -math.huge)
         end
-        return score
     end
     local merged, di, ci = {}, 1, 1
     while di <= #direct and ci <= #composed do
         local d, c = direct[di], composed[ci]
-        local direct_prefix, composed_prefix = 0, 0
-        for i = di, #direct do
-            direct_prefix = math.max(direct_prefix,
-                pair_score(i, ci))
-        end
-        for i = ci, #composed do
-            composed_prefix = math.max(composed_prefix,
-                -pair_score(di, i))
-        end
         local take_direct
-        if direct_prefix > 0 or composed_prefix > 0 then
-            if math.abs(direct_prefix - composed_prefix) > 1e-12 then
-                take_direct = direct_prefix > composed_prefix
-            else
-                take_direct = (base[d.text] or math.huge) < (base[c.text] or math.huge)
-            end
+        if learned and math.abs(suffix_max[di] - (c.score or -math.huge)) > 1e-12 then
+            take_direct = suffix_max[di] > (c.score or -math.huge)
         else
             take_direct = (base[d.text] or math.huge) < (base[c.text] or math.huge)
         end
@@ -2321,10 +2319,21 @@ local function emit(raw, states, length, include_early_commit, required_text_pre
             and state_better_score_first
             or state_better_rank_first
     end
+    local learned, has_direct = false, false
     for _, item in ipairs(all_candidates) do
-        if (item.learning_score or 0) > 0 then better = state_better_score_first; break end
+        learned = learned or (item.learning_score or 0) > 0
+        has_direct = has_direct or learning.candidate_is_direct(item)
     end
-    local result = select_exact_top(all_candidates, candidate_limit, better)
+    if learned then better = state_better_score_first end
+    local result
+    if learned and has_direct then
+        table.sort(all_candidates, better)
+        learning.apply_source_ordering(raw, all_candidates)
+        result = {}
+        for i = 1, math.min(#all_candidates, candidate_limit) do result[i] = all_candidates[i] end
+    else
+        result = select_exact_top(all_candidates, candidate_limit, better)
+    end
     if #result > 1 and ranking_prior.lexical_model and
         ranking_prior.lexical_prior_weight > 0.0 and ensure_kn() then
         -- Rerank only the first five displayed candidates. Character LM
@@ -2340,7 +2349,7 @@ local function emit(raw, states, length, include_early_commit, required_text_pre
         end
         table.sort(result, better)
     end
-    learning.apply_fusion_ordering(raw, result)
+    learning.apply_source_ordering(raw, result)
     result.learning_affected = learning_affected
     result._completed_truncated = completed._truncated or false
     -- Display Top-K is not the probability pool. Retain the scored beam for
@@ -2779,19 +2788,9 @@ function correction.rank_candidates(candidates, penalty)
     return ranked
 end
 
--- Reapply the current learning snapshot for both cached and fresh correction results.
+-- Exact decoding already contains ordinary learning scores.
 function correction.publish_learning(raw, exact, ranked, incomplete)
-    return correction.result(exact, ranked, candidate_limit, incomplete, function(result)
-        local changed
-        result, changed = learning.apply_exact_correction_ordering(
-            learning_index, learning_mode, raw, result, correction.affected)
-        if changed then
-            result.learning_affected, result.exact_correction_affected = true, true
-            -- Display preferences are not model evidence for automatic submission.
-            result.early_commit_evidence = {}
-        end
-        return result
-    end)
+    return correction.result(exact, ranked, candidate_limit, incomplete)
 end
 
 function correction.finish(raw, exact, exact_states, locked, required, full)
@@ -3394,7 +3393,7 @@ end
 function correction.before_append(env,state,raw)
     if not correction.enabled or not env.engine.context:get_option("tiger_sentence_early_commit") then return nil end
     local decoded=decode(raw,false,state.committed_text,active_lock(state))
-    local blocked=decoded.correction_incomplete or decoded.exact_correction_affected or
+    local blocked=decoded.correction_incomplete or
         (decoded[1] and (decoded[1].correction_count or 0)>0)
     local pending
     if not blocked then
@@ -3428,7 +3427,7 @@ local function try_empty_code_commit(env, state, full_before, appended_letter, b
         end
         pending=before.pending
         local current=decode(state.committed_raw..live_input(context),false,state.committed_text,active_lock(state))
-        if current.correction_incomplete or current.exact_correction_affected or (current[1] and (current[1].correction_count or 0)>0) then
+        if current.correction_incomplete or (current[1] and (current[1].correction_count or 0)>0) then
             state.empty_code_pending=nil
             save_transient_state(context,state,env)
             return false
@@ -3603,7 +3602,7 @@ local function try_early_commit(env)
 
     local generation = model_generation
     local decoded = decode(full_raw, true, state.committed_text, active_lock(state))
-    if decoded.correction_incomplete or decoded.exact_correction_affected or (decoded[1] and (decoded[1].correction_count or 0) > 0) then
+    if decoded.correction_incomplete or (decoded[1] and (decoded[1].correction_count or 0) > 0) then
         reset_early_evidence(state)
         state.empty_code_pending = nil
         save_transient_state(context, state, env)
@@ -3745,8 +3744,8 @@ local function learning_selection(env, state)
             first = first or item
             if visible == target then
                 selected = item
-                selected._fusion_ahead = {}
-                for i = 1, #seen do selected._fusion_ahead[i] = seen[i] end
+                selected._learning_ahead = {}
+                for i = 1, #seen do selected._learning_ahead[i] = seen[i] end
             end
             seen[#seen + 1] = item
             visible = visible + 1
@@ -3763,57 +3762,36 @@ local function learning_stage(env, state, selected, raw, submitted_first)
     if not live or live.mode == "" or not selected then return end
     if correction.affected(selected) then live.pending, live.baseline = {}, nil; return end
 
-    -- Cross-source learning is pairwise and never mutates either source's
-    -- internal ordering. Selecting a lower Direct candidate over an earlier
-    -- Composed candidate records only Direct > Composed (and vice versa).
-    for _, ahead in ipairs(selected._fusion_ahead or {}) do
-        local event
-        if correction.affected(ahead) then
-            event = learning.exact_correction_event(live.mode, raw, selected.text, ahead.text,
-                selected.path and selected.path.raw_length or #raw)
-        elseif learning.candidate_is_direct(selected) and
-            learning.candidate_is_composed_only(ahead) then
-            event = learning.fusion_event(live.mode, raw, selected.text, ahead.text, true,
-                selected.path and selected.path.raw_length or #raw)
-        elseif not correction.affected(ahead) and learning.candidate_is_composed_only(selected) and
-            learning.candidate_is_direct(ahead) then
-            event = learning.fusion_event(live.mode, raw, ahead.text, selected.text, false,
-                selected.path and selected.path.raw_length or #raw)
-        end
-        if event and #live.pending < 256 then
-            -- A processor key can stage the same choice again in the commit
-            -- notifier. Deduplicate only this pending submission; other pairs
-            -- and later confirmed corrections remain independent evidence.
-            local duplicate = false
-            for _, pending in ipairs(live.pending) do
-                if pending.mode == event.mode and pending.code == event.code and
-                    pending.text == event.text and pending.raw_end == event.raw_end then
-                    duplicate = true; break
-                end
-            end
-            if not duplicate then live.pending[#live.pending + 1] = event end
-        end
-    end
-
     local baseline = state.tab_pending and live.baseline or
         (not state.tab_pending and submitted_first)
-    -- A corrected baseline blocks fragment learning, not valid exact fusion pairs.
-    if baseline and not correction.affected(baseline) and learning.candidate_is_composed_only(baseline) and
-        learning.candidate_is_composed_only(selected) then
+    if baseline and not correction.affected(baseline) and
+        learning.candidate_is_direct(baseline) and learning.candidate_is_direct(selected) then
+        -- Pure Direct choices retain table rank. A visible cross-source rival
+        -- can still compete when another Direct happens to head the menu.
+        baseline = nil
+        for _, ahead in ipairs(selected._learning_ahead or {}) do
+            if correction.affected(ahead) or learning.candidate_is_composed_only(ahead) then
+                if not baseline or (ahead.score or -math.huge) > (baseline.score or -math.huge) then baseline = ahead end
+            end
+        end
+    end
+    if baseline then
         local lock = active_lock(state)
         local floor = math.max(#state.committed_raw, lock and #lock.raw or 0)
-        local events = learning.diff(raw, baseline, selected, floor, live.mode)
-        local reinforced = learning.reinforce_existing(live.store and live.store.index, raw, baseline, selected, floor, live.mode,
+        local events = learning.selection_events(raw, baseline, selected, floor, live.mode,
+            live.store and live.store.index,
             function(text) return (supplement_matcher.known or {})[text] == true end)
-        for _, e in ipairs(reinforced) do
-            local duplicate = false
-            for _, old in ipairs(events) do
-                if old.mode == e.mode and old.code == e.code and old.text == e.text then duplicate = true; break end
+        learning.plan_levels(live.store and live.store.index, events, raw, baseline, selected, correction.affected(baseline))
+        for _, e in ipairs(events) do
+            if #live.pending < 256 then
+                local duplicate = false
+                for _, old in ipairs(live.pending) do
+                    if old.mode == e.mode and old.code == e.code and old.text == e.text and old.context == e.context and
+                        old.raw_start == e.raw_start and old.raw_end == e.raw_end then duplicate = true; break end
+                end
+                if not duplicate then live.pending[#live.pending + 1] = e end
             end
-            if not duplicate then events[#events + 1] = e end
         end
-        learning.plan_levels(live.store and live.store.index, events, raw, baseline, selected)
-        for _, e in ipairs(events) do if #live.pending < 256 then live.pending[#live.pending + 1] = e end end
     end
     live.baseline = nil
 end
@@ -3824,11 +3802,8 @@ learning_submit = function(env, selected, actual, expected)
     if correction.affected(selected) then live.pending, live.baseline = {}, nil; return end
     local events, remaining = {}, {}
     if selected and actual ~= "" and actual == expected and live.mode ~= "" then
-        local fusion_mode = learning.fusion_mode(live.mode)
-        local exact_correction_mode = learning.exact_correction_mode(live.mode)
         for _, e in ipairs(live.pending) do
             if e.raw_end > selected.path.raw_length then remaining[#remaining + 1] = e
-            elseif e.mode == fusion_mode or e.mode == exact_correction_mode then events[#events + 1] = e
             elseif e.mode == live.mode and e.text_start >= #selected.text - #expected and
                 selected.text:sub(e.text_start + 1, e.text_end) == e.text then events[#events + 1] = e end
         end
@@ -4031,8 +4006,8 @@ local function processor(key_event, env)
                     #item.text > #state.committed_text then
                     if visible == target then
                         selected = item
-                        selected._fusion_ahead = {}
-                        for i = 1, #seen do selected._fusion_ahead[i] = seen[i] end
+                        selected._learning_ahead = {}
+                        for i = 1, #seen do selected._learning_ahead[i] = seen[i] end
                         break
                     end
                     seen[#seen + 1] = item
@@ -4508,7 +4483,8 @@ M.buffer_filter = function(input, env)
     end
 end
 M.learning = learning
-M.apply_fusion_ordering_for_test = learning.apply_fusion_ordering
+M.apply_source_ordering_for_test = learning.apply_source_ordering
+M.dedup_limit_for_test = dedup_limit
 M.set_learning_for_test = function(index, mode)
     learning_index, learning_mode = index, mode or ""
     reset_decode_cache()
