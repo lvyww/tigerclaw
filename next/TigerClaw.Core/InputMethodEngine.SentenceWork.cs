@@ -20,6 +20,14 @@ namespace TigerClaw.Core
             CancelSentenceWork();
             var previous = _sentenceInputDecoder;
             _sentenceInputDecoder = replacement;
+            if (!ReferenceEquals(previous, replacement))
+            {
+                // An unconfirmed choice belongs to the old resource paths.
+                // Fresh manual choices remain eligible in the new decoder;
+                // a pre-existing focus barrier must still remain in force.
+                _pendingLearning.Clear(); _readyLearning.Clear();
+                _learningBaseline = null; _learningOutput = null;
+            }
             // Raw text and candidate count can be identical across resource
             // replacement. Retire the generation as well as the decoder so a
             // late Qwen response cannot rerank the replacement's candidates.

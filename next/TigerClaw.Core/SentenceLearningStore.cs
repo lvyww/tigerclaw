@@ -139,7 +139,9 @@ namespace TigerClaw.Core
                         mode.Length == 0 || mode.Length > 512 || SentenceLearning.Characters(mode) == 0 || code.Length == 0 || code.Length > 128 || SentenceLearning.Characters(code) == 0 || !SentenceLearning.StaticText(text) ||
                         (context.Length > 0 && SentenceLearning.Characters(context) == 0) || SentenceLearning.Characters(context) > 2 || f[8].Length != 0)
                         throw new IOException("自学习片段、编码、前文或升级值无效");
-                    journal.Seen.Add(f[7]); journal.Events.Add(new SentenceLearningEvent { Id = f[7], Time = time, Mode = mode, Code = code, Text = text, Context = context, Levels = levels });
+                    journal.Seen.Add(f[7]);
+                    if (!SentenceLearning.LegacyPairMode(mode))
+                        journal.Events.Add(new SentenceLearningEvent { Id = f[7], Time = time, Mode = mode, Code = code, Text = text, Context = context, Levels = levels });
                 }
                 else if (f[0] == "撤销" && f[8].Length > 0 && f[8].Length <= 128)
                 { journal.Seen.Add(f[7]); journal.Removed.Add(f[8]); }
@@ -188,7 +190,7 @@ namespace TigerClaw.Core
             using var guard = Acquire(); string data = ReadBytes(); var journal = ReadJournal(data); var accepted = new HashSet<string>(StringComparer.Ordinal); var addition = new StringBuilder();
             foreach (var e in events)
             {
-                if (e.Id.Length == 0 || e.Id.Length > 128 || e.Id.IndexOfAny(new[] { '\t', '\r', '\n' }) >= 0 || journal.Seen.Contains(e.Id) || accepted.Contains(e.Id) ||
+                if (SentenceLearning.LegacyPairMode(e.Mode) || e.Id.Length == 0 || e.Id.Length > 128 || e.Id.IndexOfAny(new[] { '\t', '\r', '\n' }) >= 0 || journal.Seen.Contains(e.Id) || accepted.Contains(e.Id) ||
                     e.Time < 0 || e.Mode.Length == 0 || e.Mode.Length > 512 || SentenceLearning.Characters(e.Mode) == 0 || e.Code.Length == 0 || e.Code.Length > 128 || SentenceLearning.Characters(e.Code) == 0 || !SentenceLearning.StaticText(e.Text) ||
                     (e.Context.Length > 0 && SentenceLearning.Characters(e.Context) == 0) || SentenceLearning.Characters(e.Context) > 2 || e.Levels < 1 || e.Levels > 3) continue;
                 accepted.Add(e.Id);

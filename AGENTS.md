@@ -949,8 +949,22 @@ Sentence learning uses persistent correction levels with no time decay:
 10 levels, cross-context rewards +6/+8/.../+24 and same-context +9/+11/.../+27.
 Every manual correction plans a 1..3-level increment from the current candidate
 scores using non-overlapping boundary rewards; no fabricated duplicate events.
-Actual confirmation counts remain separate for early-commit maturity. Supplemental
-corpus exact members are eligible known inner fragments even without history.
+Actual confirmation counts remain separate for early-commit maturity.
+Standalone complete two-scalar choices learn one whole fragment after a valid diff.
+For longer input, selected actual boundaries can extend a changed interval to a
+known ordinary-learning or supplemental exact fragment (at most 16 scalars/128
+codes). Only one longest match containing every other match replaces overlapping
+diffs; unrelated diffs remain and ambiguous matches fall back to the original diff.
+Direct and Composed candidates now share ordinary numeric learning. Pure Direct
+choices preserve dictionary rank; an earlier Composed opponent still permits
+cross-source correction. Beam and menu limits follow numeric Direct-chain merging
+so learned later Direct entries cannot evict their dictionary predecessors.
+The current displayed final score also drives neural-menu merging and level
+planning, without changing base-model confidence. Automatic/first-choice commits
+never create feedback; fresh explicit non-first commits do not require Tab.
+Replacing decoder resources clears unconfirmed learning, not future manual choices.
+Both fusion-v1| and exact-correction-v1| records are retired: no production creation,
+ranking, active-window quota or maintenance import quota; ordinary history stays.
 The canonical UTF-8 journal is 自学习-虎爪.txt (shared full-pinyin: 自学习-全拼.txt),
 with Chinese operations, ISO UTC dates and explicit level increments. Old files
 are neither read nor migrated. Bad human edits remain intact and fail learning

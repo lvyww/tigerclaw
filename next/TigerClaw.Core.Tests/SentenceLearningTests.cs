@@ -57,6 +57,7 @@ namespace TigerClaw.Core.Tests
                 RunLearningStage("decoder", LearningDecoder);
                 RunLearningStage("engine-protocol", () => LearningEngineAndProtocol(root));
                 RunLearningStage("fusion-protocol", () => LearningFusionProtocol(root));
+                RunLearningStage("local-fragments", () => LearningFragments(root));
                 RunLearningStage("performance", LearningPerformance);
                 Console.WriteLine(JsonSerializer.Serialize(new { test = "tab_learning", status = "passed", checks = learningChecks, physicalTsfTested = false }));
                 return 0;
@@ -182,8 +183,8 @@ namespace TigerClaw.Core.Tests
             SentenceLearningSnapshot fusionSnapshot = SentenceLearningSnapshot.Build(
                 new[] { fusionEvent }, fusionEvent.Time);
             LearningCheck(
-                SentenceFusionPreference.SignedScore(fusionSnapshot, fusionMode, "ii", "C", "A") > 0,
-                "fusion preference records Direct over Composed without changing table rank");
+                fusionSnapshot.IsEmpty && SentenceFusionPreference.SignedScore(fusionSnapshot, fusionMode, "ii", "C", "A") == 0,
+                "retired whole-candidate pair records provide no ranking evidence");
             foreach (var name in new[] { "自学习-虎爪.txt", ".TIGIRL-LEARNING-v1.log.bak.txt", "自学习-虎爪.txt.tmp.dict.yaml", ".tigirl-learning-v1.log.lock" })
                 LearningCheck(SentenceLearning.IsReservedFile(name), "reserved filename " + name);
             LearningCheck(!SentenceLearning.IsReservedFile("正常码表.txt"), "normal table allowed");
@@ -315,7 +316,7 @@ namespace TigerClaw.Core.Tests
             var single = LearningEvent();decoder.SetLearning(SentenceLearningSnapshot.Build(new[] { single }), single.Mode);var first = decoder.Decode("aa");
             LearningCheck(first.Candidates[0].Text == "甲" &&
                 SentenceFusionPreference.IsDirect(first.Candidates[0]) &&
-                first.Candidates.All(candidate => candidate.LearningScore == 0),
+                first.LearningAffected,
                 "Direct-to-Direct history never changes exact table order");
             var prefix = new SentenceLockedPrefix("aa", first.Candidates[0].Text, first.Candidates[0].Boundary);decoder.SetLearning(null, "");
             var locked = decoder.Decode("aabb", lockedPrefix: prefix);LearningCheck(locked.Candidates[0].LearningScore == 0 && locked.Candidates[0].Text == "甲中", "lock no stale scores");
@@ -340,8 +341,8 @@ namespace TigerClaw.Core.Tests
                 new SentenceCandidate { Text = "C", Source = SentenceCandidateSource.Direct, DirectRank = 2 }
             };
             fusionDecoder.ApplyFusionOrdering("ii", merge);
-            LearningCheck(string.Concat(merge.Select(c => c.Text)) == "BCA",
-                "selecting Direct C promotes only the Direct prefix B,C across Composed A");
+            LearningCheck(string.Concat(merge.Select(c => c.Text)) == "ABC",
+                "legacy Direct pair cannot reorder the current menu");
         }
         private static void LearningEngineAndProtocol(string root)
         {

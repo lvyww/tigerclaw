@@ -34,7 +34,52 @@ namespace tiger::core
         double earlyLogMass = std::numeric_limits<double>::quiet_NaN();
         unsigned source = 0; // 1: direct table entry, 2: composed path
         int directRank = std::numeric_limits<int>::max();
+        // Menu-only neural result; lattice score and confidence stay untouched.
+        double finalScore = std::numeric_limits<double>::quiet_NaN();
     };
+    inline double SentenceFinalScore(const SentenceBeamState& candidate)
+    { return std::isnan(candidate.finalScore) ? candidate.score : candidate.finalScore; }
+    // The input list already has a transitive score/rank/text order. Preserve
+    // the Direct dictionary chain before any beam/display truncation; learned
+    // entries carry preceding ranks, while Composed keeps its existing order.
+    inline void ApplySentenceDirectRankOrdering(std::vector<SentenceBeamState>& candidates, bool useFinalScore = true)
+    {
+        auto original = candidates;
+        std::vector<std::size_t> direct, composed;
+        bool learned = false;
+        for (std::size_t i = 0; i < original.size(); ++i)
+        {
+            ((original[i].source & 1) ? direct : composed).push_back(i);
+            learned |= original[i].learningScore > 0;
+        }
+        std::stable_sort(direct.begin(), direct.end(), [&](auto a, auto b) { return original[a].directRank < original[b].directRank; });
+        auto score = [&](auto i) { return useFinalScore ? SentenceFinalScore(original[i]) : original[i].score; };
+        std::vector<std::size_t> strongest(direct.size());
+        for (auto i = direct.size(); i > 0; --i)
+        {
+            auto best = direct[i - 1];
+            if (i < direct.size())
+            {
+                auto next = strongest[i];
+                if (score(next) > score(best) || (score(next) == score(best) && next < best)) best = next;
+            }
+            strongest[i - 1] = best;
+        }
+        candidates.clear();
+        std::size_t di = 0, ci = 0;
+        while (di < direct.size() && ci < composed.size())
+        {
+            bool takeDirect = direct[di] < composed[ci];
+            if (learned)
+            {
+                auto best = strongest[di];
+                takeDirect = score(best) != score(composed[ci]) ? score(best) > score(composed[ci]) : best < composed[ci];
+            }
+            candidates.push_back(original[takeDirect ? direct[di++] : composed[ci++]]);
+        }
+        while (di < direct.size()) candidates.push_back(original[direct[di++]]);
+        while (ci < composed.size()) candidates.push_back(original[composed[ci++]]);
+    }
     using SentenceTransition = std::function<double(std::u16string_view, std::u16string_view, std::u16string_view)>;
     using SentenceSupplementAdvance = std::function<std::pair<int, double>(int, std::u16string_view)>;
     inline double LearningEarlyContribution(double score)
@@ -78,7 +123,7 @@ namespace tiger::core
         result.learningPotential = 0;
         result.text += candidate.text;
         bool direct = !item.boundary && edge.wholeInput;
-        if (!direct && learning && learning->snapshot && !learning->snapshot->empty())
+        if (learning && learning->snapshot && !learning->snapshot->empty())
         {
             auto start = item.boundary;
             for (;;)
@@ -164,9 +209,16 @@ namespace tiger::core
                 if (scoreFirst ? rank != 0 : score != 0) return (scoreFirst ? rank : score) < 0;
                 return a.text < b.text;
             };
+            const bool protectDirect = std::any_of(_values.begin(), _values.end(), [](const auto& c) { return c.learningScore > 0; }) &&
+                std::any_of(_values.begin(), _values.end(), [](const auto& c) { return (c.source & 1) != 0; });
+            if (protectDirect)
+            {
+                std::sort(_values.begin(), _values.end(), order);
+                ApplySentenceDirectRankOrdering(_values, false);
+            }
             if (_values.size() > limit)
             {
-                std::partial_sort(_values.begin(), _values.begin() + limit, _values.end(), order);
+                if (!protectDirect) std::partial_sort(_values.begin(), _values.begin() + limit, _values.end(), order);
                 auto first = _values.begin() + limit;
                 std::stable_sort(first, _values.end(), [](const auto& a, const auto& b)
                 { return a.learningPotential > 0 && (b.learningPotential <= 0 || a.score + a.learningPotential > b.score + b.learningPotential); });
@@ -175,7 +227,7 @@ namespace tiger::core
                 _values.resize(retained);
                 _truncated = true;
             }
-            else std::sort(_values.begin(), _values.end(), order);
+            else if (!protectDirect) std::sort(_values.begin(), _values.end(), order);
             _indices.clear(); _indices.rehash(0);
             _frozen = true;
             return _values;

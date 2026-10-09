@@ -184,7 +184,6 @@ namespace tiger::core
                 - (isolation ? isolation(item.text) : 0);
             item.score += ending + item.codeScore;
             if (pathIsolation) item.score += (isolation ? isolation(item.text) : 0) - pathIsolation(item);
-            if (item.source & 1) { item.score -= item.learningScore; item.learningScore = 0; }
             item.logMass += ending;
             item.earlyLogMass = item.logMass + std::min(.8, std::min(.75, item.supplementScore * .05) +
                 ((item.source & 1) ? 0 : item.learningEarlyBonus));
@@ -195,8 +194,8 @@ namespace tiger::core
             final.Add(std::move(item));
         }
         result.candidates = final.Limit(settings.candidateLimit, scoreFirst, false);
-        // Preserve dictionary order within direct entries, then merge the two
-        // ordered subsequences using receipt-backed pair preferences.
+        // Preserve dictionary order within direct entries. Ordinary fragment
+        // scores may move their rank-preserving prefix ahead of composed paths.
         if (settings.lexicalWeight > 0 && result.candidates.size() > 1)
         {
             for (std::size_t i = 0; i < std::min(std::size_t{5}, result.candidates.size()); ++i)

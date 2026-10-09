@@ -680,16 +680,24 @@ namespace TigerClaw.Core
                 truncated = _wasTruncated || truncatedNow;
                 _wasTruncated = truncated;
                 Comparison<BeamState> order = comparison ?? CompareBeamStatesByLexiconRankThenScore;
+                bool protectDirect = values.Any(c => c.LearningScore > 0) &&
+                    values.Any(c => (c.Source & SentenceCandidateSource.Direct) != 0);
+                if (protectDirect)
+                {
+                    values.Sort(order);
+                    values = OrderDirectChain(values, c => (c.Source & SentenceCandidateSource.Direct) != 0,
+                        c => c.DirectRank, c => c.Score, c => c.LearningScore);
+                }
                 if (truncatedNow)
                 {
-                    var kept = SelectExactTop(values, boundedLimit, order);
+                    var kept = protectDirect ? values.Take(boundedLimit).ToList() : SelectExactTop(values, boundedLimit, order);
                     // A retention hint is not a score: reserve at most four
                     // additional legal paths until their learned span finishes.
                     kept.AddRange(values.Where(v => v.LearningPotential > 0 && !kept.Contains(v))
                         .OrderByDescending(v => v.Score + v.LearningPotential).Take(4));
                     values = kept;
                 }
-                else
+                else if (!protectDirect)
                 {
                     values.Sort(order);
                 }
@@ -1266,19 +1274,9 @@ namespace TigerClaw.Core
 
                             string nextText = item.Text + candidate.Text;
                             bool directEdge = item.Boundary == null && position == 0 && wholeInputEdge;
-                            double learning = item.LearningScore;
-                            double learningPotential = 0.0;
-                            double learningEarlyCommitBonus = item.LearningEarlyCommitBonus;
-                            if (!directEdge)
-                            {
-                                learning = LearningReward(
-                                    raw,
-                                    nextText,
-                                    consumedEnd,
-                                    item,
-                                    out learningPotential,
-                                    out learningEarlyCommitBonus);
-                            }
+                            double learning = LearningReward(
+                                raw, nextText, consumedEnd, item,
+                                out double learningPotential, out double learningEarlyCommitBonus);
                             double learningAdded = learning - item.LearningScore;
                             score += learningAdded;
                             states[consumedEnd].InheritTruncation(ancestorTruncated);
@@ -1447,8 +1445,6 @@ namespace TigerClaw.Core
             double score = item.Score + endingAdjustment;
             double confidenceScore = item.LogMass + confidenceEndingAdjustment;
             bool direct = (item.Source & SentenceCandidateSource.Direct) != 0;
-            double effectiveLearningScore = direct ? 0.0 : item.LearningScore;
-            double effectiveScore = direct ? score - item.LearningScore : score;
             double personalizationBonus = Math.Min(
                 PersonalizedEarlyCommitConfidenceCap,
                 SupplementEarlyCommitContribution(item.SupplementScore) +
@@ -1457,8 +1453,8 @@ namespace TigerClaw.Core
             {
                 Text = item.Text,
                 BaseScore = score - item.LearningScore,
-                LearningScore = effectiveLearningScore,
-                FinalScore = effectiveScore,
+                LearningScore = item.LearningScore,
+                FinalScore = score,
                 ConfidenceScore = confidenceScore,
                 EarlyCommitConfidenceScore = confidenceScore + personalizationBonus,
                 SupplementScore = item.SupplementScore,
@@ -1943,6 +1939,12 @@ namespace TigerClaw.Core
             Comparison<SentenceCandidate> comparison = PreferScoreOverLexiconRank(values)
                 ? SentenceCandidate.CompareByScoreThenLexiconRank
                 : SentenceCandidate.CompareByLexiconRankThenScore;
+            if (values.Any(c => c.LearningScore > 0) && values.Any(SentenceFusionPreference.IsDirect))
+            {
+                values.Sort(comparison);
+                return OrderDirectChain(values, SentenceFusionPreference.IsDirect,
+                    c => c.DirectRank, c => c.FinalScore, c => c.LearningScore).Take(boundedLimit).ToArray();
+            }
             if (values.Count <= boundedLimit)
             {
                 values.Sort(comparison);
@@ -1955,78 +1957,51 @@ namespace TigerClaw.Core
         {
             if (candidates == null || candidates.Length < 2) return;
 
-            var baseOrder = new Dictionary<string, int>(StringComparer.Ordinal);
-            for (int index = 0; index < candidates.Length; index++)
-            {
-                string text = candidates[index]?.Text ?? string.Empty;
-                if (!baseOrder.ContainsKey(text)) baseOrder[text] = index;
-            }
-
-            int BaseIndex(SentenceCandidate candidate) =>
-                candidate != null &&
-                baseOrder.TryGetValue(candidate.Text ?? string.Empty, out int index)
-                    ? index
-                    : int.MaxValue;
-
-            List<SentenceCandidate> direct = candidates
-                .Where(SentenceFusionPreference.IsDirect)
-                .OrderBy(candidate => candidate.DirectRank)
-                .ThenBy(BaseIndex)
-                .ToList();
-            List<SentenceCandidate> composed = candidates
-                .Where(candidate => !SentenceFusionPreference.IsDirect(candidate))
-                .ToList();
-
-            if (direct.Count == 0 || composed.Count == 0)
-            {
-                if (direct.Count > 1)
-                {
-                    for (int index = 0; index < direct.Count; index++) candidates[index] = direct[index];
-                }
-                return;
-            }
-
-            var merged = new List<SentenceCandidate>(candidates.Length);
-            int di = 0, ci = 0;
-            while (di < direct.Count && ci < composed.Count)
-            {
-                SentenceCandidate d = direct[di];
-                SentenceCandidate c = composed[ci];
-                double directPrefix = 0.0;
-                for (int index = di; index < direct.Count; index++)
-                {
-                    double score = SentenceFusionPreference.SignedScore(
-                        _learning, _learningMode, raw, direct[index].Text, c.Text);
-                    if (score > directPrefix) directPrefix = score;
-                }
-
-                double composedPrefix = 0.0;
-                for (int index = ci; index < composed.Count; index++)
-                {
-                    double score = -SentenceFusionPreference.SignedScore(
-                        _learning, _learningMode, raw, d.Text, composed[index].Text);
-                    if (score > composedPrefix) composedPrefix = score;
-                }
-
-                bool takeDirect;
-                if (directPrefix > 0.0 || composedPrefix > 0.0)
-                {
-                    if (Math.Abs(directPrefix - composedPrefix) > 1e-12)
-                        takeDirect = directPrefix > composedPrefix;
-                    else
-                        takeDirect = BaseIndex(d) < BaseIndex(c);
-                }
-                else
-                {
-                    takeDirect = BaseIndex(d) < BaseIndex(c);
-                }
-
-                merged.Add(takeDirect ? direct[di++] : composed[ci++]);
-            }
-            while (di < direct.Count) merged.Add(direct[di++]);
-            while (ci < composed.Count) merged.Add(composed[ci++]);
+            var merged = OrderDirectChain(candidates, SentenceFusionPreference.IsDirect,
+                c => c.DirectRank, c => c.FinalScore, c => c.LearningScore);
             for (int index = 0; index < candidates.Length; index++) candidates[index] = merged[index];
         }
+
+        // Apply after an ordinary transitive total sort and before truncation.
+        // A lower-ranked learned Direct carries the dictionary ranks ahead of
+        // it. Composed order and the empty-history merge remain unchanged.
+        private static List<T> OrderDirectChain<T>(IReadOnlyList<T> values,
+            Func<T, bool> isDirect, Func<T, int> rank, Func<T, double> score, Func<T, double> learning)
+        {
+            var direct = Enumerable.Range(0, values.Count).Where(i => isDirect(values[i]))
+                .OrderBy(i => rank(values[i])).ThenBy(i => i).ToArray();
+            var composed = Enumerable.Range(0, values.Count).Where(i => !isDirect(values[i])).ToArray();
+            bool learned = values.Any(c => learning(c) > 0);
+            var strongest = new int[direct.Length];
+            for (int i = direct.Length - 1; i >= 0; i--)
+            {
+                int best = direct[i];
+                if (i + 1 < direct.Length)
+                {
+                    int next = strongest[i + 1];
+                    if (score(values[next]) > score(values[best]) ||
+                        (score(values[next]) == score(values[best]) && next < best)) best = next;
+                }
+                strongest[i] = best;
+            }
+            var result = new List<T>(values.Count);
+            int di = 0, ci = 0;
+            while (di < direct.Length && ci < composed.Length)
+            {
+                bool takeDirect = direct[di] < composed[ci];
+                if (learned)
+                {
+                    int best = strongest[di];
+                    double ds = score(values[best]), cs = score(values[composed[ci]]);
+                    takeDirect = ds != cs ? ds > cs : best < composed[ci];
+                }
+                result.Add(values[takeDirect ? direct[di++] : composed[ci++]]);
+            }
+            while (di < direct.Length) result.Add(values[direct[di++]]);
+            while (ci < composed.Length) result.Add(values[composed[ci++]]);
+            return result;
+        }
+
 
         private bool PreferScoreOverLexiconRank(List<SentenceCandidate> values)
         {

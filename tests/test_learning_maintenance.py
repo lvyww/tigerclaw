@@ -9,6 +9,39 @@ class MaintenanceTests(unittest.TestCase):
         self.events = [dict(id=f'id-{i}', time=1000+i, mode='test-v1', code='aa', text='虎𰻞', context='前文',levels=i+1) for i in range(3)]
         self.path.write_bytes(b''.join(m.event_line(e) for e in self.events))
     def tearDown(self): self.temp.cleanup()
+    def test_retired_pairs_are_readable_but_inactive(self):
+        retired=[dict(self.events[0], id='legacy-'+str(i), mode=mode, text='D')
+                 for i,mode in enumerate(['fusion-v1|test-v1','exact-correction-v1|test-v1'])]
+        self.path.write_bytes(self.path.read_bytes()+b''.join(m.event_line(e) for e in retired))
+        old=self.path.read_bytes()
+        self.assertEqual(m.maintain(self.path,'show')['events'],self.events)
+        self.assertEqual(m.maintain(self.path,'export')['events'],self.events)
+        self.assertEqual(self.path.read_bytes(),old)
+        m.maintain(self.path,'undo')
+        self.assertEqual(m.parse(self.path.read_bytes())[0],self.events[:-1])
+    def test_retired_pairs_do_not_consume_active_window(self):
+        self.path.write_bytes(self.path.read_bytes()+b''.join(m.event_line(dict(self.events[0],
+            id='legacy-'+str(i),mode='fusion-v1|test-v1',text='D')) for i in range(10010)))
+        self.assertEqual(m.parse(self.path.read_bytes())[0],self.events)
+    def test_import_pair_volume_is_not_active_quota(self):
+        source=self.root/'legacy-volume.json'
+        ordinary=dict(self.events[0],id='new-ordinary')
+        payload=[dict(self.events[0],id='old-'+str(i),mode='fusion-v1|test-v1',text='D') for i in range(10010)]
+        source.write_text(json.dumps({'format':m.FORMAT,'events':payload+[ordinary]}),encoding='utf-8')
+        m.maintain(self.path,'import',source)
+        self.assertEqual(m.parse(self.path.read_bytes())[0],self.events+[ordinary])
+    def test_import_ignores_retired_pair_modes(self):
+        source=self.root/'mixed.json'
+        ordinary=dict(self.events[0],id='new-ordinary')
+        retired=[dict(self.events[0],id='old-'+str(i),mode=mode,text='D')
+                 for i,mode in enumerate(['fusion-v1|test-v1','exact-correction-v1|test-v1'])]
+        source.write_text(json.dumps({'format':m.FORMAT,'events':retired+[ordinary]}),encoding='utf-8')
+        m.maintain(self.path,'import',source)
+        self.assertEqual(m.parse(self.path.read_bytes())[0],self.events+[ordinary])
+    def test_retired_mode_does_not_bypass_field_validation(self):
+        event=dict(self.events[0],mode='fusion-v1|test-v1',levels=9)
+        data=m.row('学习',event['id'],event['time'],event['text'],event['code'],event['context'],9,event['mode'])
+        with self.assertRaises(ValueError):m.parse(data)
     def test_unicode_roundtrip(self): self.assertEqual(m.parse(self.path.read_bytes())[0], self.events)
     def test_read_does_not_change(self):
         old = self.path.read_bytes(); self.assertEqual(m.maintain(self.path, 'show')['count'], 3); self.assertEqual(old, self.path.read_bytes())

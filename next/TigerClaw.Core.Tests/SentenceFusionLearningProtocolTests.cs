@@ -46,9 +46,9 @@ namespace TigerClaw.Core.Tests
                     {
                         ["uj"] = new() { "拾" }, ["kf"] = new() { "滑" }, ["ujkf"] = new() { "捡" }
                     }),
-                    // A gap beyond the ordinary learning cap proves that the
-                    // persisted cross-source preference reaches fusion ordering.
-                    new ReviewCountingModel { Score = (_, _, target) => target == "捡" ? -100 : 0 },
+                    // A finite score gap is overcome through ordinary fragment
+                    // levels, without an unbounded whole-candidate preference.
+                    new ReviewCountingModel { Score = (_, _, target) => target == "捡" ? -10 : 0 },
                     rankPenalty: 0, beamWidth: 100, isolationPenalty: SentenceIsolationPenalty.None,
                     allowDuplicateSingleCharacters: true, autoSelectMinCodeLength: 1);
                 using var handler = new ProtocolHandler(_ => { }, state, null, Decoder(), true);
@@ -71,14 +71,14 @@ namespace TigerClaw.Core.Tests
                     handler.Handle(JsonSerializer.Serialize(new { type = "learning_commit", client_session = "fusion-test",
                         learning_receipt = receipt, applied }));
                     Store().FlushAsync().GetAwaiter().GetResult();
-                    LearningCheck(Store().LastError == null, frontend + " fusion journal write succeeds");
+                    LearningCheck(Store().LastError == null, frontend + " fragment journal write succeeds");
                 }
                 SentenceLearningStore Reload()
                 {
                     var reloaded = new SentenceLearningStore(Store().Path);
                     reloaded.RefreshAsync();
                     reloaded.FlushAsync().GetAwaiter().GetResult();
-                    LearningCheck(reloaded.LastError == null, frontend + " fusion journal reload succeeds");
+                    LearningCheck(reloaded.LastError == null, frontend + " fragment journal reload succeeds");
                     return reloaded;
                 }
 
@@ -90,12 +90,25 @@ namespace TigerClaw.Core.Tests
                 Key(9); Key(27);
                 LearningCheck(!File.Exists(Store().Path), frontend + " cancelled Tab preview never persists");
 
+                Type(); Key(9); Key('U'); // Lock a selected prefix without confirming it.
+                var pending = (List<SentenceLearningEvent>)typeof(InputMethodEngine)
+                    .GetField("_pendingLearning", BindingFlags.Instance | BindingFlags.NonPublic).GetValue(engine);
+                LearningCheck(pending.Count == 1, frontend + " selected prefix has one unconfirmed fragment");
+                using var replacement = Decoder();
+                typeof(InputMethodEngine).GetMethod("ReplaceSentenceDecoder", BindingFlags.Instance | BindingFlags.NonPublic)
+                    .Invoke(engine, new object[] { replacement });
+                LearningCheck(pending.Count == 0, frontend + " resource replacement discards pending feedback");
+                using (var stale = JsonDocument.Parse(Key(32)))
+                    LearningCheck(!stale.RootElement.TryGetProperty("learning_receipt", out _),
+                        frontend + " old unconfirmed choice cannot issue a receipt after resource replacement");
+                Key(27);
+
                 Type(); Key(9);
                 using (var failed = JsonDocument.Parse(Key(32)))
                 {
                     LearningCheck(failed.RootElement.GetProperty("commit_text").GetString() == "捡", frontend + " selected Direct commit");
                     string receipt = failed.RootElement.GetProperty("learning_receipt").GetString();
-                    LearningCheck(!File.Exists(Store().Path), frontend + " response alone cannot learn fusion");
+                    LearningCheck(!File.Exists(Store().Path), frontend + " response alone cannot learn a fragment");
                     Ack(receipt, false);
                     Ack(receipt, true);
                     LearningCheck(Store().Entries().Length == 0, frontend + " failed receipt cannot later become learning");
@@ -103,23 +116,23 @@ namespace TigerClaw.Core.Tests
 
                 Type();
                 LearningCheck(Result().Candidates[0].Text == "拾滑", frontend + " failed confirmation preserves baseline");
-                Key(9);
+                Key(40); // Explicit Down + Space also learns without a Tab baseline.
                 using (var confirmed = JsonDocument.Parse(Key(32)))
                 {
                     string receipt = confirmed.RootElement.GetProperty("learning_receipt").GetString();
                     using var replay = JsonDocument.Parse(handler.Handle(lastKey));
                     LearningCheck(replay.RootElement.GetProperty("learning_receipt").GetString() == receipt,
-                        frontend + " key retry retains one fusion receipt");
+                        frontend + " key retry retains one fragment receipt");
                     Ack(receipt, true); Ack(receipt, true);
                 }
                 var events = Store().Entries();
-                LearningCheck(events.Length == 1 && events[0].Mode.StartsWith("fusion-v1|", StringComparison.Ordinal) &&
-                    events[0].Text == SentenceFusionPreference.DirectToken,
-                    frontend + " actual adapter persists one fusion event after duplicate acknowledgement");
+                LearningCheck(events.Length == 1 && !SentenceLearning.LegacyPairMode(events[0].Mode) &&
+                    events[0].Code == "ujkf" && events[0].Text == "捡",
+                    frontend + " actual adapter persists one ordinary exact fragment after duplicate acknowledgement");
                 Type();
                 string mode = Result().LearningMode;
-                LearningCheck(Result().Candidates[0].Text == "捡" && Result().Candidates[0].LearningScore == 0,
-                    frontend + " next composition promotes Direct without sentence reward");
+                LearningCheck(Result().Candidates[0].Text == "捡" && Result().Candidates[0].LearningScore == 11 && events[0].Levels == 2,
+                    frontend + " next composition promotes Direct through its ordinary numeric reward: " + string.Join(" / ", Result().Candidates.Select(c => c.Text + ":" + c.FinalScore + "/" + c.LearningScore)) + " levels=" + events[0].Levels);
                 using (var top = JsonDocument.Parse(Key(32)))
                     LearningCheck(!top.RootElement.TryGetProperty("learning_receipt", out _), frontend + " normal top1 commit does not reinforce");
                 LearningCheck(Store().Entries().Length == 1, frontend + " normal top1 leaves journal unchanged");
@@ -131,7 +144,7 @@ namespace TigerClaw.Core.Tests
                     frontend + " fresh store and decoder retain the learned first choice");
                 freshDecoder.SetLearning(reloaded.Snapshot, mode + "|different");
                 LearningCheck(freshDecoder.Decode("ujkf").Candidates[0].Text == "拾滑",
-                    frontend + " another mode cannot consume this fusion preference");
+                    frontend + " another mode cannot consume this fragment preference");
 
                 Type(); Key(9);
                 using (var reversed = JsonDocument.Parse(Key(32)))
@@ -145,7 +158,7 @@ namespace TigerClaw.Core.Tests
                 freshDecoder.SetLearning(reloaded.Snapshot, mode);
                 LearningCheck(freshDecoder.Decode("ujkf").Candidates[0].Text == "拾滑",
                     frontend + " persisted reverse preference restores Composed first");
-                Console.WriteLine(frontend + ": ujkf fusion receipt -> journal -> reload -> ordering passed");
+                Console.WriteLine(frontend + ": ujkf fragment receipt -> journal -> reload -> ordering passed");
             }
         }
     }

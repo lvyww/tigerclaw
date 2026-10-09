@@ -140,7 +140,8 @@ private:
                 e.levels=levels;
                 if(!readField(fields[6],e.mode)||!readField(fields[3],e.code)||!readField(fields[2],e.text)||!readField(fields[4],e.context)||
                    e.mode.empty()||e.code.empty()||e.code.size()>128||!learningStaticText(e.text)||learningCharacters(e.context)>2 || !fields[8].empty())throw std::runtime_error("Invalid learning text row");
-                state.seen.insert(id);state.events.push_back(std::move(e));
+                state.seen.insert(id);
+                if(!learningLegacyPairMode(e.mode))state.events.push_back(std::move(e));
             }else if(fields[0]=="撤销" && !fields[8].empty() && learningUtf16(fields[8]).size()<=128) {
                 state.seen.insert(id);removed.insert(std::string(fields[8]));
             }else if(fields[0]=="清空" && fields[8].empty()) {
@@ -217,7 +218,7 @@ public:
         std::filesystem::create_directories(path_.parent_path());
         FileLock lock(std::filesystem::path(path_.u16string()+u".lock"));auto data=bytes();auto original=journal(data);auto state=*original;std::string addition;
         for(const auto& e:events) {
-            if(e.id.empty()||learningUtf16(e.id).size()>128||e.id.find_first_of("\t\r\n")!=std::string::npos || state.seen.count(e.id) || e.mode.empty() || e.mode.size()>512 || !learningCharacters(e.mode) || !learningCharacters(e.code) ||
+            if(learningLegacyPairMode(e.mode)||e.id.empty()||learningUtf16(e.id).size()>128||e.id.find_first_of("\t\r\n")!=std::string::npos || state.seen.count(e.id) || e.mode.empty() || e.mode.size()>512 || !learningCharacters(e.mode) || !learningCharacters(e.code) ||
                e.time<0||e.code.empty()||e.code.size()>128||!learningStaticText(e.text)||(!e.context.empty()&&!learningCharacters(e.context))||learningCharacters(e.context)>2||e.levels<1||e.levels>3)continue;
             state.seen.insert(e.id);
             addition+=row("学习",e.id,e.time,e.text,e.code,e.context,e.levels,e.mode);

@@ -112,6 +112,13 @@ inline std::vector<SentenceLearningEvent> sentenceLearningDiff(
     }
     return result;
 }
+// Retired candidate-pair records are neither score evidence nor active history.
+// Keep their journal bytes untouched, but exclude them before replay/windowing.
+inline bool learningLegacyPairMode(std::u16string_view mode) {
+    return mode.substr(0,std::u16string_view(u"fusion-v1|").size())==u"fusion-v1|" ||
+           mode.substr(0,std::u16string_view(u"exact-correction-v1|").size())==u"exact-correction-v1|";
+}
+
 class SentenceLearningAccumulator;
 class SentenceLearningSnapshot {
     friend class SentenceLearningAccumulator;
@@ -161,7 +168,7 @@ public:
         using Key=std::tuple<std::u16string,std::u16string,std::u16string>;
         std::map<Key,std::map<std::u16string,Choice>> groups;
         for(const auto& event:events) {
-            if(event.mode.empty() || event.mode.size()>512 || event.code.empty() || event.code.size()>128 || !learningStaticText(event.text) ||
+            if(learningLegacyPairMode(event.mode) || event.mode.empty() || event.mode.size()>512 || event.code.empty() || event.code.size()>128 || !learningStaticText(event.text) ||
                (!event.context.empty() && (!learningCharacters(event.context) || learningCharacters(event.context)>2)) || event.levels<1 || event.levels>3)continue;
             auto& choices=groups[{event.code,event.mode,event.context}];
             // Only explicit manual corrections are persisted. A competing manual
@@ -287,14 +294,14 @@ inline void sentenceLearningPlanLevels(std::vector<SentenceLearningEvent>& event
     const std::shared_ptr<const SentenceLearningSnapshot>& snapshot,std::u16string_view raw,
     std::u16string_view before,std::u16string_view selected,
     const std::vector<SentenceLearningBoundary>& a,const std::vector<SentenceLearningBoundary>& b,
-    double beforeBase,double selectedBase) {
+    double beforeBase,double selectedBase,bool beforeIsCorrected=false) {
     if(events.empty())return;
     std::set<std::tuple<std::u16string,std::u16string,std::u16string,std::u16string>> seen;
     events.erase(std::remove_if(events.begin(),events.end(),[&](const auto& e){return !seen.emplace(e.mode,e.code,e.text,e.context).second;}),events.end());
     const SentenceLearningSnapshot empty;const auto& state=snapshot?*snapshot:empty;
     int levels=1;
     if(std::isfinite(beforeBase) && std::isfinite(selectedBase))for(;levels<3;++levels) {
-        const auto left=beforeBase+sentenceLearningProjectedReward(raw,before,a,events,state,levels);
+        const auto left=beforeBase+(beforeIsCorrected?0:sentenceLearningProjectedReward(raw,before,a,events,state,levels));
         const auto right=selectedBase+sentenceLearningProjectedReward(raw,selected,b,events,state,levels);
         if(right>=left+1)break;
     }
@@ -365,6 +372,83 @@ inline std::vector<SentenceLearningEvent> sentenceLearningReinforceExisting(
     return result;
 }
 
+// A manual exact selection learns only validated typed-code/selected-text
+// fragments. A standalone two-character choice confirms the small whole phrase;
+// longer sentences may reinforce one unambiguous existing local fragment even
+// when it crosses a shared-boundary diff. Unrelated prefixes are never guessed.
+inline std::vector<SentenceLearningEvent> sentenceLearningSelectionEvents(
+    std::u16string_view raw,std::u16string_view before,std::u16string_view selected,
+    const std::vector<SentenceLearningBoundary>& a,const std::vector<SentenceLearningBoundary>& b,
+    int floorRaw,std::u16string_view mode,const std::shared_ptr<const SentenceLearningSnapshot>& snapshot,
+    const std::function<bool(std::u16string_view)>& supplemental={}) {
+    if(mode.empty() || learningLegacyPairMode(mode))return {};
+    auto result=sentenceLearningDiff(raw,before,selected,a,b,floorRaw);
+    if(result.empty())return result; // Also validates both complete UTF-16 paths.
+    auto make=[&](int rawStart,int rawEnd,int textStart,int textEnd) {
+        SentenceLearningEvent e;e.id=learningId();e.time=learningNow();e.mode=std::u16string(mode);
+        e.code=raw.substr(rawStart,rawEnd-rawStart);
+        for(auto& c:e.code)if(c>=u'A' && c<=u'Z')c+=u'a'-u'A';
+        e.text=selected.substr(textStart,textEnd-textStart);
+        e.context=learningContext(selected.substr(0,textStart));
+        e.rawStart=rawStart;e.rawEnd=rawEnd;e.textStart=textStart;e.textEnd=textEnd;
+        return e;
+    };
+    for(auto& e:result)e.mode=std::u16string(mode);
+    if(floorRaw==0 && raw.size()<=128 && learningCharacters(selected)==2 && learningStaticText(selected))
+        return {make(0,static_cast<int>(raw.size()),0,static_cast<int>(selected.size()))};
+    std::vector<SentenceLearningBoundary> points{{0,0}};
+    points.insert(points.end(),b.begin(),b.end());
+    struct Match {int characters;SentenceLearningEvent event;};
+    std::vector<Match> matches;
+    auto overlaps=[&](int start,int end) {
+        return std::any_of(result.begin(),result.end(),[&](const auto& e){return start<e.rawEnd && end>e.rawStart;});
+    };
+    if((snapshot && !snapshot->empty()) || supplemental)for(std::size_t start=0;start+1<points.size();++start) {
+        const auto first=points[start];
+        if(first.raw<floorRaw)continue;
+        // Only inspect starts capable of reaching a changed interval within
+        // the 16-character / 128-code fragment limits.
+        const bool nearby=std::any_of(result.begin(),result.end(),[&](const auto& e) {
+            return first.raw<e.rawEnd && e.rawStart-first.raw<128 &&
+                (first.text>=e.textStart || learningCharacters(selected.substr(first.text,e.textStart-first.text))<16);
+        });
+        if(!nearby)continue;
+        for(std::size_t end=start+1;end<points.size();++end) {
+            const auto last=points[end];
+            const auto text=selected.substr(first.text,last.text-first.text);
+            const auto characters=learningCharacters(text);
+            if(!characters || characters>16 || last.raw-first.raw>128)break;
+            if(!overlaps(first.raw,last.raw) || !learningStaticText(text) ||
+               before.find(text)!=std::u16string_view::npos)continue;
+            auto event=make(first.raw,last.raw,first.text,last.text);
+            if(!(snapshot && snapshot->score(mode,event.code,event.text,event.context)>0) &&
+               !(supplemental && supplemental(event.text)))continue;
+            matches.push_back({static_cast<int>(characters),std::move(event)});
+        }
+    }
+    if(!matches.empty()) {
+        const auto best=std::max_element(matches.begin(),matches.end(),
+            [](const auto& x,const auto& y){return x.characters<y.characters;});
+        const int longest=best->characters;
+        const auto count=std::count_if(matches.begin(),matches.end(),[&](const auto& m){return m.characters==longest;});
+        const bool containsAll=count==1 && std::all_of(matches.begin(),matches.end(),[&](const auto& m) {
+            return m.event.rawStart>=best->event.rawStart && m.event.rawEnd<=best->event.rawEnd;
+        });
+        if(containsAll) {
+            const auto winner=best->event;
+            result.erase(std::remove_if(result.begin(),result.end(),[&](const auto& e) {
+                return e.rawStart<winner.rawEnd && e.rawEnd>winner.rawStart;
+            }),result.end());
+            result.push_back(winner);
+        }
+    }
+    result.erase(std::remove_if(result.begin(),result.end(),[](const auto& e){return e.code.empty() || e.code.size()>128;}),result.end());
+    std::sort(result.begin(),result.end(),[](const auto& x,const auto& y){return x.rawStart<y.rawStart;});
+    return result;
+}
+
+
+// Retired record constructors remain only for compatibility regression fixtures.
 struct SentenceFusionPreference {
     static std::u16string mode(std::u16string_view sentenceMode) {
         if(sentenceMode.empty())return {};
@@ -391,12 +475,10 @@ struct SentenceFusionPreference {
     }
 };
 
-// Successful commits can carry ordinary or fusion preferences for the same
-// active sentence mode. Keep the mode check shared with portable commit tests.
+// Only ordinary fragments from the active sentence mode may reach receipts.
 inline void filterSentenceLearningForMode(std::vector<SentenceLearningEvent>& events,std::u16string_view activeMode) {
-    const auto fusionMode=SentenceFusionPreference::mode(activeMode);
     events.erase(std::remove_if(events.begin(),events.end(),[&](const auto& event) {
-        return activeMode.empty() || (event.mode!=activeMode && event.mode!=fusionMode);
+        return activeMode.empty() || learningLegacyPairMode(event.mode) || event.mode!=activeMode;
     }),events.end());
 }
 
@@ -421,7 +503,7 @@ public:
         if(rebuild){groups_.clear();events_.clear();}
         for(std::size_t i=events_.size();i<events.size();++i) {
             const auto& event=events[i];
-            if(event.mode.empty() || event.mode.size()>512 || event.code.empty() || event.code.size()>128 || !learningStaticText(event.text) ||
+            if(learningLegacyPairMode(event.mode) || event.mode.empty() || event.mode.size()>512 || event.code.empty() || event.code.size()>128 || !learningStaticText(event.text) ||
                (!event.context.empty() && (!learningCharacters(event.context) || learningCharacters(event.context)>2)) || event.levels<1 || event.levels>3)continue;
             dirty.insert(event.code);
             auto& choices=groups_[{event.code,event.mode,event.context}];

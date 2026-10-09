@@ -80,7 +80,7 @@ namespace TigerClaw.Core
                 return _snapshot;
             }
 
-            private static bool Valid(SentenceLearningEvent e) => e.Mode.Length > 0 && e.Mode.Length <= 512 &&
+            private static bool Valid(SentenceLearningEvent e) => !SentenceLearning.LegacyPairMode(e.Mode) && e.Mode.Length > 0 && e.Mode.Length <= 512 &&
                 e.Code.Length > 0 && e.Code.Length <= 128 && SentenceLearning.StaticText(e.Text) &&
                 (e.Context.Length == 0 || SentenceLearning.Characters(e.Context) > 0) && SentenceLearning.Characters(e.Context) <= 2 && e.Levels >= 1 && e.Levels <= 3;
 

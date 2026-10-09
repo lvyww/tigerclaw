@@ -16,6 +16,10 @@ namespace TigerClaw.Core
 
     internal static class SentenceLearning
     {
+        internal static bool LegacyPairMode(string mode) =>
+            mode != null && (mode.StartsWith("fusion-v1|", StringComparison.Ordinal) ||
+                             mode.StartsWith("exact-correction-v1|", StringComparison.Ordinal));
+
         internal const string PinyinPhraseMode = "full-pinyin-v1";
         internal const string PinyinCharacterMode = "full-pinyin-character-v1";
         // Replay legacy character events into a separate competition bucket without
@@ -113,7 +117,7 @@ namespace TigerClaw.Core
         }
 
         internal static void PlanCorrectionLevels(List<SentenceLearningEvent> events, SentenceLearningSnapshot snapshot,
-            string raw, SentenceCandidate before, SentenceCandidate selected)
+            string raw, SentenceCandidate before, SentenceCandidate selected, bool beforeIsCorrected = false)
         {
             if (events == null || events.Count == 0 || before == null || selected == null) return;
             snapshot ??= SentenceLearningSnapshot.Empty;
@@ -121,13 +125,13 @@ namespace TigerClaw.Core
             // inner-fragment discovery both found it. Never manufacture clicks.
             var seen = new HashSet<(string, string, string, string)>();
             events.RemoveAll(e => !seen.Add((e.Mode, e.Code, e.Text, e.Context)));
-            double required = before.FinalScore - before.LearningScore;
+            double required = before.FinalScore - (beforeIsCorrected ? 0 : before.LearningScore);
             double chosen = selected.FinalScore - selected.LearningScore;
             int levels = 1;
             if (double.IsFinite(required) && double.IsFinite(chosen))
                 for (; levels < 3; levels++)
                 {
-                    double left = required + ProjectedReward(raw, before, events, snapshot, levels);
+                    double left = required + (beforeIsCorrected ? 0 : ProjectedReward(raw, before, events, snapshot, levels));
                     double right = chosen + ProjectedReward(raw, selected, events, snapshot, levels);
                     if (right >= left + 1.0) break;
                 }
@@ -154,6 +158,68 @@ namespace TigerClaw.Core
                 }
             }
             return best[^1];
+        }
+
+        // Diff establishes trusted typed-code/selected-text boundaries. Only a
+        // standalone two-character selection creates a whole-phrase event;
+        // longer inputs prefer one unambiguous known fragment over overlap.
+        internal static List<SentenceLearningEvent> SelectionEvents(string raw, SentenceCandidate before,
+            SentenceCandidate selected, int floor, string mode, SentenceLearningSnapshot snapshot,
+            Func<string, bool> supplemental = null)
+        {
+            if (string.IsNullOrEmpty(mode) || LegacyPairMode(mode)) return new();
+            var result = Diff(raw, before, selected, floor, mode);
+            if (result.Count == 0) return result;
+            SentenceLearningEvent Make(int rs, int re, int ts, int te) => new()
+            {
+                Mode = mode, Code = raw.Substring(rs, re - rs).ToLowerInvariant(),
+                Text = selected.Text.Substring(ts, te - ts), Context = Context(selected.Text, ts),
+                RawStart = rs, RawEnd = re, TextStart = ts, TextEnd = te
+            };
+            if (floor == 0 && raw.Length <= 128 && Characters(selected.Text) == 2 && StaticText(selected.Text))
+                return new() { Make(0, raw.Length, 0, selected.Text.Length) };
+            var points = Boundaries(selected, raw.Length).ToArray();
+            var matches = new List<(int Characters, SentenceLearningEvent Event)>();
+            bool Overlaps(int start, int end) => result.Any(e => start < e.RawEnd && end > e.RawStart);
+            if ((snapshot != null && !snapshot.IsEmpty) || supplemental != null)
+            {
+                for (int start = 0; start + 1 < points.Length; start++)
+                {
+                    var first = points[start];
+                    if (first.Key < floor) continue;
+                    bool nearby = result.Any(e => first.Key < e.RawEnd && e.RawStart - first.Key < 128 &&
+                        (first.Value >= e.TextStart || Characters(selected.Text.Substring(first.Value, e.TextStart - first.Value)) < 16));
+                    if (!nearby) continue;
+                    for (int end = start + 1; end < points.Length; end++)
+                    {
+                        var last = points[end];
+                        string text = selected.Text.Substring(first.Value, last.Value - first.Value);
+                        int characters = Characters(text);
+                        if (characters == 0 || characters > 16 || last.Key - first.Key > 128) break;
+                        if (!Overlaps(first.Key, last.Key) || !StaticText(text) ||
+                            before.Text.Contains(text, StringComparison.Ordinal)) continue;
+                        var e = Make(first.Key, last.Key, first.Value, last.Value);
+                        if ((snapshot?.Score(mode, e.Code, e.Text, e.Context) ?? 0) <= 0 &&
+                            !(supplemental?.Invoke(e.Text) ?? false)) continue;
+                        matches.Add((characters, e));
+                    }
+                }
+            }
+            if (matches.Count > 0)
+            {
+                int longest = matches.Max(m => m.Characters);
+                var best = matches.Where(m => m.Characters == longest).ToArray();
+                if (best.Length == 1 && matches.All(m => m.Event.RawStart >= best[0].Event.RawStart &&
+                    m.Event.RawEnd <= best[0].Event.RawEnd))
+                {
+                    var winner = best[0].Event;
+                    result.RemoveAll(e => e.RawStart < winner.RawEnd && e.RawEnd > winner.RawStart);
+                    result.Add(winner);
+                }
+            }
+            result.RemoveAll(e => e.Code.Length == 0 || e.Code.Length > 128);
+            result.Sort((x, y) => x.RawStart.CompareTo(y.RawStart));
+            return result;
         }
 
         internal static List<SentenceLearningEvent> ReinforceExisting(string raw, SentenceCandidate before,
@@ -282,7 +348,7 @@ namespace TigerClaw.Core
             var groups = new Dictionary<(string Code, string Mode, string Context), Dictionary<string, Choice>>();
             foreach (var e in events)
             {
-                if (e.Mode.Length == 0 || e.Mode.Length > 512 || e.Code.Length == 0 || e.Code.Length > 128 || !SentenceLearning.StaticText(e.Text) ||
+                if (SentenceLearning.LegacyPairMode(e.Mode) || e.Mode.Length == 0 || e.Mode.Length > 512 || e.Code.Length == 0 || e.Code.Length > 128 || !SentenceLearning.StaticText(e.Text) ||
                     (e.Context.Length > 0 && SentenceLearning.Characters(e.Context) == 0) || SentenceLearning.Characters(e.Context) > 2 || e.Levels < 1 || e.Levels > 3) continue;
                 var key = (e.Code, Mode: SentenceLearning.EffectiveMode(e.Mode, e.Text), e.Context);
                 if (!groups.TryGetValue(key, out var choices))

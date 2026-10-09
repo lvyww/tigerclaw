@@ -2451,7 +2451,6 @@ namespace TigerClaw.Core
             bool confirmTabSelection = _sentenceTabSelectionPending && isLetter;
             if (confirmTabSelection)
             {
-                CaptureSentenceFusionLearning(_sentenceSelectedIndex);
                 CaptureSentenceLearning(_sentenceSelectedIndex);
             }
             _sentenceTabSelectionPending = false;
@@ -3168,7 +3167,6 @@ namespace TigerClaw.Core
                 return KeyEngineResult.CreateHandled(true, null, GetSentenceDisplayCode(), true);
             }
 
-            CaptureSentenceFusionLearning(index);
             CaptureSentenceLearning(index);
             string output = candidates[index].Text;
             if (_sentenceCommittedText.Length > 0 &&
@@ -3206,7 +3204,6 @@ namespace TigerClaw.Core
             {
                 output = output.Substring(_sentenceCommittedText.Length);
             }
-            CaptureSentenceFusionLearning(_sentenceSelectedIndex);
             CaptureSentenceLearning(_sentenceSelectedIndex);
             output += suffix ?? string.Empty;
             if (candidates.Length > 0 && _sentenceSelectedIndex < candidates.Length)

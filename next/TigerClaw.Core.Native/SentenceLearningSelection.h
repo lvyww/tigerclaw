@@ -38,36 +38,35 @@ namespace tiger::core
         {
             if (_mode.empty() || index >= candidates.size()) { _baseline.reset(); return; }
             const auto& selected = candidates[index];
-            if (_baseline && _baseline->source == 2 && selected.source == 2)
+            const auto* before = _baseline ? &*_baseline : index > 0 ? &candidates.front() : nullptr;
+            // Explicit non-first taps need no preceding Tab. Keep the first
+            // manual baseline unless a Direct-only comparison needs an actual
+            // composed opponent ahead of the selected Direct entry.
+            if (before && (before->source & 1) && (selected.source & 1))
             {
-                auto a = Boundaries(*_baseline), b = Boundaries(selected);
-                auto events = sentenceLearningDiff(raw, _baseline->text, selected.text, a, b, static_cast<int>(floor));
-                for (auto& e : events) e.mode = _mode;
-                auto extra = sentenceLearningReinforceExisting(raw, _baseline->text, selected.text, a, b,
+                before = nullptr;
+                for (std::size_t i = 0; i < index; ++i)
+                    if (candidates[i].source == 2 && (!before || SentenceFinalScore(candidates[i]) > SentenceFinalScore(*before)))
+                        before = &candidates[i];
+            }
+            auto legalSource = [](unsigned source) { return source == 1 || source == 2 || source == 3; };
+            if (before && legalSource(before->source) && legalSource(selected.source))
+            {
+                auto a = Boundaries(*before), b = Boundaries(selected);
+                auto events = sentenceLearningSelectionEvents(raw, before->text, selected.text, a, b,
                     static_cast<int>(floor), _mode, _snapshot, supplemental);
-                for (const auto& e : extra)
-                    if (std::none_of(events.begin(), events.end(), [&](const auto& old) { return old.mode == e.mode && old.code == e.code && old.text == e.text; }))
-                        events.push_back(e);
-                sentenceLearningPlanLevels(events, _snapshot, raw, _baseline->text, selected.text, a, b,
-                    _baseline->score - _baseline->learningScore, selected.score - selected.learningScore);
+                sentenceLearningPlanLevels(events, _snapshot, raw, before->text, selected.text, a, b,
+                    SentenceFinalScore(*before) - before->learningScore, SentenceFinalScore(selected) - selected.learningScore);
                 _pending.insert(_pending.end(), events.begin(), events.end());
             }
             _baseline.reset();
-            for (std::size_t i = 0; i < index; ++i)
-            {
-                const auto& ahead = candidates[i];
-                bool direct = (selected.source & 1) != 0;
-                if ((direct && ahead.source == 2) || (selected.source == 2 && (ahead.source & 1)))
-                    _pending.push_back(SentenceFusionPreference::event(_mode, raw, direct ? selected.text : ahead.text,
-                        direct ? ahead.text : selected.text, direct, static_cast<int>(selected.boundary ? selected.boundary->rawLength : raw.size())));
-            }
         }
         void Release(std::u16string_view text, std::size_t rawEnd, std::u16string_view output)
         {
             for (const auto& e : _pending)
-                if (e.rawEnd <= static_cast<int>(rawEnd) && (e.mode == SentenceFusionPreference::mode(_mode) ||
-                    (e.textStart >= 0 && e.textEnd >= e.textStart && e.textEnd <= static_cast<int>(text.size()) &&
-                    text.substr(e.textStart, e.textEnd - e.textStart) == e.text))) _ready.push_back(e);
+                if (e.mode == _mode && !learningLegacyPairMode(e.mode) && e.rawEnd <= static_cast<int>(rawEnd) &&
+                    e.textStart >= 0 && e.textEnd >= e.textStart && e.textEnd <= static_cast<int>(text.size()) &&
+                    text.substr(e.textStart, e.textEnd - e.textStart) == e.text) _ready.push_back(e);
             std::erase_if(_pending, [&](const auto& e) { return e.rawEnd <= static_cast<int>(rawEnd); });
             if (!_ready.empty()) _output = output;
         }

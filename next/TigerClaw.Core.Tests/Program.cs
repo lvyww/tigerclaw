@@ -96,6 +96,7 @@ namespace TigerClaw.Core.Tests
                 if (args.Length >= 1 && args[0] == "--sentence-review-tests") return RunSentenceReviewTests(args.Length > 1 ? args[1] : null);
                 if (args.Length == 1 && args[0] == "--learning-tests") return RunLearningTests();
                 if (args.Length == 1 && args[0] == "--learning-fusion-tests") return RunLearningFusionTests();
+                if (args.Length == 1 && args[0] == "--learning-fragment-tests") return RunLearningFragmentTests();
                 if (args.Length == 2 && args[0] == "--ui-publish-stdio")
                     return RunUiPublisherProbe(args[1]);
                 if (args.Length == 1 && args[0] == "--ui-snapshot-tests")

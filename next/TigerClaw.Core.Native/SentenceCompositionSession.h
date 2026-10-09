@@ -129,7 +129,11 @@ namespace tiger::core
                 std::any_of(scores.begin(), scores.end(), [](double score) { return !std::isfinite(score); })) return false;
             auto ranks = RankSentenceNeural(_visible.candidates, scores, duplicateSingles);
             auto reordered = _visible.candidates;
-            for (std::size_t i = 0; i < ranks.size(); ++i) reordered[i] = _visible.candidates[ranks[i].index];
+            for (std::size_t i = 0; i < ranks.size(); ++i)
+            {
+                reordered[i] = _visible.candidates[ranks[i].index];
+                reordered[i].finalScore = ranks[i].finalScore;
+            }
             ApplySentenceFusionOrdering(reordered, _context.Raw(), _learningSnapshot, _learningMode);
             std::u16string raw(_context.Raw()), top(reordered[0].text);
             _visible.candidates.swap(reordered); _neuralRaw.swap(raw); _neuralTop.swap(top);

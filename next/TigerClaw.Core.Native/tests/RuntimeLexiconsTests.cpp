@@ -869,7 +869,7 @@ int main()
             Check(integrated.WaitLearningIdle(std::chrono::seconds(5)));
             SentenceLearningStore journal(integratedRoot / u"test整句" / u"自学习-虎爪.txt");
             auto learned = journal.entries();
-            Check(learned.size() == 1 && learned[0].text == u"b" && learned[0].code == u"aa");
+            Check(learned.size() == 1 && learned[0].text == u"bb" && learned[0].code == u"aabb");
             bool learningChanged = false; std::u16string learningError;
             Check(integrated.SetConfig(u"整句Tab自学习",u"否",learningChanged,learningError) && learningChanged);
             integrated.ImportRaw(u"aabb"); event(0x09);

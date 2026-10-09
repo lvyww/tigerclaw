@@ -68,7 +68,7 @@ int main()
         Check(session.Apply(session.Request(), lattice, {}));
         Check(session.Select(1)); auto output = session.FinishSelected(); Check(output && *output == u"甲乙");
         auto events = session.TakeLearning(*output); Check(events.size() == 1);
-        Check(events[0].levels == 3 && events[0].code == u"bb" && events[0].text == u"乙" && events[0].context == u"甲");
+        Check(events[0].levels == 3 && events[0].code == u"aabb" && events[0].text == u"甲乙" && events[0].context.empty());
         Check(session.TakeLearning(*output).empty());
         session.ReplaceRaw(u"aabb", 1); Check(session.Apply(session.Request(), lattice, {}));
         session.Select(1); session.FinishSelected(); Check(session.TakeLearning(u"different output").empty());
@@ -76,8 +76,8 @@ int main()
         session.FinishSelected(); Check(session.TakeLearning(u"甲丙").empty());
         session.ReplaceRaw(u"aabb", 1); lattice.candidates[0].source = 1;
         Check(session.Apply(session.Request(), lattice, {})); session.Select(1); session.FinishSelected();
-        events = session.TakeLearning(u"甲乙"); Check(events.size() == 1 && events[0].mode == u"fusion-v1|test" && events[0].text == u"C");
-        Check(SentenceFusionPreference::signedScore(SentenceLearningSnapshot::build(events), u"test", u"aabb", u"甲丙", u"甲乙") < 0);
+        events = session.TakeLearning(u"甲乙"); Check(events.size() == 1 && events[0].mode == u"test" && events[0].code == u"aabb" && events[0].text == u"甲乙");
+        Check(SentenceFusionPreference::signedScore(SentenceLearningSnapshot::build(events), u"test", u"aabb", u"甲丙", u"甲乙") == 0);
         session.ReplaceRaw(u"aabb", 1); lattice.candidates[0].source = 2;
         Check(session.Apply(session.Request(), lattice, {})); session.Select(1);
         auto never = [](auto&&...) { return false; };

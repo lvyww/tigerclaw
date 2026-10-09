@@ -13,7 +13,7 @@ namespace TigerClaw.Core
         private readonly List<SentenceLearningEvent> _readyLearning = new();
         private string _learningOutput;
         private SentenceLearningStore _learningStore;
-        private string _learningMode = "", _fusionMode = "", _learningSchema;
+        private string _learningMode = "", _learningSchema;
         private int _learningConfigVersion = -1;
         private bool _learningContextValid = true;
 
@@ -32,7 +32,6 @@ namespace TigerClaw.Core
                           "|最优码限制=" + _state.GetSentenceOptimalCodeHighFreqLimit().ToString(CultureInfo.InvariantCulture) + "|全码白名单=" + _state.GetSentenceFullCodeWhitelistText();
                 if (mode != _learningMode || changedScheme) { _pendingLearning.Clear(); _learningBaseline = null; }
                 _learningMode = mode;
-                _fusionMode = SentenceFusionPreference.Mode(mode);
                 if (mode.Length == 0) _learningStore = null;
                 else
                 {
@@ -55,74 +54,39 @@ namespace TigerClaw.Core
         }
         private void CaptureSentenceLearning(int index)
         {
-            if (!_sentenceTabSelectionPending || !_learningContextValid || _learningBaseline == null || !_state.GetSentenceLearningEnabled()) return;
+            if (!_learningContextValid || !_state.GetSentenceLearningEnabled()) return;
             var candidates = _sentenceDecodeResult.Candidates ?? Array.Empty<SentenceCandidate>();
             if (index < 0 || index >= candidates.Length || _sentenceDecodeResult.RawCode != _sentenceRawBuffer.ToString()) return;
             SentenceCandidate selected = candidates[index];
-            // Sentence self-learning is exclusively Composed<->Composed.
-            // Direct table entries never acquire a sentence-learning reward.
-            if (!SentenceFusionPreference.IsComposedOnly(_learningBaseline) ||
-                !SentenceFusionPreference.IsComposedOnly(selected))
+            SentenceCandidate before = _learningBaseline ?? (index > 0 ? candidates[0] : null);
+            // A fresh non-first tap/number is an explicit correction without
+            // Tab. Do not teach Direct-to-Direct dictionary-rank preferences.
+            if (SentenceFusionPreference.IsDirect(before) && SentenceFusionPreference.IsDirect(selected))
             {
-                _learningBaseline = null;
-                return;
+                before = candidates.Take(index).Where(SentenceFusionPreference.IsComposedOnly)
+                    .OrderByDescending(c => c.FinalScore).FirstOrDefault();
             }
+            static bool LegalSource(SentenceCandidate c) => c != null &&
+                (c.Source == SentenceCandidateSource.Direct || c.Source == SentenceCandidateSource.Composed ||
+                 c.Source == (SentenceCandidateSource.Direct | SentenceCandidateSource.Composed));
+            if (!LegalSource(before) || !LegalSource(selected)) { _learningBaseline = null; return; }
             int floor = Math.Max(_sentenceCommittedRawLength, ActiveSentenceLockedPrefix?.RawCode.Length ?? 0);
             string raw = _sentenceRawBuffer.ToString();
-            var events = SentenceLearning.Diff(raw, _learningBaseline, selected, floor, _sentenceDecodeResult.LearningMode);
-            var reinforced = SentenceLearning.ReinforceExisting(
-                raw, _learningBaseline, selected, floor, _sentenceDecodeResult.LearningMode, _learningStore?.Snapshot,
+            var events = SentenceLearning.SelectionEvents(raw, before, selected, floor,
+                _sentenceDecodeResult.LearningMode, _learningStore?.Snapshot,
                 text => _sentenceInputDecoder?.IsSupplementalFragment(text) ?? false);
-            foreach (var e in reinforced)
-            {
-                if (!events.Any(old => old.Mode == e.Mode && old.Code == e.Code && old.Text == e.Text)) events.Add(e);
-            }
-            SentenceLearning.PlanCorrectionLevels(events, _learningStore?.Snapshot, raw, _learningBaseline, selected);
+            SentenceLearning.PlanCorrectionLevels(events, _learningStore?.Snapshot, raw, before, selected);
             _pendingLearning.AddRange(events);
             _learningBaseline = null;
-        }
-        private void CaptureSentenceFusionLearning(int index)
-        {
-            if (!_learningContextValid || !_state.GetSentenceLearningEnabled() ||
-                string.IsNullOrEmpty(_learningMode)) return;
-            SentenceCandidate[] candidates = _sentenceDecodeResult.Candidates ?? Array.Empty<SentenceCandidate>();
-            if (index <= 0 || index >= candidates.Length ||
-                _sentenceDecodeResult.RawCode != _sentenceRawBuffer.ToString()) return;
-
-            SentenceCandidate selected = candidates[index];
-            bool selectedDirect = SentenceFusionPreference.IsDirect(selected);
-            bool selectedComposed = SentenceFusionPreference.IsComposedOnly(selected);
-            if (!selectedDirect && !selectedComposed) return;
-
-            string raw = _sentenceRawBuffer.ToString();
-            int rawEnd = selected?.Boundary?.RawLength ?? raw.Length;
-            for (int i = 0; i < index; i++)
-            {
-                SentenceCandidate ahead = candidates[i];
-                SentenceLearningEvent e = null;
-                if (selectedDirect && SentenceFusionPreference.IsComposedOnly(ahead))
-                {
-                    e = SentenceFusionPreference.CreateEvent(
-                        _learningMode, raw, selected.Text, ahead.Text, true, rawEnd);
-                }
-                else if (selectedComposed && SentenceFusionPreference.IsDirect(ahead))
-                {
-                    e = SentenceFusionPreference.CreateEvent(
-                        _learningMode, raw, ahead.Text, selected.Text, false, rawEnd);
-                }
-                if (e != null) _pendingLearning.Add(e);
-            }
         }
 
         private void ReleaseSentenceLearning(string text, int rawEnd, string output)
         {
             foreach (var e in _pendingLearning)
             {
-                bool fusion = !string.IsNullOrEmpty(_fusionMode) &&
-                    string.Equals(e.Mode, _fusionMode, StringComparison.Ordinal);
-                if (e.RawEnd <= rawEnd &&
-                    (fusion || (e.TextEnd <= text.Length &&
-                     text.Substring(e.TextStart, e.TextEnd - e.TextStart) == e.Text)))
+                if (e.Mode == _learningMode && !SentenceLearning.LegacyPairMode(e.Mode) &&
+                    e.RawEnd <= rawEnd && e.TextStart >= 0 && e.TextEnd >= e.TextStart && e.TextEnd <= text.Length &&
+                    text.Substring(e.TextStart, e.TextEnd - e.TextStart) == e.Text)
                     _readyLearning.Add(e);
             }
             _pendingLearning.RemoveAll(e => e.RawEnd <= rawEnd);
@@ -144,7 +108,7 @@ namespace TigerClaw.Core
                 store = _learningStore;
                 var events = _state.GetSentenceLearningEnabled() && result != null && !string.IsNullOrEmpty(result.TextToOutput) &&
                     string.Equals(result.TextToOutput, _learningOutput, StringComparison.Ordinal)
-                    ? _readyLearning.Where(e => e.Mode == _learningMode || e.Mode == _fusionMode).ToArray() : Array.Empty<SentenceLearningEvent>();
+                    ? _readyLearning.Where(e => e.Mode == _learningMode && !SentenceLearning.LegacyPairMode(e.Mode)).ToArray() : Array.Empty<SentenceLearningEvent>();
                 _readyLearning.Clear(); _learningOutput = null; return events;
             }
         }
