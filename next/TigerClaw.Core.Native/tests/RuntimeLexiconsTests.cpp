@@ -815,7 +815,7 @@ int main()
             std::filesystem::create_directories(integratedRoot / "Plain");
             std::filesystem::create_directories(integratedRoot / u"test\u6574\u53e5");
             Write(integratedRoot / "Plain/Plain.txt", u8"aa plain\naa other\n");
-            Write(integratedRoot / u"test\u6574\u53e5/table.txt", u8"aa a\naa b\nbb b\n");
+            Write(integratedRoot / u"test\u6574\u53e5/table.txt", u8"aa a\naa b\nbb b\n; symbol-menu\n;a symbol-a\n;a symbol-b\n/ slash-menu\n/a slash-a\n/a slash-b\n[ bracket-menu\n[a bracket-a\n[a bracket-b\n");
             auto integratedConfig = root / "integrated-config.txt";
             Write(integratedConfig, u8"\u7801\u8868\u5b58\u50a8\u4f4d\u7f6e\tintegrated-tables\n"
                 u8"\u5f53\u524d\u7801\u8868\tPlain\n\u6700\u8fd1\u7801\u8868\u5bf9\tPlain|test\u6574\u53e5\n"
@@ -857,6 +857,29 @@ int main()
             Check(event(0x20).text == u"plain");
             switchMode(); event(0x41); event(0x41);
             Check(event(0x20).text == u"a" && integrated.Raw().empty());
+            // Sentence-idle punctuation starts an ordinary quick-symbol composition.
+            // Its candidates and subsequent letters must share that same owner.
+            for (auto [vk, prefix, expected] : {
+                std::tuple{0xba, u";", u"symbol-a"},
+                std::tuple{0xbf, u"/", u"slash-a"},
+                std::tuple{0xdb, u"[", u"bracket-a"}})
+            {
+                auto opened = event(vk);
+                Check(opened.handled && opened.composing && integrated.Raw() == prefix);
+                auto menu = integrated.CaptureSnapshot();
+                Check(menu.mode == RuntimeInputMode::Ordinary && menu.page.total == 1);
+                Check(menu.raw == prefix && !menu.sentenceGeneration);
+                Check(event(0x41).handled);
+                Check(integrated.Raw() == std::u16string(prefix) + u"a");
+                Check(integrated.Page().entries.size() == 2);
+                Check(event(0x20).text == expected && integrated.Raw().empty());
+                event(vk); Check(event(0x08).handled && integrated.Raw().empty());
+                event(vk); Check(event(0x1b).handled && integrated.Raw().empty());
+            }
+            event(0xba); Check(event(0xba).text == u"\uff1b" && integrated.Raw().empty());
+            event(0x41); event(0x41);
+            Check(integrated.CaptureSnapshot().mode == RuntimeInputMode::Sentence);
+            Check(event(0x20).text == u"a");
             integrated.ImportRaw(u"aabb");
             Check(event(0x09).handled && integrated.SelectedCandidateIndex() == 1);
             auto correction = event(0x20);

@@ -1,5 +1,20 @@
 # Native Overlay (mainline)
 
+## Candidate typography (2026-10-11)
+
+Sentence composition (state 5) always omits numeric indices, regardless of the
+stored show-index preference. Candidate 1 keeps the configured font size;
+candidates 2 onward, including their annotations, use 70% of that size in
+DirectWrite. Font ranges participate in layout-cache identity and measurement,
+so returning to ordinary input restores normal typography even for identical text.
+Candidate windows have no fixed minimum width in either orientation; text,
+padding and borders determine their width. Existing line spacing is retained.
+Model, actual DirectWrite font-range/cache/presentation probes and 57 pending-frame
+scenarios (1258 checks) pass. ARM64 Overlay deployed and restarted with a verified
+backup in `release_arm64/backup-before-overlay-style-20261011-164947/`. Evidence:
+`next/_run/OverlayStyle-20261011/deployment.json`. Core and settings were not replaced.
+
+
 C++17 / Win32 / Direct2D / DirectWrite replacement for the WPF Overlay only.
 Core, TSF, Native Hook and Dialog remain unchanged. The resulting executable is
 named `TigerClaw.Overlay.exe`, so the existing Core launcher can use it without

@@ -24,6 +24,7 @@ namespace tiger::overlay
         float formatSize_ = 0, formatLineHeight_ = 0;
         bool formatStatus_ = false;
         Text layoutText_;
+        int layoutSecondaryStart_ = -1;
         DWRITE_TEXT_METRICS layoutMetrics_{};
         HDC dc_ = nullptr;
         HBITMAP bitmap_ = nullptr;

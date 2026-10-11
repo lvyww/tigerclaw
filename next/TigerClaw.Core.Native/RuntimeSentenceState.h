@@ -133,8 +133,7 @@ namespace tiger::core
         {
             auto liveSentence = [&]
             {
-                return _state && outer.IsChinese() && outer.Mode() != ChineseMode::Pinyin &&
-                    outer.Mode() != ChineseMode::UpperCase && !_state->input.Session().Context().UncommittedRaw().empty();
+                return _state && outer.IsChinese() && outer.Mode() == ChineseMode::Idle && !_state->input.Session().Context().UncommittedRaw().empty();
             };
             InputDispatchExtensions extensions;
             extensions.allowQuoteFallback = !liveSentence();
@@ -171,7 +170,7 @@ namespace tiger::core
             bool down = action == u"DOWN" || action == u"KEY_DOWN";
             bool up = action == u"UP" || action == u"KEY_UP";
             bool sentenceComposing = _state && outer.IsChinese() &&
-                outer.Mode() != ChineseMode::Pinyin && outer.Mode() != ChineseMode::UpperCase &&
+                outer.Mode() == ChineseMode::Idle &&
                 !_state->input.Session().Context().UncommittedRaw().empty();
             // Still observe the physical pair and clear deleted-quote arms.
             // C# has no key-up quote fallback for CnSentence; the outer
@@ -203,8 +202,7 @@ namespace tiger::core
         std::optional<PostProcessResult> TryProcessModifiedKey(const InputKeyEvent& event,
             ChineseInputSession& outer, OutputContext providers = {})
         {
-            if (!_state || !outer.IsChinese() || outer.Mode() == ChineseMode::Pinyin ||
-                outer.Mode() == ChineseMode::UpperCase || (!event.alt && !event.ctrl && !event.win)) return {};
+            if (!_state || !outer.IsChinese() || outer.Mode() != ChineseMode::Idle || (!event.alt && !event.ctrl && !event.win)) return {};
             auto action = FoldOrdinalCode(event.action);
             if (action != u"DOWN" && action != u"KEY_DOWN") return {};
             int vk = ResolveSelectionVirtualKey(event.vk, event.scan, event.extended);
@@ -223,7 +221,7 @@ namespace tiger::core
             ChineseInputSession& outer, OutputContext providers = {})
         {
             if (!_state || !outer.IsChinese() || event.ctrl || event.alt || event.win ||
-                outer.Mode() == ChineseMode::Pinyin || outer.Mode() == ChineseMode::UpperCase) return {};
+                outer.Mode() != ChineseMode::Idle) return {};
             auto action = FoldOrdinalCode(event.action);
             if (action != u"DOWN" && action != u"KEY_DOWN") return {};
             int vk = ResolveSelectionVirtualKey(event.vk, event.scan, event.extended);

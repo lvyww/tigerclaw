@@ -22,6 +22,12 @@ namespace tiger::overlay
             return {static_cast<LONG>((r.textOrigin_.x + x + hit.width / 2) * r.textScale_),
                 static_cast<LONG>((r.textOrigin_.y + y + hit.height / 2) * r.textScale_)};
         }
+        static float FontSizeAt(const Renderer& r, int position)
+        {
+            float size = 0;
+            CheckHr(r.layout_->GetFontSize(static_cast<UINT32>(position), &size));
+            return size;
+        }
         static void LoseTarget(Renderer& r) { r.target_.Reset(); }
         static void IncompleteFrame(Renderer& r) { r.frameReady_ = false; }
         static std::uint64_t Pixels(const Renderer& r)
@@ -82,6 +88,22 @@ int main(int argc, char** argv)
         {
             Renderer renderer(L".");
             auto state = Base();
+            // Same text across mode switches must invalidate font-range caching.
+            state.showIndex = false; state.composition = 5;
+            for (bool vertical : {false, true})
+            {
+                state.vertical = vertical;
+                auto display = Format(state);
+                renderer.Prepare(state, display, 144);
+                if (std::abs(RendererProbe::FontSizeAt(renderer, display.candidateRanges[0].first) - 20.f) > .001f ||
+                    std::abs(RendererProbe::FontSizeAt(renderer, display.candidateRanges[1].first) - 14.f) > .001f)
+                    throw std::runtime_error("Sentence candidate font ratio is not 0.7");
+                state.composition = 2; renderer.Prepare(state, Format(state), 144);
+                if (std::abs(RendererProbe::FontSizeAt(renderer, display.candidateRanges[1].first) - 20.f) > .001f)
+                    throw std::runtime_error("Sentence font size leaked into ordinary candidates");
+                state.composition = 5;
+            }
+            state = Base();
             renderer.Render(window, state, Format(state), 144);
             RECT before{}; GetWindowRect(window, &before);
             state.input.append(40, u'a');

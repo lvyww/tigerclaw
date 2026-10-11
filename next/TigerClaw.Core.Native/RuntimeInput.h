@@ -198,8 +198,10 @@ namespace tiger::core
     private:
         bool UsesSentenceComposition() const
         {
+            // Quick symbols live in the ordinary session even on sentence schemas.
+            // Publish their raw/page until that session returns to idle.
             return _sentence && _sentence->Snapshot() && _session.IsChinese() &&
-                _session.Mode() != ChineseMode::Pinyin && _session.Mode() != ChineseMode::UpperCase;
+                _session.Mode() == ChineseMode::Idle;
         }
         void RefreshOutputContext()
         {
@@ -255,7 +257,7 @@ namespace tiger::core
                 }
                 else if (_sentence && _sentence->Snapshot())
                 {
-                    if (_session.Mode() == ChineseMode::Pinyin || _session.Mode() == ChineseMode::UpperCase)
+                    if (_session.Mode() != ChineseMode::Idle)
                         _sentence->Leave(); // special composition stays in the common session
                     else _sentence->MigrateToOrdinary(_session, _settings);
                 }

@@ -188,7 +188,7 @@ namespace tiger::overlay
         {
             if (i) result.text += state.vertical ? u"\n" : u"  ";
             auto start = result.text.size();
-            if (state.showIndex) result.text += FromUtf8(std::to_string(i + 1)) + u" ";
+            if (state.showIndex && state.composition != 5) result.text += FromUtf8(std::to_string(i + 1)) + u" ";
             result.text += Escape(state.candidates[i]);
             if (annotations && i < state.annotations.size() && !state.annotations[i].empty())
                 result.text += u"\u3014" + Escape(state.annotations[i]) + u"\u3015";
@@ -236,8 +236,8 @@ namespace tiger::overlay
         double font = std::clamp(state.fontSize > 0 && std::isfinite(state.fontSize) ? state.fontSize : 17.0, 3.0, 200.0);
         if (mode == DisplayMode::CodeOnly)
             return {font, std::ceil(font), 0, std::nearbyint(font * 0.4), 2, std::nearbyint(font * 0.4), 2};
-        if (state.vertical) return {font, std::ceil(font * 1.5), std::ceil(font * 3.76 + 15), 12, 8, 8, 7};
-        return {font, std::ceil(font), std::ceil(font * 2.88 + 15), 8, 8, 8, 8};
+        if (state.vertical) return {font, std::ceil(font * 1.5), 0, 12, 8, 8, 7};
+        return {font, std::ceil(font), 0, 8, 8, 8, 8};
     }
 
     Palette Theme(std::u16string_view name)

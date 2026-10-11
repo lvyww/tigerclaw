@@ -144,15 +144,21 @@ namespace tiger::overlay
         }
         // Keep one layout, not an unbounded cache of typed text. Colors,
         // selection background and target DPI do not change this DIP layout.
-        if (!layout_ || text != layoutText_)
+        const int secondaryStart = !status && state.composition == 5 && display.candidateRanges.size() > 1
+            ? display.candidateRanges[1].first : -1;
+        if (!layout_ || text != layoutText_ || secondaryStart != layoutSecondaryStart_)
         {
             auto wide = Wide(text);
             ComPtr<IDWriteTextLayout> nextLayout;
             CheckHr(textFactory_->CreateTextLayout(wide.data(), static_cast<UINT32>(wide.size()), format_.Get(),
                 300000.0f, 300000.0f, nextLayout.GetAddressOf()));
+            if (secondaryStart >= 0)
+                CheckHr(nextLayout->SetFontSize(fontSize * 0.7f,
+                    {static_cast<UINT32>(secondaryStart), static_cast<UINT32>(text.size() - secondaryStart)}));
             DWRITE_TEXT_METRICS measured{};
             CheckHr(nextLayout->GetMetrics(&measured));
             layoutText_ = text;
+            layoutSecondaryStart_ = secondaryStart;
             layoutMetrics_ = measured;
             layout_ = std::move(nextLayout);
 #ifdef TIGERCLAW_RENDER_PROBE

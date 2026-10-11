@@ -137,6 +137,8 @@ int main()
         Check(Format(state).text == u"ab\n1 \u53ef\u3014x\u3015\n2 \U00020000", "vertical text");
         state.composition = 5; state.selected = 0;
         Check(Format(state).selectionStart == -1, "sentence first candidate has no highlight");
+        Check(Format(state).text == u"ab\n可〔x〕\n\U00020000", "sentence forcibly hides numeric indices");
+        state.composition = 2;
         state.hideCandidates = true;
         Check(Format(state).mode == DisplayMode::CodeOnly, "hidden candidates with hook");
         state.nativeHook = false;
@@ -157,7 +159,7 @@ int main()
         state.candidateVisible = true;
         Check(reveal.Update(state, 1300).mode == DisplayMode::CodeOnly, "new composition resets reveal");
         state.fontSize = 17;
-        Check(MeasureStyle(state, DisplayMode::CandidatesOnly).minWidth == 79, "vertical width coefficient 3.76");
+        Check(MeasureStyle(state, DisplayMode::CandidatesOnly).minWidth == 0, "vertical width follows content");
         Check(Theme(u"unknown").background == 0xfffff8f3, "default theme fallback");
         auto original = state;
         auto checkChanged = [&](auto change)

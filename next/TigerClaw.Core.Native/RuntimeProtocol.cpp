@@ -463,7 +463,10 @@ namespace tiger::core
         bool fresh=std::chrono::steady_clock::now() < _freshCaretDeadline;
         bool pendingEmpty=state.page.entries.empty() && state.decodePending;
         bool visible=state.composing && !fresh && !pendingEmpty;
-        bool hold=state.composing && !fresh && pendingEmpty && state.isChinese && !_hookDisabled && (_hookNative || _imeActive) && !_holdBlocked;
+        // A key-down reopens hold eligibility even when a restarted Core missed
+        // TSF's one-shot ime_active notification. Explicit focus/cancel/inactive
+        // notifications revoke it; Overlay still requires a visible same-session frame.
+        bool hold=state.composing && !fresh && pendingEmpty && state.isChinese && !_hookDisabled && !_holdBlocked;
         double font=17;
         try { std::size_t consumed=0; auto raw=text(u"字体大小"); auto parsed=std::stod(raw,&consumed); if (consumed==raw.size() && std::isfinite(parsed)) font=std::clamp(parsed,3.0,200.0); } catch (...) {}
         Json ui={
