@@ -4,6 +4,7 @@
 #include <utility>
 namespace tiger::core {
 inline constexpr std::pair<std::u16string_view, std::u16string_view> ConfigDefaults[] = {
+    {u"\x5019\x9009\x5e03\x5c40", u"\x0034"},
     {u"\x5f00\x673a\x81ea\x52a8\x542f\x52a8", u"\x662f"},
     {u"\x9690\x85cf\x72b6\x6001\x680f", u"\x5426"},
     {u"\x7801\x8868\x5b58\x50a8\x4f4d\x7f6e", u"\x7801\x8868"},
@@ -22,7 +23,6 @@ inline constexpr std::pair<std::u16string_view, std::u16string_view> ConfigDefau
     {u"\x6700\x8fd1\x7801\x8868\x5bf9", u""},
     {u"\x56de\x8f66\x6e05\x5c4f", u"\x5426"},
     {u"\x0054\x0041\x0042\x6e05\x5c4f", u"\x662f"},
-    {u"\x7ad6\x6392\x5019\x9009", u"\x662f"},
     {u"\x663e\x793a\x5019\x9009\x5e8f\x53f7", u"\x662f"},
     {u"\x0060\x952e\x62fc\x97f3\x53cd\x67e5", u"\x662f"},
     {u"\x663e\x793a\x6ce8\x91ca", u"\x662f"},
@@ -37,8 +37,6 @@ inline constexpr std::pair<std::u16string_view, std::u16string_view> ConfigDefau
     {u"\x5206\x53f7\x6b21\x9009", u"\x662f"},
     {u"\x5f15\x53f7\x4e09\x9009", u"\x662f"},
     {u"\x002f\x8f93\x51fa\x987f\x53f7", u"\x662f"},
-    {u"\x9690\x85cf\x5019\x9009", u"\x5426"},
-    {u"\x5019\x9009\x7a97\x663e\x793a\x7f16\x7801", u"\x5426"},
     {u"\x7f16\x7801\x4f2a\x88c5", u""},
     {u"\x7a7a\x7801\x81ea\x52a8\x6e05\x5c4f", u"\x662f"},
     {u"\x6700\x5927\x7801\x957f", u"\x0034"},

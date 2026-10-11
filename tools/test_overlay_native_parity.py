@@ -18,9 +18,9 @@ def main():
     cases = []
     for i in range(args.count):
         state = {key: bool(rng.getrandbits(1)) for key in (
-            "CandidateVisible", "VerticalCandidates", "ShowCandidateIndex", "HideCandidateItems",
-            "ShowInputCodeInCandidateWindow", "IsNativeHook")}
+            "CandidateVisible", "ShowCandidateIndex", "IsNativeHook")}
         state.update(
+            CandidateLayout=rng.randrange(1, 6),
             InputCode=rng.choice(texts), Candidates=[rng.choice(texts) for _ in range(rng.randrange(7))],
             CandidateAnnotations=[rng.choice(texts) for _ in range(rng.randrange(7))],
             CompositionState=rng.randrange(7), SelectedCandidateIndex=rng.randrange(-1, 8),

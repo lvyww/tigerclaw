@@ -1,5 +1,6 @@
 #include "ConfigParser.h"
 #include "ConfigDefaults.h"
+#include "CandidateLayout.h"
 #include "CodeCase.h"
 #include "LexiconText.h"
 #include "LexiconFile.h"
@@ -134,6 +135,8 @@ namespace tiger::core
         }
         auto root = known.at(FoldOrdinalCode(u"\u7801\u8868\u5b58\u50a8\u4f4d\u7f6e"));
         result[root].second = NormalizeCodeRoot(result[root].second);
+        auto layout = known.at(FoldOrdinalCode(CandidateLayoutKey));
+        result[layout].second = std::u16string(1, char16_t(u'0' + ParseCandidateLayout(result[layout].second)));
         return result;
     }
 }

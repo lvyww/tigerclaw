@@ -36,6 +36,21 @@ int main()
             RuntimeProtocol protocol(runtime, input, config);
             auto send = [&](Json msg) { auto result = protocol.Handle(msg.dump(), CtrlSpaceState::Time{}); Check(result.has_value()); return Json::parse(*result); };
             auto key = [&](int vk, const char* id, int seq = 1) { return send({{"type","key"},{"seq",seq},{"vk",vk},{"action","down"},{"client_session","test"},{"event_id",id}}); };
+            // Layout is one atomic setting; old flags are neither read nor writable.
+            for (int mode=1;mode<=5;++mode)
+            {
+                auto result=send({{"type","set_config"},{"key","候选布局"},{"value",std::to_string(mode)}});
+                Check(result["success"].get<bool>());
+                auto ui=Json::parse(protocol.CaptureUiState());
+                Check(ui["CandidateLayout"]==mode && !ui.contains("VerticalCandidates") &&
+                    !ui.contains("HideCandidateItems") && !ui.contains("ShowInputCodeInCandidateWindow"));
+            }
+            for (auto invalid:{"0","6","-1","","yes","1.0","01"})
+                Check(!send({{"type","set_config"},{"key","候选布局"},{"value",invalid}})["success"].get<bool>());
+            for (auto oldKey:{"竖排候选","隐藏候选","候选窗显示编码"})
+                Check(!send({{"type","set_config"},{"key",oldKey},{"value","是"}})["success"].get<bool>());
+            Check(send({{"type","get_config"}})["config_text"].get<std::string>().find("候选布局\t5")!=std::string::npos);
+            send({{"type","set_config"},{"key","候选布局"},{"value","4"}});
             auto hello=send({{"type","hello"}});
             Check(hello["core_build"]=="next-dev" && !hello.contains("production_ready") && !hello.contains("transport"));
             Check(key(0x41,"a1")["input_buffer"] == "a");

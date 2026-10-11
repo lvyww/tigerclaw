@@ -676,6 +676,7 @@ Exit:
 BOOL CSampleIME::_BypassProtectedInput(_In_opt_ ITfContext *context)
 {
     if (!_IsKeyboardDisabled(context)) return FALSE;
+    _EndCandidateUi();
     _failedKeyQueue.clear();
     _ClearPendingResponseCache();
     _ClearPendingKeyEvent();
@@ -688,6 +689,8 @@ BOOL CSampleIME::_BypassProtectedInput(_In_opt_ ITfContext *context)
 
 void CSampleIME::_ClearPendingResponseCache()
 {
+    _pendingCandidates.reset();
+    _pendingCandidateGeneration = 0;
     _pendingResponseValid = FALSE;
     _pendingResponseIsKeyDown = FALSE;
     _pendingResponseWParam = 0;
@@ -707,6 +710,8 @@ void CSampleIME::_ClearPendingResponseCache()
 
 void CSampleIME::_StorePendingResponseCache(BOOL isKeyDown, WPARAM wParam, UINT scanCode, BOOL extended, _In_ const BimeResponse &response)
 {
+    _pendingCandidates = response.candidates;
+    _pendingCandidateGeneration = response.candidateGeneration;
     _pendingResponseValid = TRUE;
     _pendingResponseIsKeyDown = isKeyDown;
     _pendingResponseWParam = wParam;
@@ -817,6 +822,8 @@ BOOL CSampleIME::_TryConsumePendingResponseCache(BOOL isKeyDown, WPARAM wParam, 
     pResponse->hasKeyboardOpen = _pendingResponseHasKeyboardOpen;
     pResponse->keyboardOpen = _pendingResponseKeyboardOpen;
     pResponse->cancelComposition = _pendingResponseCancelComposition;
+    pResponse->candidates = _pendingCandidates;
+    pResponse->candidateGeneration = _pendingCandidateGeneration;
     pResponse->compositionTracking = _pendingResponseCompositionTracking;
     pResponse->compositionPending = _pendingResponseCompositionPending;
     pResponse->learningReceipt = _pendingResponseLearningReceipt;
@@ -1133,7 +1140,9 @@ BOOL CSampleIME::_ApplyResponseAndSyncState(_In_opt_ ITfContext *pContext, _Inou
     }
     BOOL committedViaAnchor = _SyncCaretAnchorForResponse(pContext, pResponse);
 
-    if (pResponse->compositionTracking)
+    _UpdateCandidateUi(pContext, *pResponse);
+    if (_pPipeClient && pResponse->candidateGeneration==_pPipeClient->CandidateGeneration() &&
+        (pResponse->compositionTracking || (pResponse->candidates && pResponse->candidates->composing)))
     {
         _ScheduleCompositionRefresh(pResponse->compositionPending);
     }
@@ -1159,6 +1168,7 @@ BOOL CSampleIME::_ApplyResponseAndSyncState(_In_opt_ ITfContext *pContext, _Inou
 
 STDAPI CSampleIME::OnSetFocus(BOOL fForeground)
 {
+    if (!fForeground) { _EndCandidateUi(); _CancelCompositionRefresh(); }
     if (fForeground) _BypassProtectedInput(nullptr);
     Global::LogToFileVerbose("KeySink OnSetFocus foreground=%d", fForeground);
     ResetCapsCompensationState(fForeground ? "OnSetFocus.foreground" : "OnSetFocus.background");
@@ -1204,6 +1214,8 @@ STDAPI CSampleIME::OnTestKeyDown(ITfContext *pContext, WPARAM wParam, LPARAM lPa
         cachedResponse.hasKeyboardOpen = _pendingResponseHasKeyboardOpen;
         cachedResponse.keyboardOpen = _pendingResponseKeyboardOpen;
         cachedResponse.cancelComposition = _pendingResponseCancelComposition;
+        cachedResponse.candidates = _pendingCandidates;
+        cachedResponse.candidateGeneration = _pendingCandidateGeneration;
         cachedResponse.compositionTracking = _pendingResponseCompositionTracking;
         cachedResponse.compositionPending = _pendingResponseCompositionPending;
         cachedResponse.learningReceipt = _pendingResponseLearningReceipt;
@@ -1656,6 +1668,8 @@ STDAPI CSampleIME::OnTestKeyUp(ITfContext *pContext, WPARAM wParam, LPARAM lPara
         cachedResponse.hasKeyboardOpen = _pendingResponseHasKeyboardOpen;
         cachedResponse.keyboardOpen = _pendingResponseKeyboardOpen;
         cachedResponse.cancelComposition = _pendingResponseCancelComposition;
+        cachedResponse.candidates = _pendingCandidates;
+        cachedResponse.candidateGeneration = _pendingCandidateGeneration;
         cachedResponse.compositionTracking = _pendingResponseCompositionTracking;
         cachedResponse.compositionPending = _pendingResponseCompositionPending;
         cachedResponse.learningReceipt = _pendingResponseLearningReceipt;

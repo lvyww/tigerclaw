@@ -98,3 +98,40 @@ Legacy SampleIME documents and inactive composition/candidate/dictionary source 
 
 Current builds have no embedded expiry or calendar-based input gate. Previously
 installed DLLs keep their old checks until replaced.
+
+## Read-only candidate UIElement / Pain compatibility
+
+`CandidateUi.h` projects optional Core `candidate_ui` snapshots through
+`ITfCandidateListUIElement`. Core still owns candidate generation, ordering,
+selection, paging, commit and learning. No `ITfCandidateListUIElementBehavior`
+is exposed; mouse selection through the host is not implemented.
+
+Begin publishes all six update flags, subsequent notifications describe changed
+strings/count/selection/page starts/current page. Getters never call Core or pump
+messages; `GetPageIndex(nullptr, 0, &count)` succeeds for Pain's first size query.
+Document references and retained COM objects remain valid through End. Commit
+with remaining input updates the same object; cancel, loss of focus, context
+replacement, deactivation and disconnect end it. Local focus/connection epochs,
+Core instance/version and the echoed request context reject stale snapshots.
+
+This first version intentionally permits Pain and TigerClaw Overlay together.
+Begin's `pbShow=FALSE` does not suppress updates. `Show(FALSE)` does not hide
+Overlay, and `IsShown` queries the actual `TigerClawCandidate` window visibility.
+Do not advertise this as complete UILess support. Old Core without the optional
+protocol continues without a candidate UIElement. No registration flags or user
+settings change.
+
+Isolated verification (no installation or TSF registration):
+
+- `tools/test_candidate_ui.bat x86` (also `x64` / `arm64`): actual COM getters,
+  notification order, `pbShow=FALSE`, reference lifetimes/reentry, pipe framing,
+  malformed snapshots, old Core fallback and stale focus context.
+- `tools/test_pain_candidate_bridge.ps1`: compiles Pain's existing presenter
+  read-only and a copy of its test fixture, injecting the native COM object into
+  the real Begin/Update/Render path. Runs as x86; requires the x86 factory above.
+- CTest `core_native_candidate_snapshot`: display parity, full ordinary pages,
+  Unicode, reverse lookup, quick symbols, residual input, auto commit, empty code,
+  export limits, replay/focus and asynchronous sentence projection.
+
+Artifacts/logs: `next/_run/CandidateUi-20261011/`. These checks do not claim physical
+typing acceptance in the actual running Pain application.

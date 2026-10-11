@@ -502,6 +502,7 @@ CSampleIME::CSampleIME()
     _imeActivePublishRetryCount = 0;
 
     _pPipeClient = new (std::nothrow) CPipeClient();
+    if (_pPipeClient) _pPipeClient->candidateDisconnected = [this] { _EndCandidateUi(FALSE); _CancelCompositionRefresh(); };
 
     _activateTick = 0;
     _isDevenvHost = FALSE;
@@ -804,6 +805,7 @@ ExitError:
 
 STDAPI CSampleIME::Deactivate()
 {
+    _EndCandidateUi();
     _ClearDeferredCaretAnchorReopen();
 
     _UninitFunctionProviderSink();
@@ -2603,6 +2605,32 @@ void CSampleIME::_UninitCaretCoalesceWindow()
     _ResetCaretCoalesceState();
 }
 
+void CSampleIME::_EndCandidateUi(BOOL reset)
+{
+    if (reset && _pPipeClient) _pPipeClient->ResetCandidates();
+    _candidatePublisher.End();
+}
+
+void CSampleIME::_UpdateCandidateUi(ITfContext* context, const BimeResponse& response)
+{
+    if (!_pPipeClient || response.candidateGeneration!=_pPipeClient->CandidateGeneration()) return;
+    auto snapshot=response.candidates;
+    if (snapshot && !_pPipeClient->IsCurrentCandidates(snapshot)) return;
+    if (!snapshot || !snapshot->available || !snapshot->composing)
+    { _EndCandidateUi(FALSE); return; }
+    ITfDocumentMgr* document=nullptr;
+    if (context) context->GetDocumentMgr(&document);
+    else if (_pThreadMgr) _pThreadMgr->GetFocus(&document);
+    if (!document) { _EndCandidateUi(FALSE); return; }
+    ITfUIElementMgr* manager=nullptr;
+    if (_pThreadMgr && SUCCEEDED(_pThreadMgr->QueryInterface(IID_ITfUIElementMgr,reinterpret_cast<void**>(&manager))))
+    {
+        _candidatePublisher.Publish(manager,document,snapshot);
+        manager->Release();
+    }
+    document->Release();
+}
+
 void CSampleIME::_ScheduleCompositionRefresh(BOOL decodePending)
 {
     if (_msgWndHandle == nullptr)
@@ -2628,8 +2656,10 @@ void CSampleIME::_CancelCompositionRefresh()
 void CSampleIME::_HandleCompositionRefresh()
 {
     _CancelCompositionRefresh();
+    if (_pPipeClient && _pPipeClient->IsBusy()) { _ScheduleCompositionRefresh(FALSE); return; }
     if (_pPipeClient == nullptr || !_EnsurePipeConnected())
     {
+        _EndCandidateUi();
         return;
     }
 
@@ -2637,12 +2667,16 @@ void CSampleIME::_HandleCompositionRefresh()
     HRESULT hr = _pPipeClient->SendQueryStateAndWait(&response, kCompositionRefreshTimeoutMs);
     if (FAILED(hr))
     {
+        _EndCandidateUi();
         Global::LogToFileVerbose("CompositionRefresh: query failed hr=0x%08X", static_cast<unsigned>(hr));
         return;
     }
 
+    if (response.candidateGeneration!=_pPipeClient->CandidateGeneration()) return;
+
     if (response.compositionTracking && response.compositionPending)
     {
+        _UpdateCandidateUi(nullptr, response);
         _ScheduleCompositionRefresh(TRUE);
         return;
     }
@@ -3033,6 +3067,7 @@ void CSampleIME::_PublishImeActive()
 
     // Active = our IME selected (profile) AND focus on an editable doc. Either false => inactive.
     BOOL active = (_profileActive && focusEditable) ? TRUE : FALSE;
+    if (!active) { _EndCandidateUi(); _CancelCompositionRefresh(); }
 
     // Debounce: only send when the value changed, to avoid spamming on frequent OnSetFocus/OnActivated.
     if (_hasSentImeActive && _lastImeActiveSent == active)
@@ -3098,6 +3133,8 @@ void CSampleIME::_CancelImeActivePublishRetry()
 
 void CSampleIME::_SendCompositionCanceledMessage()
 {
+    _EndCandidateUi();
+    _CancelCompositionRefresh();
     if (_pPipeClient == nullptr)
     {
         return;

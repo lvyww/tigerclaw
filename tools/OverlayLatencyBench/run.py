@@ -210,8 +210,8 @@ try:
                         if scenario == 'sentence': candidates = ['新人上午来面试，讨论输入法候选窗口的显示效果' + x for x in candidates]
                         state = dict(CandidateVisible=True, IsChinese=True, InputCode=code,
                             Candidates=candidates, CandidateAnnotations=['le ts', 'lets', 'le ts', '', ''],
-                            ShowInputCodeInCandidateWindow=True, ShowCandidateIndex=True,
-                            VerticalCandidates=scenario == 'vertical', FontSize=20, FontName='Microsoft YaHei',
+                            ShowCandidateIndex=True,
+                            CandidateLayout=2 if scenario == 'vertical' else 1, FontSize=20, FontName='Microsoft YaHei',
                             SelectedCandidateIndex=-1, ThemeName='',
                             CaretX=120, CaretY=180, CaretHeight=20, HideStatusBar=True,
                             CandidateExpandDelayMs=0, AnnotationExpandDelayMs=0, SoundVolumePercent=0)

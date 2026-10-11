@@ -33,13 +33,14 @@ namespace TigerClaw.Shared
         public int CaretY { get; set; }
 
         [DataMember(Order = 10)]
-        public bool VerticalCandidates { get; set; }
+        public int CandidateLayout { get; set; } = CandidateLayouts.Default;
+
+        public bool VerticalCandidates => CandidateLayouts.IsVertical(CandidateLayout);
 
         [DataMember(Order = 11)]
         public bool ShowCandidateIndex { get; set; }
 
-        [DataMember(Order = 12)]
-        public bool HideCandidateItems { get; set; }
+        public bool HideCandidateItems => CandidateLayouts.HidesCandidates(CandidateLayout);
 
         [DataMember(Order = 13)]
         public string CodeMasking { get; set; }
@@ -68,8 +69,7 @@ namespace TigerClaw.Shared
         [DataMember(Order = 21)]
         public int SoundVolumePercent { get; set; }
 
-        [DataMember(Order = 22)]
-        public bool ShowInputCodeInCandidateWindow { get; set; }
+        public bool ShowInputCodeInCandidateWindow => CandidateLayouts.ShowsCode(CandidateLayout);
 
         [DataMember(Order = 23)]
         public int CandidateExpandDelayMs { get; set; }

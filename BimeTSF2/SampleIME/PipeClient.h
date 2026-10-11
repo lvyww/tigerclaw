@@ -2,6 +2,8 @@
 
 #include "Private.h"
 #include <string>
+#include "CandidateUi.h"
+#include <functional>
 
 #define BIME_PIPE_NAME L"\\\\.\\pipe\\BimeIPC"
 #define BIME_PIPE_BUFFER_SIZE 4096
@@ -11,6 +13,8 @@
 
 struct BimeResponse
 {
+    std::shared_ptr<const CandidateSnapshot> candidates;
+    ULONGLONG candidateGeneration = 0;
     LONG seq;
     BOOL success;
     BOOL handled;
@@ -57,6 +61,11 @@ public:
     void Disconnect();
     BOOL IsConnected() const;
     BOOL IsBusy() const { return _requestActive != 0; }
+    ULONGLONG CandidateGeneration() const { return _candidateGeneration; }
+    bool IsCurrentCandidates(const std::shared_ptr<const CandidateSnapshot>& snapshot) const
+    { return snapshot && _candidates && snapshot->instance==_candidates->instance && snapshot->version==_candidates->version; }
+    void ResetCandidates() { ++_candidateGeneration; _candidates.reset(); }
+    std::function<void()> candidateDisconnected;
 
     BOOL SendMessage(const char *jsonMessage);
     HRESULT SendMessageAndWait(const char *jsonMessage, _Out_ BimeResponse *pResponse, DWORD timeoutMs = BIME_DEFAULT_TIMEOUT_MS);
@@ -103,6 +112,11 @@ private:
     char _clientSession[64];
     BOOL _helloDone;
     volatile LONG _requestActive = 0;
+    ULONGLONG _candidateGeneration = 1;
+    std::shared_ptr<const CandidateSnapshot> _candidates;
+    std::string _readAhead;
+    void ParseCandidates(const char* json, BimeResponse* response, ULONGLONG generation);
+    BOOL ReadFrame(std::string& frame, DWORD timeoutMs);
 
     BOOL TryConnect();
     BOOL WriteMessageOverlapped(const char *data, size_t len, DWORD timeoutMs);

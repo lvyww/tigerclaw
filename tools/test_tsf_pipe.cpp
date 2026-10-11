@@ -4,6 +4,7 @@
 #include <thread>
 #include <cstdio>
 #include <cstdlib>
+#include "../BimeTSF2/SampleIME/CandidateUi.h"
 #define private public
 #include "../BimeTSF2/SampleIME/PipeClient.h"
 #undef private
@@ -37,6 +38,8 @@ struct TestPipe
         Check(server != INVALID_HANDLE_VALUE, "create server");
         client._hPipe = CreateFileW(name, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, nullptr);
         Check(client._hPipe != INVALID_HANDLE_VALUE, "connect client");
+        DWORD mode=PIPE_READMODE_MESSAGE;
+        Check(SetNamedPipeHandleState(client._hPipe,&mode,nullptr,nullptr),"message-mode client");
         client._isConnected = TRUE;
         Check(ConnectNamedPipe(server, nullptr) || GetLastError() == ERROR_PIPE_CONNECTED, "connect server");
     }
@@ -59,6 +62,70 @@ static void CALLBACK Quit(HWND, UINT, UINT_PTR id, DWORD)
 
 int main()
 {
+    {
+        CPipeClient client;
+        BimeResponse response;
+        auto generation=client.CandidateGeneration();
+        std::string menu=R"({"candidate_ui":{"api":1,"context":"1","instance":"abc-1","version":"1","menu":{"available":true,"composing":true,"pending":false,"page":0,"selection":0,"pages":[0],"strings":["first","\ud840\udc00e\u0301"]}}})";
+        client.ParseCandidates(menu.c_str(),&response,generation);
+        Check(response.candidates && response.candidates->strings[1].size()==4,"strict candidate unicode parsing");
+        auto original=response.candidates;
+        client.ParseCandidates(R"({"candidate_ui":{"api":1,"context":"1","instance":"abc-1","version":"1"}})",&response,generation);
+        Check(response.candidates==original,"unchanged snapshot reuse");
+        client.ResetCandidates(); response.candidates.reset();
+        client.ParseCandidates(menu.c_str(),&response,generation);
+        Check(!response.candidates,"focus generation rejects inflight snapshot");
+        generation=client.CandidateGeneration();
+        menu.replace(menu.find("\"context\":\"1\""),13,"\"context\":\"2\"");
+        client.ParseCandidates(menu.c_str(),&response,generation);
+        Check(response.candidates != nullptr,"new focus full snapshot");
+        client.ParseCandidates(R"({"candidate_ui":{"api":1,"context":"1","instance":"abc-1","version":"99"}})",&response,generation);
+        Check(!response.candidates && response.candidateGeneration==0,"replayed previous focus context rejected");
+        auto malformed=menu; auto pos=malformed.find("\"selection\":0"); malformed.replace(pos,13,"\"selection\":9");
+        client.ParseCandidates(malformed.c_str(),&response,generation);
+        Check(!response.candidates,"invalid menu fails closed");
+        client.ParseCandidates("{}",&response,generation); Check(!response.candidates,"old Core fallback");
+    }
+    {
+        TestPipe pipe;
+        std::thread server([&] {
+            char request[1024]; DWORD count;
+            Check(ReadFile(pipe.server,request,sizeof(request),&count,nullptr),"large snapshot request");
+            std::string reply="{\"seq\":1,\"success\":true,\"handled\":true,\"input_buffer\":\""+std::string(12000,'x')+"\"}\n";
+            Check(WriteFile(pipe.server,reply.data(),static_cast<DWORD>(reply.size()),&count,nullptr),"large snapshot write");
+        });
+        BimeResponse response;
+        Check(SUCCEEDED(pipe.client.SendQueryStateAndWait(&response,2000)) && response.inputBuffer.size()==12000,"fragmented response exceeds 4KB");
+        server.join();
+    }
+    {
+        TestPipe pipe;
+        std::thread server([&] {
+            char request[1024]; DWORD count;
+            ReadFile(pipe.server,request,sizeof(request),&count,nullptr);
+            std::string reply(1024*1024+4096,'x');
+            WriteFile(pipe.server,reply.data(),static_cast<DWORD>(reply.size()),&count,nullptr);
+        });
+        BimeResponse response;
+        Check(FAILED(pipe.client.SendQueryStateAndWait(&response,2000)) && !pipe.client.IsConnected(),"1MiB framing limit disconnects without truncated JSON");
+        server.join();
+    }
+    {
+        TestPipe pipe;
+        std::thread server([&] {
+            char request[1024]; DWORD count;
+            ReadFile(pipe.server,request,sizeof(request),&count,nullptr);
+            std::string first="{\"seq\":1,\"success\":true,\"input_buffer\":\"\xe4";
+            std::string second="\xb8\xad\"}\n{\"seq\":2,\"success\":true,\"commit_text\":\"keep\",\"candidate_ui\":{\"api\":1}}\n";
+            WriteFile(pipe.server,first.data(),static_cast<DWORD>(first.size()),&count,nullptr);
+            WriteFile(pipe.server,second.data(),static_cast<DWORD>(second.size()),&count,nullptr);
+            ReadFile(pipe.server,request,sizeof(request),&count,nullptr);
+        });
+        BimeResponse response;
+        Check(SUCCEEDED(pipe.client.SendQueryStateAndWait(&response,2000)) && response.inputBuffer==L"\x4e2d","UTF8 across pipe messages");
+        Check(SUCCEEDED(pipe.client.SendQueryStateAndWait(&response,2000)) && response.textToOutput==L"keep" && !response.candidates,"coalesced frame and malformed candidate preserve commit");
+        server.join();
+    }
     swprintf_s(connectionPipeName, L"\\\\.\\pipe\\TigerClaw.TsfConnectTest.%lu", GetCurrentProcessId());
     for (int attempt = 0; attempt < 2; ++attempt)
     {

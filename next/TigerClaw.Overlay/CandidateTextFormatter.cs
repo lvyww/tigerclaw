@@ -17,7 +17,7 @@ namespace TigerClaw.Overlay
             bool hasCandidates = HasCandidates(state);
             bool showInputCode = ShouldShowInputCode(state);
             bool hasInputCode = HasInputCode(state);
-            bool useHiddenCandidateMode = !showCandidates || (state.HideCandidateItems && state.CandidateExpandDelayMs <= 0);
+            bool useHiddenCandidateMode = !showCandidates || state.HideCandidateItems;
 
             if (useHiddenCandidateMode)
             {
@@ -130,7 +130,7 @@ namespace TigerClaw.Overlay
 
             string[] candidates = state.Candidates ?? Array.Empty<string>();
             string[] annotations = includeAnnotations ? (state.CandidateAnnotations ?? Array.Empty<string>()) : Array.Empty<string>();
-            bool showIndex = state.ShowCandidateIndex;
+            bool showIndex = state.ShowCandidateIndex && state.CompositionState != 5;
             bool showCode = mode == CandidateDisplayMode.CodeAndCandidates;
             int selectedIndex = ResolveHighlightIndex(state);
             var sb = new StringBuilder(256);

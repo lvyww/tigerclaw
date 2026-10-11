@@ -1,3 +1,4 @@
+#include "CandidateLayout.h"
 #include "RuntimeLexicons.h"
 #include "RuntimePaths.h"
 #include "PinyinLexicon.h"
@@ -104,6 +105,8 @@ namespace tiger::core
         for (const auto& [known, unused] : ConfigDefaults)
             if (FoldOrdinalCode(known) == FoldOrdinalCode(key)) { canonical = known; break; }
         if (canonical.empty()) { error = u"unknown key"; return false; }
+        if (canonical == CandidateLayoutKey && !ValidCandidateLayout(value))
+        { error = u"candidate layout must be 1..5"; return false; }
         auto normalized = canonical == RootKey ? NormalizeCodeRoot(value) : std::u16string(value);
         std::lock_guard guard(_writer);
         auto previous = Read();

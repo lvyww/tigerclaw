@@ -14,9 +14,6 @@ namespace TigerClaw.Overlay
     {
         private const string YesValue = "是";
         private const string NoValue = "否";
-        private const string ConfigVerticalCandidates = "竖排候选";
-        private const string ConfigHideCandidates = "隐藏候选";
-        private const string ConfigShowInputCodeInCandidateWindow = "候选窗显示编码";
         private readonly TypingSoundPlayer _typingSound = new TypingSoundPlayer();
         private readonly OverlaySessionState _sessionState = new OverlaySessionState();
         private readonly CandidateTextFormatter _candidateTextFormatter = new CandidateTextFormatter();
@@ -43,15 +40,6 @@ namespace TigerClaw.Overlay
         private bool _annotationExpanded;
         private bool _revealSessionActive;
         private long _revealSessionStartTick;
-        private bool _horizontalShowCodePreference;
-        private bool _verticalShowCodePreference;
-        private enum CandidateCycleMode
-        {
-            Horizontal,
-            Vertical,
-            CodeOnly
-        }
-
         public MainWindow()
         {
             InitializeComponent();
@@ -81,7 +69,6 @@ namespace TigerClaw.Overlay
                 Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
                 {
                     _state = uiState ?? new OverlayUiState();
-                    SyncNormalCandidateModePreferences();
                     OverlayUiChangeFlags changes = _sessionState.Update(_state);
                     ApplyUiState(changes);
                 }));

@@ -137,7 +137,7 @@ namespace tiger::overlay
         bool RefreshBlankResidence(std::uint64_t revision)
         {
             const auto now = GetTickCount64();
-            const bool enabled = state_.residenceDurationMs > 0 && state_.isChinese && !state_.isOff && !state_.hideCandidates;
+            const bool enabled = state_.residenceDurationMs > 0 && state_.isChinese && !state_.isOff && !state_.hideCandidates();
             const bool idle = enabled && state_.composition == 1 && !state_.candidateVisible &&
                 state_.input.empty() && state_.candidates.empty();
             if (blankResidence_)
@@ -346,7 +346,7 @@ namespace tiger::overlay
         std::int64_t soundSeq_ = 0, anchorRevision_ = 0;
         bool demo_, validCaret_ = false, candidateDrawn_ = false;
         Placement placement_;
-        bool dragging_ = false, horizontalCode_ = false, verticalCode_ = false;
+        bool dragging_ = false;
         POINT dragPoint_{}, dragOrigin_{};
         UINT candidateDpi_ = 96;
         SIZE candidateSize_{};
@@ -477,7 +477,7 @@ namespace tiger::overlay
             UINT dpi = validCaret_ ? DpiAt({state_.caretX, state_.caretY}) : 96;
             bool changed = force || !candidateDrawn_ || state_.animationEnabled != renderedState_.animationEnabled ||
                 state_.animationDurationMs != renderedState_.animationDurationMs || state_.theme != renderedState_.theme || state_.font != renderedState_.font ||
-                state_.fontSize != renderedState_.fontSize || state_.vertical != renderedState_.vertical ||
+                state_.fontSize != renderedState_.fontSize || state_.vertical() != renderedState_.vertical() ||
                 next.mode != display_.mode || next.text != display_.text ||
                 next.selectionStart != display_.selectionStart || next.selectionLength != display_.selectionLength || dpi != candidateDpi_;
             if (reformat) display_ = std::move(formatted);
@@ -686,30 +686,13 @@ namespace tiger::overlay
         void Cycle()
         {
             if (layoutPending_) return;
-            if (!state_.hideCandidates)
-            {
-                if (state_.vertical) verticalCode_ = state_.showCode;
-                else horizontalCode_ = state_.showCode;
-            }
-            State desired = state_;
-            if (desired.hideCandidates && (desired.showCode || desired.nativeHook))
-            {
-                desired.hideCandidates = false; desired.vertical = false; desired.showCode = horizontalCode_;
-            }
-            else if (desired.vertical) { desired.hideCandidates = true; desired.showCode = true; }
-            else { desired.hideCandidates = false; desired.vertical = true; desired.showCode = verticalCode_; }
+            int next = state_.candidateLayout % 5 + 1;
             if (!demo_)
             {
-                const std::pair<Text, Text> show{u"\u5019\u9009\u7a97\u663e\u793a\u7f16\u7801", desired.showCode ? u"\u662f" : u"\u5426"};
-                const std::pair<Text, Text> hide{u"\u9690\u85cf\u5019\u9009", desired.hideCandidates ? u"\u662f" : u"\u5426"};
-                const std::pair<Text, Text> vertical{u"\u7ad6\u6392\u5019\u9009", desired.vertical ? u"\u662f" : u"\u5426"};
-                // Match WPF order. Stop at first failure; incoming Core state is
-                // authoritative even if only part of a sequence was accepted.
-                layoutPending_ = commands_->SetConfigs(desired.hideCandidates ?
-                    std::vector<std::pair<Text, Text>>{show, hide} : std::vector<std::pair<Text, Text>>{hide, vertical, show}, 8);
+                layoutPending_ = commands_->SetConfigs({{u"\u5019\u9009\u5e03\u5c40", Text(1, char16_t(u'0' + next))}}, 8);
                 return;
             }
-            state_ = std::move(desired);
+            state_.candidateLayout = next;
             Refresh(true);
         }
         LRESULT Message(HWND hwnd, UINT message, WPARAM wp, LPARAM lp)
@@ -740,8 +723,6 @@ namespace tiger::overlay
                 if (source_ && source_->Take(state_))
                 {
                     candidateRetryCount_ = 0;
-                    if (!layoutPending_ && !state_.hideCandidates)
-                    { if (state_.vertical) verticalCode_ = state_.showCode; else horizontalCode_ = state_.showCode; }
                     if (state_.soundSequence > 0 && state_.soundSequence != soundSeq_)
                     { soundSeq_ = state_.soundSequence; sound_.Play(state_.soundVk, state_.soundVolume); }
                     Refresh(false);
@@ -878,7 +859,7 @@ namespace tiger::overlay
             SetWindowPos(status_, HWND_TOPMOST, work.right - 26, work.bottom - 50, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
             if (demo_)
             {
-                state_.candidateVisible = state_.showCode = state_.showIndex = state_.isChinese = true;
+                state_.candidateVisible = state_.showIndex = state_.isChinese = true; state_.candidateLayout = 1;
                 state_.input = u"lets"; state_.candidates = {u"\u800c\u4e09", u"\u65cb", u"\u800c\u758b", u"\U00020000"};
                 state_.annotations = {u"le ts", u"lets", u"le ts", u"Unicode"};
                 state_.caretX = work.left + 150; state_.caretY = work.top + 200; state_.caretHeight = 20;

@@ -9,6 +9,7 @@
 
 #include "SampleIMEBaseStructure.h"
 #include <deque>
+#include "CandidateUi.h"
 
 class CLangBarItemButton;
 class CPipeClient;
@@ -227,6 +228,11 @@ private:
     void _ScheduleFailedKeyFlush();
     void _HandleFailedKeyFlush();
     BOOL _ApplyResponseAndSyncState(_In_opt_ ITfContext *pContext, _Inout_ BimeResponse *pResponse, _In_z_ const char *stageTag, _Out_opt_ BOOL *pCommittedViaAnchor = nullptr);
+    void _UpdateCandidateUi(ITfContext* context, const BimeResponse& response);
+    void _EndCandidateUi(BOOL reset = TRUE);
+    CandidateUiPublisher _candidatePublisher;
+    std::shared_ptr<const CandidateSnapshot> _pendingCandidates;
+    ULONGLONG _pendingCandidateGeneration = 0;
     void _AdjustKeySinkModeForForegroundWindow(_In_opt_ HWND hwndForeground);
     void _RefreshImmersiveState(_In_opt_ const char *source, _In_opt_ HWND hwndForeground);
 

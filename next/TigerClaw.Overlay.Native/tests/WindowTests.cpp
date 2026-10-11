@@ -116,7 +116,7 @@ int main()
         RECT area{}; SystemParametersInfoW(SPI_GETWORKAREA, 0, &area, 0);
         int x = area.left + 100, y = area.top + 150;
         nlohmann::json state{{"CandidateVisible", true}, {"IsChinese", true}, {"InputCode", "ab"},
-            {"Candidates", {"one", "two", "three"}}, {"ShowInputCodeInCandidateWindow", true}, {"FontSize", 20},
+            {"Candidates", {"one", "two", "three"}}, {"CandidateLayout", 1}, {"FontSize", 20},
             {"CaretX", 0}, {"CaretY", 0}, {"CaretHeight", 20}, {"HideStatusBar", true}};
         publish(state);
         Check(Until([&] { return !IsWindowVisible(status); }), "status hidden by IPC");
@@ -135,7 +135,7 @@ int main()
         Check(Until([&] { RECT rect{}; GetWindowRect(candidate, &rect); return rect.left == x + 100; }), "explicit anchor revision moves window");
         state["CandidateVisible"] = false; publish(state);
         Check(Until([&] { return !IsWindowVisible(candidate); }), "composition end hides window");
-        state["CandidateVisible"] = true; state["VerticalCandidates"] = true;
+        state["CandidateVisible"] = true; state["CandidateLayout"] = 2;
         state["CaretX"] = x; state["CaretY"] = area.bottom - 10; publish(state);
         Check(Until([&] { RECT rect{}; GetWindowRect(candidate, &rect);
             return IsWindowVisible(candidate) && rect.bottom <= area.bottom - 30; }), "bottom-edge vertical window flips above caret");
@@ -146,7 +146,7 @@ int main()
         state["CandidateVisible"] = false; publish(state);
         Check(Until([&] { return !IsWindowVisible(candidate); }), "reset reveal session");
         state["CandidateVisible"] = true; state["ShowInputCodeInCandidateWindow"] = false;
-        state["VerticalCandidates"] = false; state["CaretY"] = y;
+        state["CandidateLayout"] = 1; state["CaretY"] = y;
         state["CandidateExpandDelayMs"] = 300; state["AnnotationExpandDelayMs"] = 650;
         state["CandidateAnnotations"] = {"long annotation for delayed reveal", "", ""};
         auto revealStart = GetTickCount64(); publish(state);
@@ -166,7 +166,7 @@ int main()
             {
                 state = savedState;
                 state["CandidateExpandDelayMs"] = 0; state["AnnotationExpandDelayMs"] = 0;
-                state["VerticalCandidates"] = vertical; state["CompositionState"] = composition;
+                state["CandidateLayout"] = vertical ? 2 : 1; state["CompositionState"] = composition;
                 state["CandidateAnimationDurationMs"] = 600;
                 publish(state); Sleep(700);
                 RECT full{}; GetWindowRect(candidate, &full);

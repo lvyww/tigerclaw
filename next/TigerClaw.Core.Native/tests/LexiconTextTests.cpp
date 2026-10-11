@@ -165,7 +165,15 @@ int main()
         Check(!ParseConfigBool(u"yes", false) && ParseConfigBool(u"yes", true));
         std::vector<std::u16string> configLines{u"\u5f53\u524d\u7801\u8868\tfirst", u"\u5f53\u524d\u7801\u8868 ", u"unknown\tignored"};
         auto settings = ParseConfigLines(configLines);
-        Check(settings.size() == 68);
+        Check(settings.size() == 66);
+        auto oldLayout=ParseConfigLines(std::vector<std::u16string>{u"竖排候选\t否",u"隐藏候选\t是",u"候选窗显示编码\t是"});
+        auto layoutPair=std::pair<std::u16string,std::u16string>{u"候选布局",u"4"};
+        Check(std::find(oldLayout.begin(),oldLayout.end(),layoutPair)!=oldLayout.end());
+        for(auto invalid:{u"0",u"6",u"",u"x"})
+        {
+            auto parsed=ParseConfigLines(std::vector<std::u16string>{std::u16string(u"候选布局\t")+invalid});
+            Check(std::find(parsed.begin(),parsed.end(),layoutPair)!=parsed.end());
+        }
         auto disabledLearning=ParseConfigLines(std::vector<std::u16string>{u"整句Tab自学习\t否"});
         Check(std::find(disabledLearning.begin(),disabledLearning.end(),std::pair<std::u16string,std::u16string>{u"整句Tab自学习",u"否"})!=disabledLearning.end());
         auto history = SeedRecentSchemas(u" A |a| B |C");

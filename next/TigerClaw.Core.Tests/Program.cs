@@ -33,6 +33,7 @@ namespace TigerClaw.Core.Tests
                 {
                     SettingsOrderIsIndependentOfConfigurationOrder();
                     CandidateAnimationSettings();
+                    CandidateLayoutSettings();
                     KeyResponsesDeclareExpectedKeyUp();
                     Console.WriteLine("Candidate settings and commit deadline tests passed.");
                     return 0;
@@ -66,6 +67,8 @@ namespace TigerClaw.Core.Tests
                     SentenceWholeCodeRewardUsesConfiguredFrequencyScope();
                     return 0;
                 }
+                if (args.Length == 1 && args[0] == "--overlay-format-stdio")
+                    return RunOverlayFormatProbe();
                 RunStartupContextTests();
                 if (args.Length == 2 && args[0] == "--native-core-config-defaults")
                     return ExportNativeCoreConfigDefaults(args[1]);
@@ -103,10 +106,6 @@ namespace TigerClaw.Core.Tests
                 {
                     RunUiSnapshotTests();
                     return 0;
-                }
-                if (args.Length == 1 && args[0] == "--overlay-format-stdio")
-                {
-                    return RunOverlayFormatProbe();
                 }
                 if (args.Length == 1 && args[0] == "--sentence-lifecycle-tests")
                 {
@@ -388,7 +387,7 @@ namespace TigerClaw.Core.Tests
                 CandidateVisible = true,
                 InputCode = "abcd",
                 Candidates = new[] { "candidate" },
-                ShowInputCodeInCandidateWindow = false
+                CandidateLayout = 4
             };
 
             CandidateWindowViewModel nativeView = formatter.BuildViewModel(nativeState, showCandidates: true, includeAnnotations: false);
@@ -397,7 +396,7 @@ namespace TigerClaw.Core.Tests
             True(nativeView.DisplayText.StartsWith("abcd", StringComparison.Ordinal),
                 nameof(NativeHookAlwaysShowsInputCodeInCandidateWindow) + ".native_text");
 
-            nativeState.HideCandidateItems = true;
+            nativeState.CandidateLayout = 5;
             CandidateWindowViewModel nativeCodeOnlyView = formatter.BuildViewModel(nativeState, showCandidates: false, includeAnnotations: false);
             True(nativeCodeOnlyView.Mode == CandidateDisplayMode.CodeOnly,
                 nameof(NativeHookAlwaysShowsInputCodeInCandidateWindow) + ".native_code_only");
@@ -405,7 +404,7 @@ namespace TigerClaw.Core.Tests
                 nameof(NativeHookAlwaysShowsInputCodeInCandidateWindow) + ".native_code_only_text");
 
             nativeState.IsNativeHook = false;
-            nativeState.HideCandidateItems = false;
+            nativeState.CandidateLayout = 4;
             CandidateWindowViewModel tsfView = formatter.BuildViewModel(nativeState, showCandidates: true, includeAnnotations: false);
             True(tsfView.Mode == CandidateDisplayMode.CandidatesOnly,
                 nameof(NativeHookAlwaysShowsInputCodeInCandidateWindow) + ".tsf_mode");

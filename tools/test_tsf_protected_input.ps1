@@ -34,13 +34,14 @@ void ResetCapsCompensationState(const char*) { ++resets; }
 struct Probe {
  bool disabled = true;
  std::deque<int> _failedKeyQueue{1,2};
- bool response = true, event = true, refresh = true;
+ bool response = true, event = true, refresh = true, candidates = true;
  int _keyUpForwardBudget = 4, normalPath = 0;
  HWND _msgWndHandle = nullptr;
  BOOL _IsKeyboardDisabled(void*) { return disabled; }
  void _ClearPendingResponseCache() { response = false; }
  void _ClearPendingKeyEvent() { event = false; }
  void _CancelCompositionRefresh() { refresh = false; }
+ void _EndCandidateUi() { candidates = false; }
 '@
 $code += "BOOL _BypassProtectedInput(void* context) $bypass`n$methods`n};`n"
 $code += @'
@@ -51,7 +52,7 @@ int main() {
   Probe p; BOOL eaten = TRUE;
   Check((p.*key)(nullptr, 'A', 0, &eaten) == S_OK);
   Check(!eaten && !p.normalPath && p._failedKeyQueue.empty());
-  Check(!p.response && !p.event && !p.refresh && !p._keyUpForwardBudget);
+  Check(!p.response && !p.event && !p.refresh && !p.candidates && !p._keyUpForwardBudget);
   p.disabled = false;
   Check((p.*key)(nullptr, 'A', 0, &eaten) == S_OK && p.normalPath == 1);
  }

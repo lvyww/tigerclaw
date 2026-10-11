@@ -1,5 +1,16 @@
 # Native Overlay (mainline)
 
+## Candidate layout (2026-10-12)
+
+Settings now has one five-choice dropdown: horizontal with code, vertical with
+code, horizontal without code, vertical without code (default), and code only.
+The middle button cycles all five choices with a single configuration write.
+Code-only never expands candidates after a delay. The three old configuration
+switches and remembered per-orientation code preferences are removed without
+migration. The new `CandidateLayout` UI field requires a matching Core, Overlay,
+Dialog and Shared deployment; see `Protocol/ui_state.md`.
+WPF fallback also omits sentence indices, matching the native formatter.
+
 ## Candidate typography (2026-10-11)
 
 Sentence composition (state 5) always omits numeric indices, regardless of the

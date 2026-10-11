@@ -332,6 +332,7 @@ namespace TigerClaw.Dialog
 
         private void SetupDynamicEditors(Dictionary<string, string> config, bool fullPinyin)
         {
+            if (!config.ContainsKey(CandidateLayouts.ConfigKey)) config[CandidateLayouts.ConfigKey] = "4";
             if (!config.ContainsKey("开启打字音效(娱乐)")) config["开启打字音效(娱乐)"] = No;
             if (!config.ContainsKey(KeyKeySoundVolume)) config[KeyKeySoundVolume] = "30";
             if (!config.ContainsKey(KeyAnimation)) config[KeyAnimation] = Yes;
@@ -432,6 +433,17 @@ namespace TigerClaw.Dialog
 
         private FrameworkElement CreateDynamicEditor(string key, string value)
         {
+            if (key == CandidateLayouts.ConfigKey)
+            {
+                var combo = new ComboBox { Style = (Style)FindResource("FieldComboStyle"),
+                    HorizontalAlignment = HorizontalAlignment.Left };
+                foreach (string label in new[] { "横排带编码", "竖排带编码", "横排无编码", "竖排无编码", "仅编码" })
+                    combo.Items.Add(label);
+                combo.SelectedIndex = CandidateLayouts.Parse(value) - 1;
+                combo.SelectionChanged += OnAnyEditorChanged;
+                return combo;
+            }
+
             if (IsShortcutSetting(key))
             {
                 return CreateShortcutEditor(key, value);
@@ -1161,6 +1173,10 @@ namespace TigerClaw.Dialog
                     map[KeyAnimation] = animation.Enabled.IsChecked == true ? Yes : No;
                     map[KeyAnimationDuration] = animation.Duration.Text ?? string.Empty;
                 }
+                else if (entry.Key == CandidateLayouts.ConfigKey && entry.Editor is ComboBox layout)
+                {
+                    map[entry.Key] = CandidateLayouts.Format(layout.SelectedIndex + 1);
+                }
                 else if (entry.Editor is CheckBox cb)
                 {
                     map[entry.Key] = cb.IsChecked == true ? Yes : No;
@@ -1473,8 +1489,8 @@ namespace TigerClaw.Dialog
                     return "默认 3，范围 0～128；0 禁用自动选重。编码达到此码数的非首选单字可不输入选重键参与组句；只计算该词条的编码，不计数字、分号、引号选重键。完整输入的候选仍可手动选择，显式选重与首位词条不受限制，多字词沿用原有选重规则。";
                 case "TAB清屏":
                     return "Tab 键在对应场景下是否直接清屏。整句有候选时，Tab / Shift+Tab 仍遍历整句候选，不会清屏。";
-                case "竖排候选":
-                    return "候选窗改为竖排布局。";
+                case "候选布局":
+                    return "选择横排或竖排、是否显示编码；仅编码模式始终不展开候选。中键依次切换五种布局。";
                 case "显示候选序号":
                     return "在候选项前显示序号。";
                 case "显示注释":
@@ -1493,8 +1509,6 @@ namespace TigerClaw.Dialog
                     return "允许用单引号选择第三候选；整句模式下单引号仅在开启时写入编码。";
                 case "/输出顿号":
                     return "配置 / 键是否直接输出顿号。";
-                case "隐藏候选":
-                    return "隐藏候选窗口，只保留输入中的文字变化。";
                 case "候选窗动效":
                     return "动效时间控制候选窗移动、扩大和收缩，单位毫秒；上屏后驻留由单独选项控制。";
                 case KeyResidenceDuration:
@@ -1604,13 +1618,11 @@ namespace TigerClaw.Dialog
 
                 case KeyFont:
                 case "字体大小":
-                case "竖排候选":
+                case "候选布局":
                 case "每页候选个数":
-                case "候选窗显示编码":
                 case "显示候选序号":
                 case "显示注释":
                 case "显示拆分":
-                case "隐藏候选":
                 case "延时显示候选(毫秒)":
                 case KeyResidenceDuration:
                 case "延时展开注释和拆分(毫秒)":

@@ -67,7 +67,7 @@ struct CandidateFrameHoldProbe {
     ~CandidateFrameHoldProbe() {pending_probe::duringPresent={};pending_probe::candidate=nullptr;}
     void Install(State state) {
         state.caretX=caret.x;state.caretY=caret.y;state.caretHeight=20;
-        state.font=u"Segoe UI";state.fontSize=17;state.vertical=vertical;
+        state.font=u"Segoe UI";state.fontSize=17;state.candidateLayout = (vertical) ? (state.showCode() ? 2 : 4) : (state.showCode() ? 1 : 3);
         state.hideStatus=true;state.animationEnabled=false;state.animationDurationMs=200;
         state.candidateDelay=state.annotationDelay=0;
         if(pending_probe::withoutHint)state.candidateHoldWhilePending=false;
@@ -80,6 +80,17 @@ struct CandidateFrameHoldProbe {
         pending_probe::Check(++count<200,"Refresh loop did not settle");}}
     RECT Rect() {RECT rect{};pending_probe::Check(GetWindowRect(app.candidate_,&rect)!=FALSE,"Missing candidate geometry");return rect;}
     bool Visible() {return IsWindowVisible(app.candidate_)!=FALSE;}
+    static void LayoutCycle() {
+        CandidateFrameHoldProbe probe;
+        probe.app.state_.candidateLayout=4;
+        for(int expected:{5,1,2,3,4}) {
+            probe.app.Cycle();
+            pending_probe::Check(probe.app.state_.candidateLayout==expected,"middle-button five-layout cycle");
+        }
+        probe.app.layoutPending_=true;
+        probe.app.Cycle();
+        pending_probe::Check(probe.app.state_.candidateLayout==4,"pending layout write blocks duplicate clicks");
+    }
     void Held(const RECT& before,unsigned frames,std::size_t records) {
         auto rect=Rect();
         pending_probe::Check(Visible() && EqualRect(&rect,&before) && pending_probe::published==frames,
@@ -90,7 +101,7 @@ struct CandidateFrameHoldProbe {
     static void BlankResidence() {
         using namespace pending_probe;
         State ready;ready.isChinese=true;ready.composition=2;ready.candidateVisible=true;
-        ready.input=u"ab";ready.candidates={u"Alpha",u"Beta"};ready.showCode=true;
+        ready.input=u"ab";ready.candidates={u"Alpha",u"Beta"};ready.candidateLayout = ready.vertical() ? 2 : 1;
         ready.candidateFrameSession=u"before";ready.residenceDurationMs=1500;
         auto commit=[&] {
             State idle=ready;idle.composition=1;idle.candidateVisible=false;
@@ -141,7 +152,7 @@ struct CandidateFrameHoldProbe {
         }
         {
             CandidateFrameHoldProbe p;p.Install(ready);p.Refresh();p.Install(commit());p.Refresh();
-            auto next=ready;next.candidateFrameSession=u"delayed-input";next.showCode=false;
+            auto next=ready;next.candidateFrameSession=u"delayed-input";next.candidateLayout = next.vertical() ? 4 : 3;
             p.Install(next);p.app.state_.candidateDelay=200;p.app.state_.animationEnabled=true;
             p.Refresh();Check(p.Visible() && p.app.blankResidence_,"Reveal delay hid resident frame");
             now+=199;p.Refresh();Check(p.Visible() && p.app.blankResidence_,"Reveal delay ended early");
@@ -189,7 +200,7 @@ struct CandidateFrameHoldProbe {
             if(cancel==1)p.app.state_.candidateFrameSession=u"focus-changed";
             if(cancel==2)p.app.state_.isChinese=false;
             if(cancel==3)p.app.state_.isOff=true;
-            if(cancel==4)p.app.state_.hideCandidates=true;
+            if(cancel==4)p.app.state_.candidateLayout = 5;
             if(cancel==5)p.app.frameForeground_=reinterpret_cast<HWND>(-1);
             if(cancel==6)p.app.state_.caretX=-300000;
             if(cancel==7)p.app.state_.residenceDurationMs=0;
@@ -234,8 +245,8 @@ struct CandidateFrameHoldProbe {
             }
             for(bool codeOnly:{false,true})for(int animation:{0,1,2}) {
                 CandidateFrameHoldProbe p(vertical);p.Install(wire.at("ready"));p.Refresh();
-                auto code=wire.at("ready");code.showCode=true;code.fontSize=9;
-                if(codeOnly)code.hideCandidates=true;else code.candidates.clear();
+                auto code=wire.at("ready");code.candidateLayout = code.vertical() ? 2 : 1;code.fontSize=9;
+                if(codeOnly)code.candidateLayout = 5;else code.candidates.clear();
                 p.Install(code);p.app.state_.fontSize=9;p.app.state_.animationEnabled=animation!=0;p.Refresh();
                 if(animation) {Check(p.app.transition_.Active(),"Code animation did not start");p.Tick(animation==1?50:250);}
                 Check(p.Visible() && p.app.frameCanBeHeld_,"Published code-only frame lost hold eligibility");
@@ -263,7 +274,7 @@ struct CandidateFrameHoldProbe {
                 p.Install(wire.at("ready"));p.Refresh();Check(p.Visible(),"First result did not show");++cases;
             }
             {
-                CandidateFrameHoldProbe p(vertical);auto code=wire.at("ready");code.candidates.clear();code.showCode=true;
+                CandidateFrameHoldProbe p(vertical);auto code=wire.at("ready");code.candidates.clear();code.candidateLayout = code.vertical() ? 2 : 1;
                 p.Install(code);p.Refresh();Check(p.Visible() && p.app.frameCanBeHeld_,"Published input-only frame was not eligible");
                 auto before=p.Rect();auto frames=published;auto records=p.app.placement_.RecordCount();
                 p.Install(wire.at("pending"));p.Refresh();p.Held(before,frames,records);++cases;
@@ -313,7 +324,7 @@ struct CandidateFrameHoldProbe {
         {
             CandidateFrameHoldProbe p;p.Install(wire.at("previous_commit"));p.Refresh();
             p.Install(wire.at("new_commit_pending"));p.Refresh();
-            p.Install(wire.at("new_commit_ready"));p.app.state_.candidateDelay=200;p.app.state_.showCode=false;p.Refresh();
+            p.Install(wire.at("new_commit_ready"));p.app.state_.candidateDelay=200;p.app.state_.candidateLayout = p.app.state_.vertical() ? 4 : 3;p.Refresh();
             Check(!p.Visible(),"Coalesced session inherited the old reveal clock");
             p.Tick(201);p.app.Message(p.app.candidate_,WM_TIMER,1,0);
             Check(p.Visible(),"Fresh session did not reveal candidates");++cases;
@@ -368,7 +379,7 @@ struct CandidateFrameHoldProbe {
             if(invalid==0)p.app.state_.caretX=p.app.state_.caretY=0;
             if(invalid==1)++p.app.frameDpi_; // controlled monitor/DPI API mismatch
             if(invalid==2)--p.app.frameWork_.bottom;
-            if(invalid==3)p.app.state_.hideCandidates=true;
+            if(invalid==3)p.app.state_.candidateLayout = 5;
             p.Refresh();Check(!p.Visible(),"Invalid geometry/explicit hiding was bypassed");++cases;
         }
         {
@@ -400,14 +411,15 @@ int main(int argc,char** argv) {
         }
         std::map<std::string,tiger::overlay::State> wire;
         if(std::string(argv[1])=="--synthetic") {
+            tiger::overlay::CandidateFrameHoldProbe::LayoutCycle();
             tiger::overlay::State ready;ready.isChinese=true;ready.composition=5;
             ready.candidateVisible=true;ready.input=u"abcd";ready.candidates={u"Alpha",u"Beta"};
-            ready.candidateFrameSession=u"session";ready.showCode=false;
+            ready.candidateFrameSession=u"session";ready.candidateLayout = ready.vertical() ? 4 : 3;
             auto pending=ready;pending.candidateVisible=false;pending.candidates.clear();
             pending.candidateHoldWhilePending=true;pending.input+=u"e";
             wire["ready"]=wire["completed_candidates"]=ready;
             wire["pending"]=wire["pending_after_empty"]=wire["initial_pending"]=pending;
-            auto empty=ready;empty.candidates.clear();empty.showCode=true;wire["completed_empty"]=empty;
+            auto empty=ready;empty.candidates.clear();empty.candidateLayout = empty.vertical() ? 2 : 1;wire["completed_empty"]=empty;
             auto hidden=ready;hidden.input.clear();hidden.candidates.clear();hidden.candidateVisible=false;
             for(auto name:{"cancel","focus","inactive","english","disabled"})wire[name]=hidden;
             for(std::string name:{"commit","cancel","escape","backspace"}) {

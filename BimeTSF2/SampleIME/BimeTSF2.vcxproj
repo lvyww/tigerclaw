@@ -47,6 +47,7 @@
     <ClInclude Include="EnumDisplayAttributeInfo.h" />
     <ClInclude Include="Globals.h" />
     <ClInclude Include="LanguageBar.h" />
+    <ClInclude Include="CandidateUi.h" />
     <ClInclude Include="PipeClient.h" />
     <ClInclude Include="Private.h" />
     <ClInclude Include="RegKey.h" />

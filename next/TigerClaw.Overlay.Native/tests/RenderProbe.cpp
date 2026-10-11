@@ -49,7 +49,7 @@ static long long Now() { LARGE_INTEGER n{}; QueryPerformanceCounter(&n); return 
 static State Base()
 {
     State state;
-    state.candidateVisible = state.isChinese = state.showCode = state.showIndex = true;
+    state.candidateVisible = state.isChinese = state.showIndex = true; state.candidateLayout = 1;
     state.font = u"Microsoft YaHei"; state.fontSize = 20; state.input = u"lets";
     state.candidates = {u"\u800c\u4e09", u"\u65cb", u"\u800c\u758b", u"\U00020000"};
     state.annotations = {u"le ts", u"lets", u"le ts", u"Unicode"};
@@ -74,7 +74,7 @@ int main(int argc, char** argv)
             auto state = Base(); state.composition = 6;
             for (bool vertical : {false, true}) for (UINT dpi : {96u, 144u, 192u})
             {
-                state.vertical = vertical;
+                state.candidateLayout = (vertical) ? (state.showCode() ? 2 : 4) : (state.showCode() ? 1 : 3);
                 auto display = Format(state);
                 renderer.Prepare(state, display, dpi);
                 for (int i = 0; i < static_cast<int>(display.candidateRanges.size()); ++i)
@@ -92,7 +92,7 @@ int main(int argc, char** argv)
             state.showIndex = false; state.composition = 5;
             for (bool vertical : {false, true})
             {
-                state.vertical = vertical;
+                state.candidateLayout = (vertical) ? (state.showCode() ? 2 : 4) : (state.showCode() ? 1 : 3);
                 auto display = Format(state);
                 renderer.Prepare(state, display, 144);
                 if (std::abs(RendererProbe::FontSizeAt(renderer, display.candidateRanges[0].first) - 20.f) > .001f ||
@@ -167,7 +167,7 @@ int main(int argc, char** argv)
             if (pixels != RendererProbe::Pixels(renderer)) throw std::runtime_error("Target recreation changed pixels");
             state.fontSize = 30; draw(); check("formats", 2); check("layouts", 3);
             state.font = u"Consolas"; draw(); check("formats", 3);
-            state.vertical = true; draw(); check("formats", 4);
+            state.candidateLayout = state.showCode() ? 2 : 4; draw(); check("formats", 4);
             draw(144, true); check("formats", 5);
             draw(192, true); check("formats", 5);
             result["cache_checks"] = "passed";
@@ -183,12 +183,12 @@ int main(int argc, char** argv)
                     for (int variant = 0; variant < 12; ++variant)
                     {
                         auto state = Base(); state.theme = theme;
-                        state.vertical = variant % 2; state.selected = variant % 5 - 1;
+                        state.candidateLayout = (variant % 2) ? (state.showCode() ? 2 : 4) : (state.showCode() ? 1 : 3); state.selected = variant % 5 - 1;
                         state.fontSize = variant == 6 ? 31.5 : variant == 7 ? 12 : 20;
                         if (variant == 2) state.font = u"Consolas";
                         if (variant == 3) state.font = u"#missing-private-font";
                         if (variant == 4) state.input = u"longer_input_abcdefghijk";
-                        if (variant == 5) { state.hideCandidates = true; state.input = u"a"; }
+                        if (variant == 5) { state.candidateLayout = 5; state.input = u"a"; }
                         bool status = variant >= 8;
                         state.isChinese = variant != 9; state.nativeHook = variant == 10; state.isOff = variant == 11;
                         auto display = Format(state);

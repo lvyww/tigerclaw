@@ -12,8 +12,12 @@ namespace tiger::overlay
     {
         bool isOff = false, isChinese = false, candidateVisible = false;
         bool candidateHoldWhilePending = false;
-        bool vertical = false, showIndex = false, hideCandidates = false;
-        bool hideStatus = false, showCode = false, nativeHook = false;
+        int candidateLayout = 4;
+        bool vertical() const { return candidateLayout == 2 || candidateLayout == 4; }
+        bool showCode() const { return candidateLayout == 1 || candidateLayout == 2 || candidateLayout == 5; }
+        bool hideCandidates() const { return candidateLayout == 5; }
+        bool showIndex = false;
+        bool hideStatus = false, nativeHook = false;
         Text status, input, codeMask, theme, font;
         Text candidateFrameSession, candidateSelectionToken;
         std::vector<Text> candidates, annotations;
@@ -48,7 +52,7 @@ namespace tiger::overlay
         return state.candidateHoldWhilePending && !state.candidateVisible &&
             state.isChinese && !state.isOff && (state.composition == 5 || state.composition == 6) &&
             !state.input.empty() && state.candidates.empty() &&
-            !(state.hideCandidates && state.candidateDelay <= 0);
+            !state.hideCandidates();
     }
     class Reveal
     {

@@ -1,6 +1,7 @@
 # BimeIPC 消息协议
 
-实现入口：`next/TigerClaw.Core/ProtocolHandler.cs`。修改协议时必须同步 TSF、Dialog
+主线实现入口：`next/TigerClaw.Core.Native/RuntimeProtocol.cpp`；C# 历史参考为
+`next/TigerClaw.Core/ProtocolHandler.cs`。修改协议时必须同步 TSF、Dialog
 或 Native Hook 调用方。
 
 ## 传输
@@ -17,6 +18,58 @@ TSF 与 Native Hook 的 `key` 请求可携带 `client_session` + `event_id`。�
 复用这两个值；Core 返回首次缓存响应，不再次执行按键。
 
 ## 消息清单
+
+### 可选候选快照（candidate_ui API 1）
+
+新版 TSF 在 `key`、`query_state` 请求中附加 `candidate_ui_version: 1`、
+`candidate_context`（本地焦点/连接代数的十进制字符串），以及已持有快照的
+`candidate_instance`、`candidate_version`。旧 TSF、Hook 和 Overlay 不请求此扩展。
+不提供扩展的旧 Core 继续正常输入，新 TSF 不建立候选 UIElement。
+
+响应的 `candidate_ui` 示例：
+
+```json
+{
+  "api": 1,
+  "instance": "Core随机实例标识",
+  "version": "12",
+  "context": "3",
+  "menu": {
+    "available": true,
+    "composing": true,
+    "pending": false,
+    "raw": "aa",
+    "strings": ["候选一", "候选二", "候选三"],
+    "pages": [0, 2],
+    "page": 1,
+    "selection": 2
+  }
+}
+```
+
+`version` 是同一 Core 实例内递增的菜单版本字符串；正文不变且请求版本匹配时省略
+`menu`，其余身份字段仍返回。`context` 原样回传并保留在按键重放缓存中，TSF 拒绝
+前一焦点代数的重放响应、较旧版本和已经被新版快照取代的按键缓存。实例改变时不沿用
+旧版菜单。失焦、停用、取消、断线清除本地快照；Core 焦点隐藏期间不导出旧候选。
+
+所有索引从零开始。`strings` 是实际显示文本；普通/快符/拼音反查包含全部可翻页候选，
+`pages` 给出每页起始索引，`selection` 是全局索引。整句仅导出当前真正可选的可见菜单，
+只有一页，不导出解码内部候选池。快照复用当前捕获的状态与显示转换，不重新解码、
+翻页、提交或学习。`pending` 时清空候选；空码也返回空字符串数组和空分页数组。
+`raw` 是可选诊断字段；不可用菜单可省略。随机短语显示使用提交随机数状态的副本，
+额外候选查询不会消耗后续提交的随机数。
+
+候选文本 JSON 预算为 900,000 字节，分页最多 4096 页；超限/转换失败返回
+`available: false` 的完整空菜单，正常按键响应和 Overlay 保留。预算还扣除本次响应的
+提交及组合文本大小；大提交和大剩余菜单同时出现时，优先保留提交，候选可在后续查询
+预算足够时恢复。TSF 逐段接收换行帧，
+总时限沿用该请求时限，单帧最多 1 MiB；不接受截断 JSON。非法候选结构只停用候选
+投影，不丢弃已经收到的正常提交文本。COM getter 只读本地快照，无逐候选 IPC。
+刷新复用既有计时器：解码等待 20 ms、稳定组合 120 ms；普通组合有候选扩展时也维持
+检查，空闲停止。此扩展没有用户设置。
+
+这是候选数据兼容接口，不是完整 UILess 支持；双窗、`Show` 和鼠标能力边界见
+[TSF bridge notes](../BimeTSF2/SampleIME/BRIDGE_ONLY_NOTES.md)。
 
 `show_menu` 不增加 JSON 字段。TSF 在发送前通过连接的管道取得 Core PID，
 调用 `AllowSetForegroundWindow` 传递本次点击的前台权限；Core 在触发菜单事件前
@@ -52,6 +105,13 @@ Native Overlay 尝试取得前台，但菜单显示不以授权成功为前提�
 | `hook_native_disabled` | Hook | 否 | Native Hook 禁用状态 |
 
 未知消息返回 `success:false` 的普通 `response`，不使用独立错误消息类型。
+
+候选布局使用单一配置项 `候选布局`，`set_config` 的字符串值只接受 `1`～`5`：
+横排带编码、竖排带编码、横排无编码、竖排无编码、仅编码。默认值为 `4`。
+旧配置项 `竖排候选`、`候选窗显示编码`、`隐藏候选` 已删除，不迁移旧值；
+配置文件中缺失或无效的新值回落到 `4`，设置请求中的无效值返回失败。
+候选窗中键按上述顺序循环，每次只发送一条 `set_config`。
+输出动作 `{隐藏候选}` 仍有效，在仅编码 `5` 与默认布局 `4` 之间切换。
 
 ## `key`
 

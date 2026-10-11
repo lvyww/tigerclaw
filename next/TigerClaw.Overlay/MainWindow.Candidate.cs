@@ -1,3 +1,4 @@
+using TigerClaw.Shared;
 using System;
 using System.Globalization;
 using System.Windows;
@@ -501,7 +502,7 @@ namespace TigerClaw.Overlay
                 return;
             }
 
-            CandidateCycleMode nextMode = GetNextCandidateCycleMode();
+            int nextMode = GetNextCandidateCycleMode();
             if (await TryApplyCandidateCycleModeAsync(nextMode))
             {
                 ApplyUiState(_sessionState.Update(_state));
@@ -529,107 +530,15 @@ namespace TigerClaw.Overlay
             e.Handled = true;
         }
 
-        private CandidateCycleMode GetNextCandidateCycleMode()
+        private int GetNextCandidateCycleMode() => CandidateLayouts.Next(_state.CandidateLayout);
+
+        private async System.Threading.Tasks.Task<bool> TryApplyCandidateCycleModeAsync(int mode)
         {
-            if (_state.HideCandidateItems && CandidateTextFormatter.ShouldShowInputCode(_state))
-            {
-                return CandidateCycleMode.Horizontal;
-            }
-
-            return _state.VerticalCandidates
-                ? CandidateCycleMode.CodeOnly
-                : CandidateCycleMode.Vertical;
-        }
-
-        private async System.Threading.Tasks.Task<bool> TryApplyCandidateCycleModeAsync(CandidateCycleMode mode)
-        {
-            SyncNormalCandidateModePreferences();
-
-            switch (mode)
-            {
-                case CandidateCycleMode.Horizontal:
-                    if (!await TrySetConfigValueAsync(ConfigHideCandidates, NoValue))
-                    {
-                        return false;
-                    }
-
-                    if (!await TrySetConfigValueAsync(ConfigVerticalCandidates, NoValue))
-                    {
-                        return false;
-                    }
-
-                    if (!await TrySetConfigValueAsync(ConfigShowInputCodeInCandidateWindow, _horizontalShowCodePreference ? YesValue : NoValue))
-                    {
-                        return false;
-                    }
-
-                    _state.HideCandidateItems = false;
-                    _state.VerticalCandidates = false;
-                    _state.ShowInputCodeInCandidateWindow = _horizontalShowCodePreference;
-                    return true;
-
-                case CandidateCycleMode.Vertical:
-                    if (!await TrySetConfigValueAsync(ConfigHideCandidates, NoValue))
-                    {
-                        return false;
-                    }
-
-                    if (!await TrySetConfigValueAsync(ConfigVerticalCandidates, YesValue))
-                    {
-                        return false;
-                    }
-
-                    if (!await TrySetConfigValueAsync(ConfigShowInputCodeInCandidateWindow, _verticalShowCodePreference ? YesValue : NoValue))
-                    {
-                        return false;
-                    }
-
-                    _state.HideCandidateItems = false;
-                    _state.VerticalCandidates = true;
-                    _state.ShowInputCodeInCandidateWindow = _verticalShowCodePreference;
-                    return true;
-
-                case CandidateCycleMode.CodeOnly:
-                    if (!await TrySetConfigValueAsync(ConfigShowInputCodeInCandidateWindow, YesValue))
-                    {
-                        return false;
-                    }
-
-                    if (!await TrySetConfigValueAsync(ConfigHideCandidates, YesValue))
-                    {
-                        return false;
-                    }
-
-                    _state.HideCandidateItems = true;
-                    _state.ShowInputCodeInCandidateWindow = true;
-                    return true;
-
-                default:
-                    return false;
-            }
-        }
-
-        private static async System.Threading.Tasks.Task<bool> TrySetConfigValueAsync(string key, string value)
-        {
-            CoreRequestResult result = await CorePipeClient.SetConfigValueAsync(key, value, 1000);
-            return result.Success;
-        }
-
-        private void SyncNormalCandidateModePreferences()
-        {
-            if (_state.HideCandidateItems)
-            {
-                return;
-            }
-
-            if (_state.VerticalCandidates)
-            {
-                _verticalShowCodePreference = _state.ShowInputCodeInCandidateWindow;
-            }
-            else
-            {
-                _horizontalShowCodePreference = _state.ShowInputCodeInCandidateWindow;
-            }
+            CoreRequestResult result = await CorePipeClient.SetConfigValueAsync(
+                CandidateLayouts.ConfigKey, CandidateLayouts.Format(mode), 1000);
+            if (!result.Success) return false;
+            _state.CandidateLayout = mode;
+            return true;
         }
     }
 }

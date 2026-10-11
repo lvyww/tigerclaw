@@ -60,7 +60,7 @@ struct PlacementPublicationProbe
         MONITORINFO info{};info.cbSize=sizeof(info);
         Check(GetMonitorInfoW(MonitorFromPoint({0,0},MONITOR_DEFAULTTOPRIMARY),&info)!=FALSE,"test work area");work=info.rcWork;
         auto& s=app.state_;
-        s.candidateVisible=s.isChinese=s.vertical=true;s.hideStatus=true;s.showCode=false;
+        s.candidateVisible=s.isChinese=true; s.candidateLayout=4;s.hideStatus=true;s.candidateLayout = s.vertical() ? 4 : 3;
         s.font=u"Segoe UI";s.fontSize=17;s.animationEnabled=false;s.caretHeight=20;
         s.caretX=work.left+100;s.caretY=work.top+200;s.input=u"ab";s.candidates={u"candidate"};
         app.Refresh(true);
@@ -198,7 +198,7 @@ struct PlacementPublicationProbe
         }
         {
             PlacementPublicationProbe p;p.Seed();p.Hide();p.Rows(1);
-            p.app.state_.candidateDelay=100;p.app.state_.showCode=false;p.app.state_.candidateVisible=true;
+            p.app.state_.candidateDelay=100;p.app.state_.candidateLayout = p.app.state_.vertical() ? 4 : 3;p.app.state_.candidateVisible=true;
             p.app.Refresh(false);
             Check(!IsWindowVisible(p.app.candidate_) && p.app.placement_.RecordCount()==1,"unrevealed candidates aged history");
             nowTick+=100;p.app.Refresh(false);p.Above();Check(p.app.placement_.RecordCount()==2,"delayed first frame count");++cases;

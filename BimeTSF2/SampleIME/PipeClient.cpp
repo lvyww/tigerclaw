@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "../../third_party/llama.cpp/vendor/nlohmann/json.hpp"
 
 static LONG ExtractSeqFromJson(const char *jsonMessage)
 {
@@ -181,6 +182,8 @@ BOOL CPipeClient::Connect()
 
 void CPipeClient::Disconnect()
 {
+    ResetCandidates();
+    _readAhead.clear();
     if (_hPipe != INVALID_HANDLE_VALUE)
     {
         CloseHandle(_hPipe);
@@ -188,6 +191,7 @@ void CPipeClient::Disconnect()
     }
     _isConnected = FALSE;
     _helloDone = FALSE;
+    if (candidateDisconnected) candidateDisconnected();
 }
 
 BOOL CPipeClient::IsConnected() const
@@ -330,6 +334,23 @@ HRESULT CPipeClient::SendMessageAndWait(const char *jsonMessage, _Out_ BimeRespo
         return E_INVALIDARG;
     }
 
+    pResponse->candidates.reset();
+    const ULONGLONG candidateGeneration = _candidateGeneration;
+    pResponse->candidateGeneration = candidateGeneration;
+    std::string extendedMessage;
+    const bool wantsCandidates = strstr(jsonMessage,"\"type\":\"key\"") || strstr(jsonMessage,"\"type\":\"query_state\"");
+    if (wantsCandidates)
+    {
+        extendedMessage=jsonMessage;
+        auto end=extendedMessage.rfind('}');
+        if (end!=std::string::npos)
+        {
+            std::string fields=",\"candidate_ui_version\":1";
+            fields+=",\"candidate_context\":\""+std::to_string(candidateGeneration)+"\"";
+            if (_candidates) fields+=",\"candidate_instance\":\""+_candidates->instance+"\",\"candidate_version\":\""+_candidates->version+"\"";
+            extendedMessage.insert(end,fields); jsonMessage=extendedMessage.c_str();
+        }
+    }
     CaptureDifferentialMessage(jsonMessage);
 
     pResponse->seq = -1;
@@ -411,8 +432,8 @@ HRESULT CPipeClient::SendMessageAndWait(const char *jsonMessage, _Out_ BimeRespo
             remaining = static_cast<DWORD>(deadline - now);
         }
 
-        char responseBuffer[BIME_PIPE_BUFFER_SIZE];
-        if (!ReadResponse(responseBuffer, sizeof(responseBuffer), remaining))
+        std::string responseFrame;
+        if (!ReadFrame(responseFrame, remaining))
         {
             DWORD readError = GetLastError();
             LogPipeFailure("SendMessageAndWait.ReadResponse", readError, seq);
@@ -426,6 +447,7 @@ HRESULT CPipeClient::SendMessageAndWait(const char *jsonMessage, _Out_ BimeRespo
             return (readError == ERROR_TIMEOUT) ? HRESULT_FROM_WIN32(ERROR_TIMEOUT) : E_FAIL;
         }
 
+        const char* responseBuffer=responseFrame.c_str();
         LONG responseSeq = ExtractSeqFromJson(responseBuffer);
         if (seq >= 0 && responseSeq >= 0 && responseSeq != seq)
         {
@@ -438,6 +460,7 @@ HRESULT CPipeClient::SendMessageAndWait(const char *jsonMessage, _Out_ BimeRespo
             Global::LogToFile("CPipeClient: ParseResponse failed seq=%ld payload=%s", seq, responseBuffer);
             return E_FAIL;
         }
+        if (wantsCandidates) ParseCandidates(responseBuffer,pResponse,candidateGeneration);
 
         if (seq >= 0)
         {
@@ -845,12 +868,19 @@ BOOL CPipeClient::ReadResponse(_Out_writes_bytes_(bufferSize) char *buffer, DWOR
                 return FALSE;
             }
 
-            if (!GetOverlappedResult(_hPipe, &overlapped, &bytesRead, FALSE))
+            if (!GetOverlappedResult(_hPipe, &overlapped, &bytesRead, FALSE) && GetLastError()!=ERROR_MORE_DATA)
             {
                 LogPipeFailure("ReadResponse.GetOverlappedResult", GetLastError(), -1);
                 CloseHandle(overlapped.hEvent);
                 return FALSE;
             }
+        }
+        else if (err==ERROR_MORE_DATA)
+        {
+            // Retrieve the completed partial count from the OVERLAPPED, even
+            // when ReadFile returned ERROR_MORE_DATA synchronously.
+            if (!GetOverlappedResult(_hPipe,&overlapped,&bytesRead,FALSE) && GetLastError()!=ERROR_MORE_DATA)
+            { CloseHandle(overlapped.hEvent); return FALSE; }
         }
         else
         {
@@ -868,6 +898,100 @@ BOOL CPipeClient::ReadResponse(_Out_writes_bytes_(bufferSize) char *buffer, DWOR
     }
     buffer[bytesRead] = '\0';
     return TRUE;
+}
+
+BOOL CPipeClient::ReadFrame(std::string& frame, DWORD timeoutMs)
+{
+    const auto started=GetTickCount64();
+    for (;;)
+    {
+        auto end=_readAhead.find('\n');
+        if (end!=std::string::npos)
+        {
+            frame=_readAhead.substr(0,end);
+            _readAhead.erase(0,end+1);
+            return TRUE;
+        }
+        char chunk[BIME_PIPE_BUFFER_SIZE];
+        if (!ReadResponse(chunk,sizeof(chunk),RemainingPipeBudget(started,timeoutMs))) return FALSE;
+        _readAhead+=chunk;
+        auto newline=_readAhead.find('\n');
+        if ((newline==std::string::npos ? _readAhead.size() : newline+1)>1024*1024)
+        { Disconnect(); SetLastError(ERROR_BUFFER_OVERFLOW); return FALSE; }
+    }
+}
+
+void CPipeClient::ParseCandidates(const char* bytes, BimeResponse* response, ULONGLONG generation)
+{
+    response->candidates.reset();
+    if (generation!=_candidateGeneration) return;
+    try
+    {
+        auto root=nlohmann::json::parse(bytes);
+        if (!root.contains("candidate_ui")) { _candidates.reset(); return; }
+        const auto& data=root.at("candidate_ui");
+        if (data.at("api")!=1) throw std::runtime_error("Candidate API");
+        if (data.at("context").get<std::string>()!=std::to_string(generation))
+        { response->candidateGeneration=0; return; }
+        auto next=std::make_shared<CandidateSnapshot>();
+        next->instance=data.at("instance").get<std::string>();
+        next->version=data.at("version").get<std::string>();
+        auto decimal=[](const std::string& text) {
+            return !text.empty() && text.size()<=20 && text.find_first_not_of("0123456789")==std::string::npos;
+        };
+        if (next->instance.empty() || next->instance.size()>128 ||
+            next->instance.find_first_not_of("0123456789abcdefABCDEF-")!=std::string::npos || !decimal(next->version))
+            throw std::runtime_error("Candidate identity");
+        auto version=std::stoull(next->version);
+        if (_candidates && next->instance==_candidates->instance && version<std::stoull(_candidates->version))
+        { response->candidateGeneration=0; return; }
+        if (!data.contains("menu"))
+        {
+            if (!_candidates || next->instance!=_candidates->instance || next->version!=_candidates->version)
+                throw std::runtime_error("Missing candidate menu");
+            response->candidates=_candidates; return;
+        }
+        const auto& menu=data.at("menu");
+        if (!menu.at("strings").is_array() || !menu.at("pages").is_array()) throw std::runtime_error("Candidate arrays");
+        next->generation=generation;
+        next->available=menu.at("available").get<bool>();
+        next->composing=menu.at("composing").get<bool>();
+        next->pending=menu.at("pending").get<bool>();
+        auto number=[](const nlohmann::json& value)->UINT {
+            if (!value.is_number_unsigned() || value.get<unsigned long long>()>UINT_MAX)
+                throw std::runtime_error("Candidate index");
+            return value.get<UINT>();
+        };
+        next->page=number(menu.at("page")); next->selection=number(menu.at("selection"));
+        for (const auto& value:menu.at("strings"))
+        {
+            auto utf8=value.get<std::string>();
+            int count=MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,utf8.data(),static_cast<int>(utf8.size()),nullptr,0);
+            if (!count && !utf8.empty()) throw std::runtime_error("Candidate UTF8");
+            std::wstring text(count,L'\0');
+            if (count) MultiByteToWideChar(CP_UTF8,MB_ERR_INVALID_CHARS,utf8.data(),static_cast<int>(utf8.size()),&text[0],count);
+            next->strings.push_back(std::move(text));
+        }
+        for (const auto& value:menu.at("pages")) next->pages.push_back(number(value));
+        if (next->strings.empty())
+        { if (!next->pages.empty() || next->page || next->selection) throw std::runtime_error("Empty candidate menu"); }
+        else
+        {
+            if (!next->available || !next->composing || next->pending || next->pages.empty() || next->pages.size()>4096 ||
+                next->pages[0]!=0 || next->page>=next->pages.size() || next->selection>=next->strings.size())
+                throw std::runtime_error("Candidate range");
+            for (size_t i=0;i<next->pages.size();++i)
+            {
+                auto end=i+1<next->pages.size() ? next->pages[i+1] : next->strings.size();
+                if (end<=next->pages[i] || end>next->strings.size() || end-next->pages[i]>100)
+                    throw std::runtime_error("Candidate pages");
+            }
+            auto end=next->page+1<next->pages.size() ? next->pages[next->page+1] : next->strings.size();
+            if (next->selection<next->pages[next->page] || next->selection>=end) throw std::runtime_error("Candidate selection");
+        }
+        _candidates=next; response->candidates=std::move(next);
+    }
+    catch (...) { _candidates.reset(); response->candidates.reset(); }
 }
 
 BOOL CPipeClient::ParseResponse(const char *json, _Out_ BimeResponse *pResponse)

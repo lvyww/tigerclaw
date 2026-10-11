@@ -64,7 +64,6 @@ namespace TigerClaw.Core
         internal const int DefaultSentenceAutoSelectMinCodeLength = 3;
         private const string KeyCnUseEnPunc = "\u4e2d\u6587\u72b6\u6001\u4e0b\u4f7f\u7528\u82f1\u6587\u6807\u70b9"; // unicode: 涓枃鐘舵€佷笅浣跨敤鑻辨枃鏍囩偣
 
-        private const string KeyVerticalCandidates = "\u7ad6\u6392\u5019\u9009"; // unicode: 绔栨帓鍊欓€?
         private const string KeyShowCandidateIndex = "\u663e\u793a\u5019\u9009\u5e8f\u53f7"; // unicode: 鏄剧ず鍊欓€夊簭鍙?
         private const string KeyBackQuery = "`\u952e\u62fc\u97f3\u53cd\u67e5"; // unicode: `閿嫾闊冲弽鏌?
         private const string KeyShowComment = "\u663e\u793a\u6ce8\u91ca"; // unicode: 鏄剧ず娉ㄩ噴
@@ -79,8 +78,6 @@ namespace TigerClaw.Core
         private const string KeyQuote3 = "\u5f15\u53f7\u4e09\u9009"; // unicode: 寮曞彿涓夐€?
         private const string KeySlashDunhao = "/\u8f93\u51fa\u987f\u53f7"; // unicode: /杈撳嚭椤垮彿
 
-        private const string KeyHideCandidate = "\u9690\u85cf\u5019\u9009"; // unicode: 闅愯棌鍊欓€?
-        private const string KeyShowInputCodeInCandidateWindow = "\u5019\u9009\u7a97\u663e\u793a\u7f16\u7801"; // unicode: ???????
         private const string KeyCodeMasking = "\u7f16\u7801\u4f2a\u88c5"; // unicode: 缂栫爜浼
 
         private const string KeyClearOnNoCode = "\u7a7a\u7801\u81ea\u52a8\u6e05\u5c4f"; // unicode: 绌虹爜鑷姩娓呭睆
@@ -130,9 +127,12 @@ namespace TigerClaw.Core
 
         private static readonly string Yes = "\u662f"; // unicode: 鏄?
         private static readonly string No = "\u5426"; // unicode: 鍚?
+        private const string KeyCandidateLayout = "候选布局";
+
         private static readonly KeyValuePair<string, string>[] DefaultConfigPairs = new[]
 
         {
+            new KeyValuePair<string, string>(KeyCandidateLayout, "4"),
 
             new KeyValuePair<string, string>(KeyAutoStart, Yes),
 
@@ -170,7 +170,6 @@ namespace TigerClaw.Core
 
             new KeyValuePair<string, string>(KeyTabClear, Yes),
 
-            new KeyValuePair<string, string>(KeyVerticalCandidates, Yes),
 
             new KeyValuePair<string, string>(KeyShowCandidateIndex, Yes),
 
@@ -197,9 +196,7 @@ namespace TigerClaw.Core
 
             new KeyValuePair<string, string>(KeySlashDunhao, Yes),
 
-            new KeyValuePair<string, string>(KeyHideCandidate, No),
 
-            new KeyValuePair<string, string>(KeyShowInputCodeInCandidateWindow, No),
 
             new KeyValuePair<string, string>(KeyCodeMasking, string.Empty),
 
@@ -448,6 +445,7 @@ namespace TigerClaw.Core
 
                 }
 
+                merged[KeyCandidateLayout] = CandidateLayouts.Format(CandidateLayouts.Parse(merged[KeyCandidateLayout]));
                 merged[KeyCodeRoot] = NormalizePathSetting(merged[KeyCodeRoot]);
 
                 lock (_lock)
@@ -1508,13 +1506,10 @@ namespace TigerClaw.Core
 
         public bool GetAutoSwitchSystemLanguageEnabled() => GetBool(KeyAutoSwitchSystemLanguage, true);
 
-        public bool GetVerticalCandidates() => GetBool(KeyVerticalCandidates, true);
 
         public bool GetShowCandidateIndex() => GetBool(KeyShowCandidateIndex, true);
 
-        public bool GetHideCandidateItems() => GetBool(KeyHideCandidate, false);
 
-        public bool GetShowInputCodeInCandidateWindow() => GetBool(KeyShowInputCodeInCandidateWindow, false);
         public bool GetHideStatusBar() => GetBool(KeyHideStatusBar, false);
 
         public bool GetShowComment() => GetBool(KeyShowComment, true);
@@ -1622,6 +1617,11 @@ namespace TigerClaw.Core
 
 
 
+        public int GetCandidateLayout()
+        {
+            lock (_lock) return CandidateLayouts.Parse(_config.TryGetValue(KeyCandidateLayout, out string value) ? value : null);
+        }
+
         public bool TryToggleHideCandidateItems(out bool hidden)
 
         {
@@ -1630,11 +1630,9 @@ namespace TigerClaw.Core
 
             {
 
-                bool current = _config.TryGetValue(KeyHideCandidate, out string raw) ? ParseBool(raw, false) : false;
-
-                hidden = !current;
-
-                _config[KeyHideCandidate] = hidden ? Yes : No;
+                int current = CandidateLayouts.Parse(_config.TryGetValue(KeyCandidateLayout, out string raw) ? raw : null);
+                hidden = current != CandidateLayouts.CodeOnly;
+                _config[KeyCandidateLayout] = hidden ? "5" : "4";
 
                 ConfigVersion++;
 
@@ -2681,6 +2679,12 @@ namespace TigerClaw.Core
 
 
             string v = (value ?? string.Empty).Trim();
+            if (string.Equals(k, KeyCandidateLayout, StringComparison.OrdinalIgnoreCase) && !CandidateLayouts.IsValid(v))
+            {
+                reason = "candidate layout must be 1..5";
+                return false;
+            }
+
 
             if (string.Equals(k, KeyCodeRoot, StringComparison.OrdinalIgnoreCase))
 

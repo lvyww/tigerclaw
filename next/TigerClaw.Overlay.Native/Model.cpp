@@ -102,10 +102,11 @@ namespace tiger::overlay
                     target.push_back(entry.is_null() ? Text{} : FromUtf8(entry.get<std::string>()));
             };
             scalar("IsOff", next.isOff); scalar("IsChinese", next.isChinese);
-            scalar("CandidateVisible", next.candidateVisible); scalar("VerticalCandidates", next.vertical);
+            scalar("CandidateVisible", next.candidateVisible); scalar("CandidateLayout", next.candidateLayout);
+            if (next.candidateLayout < 1 || next.candidateLayout > 5) next.candidateLayout = 4;
             scalar("CandidateHoldWhilePending", next.candidateHoldWhilePending);
-            scalar("ShowCandidateIndex", next.showIndex); scalar("HideCandidateItems", next.hideCandidates);
-            scalar("HideStatusBar", next.hideStatus); scalar("ShowInputCodeInCandidateWindow", next.showCode);
+            scalar("ShowCandidateIndex", next.showIndex);
+            scalar("HideStatusBar", next.hideStatus);
             scalar("IsNativeHook", next.nativeHook); scalar("CompositionState", next.composition);
             scalar("CaretX", next.caretX); scalar("CaretY", next.caretY); scalar("CaretHeight", next.caretHeight);
             scalar("SoundVk", next.soundVk); scalar("SoundVolumePercent", next.soundVolume);
@@ -151,8 +152,8 @@ namespace tiger::overlay
     DisplayMode ModeFor(const State& state, bool expanded)
     {
         if (!state.candidateVisible) return DisplayMode::Hidden;
-        bool code = state.showCode || state.nativeHook;
-        if (!expanded || (state.hideCandidates && state.candidateDelay <= 0))
+        bool code = state.showCode() || state.nativeHook;
+        if (!expanded || state.hideCandidates())
             return code && !state.input.empty() ? DisplayMode::CodeOnly : DisplayMode::Hidden;
         if (state.candidates.empty())
             return state.input.empty() ? DisplayMode::Hidden : DisplayMode::InputOnly;
@@ -161,8 +162,8 @@ namespace tiger::overlay
 
     bool SameDisplayContent(const State& a, const State& b)
     {
-        return a.candidateVisible == b.candidateVisible && a.vertical == b.vertical && a.showIndex == b.showIndex &&
-            a.hideCandidates == b.hideCandidates && a.showCode == b.showCode && a.nativeHook == b.nativeHook &&
+        return a.candidateVisible == b.candidateVisible && a.vertical() == b.vertical() && a.showIndex == b.showIndex &&
+            a.hideCandidates() == b.hideCandidates() && a.showCode() == b.showCode() && a.nativeHook == b.nativeHook &&
             a.input == b.input && a.codeMask == b.codeMask && a.candidates == b.candidates && a.annotations == b.annotations &&
             a.selected == b.selected && a.composition == b.composition &&
             a.candidateDelay == b.candidateDelay && a.annotationDelay == b.annotationDelay;
@@ -181,12 +182,12 @@ namespace tiger::overlay
         if (result.mode == DisplayMode::CodeAndCandidates)
         {
             result.text = Escape(state.input);
-            if (state.vertical) result.text += u'\n';
+            if (state.vertical()) result.text += u'\n';
             else if (result.text.size() < 7) result.text.append(7 - result.text.size(), u' ');
         }
         for (std::size_t i = 0; i < state.candidates.size(); ++i)
         {
-            if (i) result.text += state.vertical ? u"\n" : u"  ";
+            if (i) result.text += state.vertical() ? u"\n" : u"  ";
             auto start = result.text.size();
             if (state.showIndex && state.composition != 5) result.text += FromUtf8(std::to_string(i + 1)) + u" ";
             result.text += Escape(state.candidates[i]);
@@ -236,7 +237,7 @@ namespace tiger::overlay
         double font = std::clamp(state.fontSize > 0 && std::isfinite(state.fontSize) ? state.fontSize : 17.0, 3.0, 200.0);
         if (mode == DisplayMode::CodeOnly)
             return {font, std::ceil(font), 0, std::nearbyint(font * 0.4), 2, std::nearbyint(font * 0.4), 2};
-        if (state.vertical) return {font, std::ceil(font * 1.5), 0, 12, 8, 8, 7};
+        if (state.vertical()) return {font, std::ceil(font * 1.5), 0, 12, 8, 8, 7};
         return {font, std::ceil(font), 0, 8, 8, 8, 8};
     }
 

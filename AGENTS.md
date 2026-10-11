@@ -5,6 +5,30 @@ protocol, user, porting and model documents are indexed in `docs/README.md`.
 
 Last reorganized: 2026-08-28.
 
+## Candidate layout choices (2026-10-12)
+
+Developed in isolated `C:\Users\yc\Desktop\tigerclaw-layout-20261011`, branch
+`feat/candidate-layout`, based on `16787cd`, then merged into the main worktree
+with its existing Pain bridge on the user's request. The deployed layout bundle
+does not include the Pain bridge. One `候选布局` setting replaces three old switches,
+with no compatibility migration: 1 horizontal with code, 2 vertical with code,
+3 horizontal without code, 4 vertical without code (default), 5 code only.
+Dialog has a dropdown; the middle button cycles five modes with one write.
+UI snapshots use `CandidateLayout`; matching Core/Overlay/Dialog/Shared are
+required. Native Hook retains forced-code behavior; mode 5 never expands.
+ARM64 and x64 Core each pass 18 tests; native Overlay, 12,000 formatter parity
+cases, real WPF editor save/failure/reload/search, and middle-button/pending-frame
+probes pass. Authorized daily ARM64 bundle deployed and live snapshot verified.
+Backup: `release_arm64/backup-before-layout-20261012-000344/` in the original tree.
+Other 73 payloads have unchanged size/mtime. No TSF registration or push.
+Layout evidence and patch: `next/_run/LayoutChoice/` in the isolated tree;
+integration checks: `next/_run/LayoutMerge-20261012/` in the main worktree.
+Merged ARM64/x64 Core each pass all 19 tests, including candidate snapshots;
+x86/x64 COM/pipe tests, Pain's 111 presenter checks, protected-input guards,
+managed settings and the rebuilt WPF editor save/reload tests also pass.
+Physical application typing
+acceptance remains separate from these automated checks.
+
 ## Full-pinyin main repository (2026-09-22)
 
 Full-pinyin development has moved to https://github.com/lvyww/claw_pinyin .
@@ -61,6 +85,20 @@ stays paused. Verified performance package/evidence:
 or public release.
 
 ## Current Status
+
+Pain candidate bridge (2026-10-11): C++ Core optionally exports versioned,
+bounded candidate snapshots on key/query_state; TSF exposes a read-only
+ITfCandidateListUIElement with actual ordinary pagination and only the selectable
+sentence menu. Focus/context epochs, replay context and Core instance/version
+reject stale menus. Pending/empty candidates, residual-input commits, COM reentry
+and the existing 20/120 ms refresh lifecycle are covered by isolated tests.
+Pain and Overlay intentionally remain visible together; Show does not control
+Overlay, no candidate behavior/mouse selection or full UILess claim. Old Core
+falls back without a UIElement. Protocol: Protocol/messages.md; frontend and
+reproduction: BimeTSF2/SampleIME/BRIDGE_ONLY_NOTES.md. Evidence and isolated
+artifacts: next/_run/CandidateUi-20261011. No daily-runtime replacement,
+TSF registration, Pain source edits, physical typing acceptance or push for this
+bridge. Source integration and commit were explicitly requested on 2026-10-12.
 
 Local work integration after adaptive-learning update (2026-10-04): boundary and
 TSF/Hook receipt probes now use one event with Levels=1..3 rather than duplicating

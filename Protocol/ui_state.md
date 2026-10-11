@@ -3,6 +3,16 @@
 Core's `UiStatePublisher` is the sole production writer. All payloads are UTF-8
 JSON `OverlayUiState`. Integers below are little-endian; map capacity is 128 KiB.
 
+## Candidate layout (2026-10-12)
+
+`CandidateLayout` is one integer: 1 horizontal with code, 2 vertical with code,
+3 horizontal without code, 4 vertical without code (default), 5 code only.
+Missing or invalid values use 4. The former `VerticalCandidates`,
+`ShowInputCodeInCandidateWindow` and `HideCandidateItems` fields are removed;
+there is no migration or compatibility interpretation. Deploy Core, Overlay,
+Dialog and Shared together. Native Hook retains its existing forced-code display.
+Mode 5 never expands candidates, even when the candidate delay is nonzero.
+
 ## Legacy v1
 
 Optional `CandidateBackgroundUntil` is a superseded background-dwell experiment

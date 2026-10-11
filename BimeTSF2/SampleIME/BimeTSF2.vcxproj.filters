@@ -68,6 +68,9 @@
     <ClInclude Include="PipeClient.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="CandidateUi.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="Private.h">
       <Filter>Header Files</Filter>
     </ClInclude>

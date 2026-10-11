@@ -19,12 +19,12 @@ int main() {
             case 4:state.composition=2;break;
             case 5:state.input.clear();break;
             case 6:state.candidates={u"ready"};break;
-            case 7:state.hideCandidates=true;break;
+            case 7:state.candidateLayout = 5;break;
             }
             check(!PendingCandidateFrame(state));
         }
-        for(int delay:{1,200,60000}) {auto state=pending;state.hideCandidates=true;
-            state.candidateDelay=delay;check(PendingCandidateFrame(state));}
+        for(int delay:{1,200,60000}) {auto state=pending;state.candidateLayout = 5;
+            state.candidateDelay=delay;check(!PendingCandidateFrame(state));}
         for(int composition=0;composition<8;++composition) {auto state=pending;
             state.composition=composition;check(PendingCandidateFrame(state)==(composition==5 || composition==6));}
         check(!PendingCandidateFrame({}));

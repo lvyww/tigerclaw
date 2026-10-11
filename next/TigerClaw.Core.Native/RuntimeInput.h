@@ -178,11 +178,14 @@ namespace tiger::core
             return UsesSentenceComposition() ? _sentence->Input().Session().SelectedIndex() : 0;
         }
         const ChineseInputSession& Session() const { return _session; }
-        std::u16string CandidateDisplay(std::u16string_view candidate)
+        std::u16string CandidateDisplay(std::u16string_view candidate,
+            const std::function<std::size_t(std::size_t)>& previewRandom = {})
         {
             if (CandidateCommitText(candidate)!=candidate) return std::u16string(CandidateDisplayText(candidate));
             RefreshOutputContext();
-            auto value=NormalizeOutputAction(candidate,_context);
+            auto context=_context;
+            if (previewRandom) context.randomIndex=previewRandom;
+            auto value=NormalizeOutputAction(candidate,context);
             return value.action==OutputAction::Text ? std::move(value.text) : std::u16string(candidate);
         }
         void FocusChanged() { if (_sentence) _sentence->FocusChanged(_session); else _session.OnFocusChanged(); }

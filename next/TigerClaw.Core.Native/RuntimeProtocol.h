@@ -28,6 +28,11 @@ namespace tiger::core
         std::chrono::steady_clock::time_point _freshCaretDeadline{};
         std::string _focusIdentity = "[0,0,\"\",\"\",\"\"]";
         std::string _frameSession;
+        const std::string _candidateInstance = learningId();
+        std::uint64_t _candidateVersion = 0;
+        std::string _candidatePayload;
+        std::string CandidateSnapshot(const RuntimeInputSnapshot& state,
+            const std::string& knownInstance, const std::string& knownVersion, std::size_t responseBytes);
         void UpdateCaret(int x, int y, int width, int height)
         {
             _caretX=x; _caretY=y; _caretWidth=width; _caretHeight=height;

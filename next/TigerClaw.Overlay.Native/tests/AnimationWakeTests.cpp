@@ -62,7 +62,7 @@ int main()
             Check(GetMonitorInfoW(MonitorFromWindow(window,MONITOR_DEFAULTTONEAREST),&monitor)!=FALSE,"monitor");
             unsigned hz=EnumDisplaySettingsW(monitor.szDevice,ENUM_CURRENT_SETTINGS,&mode)?mode.dmDisplayFrequency:60;
             if(hz<30||hz>1000)hz=60;
-            Renderer renderer(L"."); State state;state.isChinese=true;state.candidateVisible=true;state.showCode=true;
+            Renderer renderer(L"."); State state;state.isChinese=true;state.candidateVisible=true;state.candidateLayout = state.vertical() ? 2 : 1;
             state.input=u"abcd";state.candidates={u"candidate one",u"candidate two"};
             auto display=Format(state);
             FrameTransition transition;

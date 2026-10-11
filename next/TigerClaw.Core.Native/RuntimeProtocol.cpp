@@ -1,3 +1,4 @@
+#include "CandidateLayout.h"
 #include "RuntimeProtocol.h"
 #include "LearningText.h"
 #include "RuntimePaths.h"
@@ -167,7 +168,7 @@ namespace tiger::core
                     if (result.action==OutputAction::ToggleHideCandidates)
                     {
                         bool changed=false; std::u16string error;
-                        _input.SetConfig(u"隐藏候选",ConfigFlag(*_runtime.Read(),u"隐藏候选",false) ? u"否" : u"是",changed,error);
+                        _input.SetConfig(CandidateLayoutKey, ParseCandidateLayout(Config(*_runtime.Read(),CandidateLayoutKey)) == 5 ? u"4" : u"5",changed,error);
                         try { _runtime.SaveConfig(_config); } catch (...) {}
                     }
                     auto response = Response(seq, true, result.handled);
@@ -212,6 +213,12 @@ namespace tiger::core
                     if (result.cancelCompositionBeforePass || _pendingFrontendCompositionReset) response["cancel_composition"] = true;
                     _pendingFrontendCompositionReset = false;
                     if (down) response["expect_keyup"] = _input.ExpectKeyUp(event);
+                    if (Number(message,"candidate_ui_version") == 1)
+                    {
+                        response["candidate_ui"] = Json::parse(CandidateSnapshot(after,
+                            Text(message,"candidate_instance"), Text(message,"candidate_version"), response.dump().size()+Text(message,"candidate_context").size()));
+                        response["candidate_ui"]["context"]=Text(message,"candidate_context");
+                    }
                     return response.dump();
                 });
             }
@@ -395,7 +402,15 @@ namespace tiger::core
             else response = Response(seq, false, false); // no false success for unported commands
             auto state = _input.CaptureSnapshot();
             if (type == "query_state")
-            { State(response, state, *_runtime.Read()); if (Hook(message)) HookConfig(response,*_runtime.Read()); }
+            {
+                State(response, state, *_runtime.Read()); if (Hook(message)) HookConfig(response,*_runtime.Read());
+                if (Number(message,"candidate_ui_version") == 1)
+                {
+                    response["candidate_ui"] = Json::parse(CandidateSnapshot(state,
+                        Text(message,"candidate_instance"), Text(message,"candidate_version"), response.dump().size()+Text(message,"candidate_context").size()));
+                    response["candidate_ui"]["context"]=Text(message,"candidate_context");
+                }
+            }
             else if (type!="hello") response["keyboard_open"] = state.isChinese;
             return response.dump();
         }
@@ -404,6 +419,85 @@ namespace tiger::core
             auto response = Response(seq, false, false); response["error"] = error.what();
             return response.dump();
         }
+    }
+
+    std::string RuntimeProtocol::CandidateSnapshot(const RuntimeInputSnapshot& state,
+        const std::string& knownInstance, const std::string& knownVersion, std::size_t responseBytes)
+    {
+        // Use the already captured menu; do not Pump or move the live page here.
+        const bool composing=state.composing && !_holdBlocked;
+        Json menu={{"composing",composing},{"pending",composing && state.decodePending},
+            {"raw",learningUtf8(state.raw)},{"strings",Json::array()},
+            {"pages",Json::array()},{"page",0},{"selection",0},{"available",true}};
+        try
+        {
+            // Extra queries must not consume the commit RNG. Convert the visible
+            // page first so random macros match the existing Overlay projection.
+            auto previewRandom=_random;
+            auto display=[&](std::u16string_view entry) {
+                return learningUtf8(_input.CandidateDisplay(entry,[&](std::size_t count) { return previewRandom.Choose(count); }));
+            };
+            std::vector<std::string> visible;
+            if (composing && state.candidatesCurrent)
+                for (const auto& entry:state.page.entries) visible.push_back(display(entry));
+            std::size_t budget=0;
+            auto add=[&](std::string text)
+            {
+                budget+=Json(text).dump().size()+1;
+                if (budget>900000) throw std::length_error("Candidate snapshot too large");
+                menu["strings"].push_back(std::move(text));
+            };
+            if (composing && state.candidatesCurrent && !state.page.entries.empty())
+            {
+                if (state.mode==RuntimeInputMode::Ordinary || state.mode==RuntimeInputMode::Pinyin)
+                {
+                    auto config=_runtime.Read();
+                    const auto& table=state.mode==RuntimeInputMode::Pinyin ? *config->pinyin : config->schema->table;
+                    auto code=std::u16string_view(state.activeCode);
+                    if (state.mode==RuntimeInputMode::Pinyin && !code.empty()) code.remove_prefix(1);
+                    auto index=table.Find(code);
+                    if (!index || table.CandidateCount(*index)!=state.page.total)
+                        throw std::runtime_error("Candidate source mismatch");
+                    auto count=table.CandidateCount(*index);
+                    if ((count+state.pageSize-1)/state.pageSize>4096)
+                        throw std::length_error("Too many candidate pages");
+                    auto start=state.page.pageIndex*state.pageSize;
+                    for (std::uint32_t i=0;i<count;++i)
+                        add(i>=start && i-start<visible.size() ? visible[i-start] : display(table.Candidate(*index,i)));
+                    for (std::uint32_t i=0;i<count;i+=state.pageSize) menu["pages"].push_back(i);
+                    menu["page"]=state.page.pageIndex;
+                    menu["selection"]=state.page.pageIndex*state.pageSize;
+                }
+                else
+                {
+                    // Sentence's internal decode pool is not a pageable menu.
+                    for (const auto& text:visible) add(text);
+                    menu["pages"].push_back(0);
+                    menu["selection"]=std::min(state.selectedCandidateIndex,state.page.entries.size()-1);
+                }
+            }
+        }
+        catch (const std::exception&)
+        {
+            menu["available"]=false; menu["strings"]=Json::array(); menu["pages"]=Json::array();
+            menu["page"]=0; menu["selection"]=0;
+        }
+        auto payload=menu.dump();
+        // Commit/preedit fields take priority over this optional projection.
+        // In particular, a long commit plus a large residual menu must never
+        // make the frontend discard a successful commit at its framing limit.
+        auto remaining=responseBytes<1024*1024-4096 ? 1024*1024-4096-responseBytes : 0;
+        if (payload.size()>remaining)
+        {
+            menu["available"]=false; menu["strings"]=Json::array(); menu["pages"]=Json::array();
+            menu["page"]=0; menu["selection"]=0; menu.erase("raw");
+            payload=menu.dump();
+        }
+        if (payload!=_candidatePayload) { _candidatePayload=payload; ++_candidateVersion; }
+        auto version=std::to_string(_candidateVersion);
+        Json result={{"api",1},{"instance",_candidateInstance},{"version",version}};
+        if (knownInstance!=_candidateInstance || knownVersion!=version) result["menu"]=std::move(menu);
+        return result.dump();
     }
 
     std::string RuntimeProtocol::CaptureUiState()
@@ -473,12 +567,12 @@ namespace tiger::core
             {"IsOff",_hookDisabled},{"IsChinese",state.isChinese},{"StatusText",_hookDisabled ? learningUtf8(u"禁") : state.isChinese ? learningUtf8(u"中") : "EN"},
             {"CandidateVisible",visible},{"InputCode",learningUtf8(DisplayCode(state,*config))},{"Candidates",candidates},
             {"CompositionState",composition},{"CaretX",_caretX},{"CaretY",_caretY},{"CaretHeight",_caretHeight},
-            {"VerticalCandidates",flag(u"竖排候选")},{"ShowCandidateIndex",flag(u"显示候选序号")},
-            {"HideCandidateItems",flag(u"隐藏候选",false)},{"CodeMasking",text(u"编码伪装")},
+            {"CandidateLayout",ParseCandidateLayout(Config(*config,CandidateLayoutKey))},{"ShowCandidateIndex",flag(u"显示候选序号")},
+            {"CodeMasking",text(u"编码伪装")},
             {"ThemeName",text(u"主题")},{"FontName",text(u"字体")},{"FontSize",font},{"CandidateAnnotations",annotations},
             {"HideStatusBar",flag(u"隐藏状态栏",false) || (!_hookNative && !_imeActive)},
             {"SoundSeq",_soundSeq},{"SoundVk",_soundVk},{"SoundVolumePercent",_soundVolume},
-            {"ShowInputCodeInCandidateWindow",flag(u"候选窗显示编码",false)},
+
             {"CandidateExpandDelayMs",number(u"延时显示候选(毫秒)")},
             {"AnnotationExpandDelayMs",composition==4 ? 0 : number(u"延时展开注释和拆分(毫秒)")},
             {"IsNativeHook",_hookNative},{"SelectedCandidateIndex",composition==5 && state.selectedCandidateIndex<state.page.entries.size() ? static_cast<int>(state.selectedCandidateIndex) : -1},

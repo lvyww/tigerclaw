@@ -637,6 +637,7 @@ STDAPI CSampleIME::OnUninitDocumentMgr(_In_ ITfDocumentMgr *pDocMgr)
 
 STDAPI CSampleIME::OnSetFocus(_In_ ITfDocumentMgr *pDocMgrFocus, _In_ ITfDocumentMgr *pDocMgrPrevFocus)
 {
+    if (pDocMgrFocus != pDocMgrPrevFocus) { _EndCandidateUi(); _CancelCompositionRefresh(); }
     pDocMgrPrevFocus;
     HWND hwndForeground = GetForegroundWindow();
     LogDocMgrFocusState(pDocMgrFocus);
@@ -681,6 +682,7 @@ STDAPI CSampleIME::OnSetFocus(_In_ ITfDocumentMgr *pDocMgrFocus, _In_ ITfDocumen
 
 STDAPI CSampleIME::OnPushContext(_In_ ITfContext *pContext)
 {
+    _EndCandidateUi(); _CancelCompositionRefresh();
     Global::LogToFileVerbose("ThreadMgrEvent OnPushContext context=%p", pContext);
     LogForegroundWindowInfoThreadMgr("OnPushContext");
     LogActiveProfileStateThreadMgr("OnPushContext");
@@ -697,6 +699,7 @@ STDAPI CSampleIME::OnPushContext(_In_ ITfContext *pContext)
 
 STDAPI CSampleIME::OnPopContext(_In_ ITfContext *pContext)
 {
+    _EndCandidateUi(); _CancelCompositionRefresh();
     Global::LogToFileVerbose("ThreadMgrEvent OnPopContext context=%p", pContext);
     LogForegroundWindowInfoThreadMgr("OnPopContext");
     LogActiveProfileStateThreadMgr("OnPopContext");

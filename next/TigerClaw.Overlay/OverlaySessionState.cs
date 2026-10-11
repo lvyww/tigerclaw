@@ -97,9 +97,8 @@ namespace TigerClaw.Overlay
                 CaretY = state.CaretY,
                 CaretHeight = state.CaretHeight,
                 CandidateAnchorRevision = state.CandidateAnchorRevision,
-                VerticalCandidates = state.VerticalCandidates,
+                CandidateLayout = state.CandidateLayout,
                 ShowCandidateIndex = state.ShowCandidateIndex,
-                HideCandidateItems = state.HideCandidateItems,
                 CodeMasking = state.CodeMasking ?? string.Empty,
                 ThemeName = state.ThemeName ?? string.Empty,
                 FontName = state.FontName ?? string.Empty,
@@ -109,7 +108,6 @@ namespace TigerClaw.Overlay
                 SoundSeq = state.SoundSeq,
                 SoundVk = state.SoundVk,
                 SoundVolumePercent = state.SoundVolumePercent,
-                ShowInputCodeInCandidateWindow = state.ShowInputCodeInCandidateWindow,
                 CandidateExpandDelayMs = state.CandidateExpandDelayMs,
                 AnnotationExpandDelayMs = state.AnnotationExpandDelayMs
             };

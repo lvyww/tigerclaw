@@ -33,6 +33,20 @@ int main()
         Check(rates.Get(2,2002,query)==60 && queries==4, "display notification and query failure fallback");
         for(unsigned invalid:{1,29,1001}) { rates.Invalidate();rate=invalid;
             Check(rates.Get(2,2003,query)==60,"invalid display rate fallback"); }
+        for (int layout=1; layout<=5; ++layout)
+        {
+            State selected;
+            Check(ParseState("{\"CandidateLayout\":" + std::to_string(layout) + "}", selected), "layout parse");
+            Check(selected.candidateLayout==layout, "layout identity");
+            selected.candidateVisible=true;selected.input=u"ab";selected.candidates={u"A",u"B"};
+            selected.candidateDelay=100;
+            Check(ModeFor(selected)==(layout==5?DisplayMode::CodeOnly:layout<=2?DisplayMode::CodeAndCandidates:DisplayMode::CandidatesOnly), "five mode rendering");
+            Check(selected.vertical()==(layout==2 || layout==4), "mode orientation");
+        }
+        State legacy;
+        Check(ParseState(R"({"VerticalCandidates":false,"HideCandidateItems":true,"ShowInputCodeInCandidateWindow":true})",legacy) && legacy.candidateLayout==4,"old fields ignored");
+        for(int invalid:{0,6,-1})
+            Check(ParseState("{\"CandidateLayout\":"+std::to_string(invalid)+"}",legacy) && legacy.candidateLayout==4,"invalid mode default");
         State animated;
         Check(ParseState(R"({})", animated) && animated.animationEnabled &&
             animated.animationDurationMs == 200, "default geometry animation duration");
@@ -129,26 +143,26 @@ int main()
         Check(ToUtf8(FromUtf8("A\xf0\xa0\x80\x80")) == "A\xf0\xa0\x80\x80", "UTF round trip");
         Check(!ParseState(R"({"Candidates":123})", state), "reject invalid arrays");
         Check(state.input == u"ab", "bad snapshot preserves previous state");
-        state.nativeHook = true;
+        state.candidateLayout = 3; state.nativeHook = true;
         auto display = Format(state);
         Check(display.text == u"ab     \u53ef\u3014x\u3015  \U00020000", "hook always shows code and annotations");
         Check(display.selectionStart == 13 && display.selectionLength == 2, "UTF-16 selection offsets");
-        state.vertical = true; state.showIndex = true;
+        state.candidateLayout = state.showCode() ? 2 : 4; state.showIndex = true;
         Check(Format(state).text == u"ab\n1 \u53ef\u3014x\u3015\n2 \U00020000", "vertical text");
         state.composition = 5; state.selected = 0;
         Check(Format(state).selectionStart == -1, "sentence first candidate has no highlight");
         Check(Format(state).text == u"ab\n可〔x〕\n\U00020000", "sentence forcibly hides numeric indices");
         state.composition = 2;
-        state.hideCandidates = true;
+        state.candidateLayout = 5;
         Check(Format(state).mode == DisplayMode::CodeOnly, "hidden candidates with hook");
         state.nativeHook = false;
-        Check(Format(state).mode == DisplayMode::Hidden, "hidden candidates without code");
-        state.hideCandidates = false; state.candidates.clear();
+        Check(Format(state).mode == DisplayMode::CodeOnly, "code-only always shows code");
+        state.candidateLayout = 4; state.candidates.clear();
         state.input = u"a\r\nb\rc\td";
         Check(Format(state).text == u"a\\nb\\nc\\td", "literal escaping");
         Check(Format(state).mode == DisplayMode::InputOnly, "unmatched code stays visible");
         state.candidates = {u"x"}; state.annotations = {u"y"}; state.input = u"ab";
-        state.showCode = true; state.candidateDelay = 100; state.annotationDelay = 200;
+        state.candidateLayout = state.vertical() ? 2 : 1; state.candidateDelay = 100; state.annotationDelay = 200;
         Reveal reveal;
         Check(reveal.Update(state, 1000).mode == DisplayMode::CodeOnly, "delayed candidates");
         Check(reveal.Update(state, 1100).text == u"ab\n1 x", "candidate deadline");
@@ -168,10 +182,10 @@ int main()
             Check(!SameDisplayContent(original, changed), "display edit invalidates formatting");
         };
         checkChanged([](State& s) { s.candidateVisible = !s.candidateVisible; });
-        checkChanged([](State& s) { s.vertical = !s.vertical; });
+        checkChanged([](State& s) { s.candidateLayout = (!s.vertical()) ? (s.showCode() ? 2 : 4) : (s.showCode() ? 1 : 3); });
         checkChanged([](State& s) { s.showIndex = !s.showIndex; });
-        checkChanged([](State& s) { s.hideCandidates = !s.hideCandidates; });
-        checkChanged([](State& s) { s.showCode = !s.showCode; });
+        checkChanged([](State& s) { s.candidateLayout = (!s.hideCandidates()) ? 5 : 4; });
+        checkChanged([](State& s) { s.candidateLayout = (!s.showCode()) ? (s.vertical() ? 2 : 1) : (s.vertical() ? 4 : 3); });
         checkChanged([](State& s) { s.nativeHook = !s.nativeHook; });
         checkChanged([](State& s) { s.input += u'x'; });
         checkChanged([](State& s) { s.codeMask += u'*'; });
@@ -188,11 +202,12 @@ int main()
         unrelated.hideStatus = !unrelated.hideStatus; unrelated.status = u"new";
         unrelated.font = u"Consolas"; unrelated.fontSize = 33; unrelated.theme = u"new";
         Check(SameDisplayContent(original, unrelated), "non-text state reuses formatted display");
+        for (int layout=1; layout<=5; ++layout)
         for (unsigned bits = 0; bits < 128; ++bits)
         {
             auto variant = original;
-            variant.candidateVisible = bits & 1; variant.hideCandidates = bits & 2;
-            variant.showCode = bits & 4; variant.nativeHook = bits & 8;
+            variant.candidateVisible = bits & 1; variant.candidateLayout = layout;
+            variant.nativeHook = bits & 8;
             if (bits & 16) variant.input.clear();
             if (bits & 32) variant.candidates.clear();
             bool expanded = (bits & 64) != 0;
