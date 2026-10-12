@@ -22,6 +22,7 @@ namespace TigerClaw.Overlay
         private bool _placeBelowLocked;
         private bool _hasPlacementDecision;
         private bool _lastPlacedAbove;
+        public bool IsAbove => _hasPlacementDecision && _lastPlacedAbove;
         private bool _forceMoveForAnchorRefresh;
         private bool _hasCaretAnchor;
         private int _anchorXPx;
@@ -141,6 +142,7 @@ namespace TigerClaw.Overlay
             int targetYPx;
             if (isStartMenuLike)
             {
+                _hasPlacementDecision = false;
                 targetYPx = workTopPx + StartMenuOffsetPx;
             }
             else

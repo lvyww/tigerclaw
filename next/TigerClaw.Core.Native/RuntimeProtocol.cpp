@@ -561,7 +561,7 @@ namespace tiger::core
         // TSF's one-shot ime_active notification. Explicit focus/cancel/inactive
         // notifications revoke it; Overlay still requires a visible same-session frame.
         bool hold=state.composing && !fresh && pendingEmpty && state.isChinese && !_hookDisabled && !_holdBlocked;
-        double font=17;
+        double font=24;
         try { std::size_t consumed=0; auto raw=text(u"字体大小"); auto parsed=std::stod(raw,&consumed); if (consumed==raw.size() && std::isfinite(parsed)) font=std::clamp(parsed,3.0,200.0); } catch (...) {}
         Json ui={
             {"IsOff",_hookDisabled},{"IsChinese",state.isChinese},{"StatusText",_hookDisabled ? learningUtf8(u"禁") : state.isChinese ? learningUtf8(u"中") : "EN"},

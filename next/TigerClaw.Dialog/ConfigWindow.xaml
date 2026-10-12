@@ -430,6 +430,8 @@
                                                Style="{StaticResource RowDescriptionStyle}" />
                                 </StackPanel>
                                 <ComboBox x:Name="CbFonts"
+                                          Height="Auto"
+                                          MinHeight="28"
                                           Grid.Column="1"
                                           Style="{StaticResource FieldComboStyle}"
                                           HorizontalAlignment="Left"

@@ -91,11 +91,15 @@ struct PlacementPublicationProbe
     { app.HideImmediately();app.placement_.Reset();Rows(5);app.Refresh(true);Above(); }
     void Above()
     {
+        history_probe::Check(app.display_.above,"above placement must orient the painted surface");
+        if(app.display_.candidateRanges.size()>1) history_probe::Check(
+            app.display_.candidateRanges.front().first>app.display_.candidateRanges.back().first,"above placement reverses actual candidate rows");
         RECT r{};history_probe::Check(GetWindowRect(app.candidate_,&r)!=FALSE,"candidate rectangle");
         history_probe::Check(app.placement_.IsAbove() && r.bottom==app.state_.caretY-app.state_.caretHeight-5,"expected above current caret");
     }
     void Below()
     {
+        history_probe::Check(!app.display_.above,"below placement restores normal orientation");
         RECT r{};history_probe::Check(GetWindowRect(app.candidate_,&r)!=FALSE,"candidate rectangle");
         history_probe::Check(!app.placement_.IsAbove() && r.top==app.state_.caretY+5,"expected below current caret");
     }

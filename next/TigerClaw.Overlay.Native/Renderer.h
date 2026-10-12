@@ -19,12 +19,19 @@ namespace tiger::overlay
         ComPtr<ID2D1DCRenderTarget> target_;
         ComPtr<IDWriteTextFormat> format_;
         ComPtr<IDWriteTextLayout> layout_;
+        ComPtr<IDWriteTextLayout> codeLayout_;
         std::wstring formatFamily_;
         IDWriteFontCollection* formatFonts_ = nullptr; // owned by localFonts_
         float formatSize_ = 0, formatLineHeight_ = 0;
         bool formatStatus_ = false;
+        bool layoutVertical_ = false;
         Text layoutText_;
-        int layoutSecondaryStart_ = -1;
+        std::vector<std::pair<int, int>> layoutSecondaryRanges_;
+        std::pair<int, int> layoutCodeRange_{-1, 0};
+        std::vector<std::pair<int, int>> layoutAnnotationRanges_;
+        std::vector<ComPtr<IDWriteTextLayout>> rowLayouts_, annotationLayouts_;
+        std::vector<D2D1_RECT_F> rowHitRects_;
+        BYTE surfaceOpacity_ = 255;
         DWRITE_TEXT_METRICS layoutMetrics_{};
         HDC dc_ = nullptr;
         HBITMAP bitmap_ = nullptr;

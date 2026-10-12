@@ -44,6 +44,23 @@ int main()
             Check(selected.vertical()==(layout==2 || layout==4), "mode orientation");
         }
         State legacy;
+        for (int layout : {2, 4})
+        {
+            State menu; menu.candidateLayout=layout; menu.candidateVisible=true;
+            menu.input=u"ab";menu.candidates={u"A",u"\U00020000"};menu.annotations={u"x",u"y"};
+            menu.showIndex=true;menu.selected=1;
+            auto down=Format(menu), up=OrientDisplay(menu,down,true);
+            Check(up.text==Text(layout==2?u"ab\n":u"")+u"\U00020000\u00b2\u3014y\u3015\nA\u3014x\u3015","above reverses rows with footer farthest from caret");
+            Check(up.selectionStart==(layout==2?3:0) && up.selectionLength==6,"above preserves selected Unicode candidate");
+            Check(up.candidateRanges[0].first>up.candidateRanges[1].first,"hit ranges retain logical candidate identities");
+            Check(OrientDisplay(menu,up,false).text==down.text,"returning below restores original order");
+            Check(up.text.substr(up.annotationRanges[0].first,up.annotationRanges[0].second)==u"\u3014x\u3015" &&
+                up.text.substr(up.annotationRanges[1].first,up.annotationRanges[1].second)==u"\u3014y\u3015","annotations retain logical identities above");
+            Check(OrientDisplay(menu,up,false).annotationRanges==down.annotationRanges,"annotation spans round trip");
+            auto padding=MeasureStyle(menu,down.mode,false), flipped=MeasureStyle(menu,up.mode,true);
+            Check(padding.left==6 && padding.right==6 && padding.top==2.5 && padding.bottom==6 &&
+                flipped.top==6 && flipped.bottom==2.5,"Expanded vertical padding follows caret side");
+        }
         Check(ParseState(R"({"VerticalCandidates":false,"HideCandidateItems":true,"ShowInputCodeInCandidateWindow":true})",legacy) && legacy.candidateLayout==4,"old fields ignored");
         for(int invalid:{0,6,-1})
             Check(ParseState("{\"CandidateLayout\":"+std::to_string(invalid)+"}",legacy) && legacy.candidateLayout==4,"invalid mode default");
@@ -145,13 +162,13 @@ int main()
         Check(state.input == u"ab", "bad snapshot preserves previous state");
         state.candidateLayout = 3; state.nativeHook = true;
         auto display = Format(state);
-        Check(display.text == u"ab     \u53ef\u3014x\u3015  \U00020000", "hook always shows code and annotations");
-        Check(display.selectionStart == 13 && display.selectionLength == 2, "UTF-16 selection offsets");
+        Check(display.text == u"ab \u53ef\u3014x\u3015 \U00020000", "hook always shows code and annotations");
+        Check(display.selectionStart == 8 && display.selectionLength == 2, "UTF-16 selection offsets");
         state.candidateLayout = state.showCode() ? 2 : 4; state.showIndex = true;
-        Check(Format(state).text == u"ab\n1 \u53ef\u3014x\u3015\n2 \U00020000", "vertical text");
+        Check(Format(state).text == u"\u53ef\u3014x\u3015\n\U00020000\u00b2\nab", "vertical text");
         state.composition = 5; state.selected = 0;
         Check(Format(state).selectionStart == -1, "sentence first candidate has no highlight");
-        Check(Format(state).text == u"ab\n可〔x〕\n\U00020000", "sentence forcibly hides numeric indices");
+        Check(Format(state).text == u"可〔x〕\n\U00020000\u00b2\nab", "sentence respects numeric indices setting");
         state.composition = 2;
         state.candidateLayout = 5;
         Check(Format(state).mode == DisplayMode::CodeOnly, "hidden candidates with hook");
@@ -165,10 +182,10 @@ int main()
         state.candidateLayout = state.vertical() ? 2 : 1; state.candidateDelay = 100; state.annotationDelay = 200;
         Reveal reveal;
         Check(reveal.Update(state, 1000).mode == DisplayMode::CodeOnly, "delayed candidates");
-        Check(reveal.Update(state, 1100).text == u"ab\n1 x", "candidate deadline");
-        Check(reveal.Update(state, 1200).text == u"ab\n1 x\u3014y\u3015", "annotation deadline");
+        Check(reveal.Update(state, 1100).text == u"x\nab", "candidate deadline");
+        Check(reveal.Update(state, 1200).text == u"x\u3014y\u3015\nab", "annotation deadline");
         state.input = u"abc";
-        Check(reveal.Update(state, 1201).text == u"abc\n1 x\u3014y\u3015", "editing does not restart reveal");
+        Check(reveal.Update(state, 1201).text == u"x\u3014y\u3015\nabc", "editing does not restart reveal");
         state.candidateVisible = false; reveal.Update(state, 1202);
         state.candidateVisible = true;
         Check(reveal.Update(state, 1300).mode == DisplayMode::CodeOnly, "new composition resets reveal");

@@ -191,7 +191,7 @@ namespace TigerClaw.Dialog
         {
             CbFonts.Items.Clear();
 
-            double previewSize = GetConfigDouble(config, "字体大小", 14);
+            double previewSize = GetConfigDouble(config, "字体大小", 24);
             if (previewSize < 3)
             {
                 previewSize = 3;

@@ -202,6 +202,7 @@ namespace tiger::overlay
             StopTransition(); KillTimer(candidate_, 1); KillTimer(candidate_, 3);
             frameCanBeHeld_ = false; candidateDrawn_ = false;
             Display blank{display_.mode, {}, -1, 0};
+            blank.above = display_.above;
             try
             {
                 transitionRenderer_.Prepare(renderedState_, blank, candidateDpi_, false, &size);
@@ -417,6 +418,18 @@ namespace tiger::overlay
             auto placement = placement_;
             POINT position{};
             if (!ResolvePosition(placement, candidateSize_, position)) return;
+            const bool above = state_.vertical() && placement.IsAbove();
+            if (display_.above != above)
+            {
+                display_ = OrientDisplay(state_, display_, above);
+                candidateSize_ = candidateRenderer_.Prepare(state_, display_, candidateDpi_);
+                placement = placement_;
+                if (!ResolvePosition(placement, candidateSize_, position)) return;
+                // A direction change must publish new pixels even if clamped
+                // geometry happens to match the previous frame.
+                PublishCandidate(candidateSize_, position, placement);
+                return;
+            }
             RECT current{}; GetWindowRect(candidate_, &current);
             if (!transition_.Active() && IsWindowVisible(candidate_) && placement_.SameDecision(placement) &&
                 current.left == position.x && current.top == position.y) return;
@@ -459,7 +472,7 @@ namespace tiger::overlay
             auto now = GetTickCount64();
             bool reformat = force || !candidateDrawn_ || !SameDisplayContent(state_, renderedState_) || reveal_.NextDelay(state_, now) != 0;
             Display formatted;
-            if (reformat) formatted = reveal_.Update(state_, now);
+            if (reformat) formatted = OrientDisplay(state_, reveal_.Update(state_, now), display_.above);
             const auto& next = reformat ? formatted : display_;
             if (next.mode != display_.mode || next.text != display_.text ||
                 next.selectionStart != display_.selectionStart || next.selectionLength != display_.selectionLength)
@@ -502,6 +515,15 @@ namespace tiger::overlay
                         POINT destination{};
                         if (!ResolvePosition(placement, size, destination))
                             throw std::runtime_error("Candidate monitor unavailable");
+                        if (display_.above != (state_.vertical() && placement.IsAbove()))
+                        {
+                            display_ = OrientDisplay(state_, display_, placement.IsAbove());
+                            size = candidateRenderer_.Prepare(state_, display_, dpi);
+                            if (revision != visualRevision_) return;
+                            placement = placement_;
+                            if (!ResolvePosition(placement, size, destination))
+                                throw std::runtime_error("Candidate monitor unavailable");
+                        }
                         // Publish pixels, dimensions and final location together.
                         // The OS retains the previous frame throughout Prepare.
                         PublishCandidate(size, destination, placement);
@@ -766,7 +788,7 @@ namespace tiger::overlay
             case WM_MOUSEWHEEL:
                 if (hwnd == candidate_)
                 {
-                    double fontSize = std::clamp((state_.fontSize > 0 ? state_.fontSize : 17) + GET_WHEEL_DELTA_WPARAM(wp) / 120.0 * 0.5, 3.0, 200.0);
+                    double fontSize = std::clamp((state_.fontSize > 0 ? state_.fontSize : 24) + GET_WHEEL_DELTA_WPARAM(wp) / 120.0 * 0.5, 3.0, 200.0);
                     if (!demo_) commands_->SetConfig(u"\u5b57\u4f53\u5927\u5c0f", FromUtf8(std::to_string(fontSize)));
                     else { state_.fontSize = fontSize; Refresh(true); }
                 }

@@ -41,8 +41,12 @@ namespace tiger::overlay
         Text text;
         int selectionStart = -1, selectionLength = 0;
         std::vector<std::pair<int, int>> candidateRanges;
+        bool above = false;
+        int codeStart = -1, codeLength = 0;
+        std::vector<std::pair<int, int>> annotationRanges;
     };
     Display Format(const State& state, bool expanded = true, bool annotations = true);
+    Display OrientDisplay(const State& state, const Display& source, bool above);
     DisplayMode ModeFor(const State& state, bool expanded = true);
     bool SameDisplayContent(const State& left, const State& right);
     // A hint is not permission to show a window: Application also requires an
@@ -66,7 +70,7 @@ namespace tiger::overlay
     {
         double fontSize, lineHeight, minWidth, left, top, right, bottom;
     };
-    Metrics MeasureStyle(const State& state, DisplayMode mode);
+    Metrics MeasureStyle(const State& state, DisplayMode mode, bool above = false);
     struct Palette
     {
         std::uint32_t foreground, background, border, selection;

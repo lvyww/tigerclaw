@@ -29,7 +29,7 @@ def main():
             state["Candidates"] = None
         if i % 13 == 0:
             state["CandidateAnnotations"] = None
-        cases.append(dict(state=state, expanded=bool(rng.getrandbits(1)), annotations=bool(rng.getrandbits(1))))
+        cases.append(dict(state=state, expanded=bool(rng.getrandbits(1)), annotations=bool(rng.getrandbits(1)), above=bool(rng.getrandbits(1))))
     payload = "".join(json.dumps(case, ensure_ascii=True) + "\n" for case in cases)
     def run(command):
         process = subprocess.run(command, input=payload, text=True, encoding="utf-8", capture_output=True, timeout=120, check=True)

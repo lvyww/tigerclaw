@@ -11,12 +11,69 @@ migration. The new `CandidateLayout` UI field requires a matching Core, Overlay,
 Dialog and Shared deployment; see `Protocol/ui_state.md`.
 WPF fallback also omits sentence indices, matching the native formatter.
 
+Vertical surfaces now follow Pain's `TsfCandidatePresenter` geometry (2026-10-12):
+4-DIP shadow margin and theme border width. Padding was subsequently increased
+by 2 DIP: 6 DIP horizontally, 2.5 DIP on the caret side and 6 DIP on the far side. Near corners have radius 5 DIP,
+far corners 10 DIP. Above-caret placement reverses candidate rows;
+below-caret placement restores normal order.
+Candidate identity, indices, annotations, selection, hit testing and the sentence
+first/secondary font sizes remain attached to their logical items. Placement
+history, pending-frame retention and blank residence use the existing lifecycle.
+Evidence: `next/_run/PainVertical-20261012/`; previews include normal and above
+surfaces. This changes the native and WPF renderers, not the Core/Pain menu order.
+
+The subsequent Pain footer alignment uses natural font line heights rather than
+1.5x spacing. When code display is enabled, code occupies a separate 65%-size
+footer: bottom when below the caret, top when above it. The later theme restoration
+uses the original theme foreground/background/border/selection colors in vertical
+mode too, including each theme's alpha. The footer uses theme foreground at 50%
+opacity for readability in both light and dark themes. No fixed Pain palette or
+extra 90% surface opacity overrides skin settings. Theme restoration and expanded
+padding evidence: `next/_run/ThemeRestore-20261012/`. Code ranges participate in
+layout-cache identity; font/color effects and candidate hit ranges remain valid
+after reversal or target recreation. Evidence: `next/_run/PainFooter-20261012/`.
+
+Vertical candidate bodies (word and superscript) align left whenever any row has
+a visible annotation/decomposition; otherwise all bodies center. Every candidate after the first uses 70% of the main font, including
+ordinary menus. Indices use 50% foreground opacity. Annotation/decomposition
+spans are a separate right-aligned group, at 50% of the configured font size for every row and
+70% foreground opacity. A separate right column and 4-DIP gap keep notes from overlapping candidate bodies. The code footer centers across the entire window. Explicit annotation
+spans participate in layout caching and follow logical candidates on reversal;
+literal annotation-like punctuation in a candidate is not styled as metadata.
+WPF uses individual Grid rows and a separate footer block. DirectWrite caches
+separate body/note layouts and preserves natural row heights and logical hit
+identities. Footer text is rendered separately in its reserved line. Current
+evidence: `next/_run/CandidateAlignment-20261012/`; previous iterations:
+`next/_run/CandidateColumns-20261012/`,
+`next/_run/CandidateCenter-20261012/`.
+
+Horizontal and vertical candidate surfaces now share typography and padding:
+first candidate 100%, all subsequent candidates 70%, annotations/decomposition
+50% and code 65% of configured font size; indices use 50% foreground opacity; annotations use 70% and code uses 50%. Horizontal selection no longer adds bold or a text shadow.
+Both use natural line heights, the same padding and near/far corner sizes. The
+layout direction and existing code placement differ. Horizontal body, annotation
+and code layouts are vertically centered independently; superscript digits stay
+attached to their body. WPF uses centered controls in horizontal groups. Evidence:
+`next/_run/HorizontalCenter-20261012/`. Explicit candidate/code
+ranges drive WPF styling; DirectWrite's layout cache includes orientation even
+when a one-item/input-only frame has identical text. Code-only mode retains its
+compact styling. Evidence: `next/_run/HorizontalStyle-20261012/`.
+
 ## Candidate typography (2026-10-11)
 
-Sentence composition (state 5) always omits numeric indices, regardless of the
-stored show-index preference. Candidate 1 keeps the configured font size;
-candidates 2 onward, including their annotations, use 70% of that size in
-DirectWrite. Font ranges participate in layout-cache identity and measurement,
+Ordinary candidates after the first show Unicode superscript indices after the word
+(2026-10-12), before any annotation: `次选词²〔abc〕`. The first candidate has no index;
+subsequent indices keep their original selection numbers. Horizontal code/candidate
+and inter-candidate gaps now use one space (no fixed seven-character code padding).
+Evidence: `next/_run/CompactHorizontal-20261012/`. Horizontal and vertical
+layouts, multi-digit indices and WPF fallback use the same format. Existing
+show-index preference applies to ordinary and sentence candidates. Highlight and
+hit ranges include the complete word, index and annotation. Actual renderer
+previews are available with `overlay_render_probe --superscript-preview`.
+
+Sentence composition (state 5) honors the stored show-index preference.
+Candidate 1 keeps the configured font size; candidates 2 onward use 70%,
+and annotations on all candidates use 50% of the configured size in DirectWrite. Font ranges participate in layout-cache identity and measurement,
 so returning to ordinary input restores normal typography even for identical text.
 Candidate windows have no fixed minimum width in either orientation; text,
 padding and borders determine their width. Existing line spacing is retained.
@@ -419,3 +476,13 @@ reproduced a pre-render regression: matched-input read P50 24.4 ms native versus
 measured 9.8 ms. These are historical diagnostic results, not photon-latency
 measurements. The production fix is the mutex-protected snapshot/change-event
 path described above; the unsafe diagnostic reader is not used.
+
+The configured candidate font defaults to 24, including missing-value fallbacks.
+Code opacity is 50% in both orientations; note opacity remains 70%. Current
+build, WPF rendering and daily-runtime verification: `next/_run/Default24-20261012/`.
+
+Horizontal candidate surfaces use 5-DIP left corners and 10-DIP right corners,
+regardless of above/below placement. Vertical corners keep their near/far rule.
+Sentence menus honor ShowCandidateIndex; first index remains omitted and later
+indices retain their superscript size/opacity. Evidence:
+`next/_run/HorizontalCorners-20261012/`.

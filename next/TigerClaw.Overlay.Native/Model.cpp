@@ -177,28 +177,81 @@ namespace tiger::overlay
         if (result.mode == DisplayMode::CodeOnly || result.mode == DisplayMode::InputOnly)
         {
             result.text = Escape(state.input);
+            if (result.mode == DisplayMode::InputOnly)
+            { result.codeStart = 0; result.codeLength = static_cast<int>(result.text.size()); }
             return result;
         }
-        if (result.mode == DisplayMode::CodeAndCandidates)
+        if (result.mode == DisplayMode::CodeAndCandidates && !state.vertical())
         {
             result.text = Escape(state.input);
-            if (state.vertical()) result.text += u'\n';
-            else if (result.text.size() < 7) result.text.append(7 - result.text.size(), u' ');
+            result.codeStart = 0; result.codeLength = static_cast<int>(result.text.size());
+            result.text += u' ';
         }
         for (std::size_t i = 0; i < state.candidates.size(); ++i)
         {
-            if (i) result.text += state.vertical() ? u"\n" : u"  ";
+            if (i) result.text += state.vertical() ? u"\n" : u" ";
             auto start = result.text.size();
-            if (state.showIndex && state.composition != 5) result.text += FromUtf8(std::to_string(i + 1)) + u" ";
             result.text += Escape(state.candidates[i]);
+            if (i > 0 && state.showIndex)
+            {
+                // Superscript digits stay attached to the word in both layouts.
+                constexpr char16_t digits[] = u"\u2070\u00b9\u00b2\u00b3\u2074\u2075\u2076\u2077\u2078\u2079";
+                for (char digit : std::to_string(i + 1)) result.text += digits[digit - '0'];
+            }
+            result.annotationRanges.emplace_back(-1, 0);
             if (annotations && i < state.annotations.size() && !state.annotations[i].empty())
+            {
+                const auto annotationStart = static_cast<int>(result.text.size());
                 result.text += u"\u3014" + Escape(state.annotations[i]) + u"\u3015";
+                result.annotationRanges.back() = {annotationStart, static_cast<int>(result.text.size()) - annotationStart};
+            }
             result.candidateRanges.emplace_back(static_cast<int>(start), static_cast<int>(result.text.size() - start));
             if (state.selected == static_cast<int>(i) && !(state.composition == 5 && i == 0))
             {
                 result.selectionStart = static_cast<int>(start);
                 result.selectionLength = static_cast<int>(result.text.size() - start);
             }
+        }
+        if (result.mode == DisplayMode::CodeAndCandidates && state.vertical())
+        {
+            result.text += u'\n';
+            result.codeStart = static_cast<int>(result.text.size());
+            result.text += Escape(state.input);
+            result.codeLength = static_cast<int>(result.text.size()) - result.codeStart;
+        }
+        return result;
+    }
+
+    Display OrientDisplay(const State& state, const Display& source, bool above)
+    {
+        Display result = source;
+        above = state.vertical() && above;
+        if (source.above == above) return result;
+        result.above = above;
+        if (!state.vertical() || source.candidateRanges.empty()) return result;
+        result.text.clear();
+        result.selectionStart = -1;
+        const bool code = source.mode == DisplayMode::CodeAndCandidates;
+        if (code && above)
+        { result.codeStart = 0; result.text = Escape(state.input) + u"\n"; }
+        for (std::size_t row = 0; row < source.candidateRanges.size(); ++row)
+        {
+            const auto index = above ? source.candidateRanges.size() - row - 1 : row;
+            const auto range = source.candidateRanges[index];
+            if (row) result.text += u'\n';
+            const auto start = static_cast<int>(result.text.size());
+            result.text += source.text.substr(range.first, range.second);
+            result.candidateRanges[index] = {start, range.second};
+            if (index < source.annotationRanges.size() && source.annotationRanges[index].first >= 0)
+                result.annotationRanges[index].first = start + source.annotationRanges[index].first - range.first;
+            if (source.selectionStart == range.first)
+                result.selectionStart = start;
+        }
+        if (code && !above)
+        {
+            result.text += u'\n';
+            result.codeStart = static_cast<int>(result.text.size());
+            result.text += Escape(state.input);
         }
         return result;
     }
@@ -232,13 +285,12 @@ namespace tiger::overlay
         return static_cast<std::uint32_t>(delay);
     }
 
-    Metrics MeasureStyle(const State& state, DisplayMode mode)
+    Metrics MeasureStyle(const State& state, DisplayMode mode, bool above)
     {
-        double font = std::clamp(state.fontSize > 0 && std::isfinite(state.fontSize) ? state.fontSize : 17.0, 3.0, 200.0);
+        double font = std::clamp(state.fontSize > 0 && std::isfinite(state.fontSize) ? state.fontSize : 24.0, 3.0, 200.0);
         if (mode == DisplayMode::CodeOnly)
             return {font, std::ceil(font), 0, std::nearbyint(font * 0.4), 2, std::nearbyint(font * 0.4), 2};
-        if (state.vertical()) return {font, std::ceil(font * 1.5), 0, 12, 8, 8, 7};
-        return {font, std::ceil(font), 0, 8, 8, 8, 8};
+        return {font, 0, 0, 6, above ? 6.0 : 2.5, 6, above ? 2.5 : 6.0};
     }
 
     Palette Theme(std::u16string_view name)

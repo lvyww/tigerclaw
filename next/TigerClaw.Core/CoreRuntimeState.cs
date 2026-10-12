@@ -239,7 +239,7 @@ namespace TigerClaw.Core
 
             new KeyValuePair<string, string>(KeyFont, DefaultFontName),
 
-            new KeyValuePair<string, string>(KeyFontSize, "17"),
+            new KeyValuePair<string, string>(KeyFontSize, "24"),
 
             new KeyValuePair<string, string>(KeyUseClipboardCommit, No),
 
@@ -1901,7 +1901,7 @@ namespace TigerClaw.Core
 
 
 
-            return 17;
+            return 24;
 
         }
 

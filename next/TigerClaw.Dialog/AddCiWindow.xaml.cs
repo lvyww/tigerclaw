@@ -313,7 +313,7 @@ namespace TigerClaw.Dialog
                 return 160;
             }
 
-            double fontSize = uiState.FontSize <= 0 ? 17 : uiState.FontSize;
+            double fontSize = uiState.FontSize <= 0 ? 24 : uiState.FontSize;
             if (fontSize < 3)
             {
                 fontSize = 3;

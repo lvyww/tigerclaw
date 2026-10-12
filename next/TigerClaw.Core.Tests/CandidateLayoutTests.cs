@@ -26,6 +26,28 @@ namespace TigerClaw.Core.Tests
                     True(!state.TrySetConfigValue(old, "是", out _, out _), "old key rejected: " + old);
                 }
                 var formatter = new CandidateTextFormatter();
+                foreach (int layout in new[] { 3, 4 })
+                {
+                    var indexed = new OverlayUiState { CandidateLayout = layout, CandidateVisible = true,
+                        ShowCandidateIndex = true, Candidates = new[] { "词", "𠀀" },
+                        CandidateAnnotations = new[] { "ci", "" }, SelectedCandidateIndex = 1 };
+                    var view = formatter.BuildViewModel(indexed, true, true);
+                    string expected = layout == 3 ? "词〔ci〕 𠀀²" : "词〔ci〕\n𠀀²";
+                    True(view.DisplayText == expected, "first index omitted, other superscripts follow word");
+                    True(view.DisplayText.Substring(view.SelectionStart, view.SelectionLength) == "𠀀²",
+                        "Unicode word and superscript share highlight");
+                    True(view.AnnotationRanges.Count == 1 && view.DisplayText.Substring(
+                        view.AnnotationRanges[0].Start, view.AnnotationRanges[0].Length) == "〔ci〕", "explicit annotation span");
+                    var reversed = formatter.BuildViewModel(indexed, true, true, true);
+                    True(reversed.DisplayText.Substring(reversed.AnnotationRanges[0].Start,
+                        reversed.AnnotationRanges[0].Length) == "〔ci〕", "annotation span follows reversed row");
+                    indexed.Candidates = new string[10];
+                    for (int i = 0; i < 10; ++i) indexed.Candidates[i] = "词";
+                    True(formatter.BuildViewModel(indexed, true, false).DisplayText.EndsWith("词¹⁰"),
+                        "multi-digit superscript");
+                    indexed.ShowCandidateIndex = false;
+                    True(!formatter.BuildViewModel(indexed, true, false).DisplayText.Contains("¹"), "index switch off");
+                }
                 for (int mode = 1; mode <= 5; ++mode)
                 {
                     True(state.TrySetConfigValue(CandidateLayouts.ConfigKey, mode.ToString(), out _, out _), "set layout");

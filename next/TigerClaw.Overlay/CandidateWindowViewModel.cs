@@ -1,7 +1,13 @@
 using System;
+using System.Collections.Generic;
 
 namespace TigerClaw.Overlay
 {
+    internal sealed class CandidateAnnotationSpan
+    {
+        public int Start, Length;
+    }
+
     internal sealed class CandidateWindowViewModel
     {
         public static readonly CandidateWindowViewModel Hidden =
@@ -21,5 +27,9 @@ namespace TigerClaw.Overlay
         public int SelectionStart { get; set; }
 
         public int SelectionLength { get; set; }
+        public int CodeStart { get; set; } = -1;
+        public int CodeLength { get; set; }
+        public List<CandidateAnnotationSpan> CandidateRanges { get; set; } = new List<CandidateAnnotationSpan>();
+        public List<CandidateAnnotationSpan> AnnotationRanges { get; set; } = new List<CandidateAnnotationSpan>();
     }
 }

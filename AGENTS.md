@@ -86,6 +86,86 @@ or public release.
 
 ## Current Status
 
+Horizontal candidate corners now use left 5 / right 10 DIP, independent of
+above/below placement; vertical near/far corners stay unchanged. Native and WPF
+renderers agree. Sentence candidates now honor ShowCandidateIndex instead of
+forcing it off; first index remains omitted, later indices retain superscript
+and 50% opacity. ARM64 Overlay rebuilt/deployed with backup; native model/render
+and actual WPF layout/style checks pass. Evidence:
+`next/_run/HorizontalCorners-20261012/`.
+
+Candidate font default is now 24 in generated native defaults, managed defaults,
+seed configs and UI fallbacks. Daily font explicitly set to 24 via Core IPC;
+other configuration values unchanged. Code foreground opacity reduced to 50%
+in both native/WPF orientations; annotations remain 70%. ARM64 Core/Overlay/Dialog
+built and deployed with backups; all 19 native Core tests and actual WPF
+rendering checks pass. Live candidate_ui API 1 survives the Core update.
+Evidence: `next/_run/Default24-20261012/`. No physical typing acceptance claim.
+
+Font selector height (2026-10-12): CbFonts overrides the shared 28-DIP fixed
+height with Auto + MinHeight 28. Actual WPF preview sizes 13/37.5/60 grow and
+shrink correctly. Daily Dialog executable updated with backup, existing settings
+window preserved (reopen to apply). Evidence: `next/_run/FontComboHeight-20261012/`.
+
+Pain bridge runtime repair (2026-10-12): the earlier isolated layout deployment
+replaced daily Core with a build lacking candidate_ui, while the registered x86
+TSF still contained the bridge. Main-worktree Core (layout + candidate snapshots)
+was rebuilt, passed all 19 CTests, backed up and deployed Core-only. Live query now
+returns candidate_ui API 1; Pain PID 19916 loads the registered x86 bridge DLL.
+Pain's actual presenter bridge probe passes 136 checks. Config, Overlay, Dialog
+and Shared hashes unchanged. Backup:
+`release_arm64/backup-before-cpp-core-20261012-013034-811ec26a/`.
+Evidence: `next/_run/PainDiagnosis-20261012/`. Registered 64-bit TSF is still the
+older non-bridge build; it was not changed for this x86 Pain repair. No physical
+typing acceptance claimed. Future Core publishing must preserve both the current
+CandidateLayout protocol and candidate_ui API 1; do not redeploy the isolated
+pre-merge layout Core.
+
+Vertical candidate presentation (2026-10-12): ordinary indices follow words as
+superscripts. Native/WPF vertical surfaces use Pain's near/far corners and padding;
+above-caret placement reverses visual rows while preserving logical identities,
+selection, hit testing and sentence font sizes. ARM64 Overlay deployed with backup;
+12,000 formatter parity cases plus actual rendering/placement/pending-frame tests
+pass. Evidence: `next/_run/PainVertical-20261012/`. Follow-up alignment adds natural
+line heights, a half-size gray code footer (bottom below the caret, top above it),
+and Pain's vertical surface/selection colors. Evidence and deployment backup:
+`next/_run/PainFooter-20261012/`. Subsequent vertical typography centers each
+candidate group; annotation/decomposition spans use half the candidate font and
+70% foreground opacity. The code footer stays left aligned. ARM64/x64 native
+builds, render/hit/reversal/cache checks, 12,000 formatter parity cases including
+annotation spans, and isolated actual WPF rendering methods pass. Daily ARM64
+Overlay updated with verified backup `backup-before-overlay-candidate-center-20261012-005804`;
+evidence: `next/_run/CandidateCenter-20261012/`. Latest refinement centers candidate
+bodies independently, right-aligns annotation/decomposition groups, applies 70%
+font to every vertical secondary candidate and 80% index opacity, and centers
+code across the whole window. Native ARM64/x64 and isolated WPF rendering checks
+pass; daily Overlay updated with backup. Evidence:
+`next/_run/CandidateColumns-20261012/`. Latest alignment rule: any visible
+annotation/decomposition makes all vertical candidate bodies left-aligned;
+otherwise bodies center. Notes remain right-aligned and code centered. Deferred
+note reveal/removal and reversal are covered by native/WPF probes. Evidence:
+`next/_run/CandidateAlignment-20261012/`. Annotation/decomposition size is now
+uniform at 50% of configured font size for every candidate (not half secondary
+size); indices now use 70% opacity. Evidence: `next/_run/AnnotationSize-20261012/`.
+Vertical padding subsequently increased by 2 DIP per edge (6 horizontal, 2.5 near,
+6 far). Original theme colors/alpha restored for vertical surfaces, including
+selection and theme-colored footer, so skin changes work again. Evidence:
+`next/_run/ThemeRestore-20261012/`. Horizontal candidate surfaces now share
+vertical font sizes, opacity, padding, natural line heights and corner sizes;
+no extra horizontal bold/text shadow. Orientation cache and 12,000 formatter
+parity cases pass along with native/WPF rendering checks. Evidence:
+`next/_run/HorizontalStyle-20261012/`. Horizontal bodies, annotations/decomposition
+and code are subsequently vertically centered independently, retaining superscript
+indices. Native render/hit and actual WPF arranged-center checks pass; evidence:
+`next/_run/HorizontalCenter-20261012/`. Candidate-window code font is now 65%
+of configured size in both orientations; annotations remain 50%. Evidence:
+`next/_run/CodeSize65-20261012/`. First candidate index is now omitted in both
+orientations; subsequent numbers stay 2, 3, etc. Horizontal gaps use one space,
+including after code (removed seven-character padding). Evidence:
+`next/_run/CompactHorizontal-20261012/`. Index opacity was subsequently reduced
+to 50% in both orientations; other text opacity is unchanged. Evidence:
+`next/_run/IndexOpacity50-20261012/`. These UI edits are included in the user-requested UI refinement commit.
+
 Pain candidate bridge (2026-10-11): C++ Core optionally exports versioned,
 bounded candidate snapshots on key/query_state; TSF exposes a read-only
 ITfCandidateListUIElement with actual ordinary pagination and only the selectable

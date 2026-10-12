@@ -2,6 +2,7 @@
 #include <nlohmann/json.hpp>
 #include <algorithm>
 #include <cmath>
+#include <fstream>
 #include <iostream>
 #include <vector>
 
@@ -28,7 +29,99 @@ namespace tiger::overlay
             CheckHr(r.layout_->GetFontSize(static_cast<UINT32>(position), &size));
             return size;
         }
+        static bool NaturalLines(const Renderer& r)
+        {
+            DWRITE_LINE_SPACING_METHOD method; FLOAT height, baseline;
+            CheckHr(r.format_->GetLineSpacing(&method, &height, &baseline));
+            return method == DWRITE_LINE_SPACING_METHOD_DEFAULT;
+        }
+        static bool GrayCode(const Renderer& r, int position)
+        {
+            ComPtr<IUnknown> effect;
+            CheckHr(r.layout_->GetDrawingEffect(position, effect.GetAddressOf()));
+            ComPtr<ID2D1SolidColorBrush> brush;
+            if (!effect || FAILED(effect.As(&brush))) return false;
+            auto color = brush->GetColor();
+            return color.a == 0;
+        }
+        static void VerifyVerticalRows(const Renderer& r, const Display& display, bool sentence)
+        {
+            for (std::size_t i = 0; i < display.candidateRanges.size(); ++i)
+            {
+                const auto range = display.candidateRanges[i];
+                UINT32 count = 0;
+                r.layout_->HitTestTextRange(range.first, range.second, 0, 0, nullptr, 0, &count);
+                std::vector<DWRITE_HIT_TEST_METRICS> hits(count);
+                CheckHr(r.layout_->HitTestTextRange(range.first, range.second, 0, 0, hits.data(), count, &count));
+                float left = 300000.f, right = 0;
+                for (const auto& hit : hits) { left = std::min(left, hit.left); right = std::max(right, hit.left + hit.width); }
+                if (std::abs(left + right - r.layout_->GetMaxWidth()) > .02f)
+                    throw std::runtime_error("Candidate group not horizontally centered");
+                DWRITE_TEXT_METRICS body{};
+                CheckHr(r.rowLayouts_[i]->GetMetrics(&body));
+                bool hasNotes = std::any_of(r.annotationLayouts_.begin(), r.annotationLayouts_.end(),
+                    [](const auto& item) { return item.Get() != nullptr; });
+                if (hasNotes ? std::abs(body.left) > .02f : std::abs(2 * body.left + body.width - r.layout_->GetMaxWidth()) > .02f)
+                    throw std::runtime_error("All candidate bodies must align left with notes, center without notes");
+                if (r.annotationLayouts_[i])
+                {
+                    DWRITE_TEXT_METRICS note{}; CheckHr(r.annotationLayouts_[i]->GetMetrics(&note));
+                    float noteSize = 0; CheckHr(r.annotationLayouts_[i]->GetFontSize(0, &noteSize));
+                    if (std::abs(noteSize - 10.f) > .001f) throw std::runtime_error("Rendered annotation must use half configured size");
+                    if (std::abs(note.left + note.width - r.layout_->GetMaxWidth()) > .02f || body.left + body.width + 3.9f > note.left)
+                        throw std::runtime_error("Annotation must be right aligned without overlapping body");
+                }
+                const auto annotation = display.annotationRanges[i];
+                if (annotation.first < 0) continue;
+                if (std::abs(FontSizeAt(r, annotation.first) - 10.f) > .001f)
+                    throw std::runtime_error("Annotation not half configured font size");
+                ComPtr<IUnknown> effect; ComPtr<ID2D1SolidColorBrush> brush;
+                CheckHr(r.layout_->GetDrawingEffect(annotation.first, effect.GetAddressOf()));
+                if (!effect || FAILED(effect.As(&brush)) || std::abs(brush->GetColor().a - .7f) > .001f)
+                    throw std::runtime_error("Annotation opacity is not 70 percent");
+            }
+            if (display.codeStart >= 0 && (!r.codeLayout_ || r.codeLayout_->GetTextAlignment() != DWRITE_TEXT_ALIGNMENT_CENTER))
+                throw std::runtime_error("Footer must center across the entire content width");
+        }
+        static void VerifyIndexOpacity(const Renderer& r, const State& state, const Display& display)
+        {
+            for (std::size_t i = 1; i < display.candidateRanges.size(); ++i)
+            {
+                const auto range = display.candidateRanges[i]; const auto note = display.annotationRanges[i];
+                UINT32 end = (note.first >= 0 ? note.first : range.first + range.second);
+                auto layout = r.rowLayouts_.empty() ? r.layout_.Get() : r.rowLayouts_[i].Get();
+                if (!r.rowLayouts_.empty()) end -= range.first;
+                ComPtr<IUnknown> effect; ComPtr<ID2D1SolidColorBrush> brush;
+                CheckHr(layout->GetDrawingEffect(end - 1, effect.GetAddressOf()));
+                if (!effect || FAILED(effect.As(&brush)) || std::abs(brush->GetColor().a - .5f) > .001f)
+                    throw std::runtime_error("Index opacity must be 50 percent");
+            }
+        }
+        static void VerifyOrientationCache(const Renderer& r, bool vertical, bool inputOnly)
+        {
+            if (r.layoutVertical_ != vertical || (!inputOnly && r.rowLayouts_.empty()) ||
+                (inputOnly && !r.codeLayout_))
+                throw std::runtime_error("Same-text orientation switch must rebuild body/footer layouts");
+        }
         static void LoseTarget(Renderer& r) { r.target_.Reset(); }
+        static void SaveBitmap(const Renderer& r, const char* path)
+        {
+            DIBSECTION dib{};
+            if (!GetObjectW(r.bitmap_, sizeof(dib), &dib) || !dib.dsBm.bmBits)
+                throw std::runtime_error("Read preview DIB failed");
+            BITMAPFILEHEADER file{};
+            file.bfType = 0x4d42;
+            file.bfOffBits = sizeof(file) + sizeof(BITMAPINFOHEADER);
+            auto info = dib.dsBmih;
+            info.biHeight = -r.size_.cy; // Renderer owns a top-down DIB.
+            info.biSizeImage = dib.dsBm.bmWidthBytes * r.size_.cy;
+            file.bfSize = file.bfOffBits + info.biSizeImage;
+            std::ofstream output(path, std::ios::binary);
+            output.write(reinterpret_cast<const char*>(&file), sizeof(file));
+            output.write(reinterpret_cast<const char*>(&info), sizeof(info));
+            output.write(static_cast<const char*>(dib.dsBm.bmBits), info.biSizeImage);
+            if (!output) throw std::runtime_error("Write preview failed");
+        }
         static void IncompleteFrame(Renderer& r) { r.frameReady_ = false; }
         static std::uint64_t Pixels(const Renderer& r)
         {
@@ -68,14 +161,36 @@ int main(int argc, char** argv)
         LARGE_INTEGER frequency{}; QueryPerformanceFrequency(&frequency);
         nlohmann::json result;
         bool verify = argc > 1 && std::string(argv[1]) == "--verify";
-        if (argc > 1 && std::string(argv[1]) == "--pinyin-hit-check")
+        if (argc > 1 && std::string(argv[1]) == "--superscript-preview")
+        {
+            Renderer renderer(L".");
+            auto state = Base();
+            state.candidates = {u"\u5019\u9009\u8bcd", u"\u8f93\u5165\u6cd5", u"Unicode"};
+            state.annotations = {u"abc", u"def", u"ghi"};
+            state.selected = 1;
+            for (int layout : {3, 4, 2})
+            {
+                state.candidateLayout = layout;
+                auto size = renderer.Prepare(state, Format(state), 144);
+                RendererProbe::VerifyIndexOpacity(renderer, state, Format(state));
+                RendererProbe::SaveBitmap(renderer, layout == 3 ? "superscript-horizontal.bmp" : layout == 4 ? "superscript-vertical.bmp" : "vertical-code-below.bmp");
+                if (layout != 3)
+                {
+                    auto flipped = renderer.Prepare(state, OrientDisplay(state, Format(state), true), 144);
+                    if (size.cx != flipped.cx || size.cy != flipped.cy) throw std::runtime_error("Orientation changed measured size");
+                    RendererProbe::SaveBitmap(renderer, layout == 4 ? "vertical-above.bmp" : "vertical-code-above.bmp");
+                }
+            }
+            result["superscript_preview"] = "written";
+        }
+        else if (argc > 1 && std::string(argv[1]) == "--pinyin-hit-check")
         {
             Renderer renderer(L".");
             auto state = Base(); state.composition = 6;
-            for (bool vertical : {false, true}) for (UINT dpi : {96u, 144u, 192u})
+            for (bool vertical : {false, true}) for (bool above : {false, true}) for (UINT dpi : {96u, 144u, 192u})
             {
                 state.candidateLayout = (vertical) ? (state.showCode() ? 2 : 4) : (state.showCode() ? 1 : 3);
-                auto display = Format(state);
+                auto display = OrientDisplay(state, Format(state), above);
                 renderer.Prepare(state, display, dpi);
                 for (int i = 0; i < static_cast<int>(display.candidateRanges.size()); ++i)
                     if (renderer.HitCandidate(RendererProbe::CandidatePoint(renderer, display.candidateRanges[i].first), display) != i)
@@ -90,18 +205,62 @@ int main(int argc, char** argv)
             auto state = Base();
             // Same text across mode switches must invalidate font-range caching.
             state.showIndex = false; state.composition = 5;
-            for (bool vertical : {false, true})
+            for (bool vertical : {false, true}) for (bool above : {false, true})
             {
                 state.candidateLayout = (vertical) ? (state.showCode() ? 2 : 4) : (state.showCode() ? 1 : 3);
-                auto display = Format(state);
+                auto display = OrientDisplay(state, Format(state), above);
                 renderer.Prepare(state, display, 144);
                 if (std::abs(RendererProbe::FontSizeAt(renderer, display.candidateRanges[0].first) - 20.f) > .001f ||
                     std::abs(RendererProbe::FontSizeAt(renderer, display.candidateRanges[1].first) - 14.f) > .001f)
                     throw std::runtime_error("Sentence candidate font ratio is not 0.7");
-                state.composition = 2; renderer.Prepare(state, Format(state), 144);
-                if (std::abs(RendererProbe::FontSizeAt(renderer, display.candidateRanges[1].first) - 20.f) > .001f)
-                    throw std::runtime_error("Sentence font size leaked into ordinary candidates");
+                if (vertical && (!RendererProbe::NaturalLines(renderer) || display.codeStart < 0 ||
+                    std::abs(RendererProbe::FontSizeAt(renderer, display.codeStart) - 13.f) > .001f ||
+                    !RendererProbe::GrayCode(renderer, display.codeStart)))
+                    throw std::runtime_error("Natural line spacing / 65-percent footer mismatch");
+                if (vertical) RendererProbe::VerifyVerticalRows(renderer, display, true);
+                for (const auto& note : display.annotationRanges) if (note.first >= 0)
+                    if (std::abs(RendererProbe::FontSizeAt(renderer, note.first) - 10.f) > .001f)
+                        throw std::runtime_error("Both orientations require 50 percent annotation size");
+                if (display.codeStart >= 0 && std::abs(RendererProbe::FontSizeAt(renderer, display.codeStart) - 13.f) > .001f)
+                    throw std::runtime_error("Both orientations require 65 percent code size");
+                state.composition = 2;
+                auto ordinary = OrientDisplay(state, Format(state), above);
+                renderer.Prepare(state, ordinary, 144);
+                if (std::abs(RendererProbe::FontSizeAt(renderer, ordinary.candidateRanges[1].first) - 14.f) > .001f)
+                    throw std::runtime_error("Ordinary secondary candidate font ratio mismatch");
+                if (vertical) RendererProbe::VerifyVerticalRows(renderer, ordinary, false);
                 state.composition = 5;
+            }
+            state = Base(); state.candidateLayout = 2;
+            // Includes a row without notes and deferred annotation reveal on a reused renderer.
+            state.annotations = {u"note", u"", u"decomposition", u""};
+            for (bool above : {false, true}) for (bool notes : {true, false, true})
+            {
+                auto display = OrientDisplay(state, Format(state, true, notes), above);
+                renderer.Prepare(state, display, 144);
+                RendererProbe::VerifyVerticalRows(renderer, display, false);
+            }
+            state = Base(); state.candidateLayout = 2;
+            renderer.Prepare(state, Format(state), 144);
+            auto previousThemePixels = RendererProbe::Pixels(renderer);
+            for (const auto* theme : {u"\u8ff7\u96fe", u"\u661f\u591c", u"\u901a\u900f", u"\u7eb8"})
+            {
+                state.theme = theme;
+                renderer.Prepare(state, Format(state), 144);
+                auto themedPixels = RendererProbe::Pixels(renderer);
+                if (themedPixels == previousThemePixels) throw std::runtime_error("Vertical theme change did not repaint");
+                previousThemePixels = themedPixels;
+            }
+            state = Base(); state.annotations.clear(); state.input.clear(); state.candidates = {u"word"};
+            for (bool inputOnly : {false, true})
+            {
+                if (inputOnly) { state.candidates.clear(); state.input = u"code"; }
+                for (int mode : {3,4,3,4})
+                {
+                    state.candidateLayout = mode;
+                    renderer.Prepare(state, Format(state), 144);
+                    RendererProbe::VerifyOrientationCache(renderer, mode == 4, inputOnly);
+                }
             }
             state = Base();
             renderer.Render(window, state, Format(state), 144);

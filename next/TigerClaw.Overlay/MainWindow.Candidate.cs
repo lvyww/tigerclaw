@@ -1,6 +1,8 @@
 using TigerClaw.Shared;
 using System;
+using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
@@ -13,14 +15,28 @@ namespace TigerClaw.Overlay
     public partial class MainWindow
     {
         private Brush _candidateSelectionBackground = Brushes.Transparent;
+        private bool _candidateAbove;
+        private StackPanel _candidateRows;
+        private TextBlock _candidateFooter;
 
         private void ApplyTheme()
         {
             OverlayThemePalette palette = _themeResolver.Resolve(_state.ThemeName);
+            var mode = _candidateTextFormatter.GetDisplayMode(_state, _candidateExpanded);
+            ApplyCandidatePalette(_state.VerticalCandidates && mode != CandidateDisplayMode.CodeOnly,
+                palette, mode == CandidateDisplayMode.CodeOnly);
+        }
+
+        private void ApplyCandidatePalette(bool vertical, OverlayThemePalette palette, bool codeOnly)
+        {
             BorderCandi.Background = palette.Background;
             BorderCandi.BorderBrush = palette.Border;
             BorderCandi.BorderThickness = new Thickness(palette.BorderWidth);
-            BorderCandi.CornerRadius = palette.Corner;
+            BorderCandi.CornerRadius = vertical
+                ? (_candidateAbove ? new CornerRadius(10, 10, 5, 5) : new CornerRadius(5, 5, 10, 10))
+                : (codeOnly
+                    ? palette.Corner : new CornerRadius(5, 10, 10, 5));
+            BorderCandi.Opacity = 1;
             ApplyCandidateForeground(palette.Foreground);
             _candidateSelectionBackground = palette.CandidateSelectionBackground;
         }
@@ -57,7 +73,8 @@ namespace TigerClaw.Overlay
 
             UpdateCandidateRevealState();
 
-            CandidateWindowViewModel viewModel = _candidateTextFormatter.BuildViewModel(_state, _candidateExpanded, _candidateExpanded && _annotationExpanded);
+            CandidateWindowViewModel viewModel = _candidateTextFormatter.BuildViewModel(_state, _candidateExpanded,
+                _candidateExpanded && _annotationExpanded, _candidateAbove);
             if (viewModel.Mode == CandidateDisplayMode.Hidden)
             {
                 _lastRenderSignature = string.Empty;
@@ -123,6 +140,13 @@ namespace TigerClaw.Overlay
             bool hasPosition = _positioner.Update(this, BorderCandi, _state, true, _predictedWindowWidthDip, _predictedWindowHeightDip);
             if (hasPosition)
             {
+                bool above = _state.VerticalCandidates && _positioner.IsAbove;
+                if (above != _candidateAbove)
+                {
+                    _candidateAbove = above;
+                    _lastRenderSignature = string.Empty;
+                    RenderCandidateText();
+                }
                 ShowCandidate(becameVisible);
                 return;
             }
@@ -200,6 +224,8 @@ namespace TigerClaw.Overlay
         {
             CandidateText.Inlines.Clear();
             CandidateText.Text = string.Empty;
+            if (_candidateFooter != null) _candidateFooter.Text = string.Empty;
+            if (_candidateRows != null) _candidateRows.Children.Clear();
             _predictedWindowWidthDip = 0;
             _predictedWindowHeightDip = 0;
             CandidateText.MinWidth = 0;
@@ -210,37 +236,171 @@ namespace TigerClaw.Overlay
             BorderCandi.MinWidth = 0.0;
             BorderCandi.MinHeight = 0.0;
             ApplyCandidateTextStyle(viewModel.Mode, viewModel.IsVertical, CandidateText.FontSize);
+            bool vertical = viewModel.IsVertical && viewModel.Mode != CandidateDisplayMode.CodeOnly;
+            if (CandidateText.Parent is Panel parent) parent.Children.Remove(CandidateText);
+            if (_candidateRows != null) _candidateRows.Children.Clear();
+            BorderCandi.Child = null;
+            if (vertical)
+            {
+                ApplyVerticalCandidateRows(viewModel);
+                return;
+            }
+            else if (viewModel.Mode != CandidateDisplayMode.CodeOnly)
+            {
+                ApplyHorizontalCandidateRows(viewModel);
+                return;
+            }
+            else BorderCandi.Child = CandidateText;
             ApplyCandidateDisplayText(viewModel);
+        }
+
+        private void ApplyVerticalCandidateRows(CandidateWindowViewModel viewModel)
+        {
+            if (_candidateRows == null) _candidateRows = new StackPanel();
+            _candidateRows.Orientation = Orientation.Vertical;
+            _candidateRows.Margin = CandidateText.Padding;
+            BorderCandi.Child = _candidateRows;
+            string text = viewModel.DisplayText ?? string.Empty;
+            int offset = 0;
+            if (_candidateFooter == null) _candidateFooter = new TextBlock();
+            _candidateFooter.FontFamily = CandidateText.FontFamily;
+            _candidateFooter.FontSize = CandidateText.FontSize * 0.65;
+            var footerBrush = CandidateText.Foreground.Clone(); footerBrush.Opacity *= 0.5;
+            _candidateFooter.Foreground = footerBrush;
+            _candidateFooter.TextAlignment = TextAlignment.Center;
+            _candidateFooter.Text = viewModel.CodeStart >= 0 ? text.Substring(viewModel.CodeStart, viewModel.CodeLength) : string.Empty;
+            _candidateFooter.Visibility = _candidateFooter.Text.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+            if (viewModel.CodeStart == 0)
+            {
+                offset = viewModel.CodeLength;
+                if (offset < text.Length && text[offset] == '\n') ++offset;
+                text = text.Substring(offset);
+            }
+            else if (viewModel.CodeStart > 0) text = text.Substring(0, viewModel.CodeStart - 1);
+            if (_candidateAbove) _candidateRows.Children.Add(_candidateFooter);
+            var rows = text.Length > 0 ? text.Split('\n') : Array.Empty<string>();
+            var grids = new List<Grid>();
+            double maxWord = 0, maxNote = 0;
+            for (int row = 0; row < rows.Length; ++row)
+            {
+                int logical = _candidateAbove ? rows.Length - row - 1 : row;
+                double size = CandidateText.FontSize * (logical == 0 ? 1 : 0.7);
+                var span = viewModel.AnnotationRanges.FirstOrDefault(item => item.Start >= offset && item.Start < offset + rows[row].Length);
+                int length = span == null ? rows[row].Length : span.Start - offset;
+                string word = rows[row].Substring(0, length);
+                int digits = logical > 0 && _state.ShowCandidateIndex ? (logical + 1).ToString(CultureInfo.InvariantCulture).Length : 0;
+                var body = new TextBlock { FontFamily = CandidateText.FontFamily, FontSize = size,
+                    Foreground = CandidateText.Foreground, TextAlignment = TextAlignment.Center };
+                body.Inlines.Add(new Run(word.Substring(0, word.Length - digits)));
+                if (digits > 0)
+                {
+                    var indexBrush = CandidateText.Foreground.Clone(); indexBrush.Opacity *= 0.5;
+                    body.Inlines.Add(new Run(word.Substring(word.Length - digits)) { Foreground = indexBrush });
+                }
+                var grid = new Grid(); grid.Children.Add(body);
+                body.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+                maxWord = Math.Max(maxWord, body.DesiredSize.Width);
+                if (span != null)
+                {
+                    var noteBrush = CandidateText.Foreground.Clone(); noteBrush.Opacity *= 0.7;
+                    var note = new TextBlock { Text = rows[row].Substring(length), FontFamily = CandidateText.FontFamily,
+                        FontSize = CandidateText.FontSize * 0.5, Foreground = noteBrush, TextAlignment = TextAlignment.Right,
+                        VerticalAlignment = VerticalAlignment.Center };
+                    note.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+                    maxNote = Math.Max(maxNote, note.DesiredSize.Width);
+                    grid.Children.Add(note);
+                }
+                if (viewModel.SelectionStart == offset) grid.Background = _candidateSelectionBackground;
+                grids.Add(grid); _candidateRows.Children.Add(grid);
+                offset += rows[row].Length + 1;
+            }
+            double width = maxWord + (maxNote > 0 ? maxNote + 4 : 0);
+            bool hasNotes = grids.Any(grid => grid.Children.Count > 1);
+            foreach (var grid in grids)
+            {
+                grid.MinWidth = width;
+                ((TextBlock)grid.Children[0]).TextAlignment = hasNotes ? TextAlignment.Left : TextAlignment.Center;
+            }
+            if (!_candidateAbove) _candidateRows.Children.Add(_candidateFooter);
+        }
+
+        private void ApplyHorizontalCandidateRows(CandidateWindowViewModel viewModel)
+        {
+            if (_candidateRows == null) _candidateRows = new StackPanel();
+            _candidateRows.Orientation = Orientation.Horizontal;
+            _candidateRows.Margin = CandidateText.Padding;
+            BorderCandi.Child = _candidateRows;
+            string text = viewModel.DisplayText ?? string.Empty;
+            var muted = CandidateText.Foreground.Clone(); muted.Opacity *= 0.7;
+            var codeBrush = CandidateText.Foreground.Clone(); codeBrush.Opacity *= 0.5;
+            var indexBrush = CandidateText.Foreground.Clone(); indexBrush.Opacity *= 0.5;
+            Func<string, double, Brush, TextBlock> block = (value, scale, color) => new TextBlock {
+                Text = value, FontFamily = CandidateText.FontFamily, FontSize = CandidateText.FontSize * scale,
+                Foreground = color, VerticalAlignment = VerticalAlignment.Center };
+            int cursor = 0;
+            if (viewModel.CodeStart >= 0)
+            {
+                _candidateRows.Children.Add(block(text.Substring(viewModel.CodeStart, viewModel.CodeLength), 0.65, codeBrush));
+                cursor = viewModel.CodeStart + viewModel.CodeLength;
+            }
+            for (int i = 0; i < viewModel.CandidateRanges.Count; ++i)
+            {
+                var span = viewModel.CandidateRanges[i];
+                if (span.Start > cursor) _candidateRows.Children.Add(block(text.Substring(cursor, span.Start - cursor), 1, CandidateText.Foreground));
+                var note = viewModel.AnnotationRanges.FirstOrDefault(item => item.Start >= span.Start && item.Start < span.Start + span.Length);
+                int wordEnd = note == null ? span.Start + span.Length : note.Start;
+                int digits = i > 0 && _state.ShowCandidateIndex ? (i + 1).ToString(CultureInfo.InvariantCulture).Length : 0;
+                var body = block(string.Empty, i == 0 ? 1 : 0.7, CandidateText.Foreground);
+                body.Inlines.Add(new Run(text.Substring(span.Start, wordEnd - span.Start - digits)));
+                if (digits > 0) body.Inlines.Add(new Run(text.Substring(wordEnd - digits, digits)) { Foreground = indexBrush });
+                var group = new StackPanel { Orientation = Orientation.Horizontal };
+                group.Children.Add(body);
+                if (note != null) group.Children.Add(block(text.Substring(note.Start, note.Length), 0.5, muted));
+                if (viewModel.SelectionStart == span.Start) group.Background = _candidateSelectionBackground;
+                _candidateRows.Children.Add(group);
+                cursor = span.Start + span.Length;
+            }
         }
 
         private void ApplyCandidateDisplayText(CandidateWindowViewModel viewModel)
         {
-            string displayText = viewModel.DisplayText ?? string.Empty;
-            int selectionStart = viewModel.SelectionStart;
-            int selectionLength = viewModel.SelectionLength;
-            if (selectionStart < 0 || selectionLength <= 0 || selectionStart + selectionLength > displayText.Length)
-            {
-                CandidateText.Inlines.Clear();
-                CandidateText.Text = displayText;
-                return;
-            }
-
+            string text = viewModel.DisplayText ?? string.Empty;
+            CandidateText.Visibility = text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
             CandidateText.Inlines.Clear();
-            if (selectionStart > 0)
+            var boundaries = new SortedSet<int> { 0, text.Length };
+            var indexRanges = new List<CandidateAnnotationSpan>();
+            foreach (var span in viewModel.CandidateRanges.Concat(viewModel.AnnotationRanges))
+            { boundaries.Add(span.Start); boundaries.Add(span.Start + span.Length); }
+            if (viewModel.CodeStart >= 0)
+            { boundaries.Add(viewModel.CodeStart); boundaries.Add(viewModel.CodeStart + viewModel.CodeLength); }
+            if (_state.ShowCandidateIndex)
+                for (int i = 1; i < viewModel.CandidateRanges.Count; ++i)
+                {
+                    var span = viewModel.CandidateRanges[i];
+                    var note = viewModel.AnnotationRanges.FirstOrDefault(item => item.Start >= span.Start && item.Start < span.Start + span.Length);
+                    int end = note == null ? span.Start + span.Length : note.Start;
+                    int length = (i + 1).ToString(CultureInfo.InvariantCulture).Length;
+                    indexRanges.Add(new CandidateAnnotationSpan { Start = end - length, Length = length });
+                    boundaries.Add(end - length); boundaries.Add(end);
+                }
+            int start = 0;
+            foreach (int end in boundaries)
             {
-                CandidateText.Inlines.Add(new Run(displayText.Substring(0, selectionStart)));
-            }
-
-            CandidateText.Inlines.Add(new Run(displayText.Substring(selectionStart, selectionLength))
-            {
-                Background = _candidateSelectionBackground,
-                FontWeight = FontWeights.SemiBold
-            });
-
-            int remainingStart = selectionStart + selectionLength;
-            if (remainingStart < displayText.Length)
-            {
-                CandidateText.Inlines.Add(new Run(displayText.Substring(remainingStart)));
+                if (end <= start) continue;
+                var run = new Run(text.Substring(start, end - start));
+                int candidate = viewModel.CandidateRanges.FindIndex(span => start >= span.Start && end <= span.Start + span.Length);
+                bool note = viewModel.AnnotationRanges.Any(span => start >= span.Start && end <= span.Start + span.Length);
+                bool index = indexRanges.Any(span => start >= span.Start && end <= span.Start + span.Length);
+                bool code = viewModel.CodeStart >= 0 && start >= viewModel.CodeStart && end <= viewModel.CodeStart + viewModel.CodeLength;
+                run.FontSize = CandidateText.FontSize * (code ? 0.65 : note ? 0.5 : candidate > 0 ? 0.7 : 1);
+                if (note || index || code)
+                {
+                    var brush = CandidateText.Foreground.Clone(); brush.Opacity *= index || code ? 0.5 : 0.7; run.Foreground = brush;
+                }
+                if (viewModel.SelectionStart >= 0 && start >= viewModel.SelectionStart && end <= viewModel.SelectionStart + viewModel.SelectionLength)
+                    run.Background = _candidateSelectionBackground;
+                CandidateText.Inlines.Add(run);
+                start = end;
             }
         }
 
@@ -254,6 +414,10 @@ namespace TigerClaw.Overlay
             return ((int)viewModel.Mode).ToString(CultureInfo.InvariantCulture) + "|" +
                    (viewModel.IsVertical ? "V" : "H") + "|" +
                    (viewModel.DisplayText ?? string.Empty) + "|" +
+                   string.Join(";", viewModel.CandidateRanges.Select(span => span.Start + "," + span.Length)) + "|" +
+                   string.Join(";", viewModel.AnnotationRanges.Select(span => span.Start + "," + span.Length)) + "|" +
+                   viewModel.CodeStart + ":" + viewModel.CodeLength + "|" +
+                   (_state == null ? 0 : _state.CompositionState) + "|" +
                    viewModel.SelectionStart.ToString(CultureInfo.InvariantCulture) + "|" +
                    viewModel.SelectionLength.ToString(CultureInfo.InvariantCulture) + "|" +
                    CandidateText.FontSize.ToString("0.##", CultureInfo.InvariantCulture) + "|" +
@@ -397,11 +561,16 @@ namespace TigerClaw.Overlay
 
         private void ApplyCandidateTextStyle(CandidateDisplayMode mode, bool isVertical, double fontSize)
         {
+            bool verticalSurface = mode != CandidateDisplayMode.CodeOnly;
+            var palette = _themeResolver.Resolve(_state.ThemeName);
+            ApplyCandidatePalette(verticalSurface && isVertical, palette, mode == CandidateDisplayMode.CodeOnly);
+            BorderCandi.Margin = new Thickness(verticalSurface ? 4 : 0);
             CandidateText.Margin = new Thickness(0);
             CandidateText.HorizontalAlignment = HorizontalAlignment.Left;
             CandidateText.VerticalAlignment = VerticalAlignment.Top;
             CandidateText.TextAlignment = TextAlignment.Left;
             CandidateText.TextWrapping = TextWrapping.NoWrap;
+            CandidateText.Effect = null;
 
             if (mode == CandidateDisplayMode.CodeOnly)
             {
@@ -412,11 +581,12 @@ namespace TigerClaw.Overlay
                 return;
             }
 
-            if (isVertical)
+            if (mode != CandidateDisplayMode.CodeOnly)
             {
-                CandidateText.Padding = new Thickness(12, 8, 8, 7);
-                CandidateText.LineHeight = ToWholeDip(fontSize * CandidateWindowMetrics.VerticalLineHeightScale);
-                CandidateText.MinWidth = ToWholeDip(fontSize * CandidateWindowMetrics.VerticalMinWidthScale + CandidateWindowMetrics.VerticalMinWidthExtraDip);
+                CandidateText.Padding = new Thickness(6, _candidateAbove ? 6 : 2.5, 6, _candidateAbove ? 2.5 : 6);
+                CandidateText.LineHeight = double.NaN;
+                CandidateText.LineStackingStrategy = LineStackingStrategy.MaxHeight;
+                CandidateText.MinWidth = 0;
                 return;
             }
 
@@ -479,7 +649,7 @@ namespace TigerClaw.Overlay
         {
             if (fontSize <= 0)
             {
-                fontSize = 17;
+                fontSize = 24;
             }
 
             if (fontSize < 3)
@@ -511,7 +681,7 @@ namespace TigerClaw.Overlay
 
         private async void Disp_MouseWheel(object sender, MouseWheelEventArgs e)
         {
-            double nextFontSize = _state.FontSize <= 0 ? 17 : _state.FontSize;
+            double nextFontSize = _state.FontSize <= 0 ? 24 : _state.FontSize;
             nextFontSize += e.Delta / 120.0 * 0.5;
             nextFontSize = ClampFontSize(nextFontSize);
 
